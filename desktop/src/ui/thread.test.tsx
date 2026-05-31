@@ -85,6 +85,30 @@ describe("ConfirmApprovalCard — ApprovalPrompt rendering", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
   });
 
+  it("marks long command previews as contained so approval actions stay reachable", () => {
+    const command = `npm test -- ${"very-long-argument-".repeat(30)}`;
+    const { container } = render(
+      <ConfirmApprovalCard
+        prompt={makeShellPrompt(command)}
+        onAllow={() => {}}
+        onAlwaysAllow={() => {}}
+        onDeny={() => {}}
+      />,
+    );
+
+    expect(container.querySelector(".ap-preview")?.classList.contains("ap-preview--long")).toBe(
+      true,
+    );
+    expect(
+      container
+        .querySelector(".ap-foot")
+        ?.contains(screen.getByRole("button", { name: "Run once" })),
+    ).toBe(true);
+    expect(
+      container.querySelector(".ap-foot")?.contains(screen.getByRole("button", { name: "Deny" })),
+    ).toBe(true);
+  });
+
   it("fires onAllow when primary button is clicked", () => {
     const onAllow = vi.fn();
     render(

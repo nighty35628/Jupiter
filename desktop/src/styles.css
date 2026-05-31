@@ -6784,8 +6784,12 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   border: 1px solid var(--border);
   background: var(--card);
   border-radius: 10px;
-  overflow: hidden;
+  overflow: auto;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: min(42vh, 360px);
+  min-height: 0;
 }
 .approval::before {
   content: "";
@@ -6806,6 +6810,10 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   align-items: center;
   gap: 10px;
   padding: 10px 12px 10px 14px;
+  flex: 0 0 auto;
+}
+.approval .ap-head > div {
+  min-width: 0;
 }
 .approval .ap-ico {
   width: 24px;
@@ -6830,18 +6838,21 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   font-weight: 600;
   margin-top: 1px;
   color: var(--fg);
+  overflow-wrap: anywhere;
 }
 .approval .ap-sub {
   font-family: inherit;
   font-size: 14px;
   color: var(--muted);
   margin-top: 2px;
+  overflow-wrap: anywhere;
 }
 .approval .ap-body {
   padding: 0 14px 10px 14px;
   font-size: 14px;
   color: var(--fg-2);
   line-height: 1.6;
+  min-height: 0;
 }
 .approval .ap-body code {
   background: var(--panel);
@@ -6882,20 +6893,53 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   font-size: 14px;
   border: 1px solid var(--border);
   color: var(--fg-2);
+  min-height: 0;
+  overflow-wrap: anywhere;
+}
+.approval .ap-preview--long {
+  max-height: min(18vh, 160px);
+  overflow: auto;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
 }
 .approval .ap-foot {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 8px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-2);
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  flex: 0 0 auto;
+}
+.approval .ap-foot .btn {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .approval .ap-foot .grow { flex: 1; }
 .approval .ap-foot .meta {
   font-family: inherit;
   font-size: 14px;
   color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-approvals {
+  max-width: var(--thread-max-width, 740px);
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 32px;
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 /* ============================================================
@@ -9664,6 +9708,7 @@ html[data-platform="macos"] .app {
 }
 
 .tabbar {
+  --top-tab-width: 156px;
   height: 30px;
   align-items: center;
   padding: 3px 10px;
@@ -9683,6 +9728,11 @@ html[data-platform="macos"] .app {
   border-radius: 6px;
   color: var(--muted);
   font-size: 12.5px;
+}
+
+.tab:not(.newtab) {
+  width: var(--top-tab-width);
+  flex: 0 0 var(--top-tab-width);
 }
 
 .tab:hover {
@@ -9708,12 +9758,18 @@ html[data-platform="macos"] .app {
 }
 
 .tab .label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 520;
 }
 
 .tab .close {
   width: 17px;
   height: 17px;
+  flex: 0 0 auto;
   margin-right: -3px;
   border-radius: 5px;
 }
@@ -9724,6 +9780,8 @@ html[data-platform="macos"] .app {
 
 .tab.newtab {
   max-width: none;
+  width: auto;
+  flex: 0 0 auto;
   padding: 0 8px;
   color: var(--muted);
 }

@@ -2556,7 +2556,7 @@ function TabRuntime({
               </div>
 
               {state.pendingPlans.length > 0 || state.pendingCheckpoints.length > 0 || state.pendingRevisions.length > 0 || state.pendingConfirms.length > 0 || state.pendingPathAccess.length > 0 || state.pendingChoices.length > 0 || !state.ready ? (
-                <div style={{ maxWidth: "var(--thread-max-width, 740px)", margin: "0 auto", padding: "0 32px", width: "100%" }}>
+                <div className="pending-approvals">
                   {state.pendingPlans.map((p) => (<PlanApprovalCard key={`pp-${p.id}`} p={p} onApprove={() => resolvePlan(p.id, { type: "approve" })} onRefine={() => resolvePlan(p.id, { type: "refine" })} onCancel={() => resolvePlan(p.id, { type: "cancel" })} />))}
                   {state.pendingCheckpoints.map((c) => (<CheckpointApprovalCard key={`cp-${c.id}`} c={c} onContinue={() => resolveCheckpoint(c.id, { type: "continue" })} onRevise={() => resolveCheckpoint(c.id, { type: "revise" })} onStop={() => resolveCheckpoint(c.id, { type: "stop" })} />))}
                   {state.pendingRevisions.map((r) => (<RevisionApprovalCard key={`rv-${r.id}`} r={r} onAccept={() => resolveRevision(r.id, { type: "accepted" })} onReject={() => resolveRevision(r.id, { type: "rejected" })} />))}

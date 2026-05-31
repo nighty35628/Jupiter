@@ -600,6 +600,7 @@ export function ConfirmApprovalCard({
           <span style={{ color: "var(--accent)" }}>$</span> {prompt.preview ?? prompt.subtitle}
         </>
       }
+      previewClassName="ap-preview--long"
       meta={t("thread.riskMedium", {
         kind: prompt.kind === "shell" ? "run_command" : "run_background",
       })}
@@ -647,6 +648,7 @@ export function PathAccessApprovalCard({
           ) : null}
         </>
       }
+      previewClassName="ap-preview--long"
       meta={t("thread.riskMedium", { kind: intent })}
       primaryLabel={
         allowAction?.label ?? (isWrite ? t("thread.allowWrite") : t("thread.allowRead"))

@@ -11,6 +11,7 @@ export function ApprovalCard({
   sub,
   body,
   preview,
+  previewClassName,
   meta,
   primaryLabel,
   secondaryLabel,
@@ -25,6 +26,7 @@ export function ApprovalCard({
   sub?: string;
   body?: ReactNode;
   preview?: ReactNode;
+  previewClassName?: string;
   meta?: ReactNode;
   primaryLabel?: string;
   secondaryLabel?: string;
@@ -47,7 +49,11 @@ export function ApprovalCard({
         </div>
       </div>
       {body ? <div className="ap-body">{body}</div> : null}
-      {preview ? <div className="ap-preview">{preview}</div> : null}
+      {preview ? (
+        <div className={previewClassName ? `ap-preview ${previewClassName}` : "ap-preview"}>
+          {preview}
+        </div>
+      ) : null}
       <div className="ap-foot">
         {onPrimary ? (
           <button type="button" className="btn primary" onClick={onPrimary}>
