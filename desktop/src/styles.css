@@ -9709,12 +9709,14 @@ html[data-platform="macos"] .app {
 
 .tabbar {
   --top-tab-width: 156px;
+  --top-tab-min-width: 48px;
   height: 30px;
   align-items: center;
   padding: 3px 10px;
   gap: 4px;
   background: color-mix(in oklch, var(--panel) 72%, var(--bg));
   border-bottom-color: color-mix(in oklch, var(--border) 72%, transparent);
+  overflow: hidden;
 }
 
 .tab {
@@ -9731,8 +9733,9 @@ html[data-platform="macos"] .app {
 }
 
 .tab:not(.newtab) {
-  width: var(--top-tab-width);
-  flex: 0 0 var(--top-tab-width);
+  min-width: var(--top-tab-min-width);
+  max-width: var(--top-tab-width);
+  flex: 1 1 var(--top-tab-width);
 }
 
 .tab:hover {

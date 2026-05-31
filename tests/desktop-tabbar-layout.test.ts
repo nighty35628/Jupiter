@@ -10,11 +10,13 @@ function cssRule(selector: string): string {
 }
 
 describe("desktop top tab layout", () => {
-  it("keeps regular tabs fixed width even when workspace names are short", () => {
-    expect(cssRule(".tab:not(.newtab)")).toContain("flex: 0 0 var(--top-tab-width");
-    expect(cssRule(".tab:not(.newtab)")).toContain("width: var(--top-tab-width");
+  it("lets regular tabs prefer a stable width but shrink before hiding the new-tab button", () => {
+    expect(cssRule(".tabbar")).toContain("overflow: hidden");
+    expect(cssRule(".tab:not(.newtab)")).toContain("flex: 1 1 var(--top-tab-width");
+    expect(cssRule(".tab:not(.newtab)")).toContain("min-width: var(--top-tab-min-width");
+    expect(cssRule(".tab:not(.newtab)")).toContain("max-width: var(--top-tab-width");
     expect(cssRule(".tab .label")).toContain("text-overflow: ellipsis");
     expect(cssRule(".tab .label")).toContain("min-width: 0");
-    expect(cssRule(".tab.newtab")).toContain("width: auto");
+    expect(cssRule(".tab.newtab")).toContain("flex: 0 0 auto");
   });
 });
