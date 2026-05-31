@@ -1,0 +1,329 @@
+import { Box, type Color, Text, useStdout } from "ink";
+import React from "react";
+import { type DiffDisplay, loadDiffDisplay } from "../../../config.js";
+import { t } from "../../../i18n/index.js";
+import { Markdown } from "../markdown.js";
+import { Card } from "../primitives/Card.js";
+import { CardHeader, type MetaItem } from "../primitives/CardHeader.js";
+import { PULSE_SQUARE, Pulse } from "../primitives/Pulse.js";
+import type { ToolCard as ToolCardData } from "../state/cards.js";
+import { useIsInflight } from "../state/inflight-context.js";
+import { VerboseContext } from "../state/verbose-context.js";
+import { clipToCells } from "../text-width.js";
+import { FG, TONE, TONE_ACTIVE } from "../theme/tokens.js";
+import { selectToolPreviewLines } from "../tool-summary.js";
+
+const READ_TAIL = 2;
+const OTHER_TAIL = 5;
+
+const EDIT_TOOL_NAMES = new Set(["edit_file", "write_file", "multi_edit"]);
+
+function isEditTool(name: string): boolean {
+  return EDIT_TOOL_NAMES.has(name) || EDIT_TOOL_NAMES.has(name.replace(/^.*_/, ""));
+}
+
+interface DiffLine {
+  kind: "ctx" | "add" | "del" | "hunk";
+  text: string;
+}
+
+function parseDiffFromOutput(output: string): { file: string; lines: DiffLine[] } | null {
+  const lines = output.split("\n");
+  if (lines.length < 2) return null;
+
+  let file = "";
+  const diffLines: DiffLine[] = [];
+  let inDiff = false;
+
+  for (const line of lines) {
+    // Header: "edited path (N→M chars)" or "created path (N chars)"
+    const headerMatch = line.match(/^(?:edited|created)\s+(.+?)\s+\(/);
+    if (headerMatch) {
+      file = headerMatch[1] ?? "";
+      continue;
+    }
+    // Hunk header
+    if (line.startsWith("@@ ")) {
+      inDiff = true;
+      diffLines.push({ kind: "hunk", text: line });
+      continue;
+    }
+    if (inDiff) {
+      if (line.startsWith("+") && !line.startsWith("+++")) {
+        diffLines.push({ kind: "add", text: line.slice(1) });
+      } else if (line.startsWith("-") && !line.startsWith("---")) {
+        diffLines.push({ kind: "del", text: line.slice(1) });
+      } else if (line.startsWith(" ")) {
+        diffLines.push({ kind: "ctx", text: line.slice(1) });
+      }
+    }
+  }
+  if (diffLines.length === 0) return null;
+  return { file, lines: diffLines };
+}
+
+/** Read-style tools dump file/list bodies — short tail is enough; the model already has the full text in context. */
+function tailLinesFor(name: string): number {
+  const lower = name.toLowerCase();
+  return /(?:^|_)(read|search|list|tree|get|status|diff|fetch|grep)(_|$)/.test(lower) ||
+    lower === "job_output"
+    ? READ_TAIL
+    : OTHER_TAIL;
+}
+
+export function ToolCard({ card }: { card: ToolCardData }): React.ReactElement {
+  const { stdout } = useStdout();
+  const cols = stdout?.columns ?? 80;
+  const lineCells = Math.max(20, cols - 4);
+  const argsLabel = formatArgsSummary(card.args);
+
+  const subagentMarkdown = React.useMemo(
+    () => unwrapSubagentMarkdown(card.name, card.output),
+    [card.name, card.output],
+  );
+
+  const diffDisplay = React.useMemo<DiffDisplay>(() => loadDiffDisplay(), []);
+  const parsedDiff = React.useMemo(
+    () =>
+      diffDisplay === "full" && isEditTool(card.name) ? parseDiffFromOutput(card.output) : null,
+    [diffDisplay, card.name, card.output],
+  );
+
+  const verbose = React.useContext(VerboseContext);
+  const tail = tailLinesFor(card.name);
+  const preview = selectToolPreviewLines({
+    toolName: card.name,
+    output: card.output,
+    exitCode: card.exitCode,
+    tailLines: tail,
+    verbose,
+  });
+  const firstHiddenRow = preview.rows.findIndex((row) => row.kind === "hidden");
+  const isInflight = useIsInflight(card.id);
+  const status = toolStatus(card, isInflight);
+  const headColor = headerColorFor(status);
+  const errColor = card.exitCode && card.exitCode !== 0 ? TONE.err : FG.sub;
+  // Rejected calls show a single trailing badge — the verbose JSON error body
+  // is already conveyed by the badge, so dropping the body keeps the card tight.
+  const showBody = !card.rejected && (subagentMarkdown !== null || preview.rows.length > 0);
+
+  // In full mode, for edit tools, show diff instead of raw preview.
+  const showDiff = parsedDiff !== null && parsedDiff.lines.length > 0;
+
+  const meta: MetaItem[] = [];
+  if (card.retry) {
+    meta.push({ text: `↻ ${card.retry.attempt}/${card.retry.max}`, color: TONE.warn });
+  }
+  if (card.rejected) {
+    meta.push({ text: t("cardLabels.rejected"), color: TONE.err });
+  }
+  if (showDiff) {
+    const adds = parsedDiff!.lines.filter((l) => l.kind === "add").length;
+    const dels = parsedDiff!.lines.filter((l) => l.kind === "del").length;
+    meta.push({ text: `+${adds}`, color: TONE.ok });
+    meta.push({ text: `-${dels}`, color: TONE.err });
+  }
+  for (const part of metaTrail(card)) meta.push(part);
+
+  const headerGlyph =
+    status === "running" ? (
+      <Pulse active frames={PULSE_SQUARE} settled="▣" color={headColor} />
+    ) : (
+      statusGlyph(status)
+    );
+  const headerTitle = showDiff && parsedDiff!.file ? parsedDiff!.file : card.name;
+
+  const DIFF_LINE_COLOR: Record<string, Color> = {
+    add: TONE.ok,
+    del: TONE.err,
+    ctx: FG.sub,
+    hunk: FG.faint,
+  };
+  const DIFF_LINE_GLYPH: Record<string, string> = {
+    add: "+",
+    del: "-",
+    ctx: " ",
+    hunk: " ",
+  };
+
+  return (
+    <Card tone={headColor}>
+      <CardHeader
+        glyph={headerGlyph}
+        tone={headColor}
+        title={headerTitle}
+        subtitle={argsLabel || undefined}
+        meta={meta.length > 0 ? meta : undefined}
+      />
+      {showDiff ? (
+        <>
+          {parsedDiff!.lines.map((ln, i) => (
+            <Box key={`${card.id}:diff:${i}`} flexDirection="row" gap={1}>
+              <Text color={DIFF_LINE_COLOR[ln.kind] ?? FG.sub}>
+                {DIFF_LINE_GLYPH[ln.kind] ?? " "}
+              </Text>
+              <Text color={DIFF_LINE_COLOR[ln.kind] ?? FG.sub} dim={ln.kind === "ctx"}>
+                {clipToCells(ln.text, lineCells - 2) || " "}
+              </Text>
+            </Box>
+          ))}
+        </>
+      ) : (
+        showBody &&
+        (subagentMarkdown !== null ? (
+          <Markdown text={subagentMarkdown} width={lineCells} />
+        ) : (
+          <>
+            {preview.rows.map((row, i) =>
+              row.kind === "hidden" ? (
+                <Text key={`${card.id}:hidden:${i}`} color={FG.faint}>
+                  {t(
+                    hiddenRowLabelKey({
+                      count: row.count,
+                      includeShortcut: i === firstHiddenRow,
+                    }),
+                    { count: row.count },
+                  )}
+                </Text>
+              ) : (
+                <Text
+                  key={`${card.id}:line:${row.index}`}
+                  color={errColor}
+                  dim={!card.exitCode || card.exitCode === 0}
+                >
+                  {clipToCells(row.text, lineCells) || " "}
+                </Text>
+              ),
+            )}
+          </>
+        ))
+      )}
+    </Card>
+  );
+}
+
+function hiddenRowLabelKey({
+  count,
+  includeShortcut,
+}: {
+  count: number;
+  includeShortcut: boolean;
+}):
+  | "cardLabels.earlierLine"
+  | "cardLabels.earlierLines"
+  | "cardLabels.hiddenLine"
+  | "cardLabels.hiddenLines" {
+  if (includeShortcut) return count === 1 ? "cardLabels.earlierLine" : "cardLabels.earlierLines";
+  return count === 1 ? "cardLabels.hiddenLine" : "cardLabels.hiddenLines";
+}
+
+function unwrapSubagentMarkdown(name: string, output: string): string | null {
+  if (name !== "spawn_subagent") return null;
+  if (output.length === 0) return null;
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const obj = parsed as Record<string, unknown>;
+    if (obj.success !== true) return null;
+    if (typeof obj.output !== "string") return null;
+    return obj.output;
+  } catch {
+    return null;
+  }
+}
+
+type ToolStatus = "running" | "ok" | "rejected" | "error" | "aborted";
+
+function toolStatus(card: ToolCardData, isInflight: boolean): ToolStatus {
+  // Running is derived from the loop's inflight set so a missed `tool` event
+  // can't strand the spinner forever — finally in runOneToolCall guarantees
+  // the id leaves the set on every exit path.
+  if (isInflight) return "running";
+  if (card.rejected) return "rejected";
+  if (card.aborted) return "aborted";
+  if (card.exitCode !== undefined && card.exitCode !== 0) return "error";
+  return "ok";
+}
+
+function statusGlyph(s: ToolStatus): string {
+  switch (s) {
+    case "running":
+      return "●";
+    case "ok":
+      return "✓";
+    case "rejected":
+      return "✗";
+    case "error":
+      return "✗";
+    case "aborted":
+      return "⊘";
+  }
+}
+
+function headerColorFor(s: ToolStatus): Color {
+  switch (s) {
+    case "ok":
+      return TONE.ok;
+    case "rejected":
+    case "error":
+    case "aborted":
+      return TONE.err;
+    case "running":
+      return TONE_ACTIVE.brand;
+  }
+}
+
+function metaTrail(card: ToolCardData): string[] {
+  const parts: string[] = [];
+  const inputBytes = largestStringInputBytes(card.args);
+  if (inputBytes !== null) parts.push(t("cardLabels.bytesIn", { bytes: formatBytes(inputBytes) }));
+  if (card.elapsedMs > 0)
+    parts.push(t("cardLabels.elapsedSec", { secs: (card.elapsedMs / 1000).toFixed(2) }));
+  if (
+    card.done &&
+    !card.rejected &&
+    !card.aborted &&
+    card.exitCode !== undefined &&
+    card.exitCode !== 0
+  ) {
+    parts.push(t("cardLabels.exit", { code: card.exitCode }));
+  }
+  return parts;
+}
+
+function formatArgsSummary(args: unknown): string {
+  if (typeof args === "string") return args.length > 60 ? `${args.slice(0, 60)}…` : args;
+  if (args && typeof args === "object") {
+    const keys = Object.keys(args as Record<string, unknown>);
+    if (keys.length === 0) return "";
+    const first = keys[0]!;
+    const value = (args as Record<string, unknown>)[first];
+    if (typeof value === "string") {
+      const trimmed = value.length > 40 ? `${value.slice(0, 40)}…` : value;
+      return keys.length === 1 ? trimmed : `${trimmed}  +${keys.length - 1}`;
+    }
+    return keys.join(" ");
+  }
+  return "";
+}
+
+const INPUT_SIZE_THRESHOLD = 1024;
+
+/** Largest string field on args, when above threshold. Surfaces input bulk for write_file (content), edit_file (replace), run_command (long stdin), etc. without per-tool special cases. */
+export function largestStringInputBytes(args: unknown): number | null {
+  let max = 0;
+  if (typeof args === "string") {
+    max = args.length;
+  } else if (args && typeof args === "object") {
+    for (const v of Object.values(args as Record<string, unknown>)) {
+      if (typeof v === "string" && v.length > max) max = v.length;
+    }
+  }
+  return max >= INPUT_SIZE_THRESHOLD ? max : null;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}

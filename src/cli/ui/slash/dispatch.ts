@@ -1,0 +1,67 @@
+import { t } from "../../../i18n/index.js";
+import type { CacheFirstLoop } from "../../../loop.js";
+import { resolveSlashAlias } from "./commands.js";
+import { handlers as adminHandlers } from "./handlers/admin.js";
+import { handlers as basicHandlers } from "./handlers/basic.js";
+import { handlers as dashboardHandlers } from "./handlers/dashboard.js";
+import { handlers as diffHandlers } from "./handlers/diff.js";
+import { handlers as editsHandlers } from "./handlers/edits.js";
+import { handlers as initHandlers } from "./handlers/init.js";
+import { handlers as jobsHandlers } from "./handlers/jobs.js";
+import { handlers as languageHandlers } from "./handlers/language.js";
+import { handlers as mcpHandlers } from "./handlers/mcp.js";
+import { handlers as memoryHandlers } from "./handlers/memory.js";
+import { handlers as modelHandlers } from "./handlers/model.js";
+import { handlers as observabilityHandlers } from "./handlers/observability.js";
+import { handlers as permissionsHandlers } from "./handlers/permissions.js";
+import { handlers as plansHandlers } from "./handlers/plans.js";
+import { handlers as qqHandlers } from "./handlers/qq.js";
+import { handlers as sessionsHandlers } from "./handlers/sessions.js";
+import { handlers as skillHandlers } from "./handlers/skill.js";
+import { handlers as telegramHandlers } from "./handlers/telegram.js";
+import { handlers as themeHandlers } from "./handlers/theme.js";
+import { handlers as webSearchEngineHandlers } from "./handlers/web-search-engine.js";
+import { nearestCommands } from "./nearest.js";
+import type { SlashContext, SlashResult } from "./types.js";
+
+/** Synchronous return — async work fires-and-forgets via `ctx.postInfo` to keep input non-blocking. */
+export type SlashHandler = (args: string[], loop: CacheFirstLoop, ctx: SlashContext) => SlashResult;
+
+const HANDLERS: Record<string, SlashHandler> = {
+  ...adminHandlers,
+  ...basicHandlers,
+  ...dashboardHandlers,
+  ...diffHandlers,
+  ...editsHandlers,
+  ...initHandlers,
+  ...jobsHandlers,
+  ...languageHandlers,
+  ...mcpHandlers,
+  ...memoryHandlers,
+  ...modelHandlers,
+  ...observabilityHandlers,
+  ...permissionsHandlers,
+  ...plansHandlers,
+  ...qqHandlers,
+  ...sessionsHandlers,
+  ...themeHandlers,
+  ...skillHandlers,
+  ...telegramHandlers,
+  ...webSearchEngineHandlers,
+};
+
+export function handleSlash(
+  cmd: string,
+  args: string[],
+  loop: CacheFirstLoop,
+  ctx: SlashContext = {},
+): SlashResult {
+  const h = HANDLERS[resolveSlashAlias(cmd)];
+  if (h) return h(args, loop, ctx);
+  const suggestions = nearestCommands(cmd, Object.keys(HANDLERS));
+  if (suggestions.length > 0) {
+    const list = suggestions.map((name) => `/${name}`).join(", ");
+    return { unknown: true, info: t("handlers.basic.unknownCommand", { cmd, list }) };
+  }
+  return { unknown: true, info: t("handlers.basic.unknownCommandShort", { cmd }) };
+}

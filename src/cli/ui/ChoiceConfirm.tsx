@@ -1,0 +1,59 @@
+/** Modal picker for `ask_choice` — options + optional "type my own" escape hatch. */
+
+import React from "react";
+import { t } from "../../i18n/index.js";
+import type { ChoiceOption } from "../../tools/choice.js";
+import { SingleSelect } from "./Select.js";
+import { ApprovalCard } from "./cards/ApprovalCard.js";
+
+export type ChoiceConfirmChoice =
+  | { kind: "pick"; optionId: string }
+  | { kind: "custom" }
+  | { kind: "cancel" };
+
+export interface ChoiceConfirmProps {
+  question: string;
+  options: ChoiceOption[];
+  allowCustom: boolean;
+  onChoose: (choice: ChoiceConfirmChoice) => void;
+}
+
+const CUSTOM_VALUE = "__custom__";
+const CANCEL_VALUE = "__cancel__";
+
+function ChoiceConfirmInner({ question, options, allowCustom, onChoose }: ChoiceConfirmProps) {
+  const items: Array<{ value: string; label: string; hint?: string }> = options.map((opt) => ({
+    value: opt.id,
+    label: `${opt.id} · ${opt.title}`,
+    hint: opt.summary,
+  }));
+  if (allowCustom) {
+    items.push({
+      value: CUSTOM_VALUE,
+      label: t("choiceConfirm.customLabel"),
+      hint: t("choiceConfirm.customDesc"),
+    });
+  }
+  items.push({
+    value: CANCEL_VALUE,
+    label: t("choiceConfirm.cancelLabel"),
+    hint: t("choiceConfirm.cancelDesc"),
+  });
+
+  return (
+    <ApprovalCard tone="info" title={question} metaRight={t("shellConfirm.awaiting")}>
+      <SingleSelect
+        initialValue={options[0]?.id}
+        items={items}
+        onSubmit={(v) => {
+          if (v === CUSTOM_VALUE) onChoose({ kind: "custom" });
+          else if (v === CANCEL_VALUE) onChoose({ kind: "cancel" });
+          else onChoose({ kind: "pick", optionId: v });
+        }}
+        onCancel={() => onChoose({ kind: "cancel" })}
+      />
+    </ApprovalCard>
+  );
+}
+
+export const ChoiceConfirm = React.memo(ChoiceConfirmInner);

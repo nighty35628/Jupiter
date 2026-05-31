@@ -1,0 +1,1680 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SLASH_COMMANDS,
+  SLASH_GROUP_ORDER,
+  detectSlashArgContext,
+  handleSlash,
+  parseSlash,
+  suggestSlashCommands,
+} from "../src/cli/ui/slash.js";
+import { DeepSeekClient, Usage } from "../src/client.js";
+import { loadTheme, readConfig } from "../src/config.js";
+import {
+  getLanguage,
+  notifyLanguageChange,
+  onLanguageChange,
+  setLanguageRuntime,
+} from "../src/i18n/index.js";
+import { CacheFirstLoop } from "../src/loop.js";
+import { ImmutablePrefix } from "../src/memory/runtime.js";
+import { VERSION } from "../src/version.js";
+
+function makeLoop() {
+  const client = new DeepSeekClient({
+    apiKey: "sk-test",
+    fetch: vi.fn() as unknown as typeof fetch,
+  });
+  return new CacheFirstLoop({
+    client,
+    prefix: new ImmutablePrefix({ system: "s" }),
+  });
+}
+
+describe("parseSlash", () => {
+  it("returns null on non-slash input", () => {
+    expect(parseSlash("hello")).toBeNull();
+    expect(parseSlash("")).toBeNull();
+    expect(parseSlash("/")).toBeNull();
+  });
+  it("returns null on comment-like input starting with //", () => {
+    expect(parseSlash("// some comment")).toBeNull();
+    expect(parseSlash("//")).toBeNull();
+    expect(parseSlash("//help")).toBeNull();
+    expect(parseSlash("// /still/a/comment")).toBeNull();
+  });
+  it("lowercases the command and splits args", () => {
+    expect(parseSlash("/Harvest on")).toEqual({ cmd: "harvest", args: ["on"] });
+    expect(parseSlash("/branch 3")).toEqual({ cmd: "branch", args: ["3"] });
+    expect(parseSlash("/help")).toEqual({ cmd: "help", args: [] });
+  });
+});
+
+describe("handleSlash", () => {
+  it("/exit requests exit (incl. /quit and /q aliases)", () => {
+    const loop = makeLoop();
+    expect(handleSlash("exit", [], loop).exit).toBe(true);
+    expect(handleSlash("quit", [], loop).exit).toBe(true);
+    expect(handleSlash("q", [], loop).exit).toBe(true);
+  });
+
+  it("alias prefixes surface the canonical spec in suggestions", () => {
+    const matches = suggestSlashCommands("q");
+    expect(matches.map((s) => s.cmd)).toContain("exit");
+    expect(matches.find((s) => s.cmd === "exit")?.aliases).toEqual(["quit", "q"]);
+    expect(suggestSlashCommands("?").map((s) => s.cmd)).toContain("help");
+    expect(suggestSlashCommands("res").map((s) => s.cmd)).toContain("new");
+  });
+
+  it("bare-slash browsing follows the shared group order", () => {
+    const matches = suggestSlashCommands("");
+    const seenGroups = [...new Set(matches.map((spec) => spec.group))];
+    expect(seenGroups).toEqual(SLASH_GROUP_ORDER.filter((group) => group !== "advanced"));
+
+    const setupCommands = matches.filter((spec) => spec.group === "setup").map((spec) => spec.cmd);
+    expect(setupCommands).toEqual(
+      SLASH_COMMANDS.filter((spec) => spec.group === "setup").map((spec) => spec.cmd),
+    );
+  });
+
+  it("detectSlashArgContext resolves an alias to its canonical spec", () => {
+    const ctx = detectSlashArgContext("/lang zh");
+    expect(ctx).not.toBeNull();
+    expect(ctx!.spec.cmd).toBe("language");
+  });
+
+  it("/new drops in-memory context AND clears scrollback", () => {
+    const loop = makeLoop();
+    loop.log.append({ role: "user", content: "message 1" });
+    loop.log.append({ role: "assistant", content: "reply 1" });
+    loop.log.append({ role: "user", content: "message 2" });
+    expect(loop.log.length).toBe(3);
+    const r = handleSlash("new", [], loop);
+    expect(r.clear).toBe(true);
+    expect(r.info).toMatch(/dropped 3/);
+    expect(loop.log.length).toBe(0);
+  });
+
+  it("/reset and /clear are aliases for /new (single fresh-start command)", () => {
+    for (const name of ["reset", "clear"]) {
+      const loop = makeLoop();
+      loop.log.append({ role: "user", content: "hi" });
+      const r = handleSlash(name, [], loop);
+      expect(r.clear).toBe(true);
+      expect(loop.log.length).toBe(0);
+    }
+  });
+
+  it("/help returns a multi-line message", () => {
+    const r = handleSlash("help", [], makeLoop());
+    expect(r.info).toMatch(/\/status/);
+    expect(r.info).toMatch(/\/effort/);
+    expect(r.info).toMatch(/\/compact/);
+  });
+
+  it("/help groups commands in the shared order", () => {
+    const info = handleSlash("help", [], makeLoop()).info ?? "";
+    const groupHeaders = [
+      ...info.matchAll(/^ {2}(SETUP|INFO|CHAT|EXTEND|SESSION|CODE|JOBS|ADVANCED)\b/gm),
+    ].map((match) => match[1]);
+    expect(groupHeaders).toEqual(SLASH_GROUP_ORDER.map((group) => group.toUpperCase()));
+    expect(info.indexOf("  SETUP")).toBeLessThan(info.indexOf("  CHAT"));
+  });
+
+  it("/about prints version, website, repo, and MIT license", () => {
+    const r = handleSlash("about", [], makeLoop());
+    expect(r.info).toContain(VERSION);
+    expect(r.info).toContain("https://esengine.github.io/DeepSeek-Jupiter/");
+    expect(r.info).toContain("https://github.com/esengine/DeepSeek-Jupiter");
+    expect(r.info).toContain("MIT");
+    expect(SLASH_COMMANDS.find((s) => s.cmd === "about")?.group).toBe("info");
+  });
+
+  it("/title starts AI session title regeneration", async () => {
+    let called = 0;
+    let posted = "";
+    const result = handleSlash("title", [], makeLoop(), {
+      generateSessionTitle: async () => {
+        called++;
+        return '▸ session renamed to "Fix-parser-cache-bug"';
+      },
+      postInfo: (text) => {
+        posted = text;
+      },
+    });
+    expect(result.info).toMatch(/naming|title/i);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(called).toBe(1);
+    expect(posted).toContain("Fix-parser-cache-bug");
+  });
+
+  it("/status reflects current loop config", () => {
+    const loop = makeLoop();
+    const r = handleSlash("status", [], loop);
+    expect(r.info).toMatch(/model\s+deepseek-/);
+    expect(r.info).toMatch(/effort=high/);
+  });
+
+  it("/model switches the model", () => {
+    const loop = makeLoop();
+    const tempDir = mkdtempSync(join(tmpdir(), "jupiter-slash-model-basic-"));
+    const tempConfig = join(tempDir, "config.json");
+    try {
+      handleSlash("model", ["deepseek-reasoner"], loop, { configPath: tempConfig });
+      expect(loop.model).toBe("deepseek-reasoner");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("/model soft-warns when id is not in the fetched catalog but still switches", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "jupiter-slash-model-warn-"));
+    const tempConfig = join(tempDir, "config.json");
+    try {
+      const loop = makeLoop();
+      const r = handleSlash("model", ["deepseek-made-up"], loop, {
+        models: ["deepseek-chat", "deepseek-reasoner"],
+        configPath: tempConfig,
+      });
+      expect(loop.model).toBe("deepseek-made-up");
+      expect(r.info).toMatch(/not in the fetched catalog/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("/model persists to the provided configPath instead of the user's global config", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "jupiter-slash-model-"));
+    const tempConfig = join(tempDir, "config.json");
+    try {
+      const loop = makeLoop();
+      const r = handleSlash("model", ["deepseek-made-up"], loop, {
+        models: ["deepseek-chat", "deepseek-reasoner"],
+        configPath: tempConfig,
+      });
+      expect(loop.model).toBe("deepseek-made-up");
+      expect(r.info).toMatch(/not in the fetched catalog/);
+      const saved = JSON.parse(readFileSync(tempConfig, "utf8"));
+      expect(saved.model).toBe("deepseek-made-up");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("/search-engine accepts baidu and saves an inline API key", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "jupiter-slash-search-engine-"));
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    try {
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      const result = handleSlash("search-engine", ["baidu", "test-baidu-key"], makeLoop());
+      expect(result.info).toContain("baidu");
+      const configPath = join(tempHome, ".jupiter", "config.json");
+      expect(readConfig(configPath)).toMatchObject({
+        webSearchEngine: "baidu",
+        baiduApiKey: "test-baidu-key",
+      });
+    } finally {
+      if (originalHome === undefined) {
+        // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalUserProfile === undefined) {
+        // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = originalUserProfile;
+      }
+      if (existsSync(tempHome)) rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("/search-engine baidu without a key points at both supported env vars", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "jupiter-slash-search-engine-"));
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const originalBaidu = process.env.BAIDU_API_KEY;
+    const originalQianfan = process.env.QIANFAN_API_KEY;
+    try {
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
+      delete process.env.BAIDU_API_KEY;
+      // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
+      delete process.env.QIANFAN_API_KEY;
+      const result = handleSlash("search-engine", ["baidu"], makeLoop());
+      expect(result.info).toContain("BAIDU_API_KEY or QIANFAN_API_KEY");
+    } finally {
+      if (originalHome === undefined) {
+        // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalUserProfile === undefined) {
+        // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = originalUserProfile;
+      }
+      if (originalBaidu === undefined) {
+        // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
+        delete process.env.BAIDU_API_KEY;
+      } else {
+        process.env.BAIDU_API_KEY = originalBaidu;
+      }
+      if (originalQianfan === undefined) {
+        // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
+        delete process.env.QIANFAN_API_KEY;
+      } else {
+        process.env.QIANFAN_API_KEY = originalQianfan;
+      }
+      if (existsSync(tempHome)) rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("/model with no arg opens the unified picker (#371)", () => {
+    const loop = makeLoop();
+    const r = handleSlash("model", [], loop, {
+      models: ["deepseek-chat", "deepseek-reasoner"],
+    });
+    expect(r.openModelPicker).toBe(true);
+  });
+
+  it("/effort with no arg returns the current value", () => {
+    const r = handleSlash("effort", [], makeLoop());
+    expect(r.info).toMatch(/effort/);
+    expect(r.info).toMatch(/low.*medium.*high.*max/);
+  });
+
+  it("unknown commands return an unknown flag with hint", () => {
+    const r = handleSlash("nope", [], makeLoop());
+    expect(r.unknown).toBe(true);
+    expect(r.info).toMatch(/unknown command/);
+  });
+
+  it("/mcp with no servers attached opens the marketplace tab directly", () => {
+    const r = handleSlash("mcp", [], makeLoop());
+    expect(r.openMcpHub).toEqual({ tab: "marketplace" });
+  });
+
+  it("/mcp text shows the spec strings from SlashContext", () => {
+    const r = handleSlash("mcp", ["text"], makeLoop(), {
+      mcpSpecs: [
+        "filesystem=npx -y @modelcontextprotocol/server-filesystem /tmp",
+        "kb=https://kb.example.com/sse",
+      ],
+    });
+    expect(r.info).toMatch(/MCP servers \(2\)/);
+    expect(r.info).toMatch(/server-filesystem/);
+    expect(r.info).toContain("kb.example.com");
+  });
+
+  it("/mcp opens the hub on Marketplace when no servers are bridged (even with native tools)", () => {
+    const r = handleSlash("mcp", [], makeLoop(), {
+      mcpSpecs: ["filesystem=npx -y @scope/fs /tmp"],
+    });
+    expect(r.openMcpHub).toEqual({ tab: "marketplace" });
+  });
+
+  it("/compact returns synchronously with a 'folding…' status and fires fold async", async () => {
+    const loop = makeLoop();
+    let posted = "";
+    const r = handleSlash("compact", [], loop, {
+      postInfo: (text) => {
+        posted = text;
+      },
+    });
+    // Sync return is the starting status, not the result.
+    expect(r.info).toMatch(/folding/i);
+    // Fold call is in flight; await it via the public API to reach the postInfo path.
+    // Empty log → noop result.
+    await loop.compactHistory();
+    // Poll briefly for the postInfo (handler's promise settles in the same tick).
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(posted).toMatch(/nothing to fold|folded/);
+  });
+
+  it("/effort accepts each enum value", () => {
+    for (const e of ["low", "medium", "high", "max"] as const) {
+      const loop = makeLoop();
+      handleSlash("effort", [e], loop);
+      expect(loop.reasoningEffort).toBe(e);
+    }
+  });
+
+  it("/effort with bad name returns usage", () => {
+    const r = handleSlash("effort", ["nonsense"], makeLoop());
+    expect(r.info).toMatch(/usage/);
+  });
+
+  it("/effort rejects `max` on non-DeepSeek endpoints (#1794)", () => {
+    const client = new DeepSeekClient({
+      apiKey: "sk-test",
+      baseUrl: "http://localhost:8080/v1",
+      fetch: vi.fn() as unknown as typeof fetch,
+    });
+    const loop = new CacheFirstLoop({ client, prefix: new ImmutablePrefix({ system: "s" }) });
+    const r = handleSlash("effort", ["max"], loop);
+    expect(r.info).toMatch(/usage/);
+    expect(r.info).not.toMatch(/\bmax\b/);
+    expect(loop.reasoningEffort).not.toBe("max");
+  });
+
+  it("/effort status on non-DeepSeek endpoint omits `max` from the list (#1794)", () => {
+    const client = new DeepSeekClient({
+      apiKey: "sk-test",
+      baseUrl: "http://localhost:8080/v1",
+      fetch: vi.fn() as unknown as typeof fetch,
+    });
+    const loop = new CacheFirstLoop({ client, prefix: new ImmutablePrefix({ system: "s" }) });
+    const r = handleSlash("effort", [], loop);
+    expect(r.info).toMatch(/low/);
+    expect(r.info).toMatch(/medium/);
+    expect(r.info).toMatch(/high/);
+    expect(r.info).not.toMatch(/\bmax\b/);
+  });
+
+  it("/help mentions sessions", () => {
+    const r = handleSlash("help", [], makeLoop());
+    expect(r.info).toMatch(/\/sessions/);
+  });
+
+  it("/help mentions /mcp", () => {
+    const r = handleSlash("help", [], makeLoop());
+    expect(r.info).toMatch(/\/mcp/);
+  });
+
+  it("/help explains the per-call shell-exec approval flow (issue #866)", () => {
+    const r = handleSlash("help", [], makeLoop());
+    expect(r.info).toMatch(/per-call approval/i);
+    expect(r.info).toMatch(/allow once/i);
+    expect(r.info).toMatch(/allow always/i);
+    expect(r.info).toMatch(/deny/i);
+  });
+
+  it("/undo outside code mode says it's not available", () => {
+    const r = handleSlash("undo", [], makeLoop());
+    expect(r.info).toMatch(/only available inside .jupiter code/);
+  });
+
+  it("/restore with no arg opens the checkpoint picker in code mode", () => {
+    const r = handleSlash("restore", [], makeLoop(), { codeRoot: "/tmp" });
+    expect(r.openCheckpointPicker).toBe(true);
+    expect(r.info).toBeUndefined();
+  });
+
+  it("/restore <name> in code mode still resolves directly (skips picker)", () => {
+    const r = handleSlash("restore", ["nonexistent"], makeLoop(), { codeRoot: "/tmp" });
+    expect(r.openCheckpointPicker).toBeUndefined();
+    expect(r.info).toMatch(/no.*match|not found/i);
+  });
+
+  it("/restore outside code mode is unavailable regardless of args", () => {
+    const noArg = handleSlash("restore", [], makeLoop());
+    expect(noArg.openCheckpointPicker).toBeUndefined();
+    expect(noArg.info).toMatch(/only available inside .jupiter code/);
+    const withArg = handleSlash("restore", ["abc"], makeLoop());
+    expect(withArg.info).toMatch(/only available inside .jupiter code/);
+  });
+
+  it("/undo in code mode invokes the callback", () => {
+    const r = handleSlash("undo", [], makeLoop(), {
+      codeUndo: () => "▸ restored 2 file(s)",
+    });
+    expect(r.info).toMatch(/restored 2 file/);
+  });
+
+  it("/undo records reverted edits in model context", () => {
+    const loop = makeLoop();
+    const r = handleSlash("undo", [], loop, {
+      codeUndo: () => ({
+        info: "▸ undo: reverted demo.txt from batch #1",
+        contextEvent: { batchId: 1, source: "auto", paths: ["demo.txt"] },
+      }),
+    });
+
+    expect(r.info).toContain("reverted demo.txt");
+    expect(loop.log.entries.at(-1)).toMatchObject({
+      role: "system",
+      content: expect.stringContaining("The user ran /undo and reverted edit batch #1"),
+    });
+  });
+
+  it("/help mentions /undo and /commit", () => {
+    const r = handleSlash("help", [], makeLoop());
+    expect(r.info).toMatch(/\/undo/);
+    expect(r.info).toMatch(/\/commit/);
+  });
+
+  it("/commit outside code mode says it's not available", () => {
+    const r = handleSlash("commit", ["foo"], makeLoop());
+    expect(r.info).toMatch(/only available inside .jupiter code/);
+  });
+
+  it("/commit with no message prints usage", () => {
+    const r = handleSlash("commit", [], makeLoop(), { codeRoot: "/tmp" });
+    expect(r.info).toMatch(/usage: \/commit/);
+  });
+
+  it("/apply outside code mode says it's not available", () => {
+    const r = handleSlash("apply", [], makeLoop());
+    expect(r.info).toMatch(/only available inside .jupiter code/);
+  });
+
+  it("/apply in code mode invokes the callback", () => {
+    const r = handleSlash("apply", [], makeLoop(), {
+      codeApply: () => "▸ 2/2 edits applied",
+    });
+    expect(r.info).toMatch(/2\/2 edits applied/);
+  });
+
+  it("/discard outside code mode says it's not available", () => {
+    const r = handleSlash("discard", [], makeLoop());
+    expect(r.info).toMatch(/only available inside .jupiter code/);
+  });
+
+  it("/discard in code mode invokes the callback", () => {
+    const r = handleSlash("discard", [], makeLoop(), {
+      codeDiscard: () => "▸ discarded 3 pending",
+    });
+    expect(r.info).toMatch(/discarded 3 pending/);
+  });
+
+  it("/help mentions /apply and /discard", () => {
+    const r = handleSlash("help", [], makeLoop());
+    expect(r.info).toMatch(/\/apply/);
+    expect(r.info).toMatch(/\/discard/);
+  });
+
+  it("/retry returns info + resubmit when there's a prior user message", () => {
+    const loop = makeLoop();
+    loop.log.append({ role: "user", content: "hello" });
+    loop.log.append({ role: "assistant", content: "hi back" });
+    const r = handleSlash("retry", [], loop);
+    expect(r.resubmit).toBe("hello");
+    expect(r.info).toMatch(/retrying/);
+    // After retry, the log should be empty (last user message and
+    // everything after were dropped; user will be re-pushed on next
+    // successful turn).
+    expect(loop.log.length).toBe(0);
+  });
+
+  it("/retry says nothing to retry when log has no user messages", () => {
+    const r = handleSlash("retry", [], makeLoop());
+    expect(r.info).toMatch(/nothing to retry/);
+    expect(r.resubmit).toBeUndefined();
+  });
+
+  it("/help mentions /retry", () => {
+    const r = handleSlash("help", [], makeLoop());
+    expect(r.info).toMatch(/\/retry/);
+  });
+
+  describe("detectSlashArgContext", () => {
+    it("returns null before the user commits to a slash name", () => {
+      expect(detectSlashArgContext("/pr")).toBeNull();
+      expect(detectSlashArgContext("/effort")).toBeNull();
+    });
+
+    it("returns null when the command doesn't exist", () => {
+      expect(detectSlashArgContext("/nope foo")).toBeNull();
+    });
+
+    it("returns null on plain prose (no slash at all)", () => {
+      expect(detectSlashArgContext("just some text")).toBeNull();
+    });
+
+    it("activates enum picker for /effort", () => {
+      const ctx = detectSlashArgContext("/effort hi");
+      expect(ctx).not.toBeNull();
+      expect(ctx!.kind).toBe("picker");
+      expect(ctx!.spec.argCompleter).toEqual(["low", "medium", "high", "max"]);
+      expect(ctx!.partial).toBe("hi");
+      expect(ctx!.partialOffset).toBe("/effort ".length);
+    });
+
+    it("activates model picker for /model", () => {
+      const ctx = detectSlashArgContext("/model deep");
+      expect(ctx).not.toBeNull();
+      expect(ctx!.kind).toBe("picker");
+      expect(ctx!.spec.argCompleter).toBe("models");
+    });
+
+    it("activates enum picker for /plan in code mode", () => {
+      const ctx = detectSlashArgContext("/plan o", true);
+      expect(ctx).not.toBeNull();
+      expect(ctx!.kind).toBe("picker");
+      expect(ctx!.spec.argCompleter).toEqual(["on", "off", "strict"]);
+    });
+
+    it("hides /plan outside code mode (command is contextual)", () => {
+      expect(detectSlashArgContext("/plan on", false)).toBeNull();
+    });
+
+    it("surfaces a hint-only row once the user types a space inside the partial", () => {
+      const ctx = detectSlashArgContext("/effort high foo");
+      expect(ctx).not.toBeNull();
+      expect(ctx!.kind).toBe("hint");
+    });
+
+    it("returns picker with empty partial when the user just hit space", () => {
+      const ctx = detectSlashArgContext("/effort ");
+      expect(ctx).not.toBeNull();
+      expect(ctx!.kind).toBe("picker");
+      expect(ctx!.partial).toBe("");
+    });
+
+    it("returns hint for commands without a completer", () => {
+      // `/commit "msg"` — free-form argument, no picker data.
+      const ctx = detectSlashArgContext('/commit "', true);
+      expect(ctx).not.toBeNull();
+      expect(ctx!.kind).toBe("hint");
+      expect(ctx!.spec.cmd).toBe("commit");
+    });
+
+    it("still surfaces picker kind when partial exactly matches an enum value", () => {
+      const ctx = detectSlashArgContext("/effort medium");
+      expect(ctx).not.toBeNull();
+      expect(ctx!.kind).toBe("picker");
+      expect(ctx!.partial).toBe("medium");
+    });
+  });
+
+  describe("/cwd", () => {
+    it("registry exposes /cwd as a code-mode command with `sandbox` alias", () => {
+      const spec = SLASH_COMMANDS.find((c) => c.cmd === "cwd");
+      expect(spec).toBeDefined();
+      expect(spec?.contextual).toBe("code");
+      expect(spec?.aliases).toContain("sandbox");
+    });
+
+    it("returns code-only message when switchCwd is not provided", () => {
+      const r = handleSlash("cwd", ["./somewhere"], makeLoop());
+      expect(r.info).toMatch(/only available inside/);
+    });
+
+    it("opens the workspace picker when called without arguments", () => {
+      const r = handleSlash("cwd", [], makeLoop(), {
+        codeRoot: "/proj",
+        switchCwd: () => ({ ok: true, info: "" }),
+      });
+      expect(r.openWorkspacePicker).toBe(true);
+    });
+
+    it("calls switchCwd and surfaces its info string", () => {
+      const calls: string[] = [];
+      const r = handleSlash("cwd", ["../sibling"], makeLoop(), {
+        switchCwd: (path) => {
+          calls.push(path);
+          return { ok: true, info: `▸ moved to ${path}` };
+        },
+      });
+      expect(calls).toEqual(["../sibling"]);
+      expect(r.info).toBe("▸ moved to ../sibling");
+    });
+
+    it("strips outer quotes from the path argument", () => {
+      const calls: string[] = [];
+      const r = handleSlash("cwd", ['"path with spaces"'], makeLoop(), {
+        switchCwd: (path) => {
+          calls.push(path);
+          return { ok: true, info: "ok" };
+        },
+      });
+      expect(calls).toEqual(["path with spaces"]);
+      expect(r.info).toBe("ok");
+    });
+
+    it("`sandbox` alias resolves to the same handler", () => {
+      const calls: string[] = [];
+      handleSlash("sandbox", ["/x"], makeLoop(), {
+        switchCwd: (p) => {
+          calls.push(p);
+          return { ok: true, info: "" };
+        },
+      });
+      expect(calls).toEqual(["/x"]);
+    });
+
+    it("the slash result returns immediately even when switchCwd kicks off async work", () => {
+      let resolved = false;
+      const r = handleSlash("cwd", ["/somewhere"], makeLoop(), {
+        switchCwd: () => {
+          // Real implementation fires `void reBootstrapSemantic(...)` in
+          // the background and returns sync. The slash dispatch must NOT
+          // wait on that — postInfo carries the eventual result.
+          queueMicrotask(() => {
+            resolved = true;
+          });
+          return { ok: true, info: "▸ workspace switched" };
+        },
+      });
+      expect(r.info).toBe("▸ workspace switched");
+      // The async work hasn't drained yet — the slash returned synchronously.
+      expect(resolved).toBe(false);
+    });
+  });
+
+  it("SLASH_COMMANDS registry contains every handler switch case", () => {
+    // Spot-check a handful so the registry doesn't silently drift
+    // from `handleSlash`. If a new case lands in handleSlash, it
+    // should also show up in suggestions — bump this list when
+    // adding.
+    const names = SLASH_COMMANDS.map((s) => s.cmd);
+    for (const required of [
+      "help",
+      "status",
+      "effort",
+      "model",
+      "language",
+      "theme",
+      "mcp",
+      "memory",
+      "retry",
+      "compact",
+      "sessions",
+      "new",
+      "exit",
+      "apply",
+      "discard",
+      "undo",
+      "commit",
+      "plan",
+    ]) {
+      expect(names, `registry missing /${required}`).toContain(required);
+    }
+  });
+
+  it("suggestSlashCommands filters by prefix", () => {
+    expect(suggestSlashCommands("h").map((s) => s.cmd)).toEqual(["help", "hooks"]);
+    // Case-insensitive.
+    expect(suggestSlashCommands("HE").map((s) => s.cmd)).toEqual(["help"]);
+    // Empty prefix returns the full non-advanced release list, including code commands.
+    expect(suggestSlashCommands("", true)).toHaveLength(44);
+    expect(suggestSlashCommands("", true).map((s) => s.cmd)).toContain("logs");
+    expect(suggestSlashCommands("", true).map((s) => s.cmd)).toContain("language");
+    expect(suggestSlashCommands("lan").map((s) => s.cmd)).toContain("language");
+  });
+
+  describe("/btw — issue #725", () => {
+    it("registers /btw under the chat group with a <question> argsHint", () => {
+      const spec = SLASH_COMMANDS.find((s) => s.cmd === "btw");
+      expect(spec).toBeDefined();
+      expect(spec?.group).toBe("chat");
+      expect(spec?.argsHint).toBe("<question>");
+    });
+
+    it("/btw is interception-handled — handleSlash routes to the unknown branch (action lives in App.tsx)", () => {
+      const loop = makeLoop();
+      const r = handleSlash("btw", ["hello?"], loop, {});
+      expect(r.unknown).toBe(true);
+    });
+
+    it("parseSlash splits /btw <multi word question> correctly", () => {
+      const r = parseSlash("/btw what is the capital of france?");
+      expect(r?.cmd).toBe("btw");
+      expect(r?.args.join(" ")).toBe("what is the capital of france?");
+    });
+  });
+
+  describe("/update", () => {
+    it("reports pending check when latestVersion is null (offline / in flight)", () => {
+      const r = handleSlash("update", [], makeLoop(), { latestVersion: null });
+      expect(r.info).toMatch(/current: Jupiter/);
+      expect(r.info).toMatch(/Jupiter update channel/);
+      expect(r.info).toMatch(/JUPITER_REGISTRY_URL/);
+    });
+
+    it("reports up-to-date when current matches latest", () => {
+      const r = handleSlash("update", [], makeLoop(), { latestVersion: VERSION });
+      expect(r.info).toMatch(/on the latest/);
+      expect(r.info).not.toMatch(/npm install/);
+    });
+
+    it("prints shell command when latest is newer than current", () => {
+      const r = handleSlash("update", [], makeLoop(), { latestVersion: "99.99.99" });
+      expect(r.info).toMatch(/99\.99\.99/);
+      expect(r.info).toMatch(/jupiter update/);
+      expect(r.info).toMatch(/npm install -g jupiter@latest/);
+    });
+
+    it("is surfaced by suggestSlashCommands", () => {
+      const names = suggestSlashCommands("up").map((s) => s.cmd);
+      expect(names).toContain("update");
+    });
+  });
+
+  describe("/stats", () => {
+    it("prints a how-to when the usage log is empty / missing", () => {
+      // Use the real ~ here — if a real log exists (developer machine),
+      // this test would see real data. We assert only on a substring
+      // that's present either way: the path is always mentioned.
+      const r = handleSlash("stats", [], makeLoop());
+      expect(r.info).toMatch(/usage\.jsonl|turns/);
+    });
+
+    it("is surfaced by suggestSlashCommands", () => {
+      const names = suggestSlashCommands("sta").map((s) => s.cmd);
+      expect(names).toContain("stats");
+    });
+  });
+
+  it("suggestSlashCommands shows code-mode entries in bare slash browse mode", () => {
+    const names = suggestSlashCommands("", false).map((s) => s.cmd);
+    expect(names).toContain("apply");
+    expect(names).toContain("undo");
+  });
+
+  it("suggestSlashCommands keeps code-mode gating for typed prefixes", () => {
+    expect(suggestSlashCommands("ap", false).map((s) => s.cmd)).not.toContain("apply");
+    expect(suggestSlashCommands("ap", true).map((s) => s.cmd)).toContain("apply");
+  });
+
+  it("/mcp opens the browser modal when servers are attached", () => {
+    const r = handleSlash("mcp", [], makeLoop(), {
+      mcpServers: [
+        {
+          label: "fs",
+          spec: "fs=npx -y @scope/fs /tmp",
+          toolCount: 4,
+          report: {
+            protocolVersion: "2024-11-05",
+            serverInfo: { name: "fs-server", version: "1.0.0" },
+            capabilities: { tools: {}, resources: {} },
+            tools: { supported: true, items: [] },
+            resources: { supported: true, items: [] },
+            prompts: { supported: false, reason: "method not found (-32601)" },
+          },
+        },
+      ],
+    });
+    expect(r.openMcpHub).toEqual({ tab: "live" });
+    expect(r.info).toBeUndefined();
+  });
+
+  it("/mcp browse opens the hub on the marketplace tab", () => {
+    const r = handleSlash("mcp", ["browse"], makeLoop());
+    expect(r.openMcpHub).toEqual({ tab: "marketplace" });
+  });
+
+  it("/mcp text falls through to the printed-card view (non-TTY / replay)", () => {
+    const r = handleSlash("mcp", ["text"], makeLoop(), {
+      mcpServers: [
+        {
+          label: "fs",
+          spec: "fs=npx -y @scope/fs /tmp",
+          toolCount: 4,
+          report: {
+            protocolVersion: "2024-11-05",
+            serverInfo: { name: "fs-server", version: "1.0.0" },
+            capabilities: { tools: {}, resources: {} },
+            tools: { supported: true, items: [] },
+            resources: {
+              supported: true,
+              items: [
+                { uri: "file:///a", name: "docs" },
+                { uri: "file:///b", name: "readme" },
+              ],
+            },
+            prompts: { supported: false, reason: "method not found (-32601)" },
+          },
+        },
+      ],
+    });
+    expect(r.openMcpBrowser).toBeUndefined();
+    expect(r.info).toMatch(/\[fs\].*fs-server v1\.0\.0/);
+    expect(r.info).toMatch(/tools\s+4/);
+    expect(r.info).toMatch(/resources\s+2\s+\[docs, readme\]/);
+    expect(r.info).toMatch(/prompts\s+\(not supported\)/);
+  });
+
+  describe("/mcp reconnect", () => {
+    function summary(label: string, spec: string) {
+      // Stub host — slash dispatch only reads it; the async reconnect runs
+      // in the background and we only inspect the synchronous return.
+      const host = { client: {} as never };
+      return {
+        label,
+        spec,
+        toolCount: 0,
+        host,
+        report: {
+          protocolVersion: "2024-11-05",
+          serverInfo: { name: label, version: "1.0.0" },
+          capabilities: { tools: {} },
+          tools: { supported: true as const, items: [] },
+          resources: { supported: false as const, reason: "method not found" },
+          prompts: { supported: false as const, reason: "method not found" },
+          elapsedMs: 0,
+        },
+      };
+    }
+
+    it("/mcp reconnect <name> emits the lifecycle line on dispatch", () => {
+      const r = handleSlash("mcp", ["reconnect", "notion"], makeLoop(), {
+        mcpServers: [summary("notion", "notion=tail -f /dev/null")],
+        postInfo: () => {
+          /* swallowed for this test */
+        },
+      });
+      expect(r.info).toMatch(/MCP · notion/);
+      expect(r.info).toMatch(/↻ reconnect…/);
+    });
+
+    it("/mcp reconnect rejects unknown name with the list of known", () => {
+      const r = handleSlash("mcp", ["reconnect", "ghost"], makeLoop(), {
+        mcpServers: [summary("notion", "notion=cmd"), summary("linear", "linear=cmd")],
+        postInfo: () => {},
+      });
+      expect(r.info).toMatch(/unknown MCP server "ghost"/);
+      expect(r.info).toMatch(/Known: linear, notion/);
+    });
+
+    it("/mcp reconnect with no name shows usage", () => {
+      const r = handleSlash("mcp", ["reconnect"], makeLoop(), {
+        mcpServers: [summary("notion", "notion=cmd")],
+        postInfo: () => {},
+      });
+      expect(r.info).toMatch(/usage: \/mcp reconnect <name>/);
+    });
+  });
+
+  it("/mcp text falls back to the spec-only list when mcpServers is absent", () => {
+    const r = handleSlash("mcp", ["text"], makeLoop(), {
+      mcpSpecs: ["filesystem=npx -y @scope/fs /tmp"],
+    });
+    expect(r.info).toMatch(/MCP servers \(1\)/);
+    expect(r.info).toMatch(/server-filesystem|fs/);
+  });
+
+  describe("/mcp disable / enable", () => {
+    let tempHome: string;
+    let originalHome: string | undefined;
+    let originalUserProfile: string | undefined;
+
+    beforeEach(() => {
+      tempHome = mkdtempSync(join(tmpdir(), "jupiter-mcp-toggle-"));
+      originalHome = process.env.HOME;
+      originalUserProfile = process.env.USERPROFILE;
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+    });
+    afterEach(() => {
+      process.env.HOME = originalHome;
+      process.env.USERPROFILE = originalUserProfile;
+      rmSync(tempHome, { recursive: true, force: true });
+    });
+
+    it("/mcp disable <name> persists the name into config.mcpDisabled", () => {
+      const r = handleSlash("mcp", ["disable", "notion"], makeLoop(), {
+        mcpSpecs: ["notion=npx -y @scope/notion", "linear=npx -y @scope/linear"],
+      });
+      expect(r.info).toMatch(/notion disabled/);
+      expect(r.info).toMatch(/next launch/);
+      const cfgPath = join(tempHome, ".jupiter", "config.json");
+      const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+      expect(cfg.mcpDisabled).toEqual(["notion"]);
+    });
+
+    it("/mcp enable <name> removes from disabled and clears the array when empty", () => {
+      const cfgPath = join(tempHome, ".jupiter", "config.json");
+      mkdirSync(join(tempHome, ".jupiter"), { recursive: true });
+      writeFileSync(cfgPath, JSON.stringify({ mcpDisabled: ["notion", "linear"] }));
+      const r = handleSlash("mcp", ["enable", "notion"], makeLoop(), {
+        mcpSpecs: ["notion=npx -y @scope/notion", "linear=npx -y @scope/linear"],
+      });
+      expect(r.info).toMatch(/notion re-enabled/);
+      const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+      expect(cfg.mcpDisabled).toEqual(["linear"]);
+    });
+
+    it("/mcp enable removes the array entirely when last entry clears", () => {
+      const cfgPath = join(tempHome, ".jupiter", "config.json");
+      mkdirSync(join(tempHome, ".jupiter"), { recursive: true });
+      writeFileSync(cfgPath, JSON.stringify({ mcpDisabled: ["notion"] }));
+      handleSlash("mcp", ["enable", "notion"], makeLoop(), {
+        mcpSpecs: ["notion=npx -y @scope/notion"],
+      });
+      const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+      expect(cfg.mcpDisabled).toBeUndefined();
+    });
+
+    it("/mcp disable rejects unknown names with the list of known ones", () => {
+      const r = handleSlash("mcp", ["disable", "ghost"], makeLoop(), {
+        mcpSpecs: ["notion=cmd", "linear=cmd"],
+      });
+      expect(r.info).toMatch(/unknown MCP server "ghost"/);
+      expect(r.info).toMatch(/Known: linear, notion/);
+    });
+
+    it("/mcp disable with no arg shows usage", () => {
+      const r = handleSlash("mcp", ["disable"], makeLoop(), {
+        mcpSpecs: ["notion=cmd"],
+      });
+      expect(r.info).toMatch(/usage: \/mcp disable <name>/);
+    });
+
+    it("/mcp disable on already-disabled is idempotent", () => {
+      const cfgPath = join(tempHome, ".jupiter", "config.json");
+      mkdirSync(join(tempHome, ".jupiter"), { recursive: true });
+      writeFileSync(cfgPath, JSON.stringify({ mcpDisabled: ["notion"] }));
+      const r = handleSlash("mcp", ["disable", "notion"], makeLoop(), {
+        mcpSpecs: ["notion=cmd"],
+      });
+      expect(r.info).toMatch(/already disabled/);
+    });
+  });
+
+  it("/status shows ctx / session / mcp / pending lines with rich detail", () => {
+    const loop = makeLoop();
+    // Make it look like one turn ran so lastPromptTokens > 0.
+    loop.stats.record(1, loop.model, new Usage(42_000, 50, 42_050, 40_000, 2_000));
+    loop.log.append({ role: "user", content: "hi" });
+    loop.log.append({ role: "assistant", content: "there" });
+    const r = handleSlash("status", [], loop, {
+      mcpSpecs: ["filesystem=npx -y @scope/fs /tmp", "mem=npx -y @scope/mem"],
+      pendingEditCount: 3,
+    });
+    expect(r.info).toMatch(/model\s+deepseek-/);
+    // ctx row now includes a tiny [██░░░░] char bar between the label
+    // and the count — match the count itself loosely.
+    expect(r.info).toMatch(/ctx\s+\S+\s+\d+\.?\d*K?\/\d+K/);
+    expect(r.info).toMatch(/mcp\s+2 server\(s\)/);
+    expect(r.info).toMatch(/session.*\(ephemeral|session\s+"/);
+    expect(r.info).toMatch(/edits\s+3 pending/);
+    // /status now also surfaces cost/turns
+    expect(r.info).toMatch(/cost\s+\$/);
+  });
+
+  it("/context breaks down tokens across system / tools / log, and flags the heaviest tool results", () => {
+    const loop = makeLoop();
+    // Seed a realistic log: two turns, one with a large tool result.
+    loop.log.append({ role: "user", content: "list me the files" });
+    loop.log.append({
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          id: "c1",
+          type: "function",
+          function: { name: "list_directory", arguments: '{"path":"."}' },
+        },
+      ],
+    });
+    loop.log.append({
+      role: "tool",
+      tool_call_id: "c1",
+      name: "list_directory",
+      content: "README.md\npackage.json\nsrc/\n".repeat(200),
+    });
+    loop.log.append({ role: "assistant", content: "here are the files" });
+    loop.log.append({ role: "user", content: "now read package.json" });
+
+    const r = handleSlash("context", [], loop);
+    // /context now returns a structured `ctxBreakdown` payload that
+    // EventLog renders as a 4-color stacked char-bar; `info` is just
+    // a fallback one-liner. Assert on the structure.
+    expect(r.ctxBreakdown).toBeDefined();
+    expect(r.ctxBreakdown!.systemTokens).toBeGreaterThan(0);
+    expect(r.ctxBreakdown!.toolsCount).toBeGreaterThanOrEqual(0);
+    expect(r.ctxBreakdown!.logMessages).toBeGreaterThan(0);
+    // Heaviest-tool section must surface the list_directory result.
+    const top = r.ctxBreakdown!.topTools;
+    expect(top.length).toBeGreaterThan(0);
+    expect(top[0]!.name).toBe("list_directory");
+    // The fallback info summary still has the basic shape.
+    expect(r.info).toMatch(/context:/);
+    expect(r.info).toMatch(/system/);
+  });
+
+  it("/context handles an empty log without crashing", () => {
+    const r = handleSlash("context", [], makeLoop());
+    expect(r.ctxBreakdown).toBeDefined();
+    expect(r.ctxBreakdown!.topTools).toEqual([]);
+    expect(r.info).toMatch(/context:/);
+  });
+
+  it("/cost with text estimates worst-case + likely cost for the prospective prompt", () => {
+    const loop = makeLoop();
+    loop.stats.record(1, loop.model, new Usage(10_000, 500, 10_500, 8_000, 2_000));
+    loop.log.append({ role: "user", content: "earlier message" });
+    loop.log.append({ role: "assistant", content: "earlier reply" });
+    const r = handleSlash("cost", ["draft", "this", "long", "prompt", "right", "here"], loop);
+    expect(r.info).toMatch(/\/cost estimate/);
+    expect(r.info).toMatch(/prompt tokens/);
+    expect(r.info).toMatch(/worst case.*\$/);
+    expect(r.info).toMatch(/likely.*cache hit/);
+  });
+
+  it("/cost with text but no completed turns notes cache hasn't filled yet", () => {
+    const r = handleSlash("cost", ["hello"], makeLoop());
+    expect(r.info).toMatch(/worst case/);
+    expect(r.info).toMatch(/no completed turns yet/);
+  });
+
+  it("/cost with no args + no completed turns falls through to the existing post-turn message", () => {
+    const r = handleSlash("cost", [], makeLoop());
+    expect(r.info).toMatch(/no turn yet/);
+  });
+
+  it("/cost posts the session-aggregate cacheHit so the card matches the status bar (#1479)", () => {
+    const loop = makeLoop();
+    // Two turns with very different per-turn cache hits — last turn is 10%
+    // but the session average is ~75% once both turns are summed. Without
+    // the fix the slash card would have shown 10% while the bottom status
+    // bar showed ~75%, which is exactly the bug.
+    loop.stats.record(1, loop.model, new Usage(10_000, 100, 10_100, 9_000, 1_000));
+    loop.stats.record(2, loop.model, new Usage(10_000, 100, 10_100, 1_000, 9_000));
+    const lastTurn = loop.stats.turns[loop.stats.turns.length - 1]!;
+    const summary = loop.stats.summary();
+    // Sanity: per-turn and session-aggregate must actually differ, otherwise
+    // the test passes for the wrong reason.
+    expect(lastTurn.cacheHitRatio).not.toBe(summary.cacheHitRatio);
+
+    let posted: { cacheHit: number; sessionCost: number } | null = null;
+    handleSlash("cost", [], loop, {
+      postUsage: (args) => {
+        posted = { cacheHit: args.cacheHit, sessionCost: args.sessionCost };
+      },
+    });
+    expect(posted).not.toBeNull();
+    expect(posted!.cacheHit).toBeCloseTo(summary.cacheHitRatio, 6);
+    expect(posted!.cacheHit).not.toBe(lastTurn.cacheHitRatio);
+  });
+
+  it("/status with pendingEditCount=0 hides the edits line", () => {
+    const r = handleSlash("status", [], makeLoop(), { pendingEditCount: 0 });
+    expect(r.info).not.toMatch(/pending/);
+  });
+
+  it("/commit strips surrounding double quotes from the message", () => {
+    // We can't exercise git without a real repo; instead, rely on the
+    // fact that /commit fails (no git repo at /nonexistent) but the
+    // failure output should reveal the stripped message in the
+    // arguments we passed. We mirror this by just confirming usage
+    // ISN'T printed — meaning the parser accepted a non-empty message.
+    const r = handleSlash("commit", ['"fix: tests"'], makeLoop(), { codeRoot: "/nonexistent" });
+    expect(r.info).not.toMatch(/usage: \/commit/);
+    // It WILL say git failed since /nonexistent isn't a git repo, but
+    // we don't assert the exact message — it varies by platform.
+    expect(r.info).toMatch(/git (add|commit) failed/);
+  });
+
+  it("/sessions opens the session picker", () => {
+    const r = handleSlash("sessions", [], makeLoop());
+    expect(r.openSessionsPicker).toBe(true);
+  });
+
+  describe("/plans + /replay", () => {
+    let tempHome: string;
+    let originalHome: string | undefined;
+    let originalUserProfile: string | undefined;
+
+    beforeEach(() => {
+      tempHome = mkdtempSync(join(tmpdir(), "jupiter-replay-slash-"));
+      originalHome = process.env.HOME;
+      originalUserProfile = process.env.USERPROFILE;
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+    });
+    afterEach(() => {
+      process.env.HOME = originalHome;
+      process.env.USERPROFILE = originalUserProfile;
+      rmSync(tempHome, { recursive: true, force: true });
+    });
+
+    function loopWithSession(name: string): CacheFirstLoop {
+      const client = new DeepSeekClient({
+        apiKey: "sk-test",
+        fetch: vi.fn() as unknown as typeof fetch,
+      });
+      return new CacheFirstLoop({
+        client,
+        prefix: new ImmutablePrefix({ system: "s" }),
+        session: name,
+      });
+    }
+
+    function writeArchive(
+      sessionName: string,
+      stamp: string,
+      payload: Record<string, unknown>,
+    ): void {
+      const dir = join(tempHome, ".jupiter", "sessions");
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        join(dir, `${sessionName}.plan.${stamp}.done.json`),
+        JSON.stringify(payload),
+      );
+    }
+
+    it("/replay without args returns the newest archive", () => {
+      const loop = loopWithSession("replay-test");
+      writeArchive("replay-test", "2026-04-01-old", {
+        version: 1,
+        steps: [{ id: "step-1", title: "old work", action: "a" }],
+        completedStepIds: ["step-1"],
+        updatedAt: "2026-04-01T00:00:00.000Z",
+        summary: "Older plan",
+      });
+      writeArchive("replay-test", "2026-04-20-new", {
+        version: 1,
+        steps: [
+          { id: "step-1", title: "extract", action: "a" },
+          { id: "step-2", title: "rewire", action: "b" },
+        ],
+        completedStepIds: ["step-1", "step-2"],
+        updatedAt: "2026-04-20T00:00:00.000Z",
+        summary: "Newer plan",
+        body: "# Plan\n- do thing",
+      });
+      const r = handleSlash("replay", [], loop);
+      expect(r.replayPlan).toBeDefined();
+      expect(r.replayPlan?.summary).toBe("Newer plan");
+      expect(r.replayPlan?.steps).toHaveLength(2);
+      expect(r.replayPlan?.body).toBe("# Plan\n- do thing");
+      expect(r.replayPlan?.index).toBe(1);
+      expect(r.replayPlan?.total).toBe(2);
+    });
+
+    it("/replay 2 returns the older archive in a 2-archive session", () => {
+      const loop = loopWithSession("replay-idx");
+      writeArchive("replay-idx", "2026-04-01-a", {
+        version: 1,
+        steps: [{ id: "x", title: "y", action: "z" }],
+        completedStepIds: ["x"],
+        updatedAt: "2026-04-01T00:00:00.000Z",
+        summary: "Older",
+      });
+      writeArchive("replay-idx", "2026-04-20-b", {
+        version: 1,
+        steps: [{ id: "x", title: "y", action: "z" }],
+        completedStepIds: ["x"],
+        updatedAt: "2026-04-20T00:00:00.000Z",
+        summary: "Newer",
+      });
+      const r = handleSlash("replay", ["2"], loop);
+      expect(r.replayPlan?.summary).toBe("Older");
+      expect(r.replayPlan?.index).toBe(2);
+    });
+
+    it("/replay rejects out-of-range index", () => {
+      const loop = loopWithSession("replay-oob");
+      writeArchive("replay-oob", "2026-04-20-a", {
+        version: 1,
+        steps: [{ id: "x", title: "y", action: "z" }],
+        completedStepIds: [],
+        updatedAt: "2026-04-20T00:00:00.000Z",
+      });
+      const r = handleSlash("replay", ["5"], loop);
+      expect(r.replayPlan).toBeUndefined();
+      expect(r.info).toMatch(/invalid index/);
+    });
+
+    it("/replay says nothing to replay when no archives exist", () => {
+      const loop = loopWithSession("replay-empty");
+      const r = handleSlash("replay", [], loop);
+      expect(r.replayPlan).toBeUndefined();
+      expect(r.info).toMatch(/no archived plans yet/);
+    });
+
+    it("/replay needs a session", () => {
+      const r = handleSlash("replay", [], makeLoop());
+      expect(r.replayPlan).toBeUndefined();
+      expect(r.info).toMatch(/no session attached/);
+    });
+
+    it("/plans surfaces the summary as the active plan label", () => {
+      const loop = loopWithSession("plans-summary");
+      const fs = require("node:fs") as typeof import("node:fs");
+      const dir = join(tempHome, ".jupiter", "sessions");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        join(dir, "plans-summary.plan.json"),
+        JSON.stringify({
+          version: 1,
+          steps: [
+            { id: "s1", title: "a", action: "b" },
+            { id: "s2", title: "c", action: "d" },
+          ],
+          completedStepIds: ["s1"],
+          updatedAt: new Date().toISOString(),
+          summary: "Refactor auth into signed tokens",
+        }),
+      );
+      const r = handleSlash("plans", [], loop);
+      expect(r.info).toMatch(/Refactor auth into signed tokens/);
+      expect(r.info).toMatch(/1\/2/);
+    });
+
+    it("/plans surfaces active step evidence and pending evidence state", () => {
+      const loop = loopWithSession("plans-active-evidence");
+      const fs = require("node:fs") as typeof import("node:fs");
+      const dir = join(tempHome, ".jupiter", "sessions");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        join(dir, "plans-active-evidence.plan.json"),
+        JSON.stringify({
+          version: 2,
+          steps: [
+            { id: "step-1", title: "Update router", action: "Update router references." },
+            { id: "step-2", title: "Run migration", action: "Run the migration." },
+          ],
+          completedStepIds: ["step-1"],
+          stepCompletions: {
+            "step-1": {
+              kind: "step_completed",
+              stepId: "step-1",
+              result: "Updated router references.",
+              evidence: [
+                {
+                  kind: "verification",
+                  summary: "focused router tests passed",
+                  command: "npm test -- tests/router.test.ts",
+                },
+                {
+                  kind: "diff",
+                  summary: "updated router imports",
+                  paths: ["src/router.ts", "src/routes.ts"],
+                },
+              ],
+            },
+          },
+          updatedAt: new Date().toISOString(),
+          summary: "Router migration",
+        }),
+      );
+
+      const r = handleSlash("plans", [], loop, {
+        getEngineeringLifecycleSnapshot: () => ({
+          mode: "strict",
+          state: "executing",
+          planSteps: [],
+          completedStepIds: ["step-1"],
+          mutatedSinceLastStep: true,
+        }),
+      });
+
+      expect(r.info).toContain("Router migration");
+      expect(r.info).toContain("evidence pending");
+      expect(r.info).toContain("step-1");
+      expect(r.info).toContain("verification - focused router tests passed");
+      expect(r.info).toContain("npm test -- tests/router.test.ts");
+      expect(r.info).toContain("diff - updated router imports");
+      expect(r.info).toContain("src/router.ts, src/routes.ts");
+    });
+
+    it("/plans surfaces archived plan evidence summaries", () => {
+      const loop = loopWithSession("plans-archived-evidence");
+      writeArchive("plans-archived-evidence", "2026-04-20-evidence", {
+        version: 2,
+        steps: [
+          { id: "step-1", title: "Migrate config", action: "Update dependency config." },
+          { id: "step-2", title: "Confirm rollout", action: "Confirm rollout notes." },
+        ],
+        completedStepIds: ["step-1", "step-2"],
+        stepCompletions: {
+          "step-1": {
+            kind: "step_completed",
+            stepId: "step-1",
+            result: "Updated dependency config.",
+            evidence: [
+              {
+                kind: "diff",
+                summary: "updated package and lockfile",
+                paths: ["package.json", "pnpm-lock.yaml"],
+              },
+              {
+                kind: "verification",
+                summary: "install completed",
+                command: "npm install",
+              },
+            ],
+          },
+          "step-2": {
+            kind: "step_completed",
+            stepId: "step-2",
+            result: "Confirmed rollout notes.",
+            evidence: [{ kind: "manual", summary: "owner approved rollout note" }],
+          },
+        },
+        updatedAt: "2026-04-20T00:00:00.000Z",
+        summary: "Config migration",
+      });
+
+      const r = handleSlash("plans", [], loop);
+
+      expect(r.info).toContain("Config migration");
+      expect(r.info).toContain("evidence:");
+      expect(r.info).toContain("step-1");
+      expect(r.info).toContain("diff - updated package and lockfile");
+      expect(r.info).toContain("package.json, pnpm-lock.yaml");
+      expect(r.info).toContain("verification - install completed");
+      expect(r.info).toContain("npm install");
+      expect(r.info).toContain("step-2");
+      expect(r.info).toContain("manual - owner approved rollout note");
+    });
+  });
+
+  describe("/memory", () => {
+    let root: string;
+    const originalEnv = process.env.JUPITER_MEMORY;
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+
+    beforeEach(() => {
+      root = mkdtempSync(join(tmpdir(), "jupiter-mem-slash-"));
+      process.env.HOME = root;
+      process.env.USERPROFILE = root;
+      // biome-ignore lint/performance/noDelete: avoid "undefined" in env
+      delete process.env.JUPITER_MEMORY;
+    });
+    afterEach(() => {
+      rmSync(root, { recursive: true, force: true });
+      if (originalEnv === undefined) {
+        // biome-ignore lint/performance/noDelete: same reason
+        delete process.env.JUPITER_MEMORY;
+      } else {
+        process.env.JUPITER_MEMORY = originalEnv;
+      }
+      if (originalHome === undefined) {
+        // biome-ignore lint/performance/noDelete: env restoration needs absence, not "undefined"
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalUserProfile === undefined) {
+        // biome-ignore lint/performance/noDelete: env restoration needs absence, not "undefined"
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = originalUserProfile;
+      }
+    });
+
+    it("prints a how-to when no memory (JUPITER.md or ~/.jupiter/memory) exists", () => {
+      const r = handleSlash("memory", [], makeLoop(), { memoryRoot: root });
+      expect(r.info).toMatch(/no memory pinned/);
+      expect(r.info).toMatch(/JUPITER\.md/);
+    });
+
+    it("prints the JUPITER.md contents + path when present", () => {
+      writeFileSync(
+        join(root, "JUPITER.md"),
+        "# House rules\nSnake case only in this repo.\n",
+        "utf8",
+      );
+      const r = handleSlash("memory", [], makeLoop(), { memoryRoot: root });
+      expect(r.info).toMatch(/▸ JUPITER\.md:/);
+      expect(r.info).toContain("Snake case only");
+      expect(r.info).toMatch(/chars/);
+    });
+
+    it("says memory is disabled when JUPITER_MEMORY=off, even with a file present", () => {
+      writeFileSync(join(root, "JUPITER.md"), "content", "utf8");
+      process.env.JUPITER_MEMORY = "off";
+      const r = handleSlash("memory", [], makeLoop(), { memoryRoot: root });
+      expect(r.info).toMatch(/memory is disabled/);
+    });
+
+    it("refuses to guess a root when memoryRoot is absent", () => {
+      const r = handleSlash("memory", [], makeLoop());
+      expect(r.info).toMatch(/no working directory/);
+    });
+  });
+
+  describe("/plan", () => {
+    it("/plan replies 'only in code mode' when setPlanMode callback is missing", () => {
+      const r = handleSlash("plan", [], makeLoop());
+      expect(r.info).toMatch(/only available inside `jupiter code`/);
+    });
+
+    it("/plan toggles when called with no args", () => {
+      const calls: boolean[] = [];
+      const r1 = handleSlash("plan", [], makeLoop(), {
+        planMode: false,
+        setPlanMode: (on) => calls.push(on),
+      });
+      expect(calls).toEqual([true]);
+      expect(r1.info).toMatch(/plan mode ON/);
+
+      const r2 = handleSlash("plan", [], makeLoop(), {
+        planMode: true,
+        setPlanMode: (on) => calls.push(on),
+      });
+      expect(calls).toEqual([true, false]);
+      expect(r2.info).toMatch(/plan mode OFF/);
+    });
+
+    it("/plan on / off / true / false / 0 / 1 / strict parse correctly", () => {
+      const check = (arg: string, expected: boolean) => {
+        const calls: boolean[] = [];
+        handleSlash("plan", [arg], makeLoop(), {
+          planMode: !expected, // start from the opposite
+          setPlanMode: (on) => calls.push(on),
+        });
+        expect(calls, `arg=${arg}`).toEqual([expected]);
+      };
+      check("on", true);
+      check("true", true);
+      check("1", true);
+      check("off", false);
+      check("false", false);
+      check("0", false);
+      check("strict", true);
+    });
+
+    it("/plan strict is explicit, not a toggle", () => {
+      const calls: boolean[] = [];
+      handleSlash("plan", ["strict"], makeLoop(), {
+        planMode: true,
+        setPlanMode: (on) => calls.push(on),
+      });
+      expect(calls).toEqual([true]);
+    });
+
+    it("/plan off marks the change as a user slash action", () => {
+      const calls: Array<{ on: boolean; source?: string }> = [];
+      handleSlash("plan", ["off"], makeLoop(), {
+        planMode: true,
+        setPlanMode: (on, source) => calls.push({ on, source }),
+      });
+      expect(calls).toEqual([{ on: false, source: "slash" }]);
+    });
+
+    it("/plan explains the stronger-constraint relationship with autonomous submit_plan", () => {
+      const r = handleSlash("plan", ["on"], makeLoop(), {
+        setPlanMode: () => {},
+        planMode: false,
+      });
+      // The info text should be explicit that submit_plan can also fire
+      // outside plan mode (autonomous) — plan mode is the *stronger*
+      // constraint, not the only path.
+      expect(r.info).toMatch(/stronger/);
+      expect(r.info).toMatch(/submit_plan/);
+    });
+
+    it("/status surfaces plan mode when it's on", () => {
+      const r = handleSlash("status", [], makeLoop(), { planMode: true });
+      expect(r.info).toMatch(/plan\s+ON/);
+    });
+
+    it("/status hides the plan line when plan mode is off", () => {
+      const r = handleSlash("status", [], makeLoop(), { planMode: false });
+      expect(r.info).not.toMatch(/plan\s+ON/);
+    });
+
+    it("/status surfaces strict lifecycle state when enabled", () => {
+      const r = handleSlash("status", [], makeLoop(), {
+        getEngineeringLifecycleSnapshot: () => ({
+          mode: "strict",
+          state: "armed",
+          planSteps: [],
+          completedStepIds: [],
+          mutatedSinceLastStep: false,
+        }),
+      });
+
+      expect(r.info).toMatch(/lifecycle\s+strict\/armed/);
+    });
+
+    it("/status surfaces lifecycle progress and evidence pending", () => {
+      const r = handleSlash("status", [], makeLoop(), {
+        getEngineeringLifecycleSnapshot: () => ({
+          mode: "strict",
+          state: "executing",
+          planSteps: [
+            { id: "step-1", title: "Refactor", action: "Move code." },
+            { id: "step-2", title: "Verify", action: "Run tests." },
+            { id: "step-3", title: "Document", action: "Write notes." },
+          ],
+          completedStepIds: ["step-1"],
+          mutatedSinceLastStep: true,
+        }),
+      });
+
+      expect(r.info).toMatch(/lifecycle\s+strict\/executing/);
+      expect(r.info).toMatch(/1\/3/);
+      expect(r.info).toMatch(/evidence pending/);
+    });
+
+    it("/status hides lifecycle when it is off", () => {
+      const r = handleSlash("status", [], makeLoop(), {
+        getEngineeringLifecycleSnapshot: () => ({
+          mode: "off",
+          state: "idle",
+          planSteps: [],
+          completedStepIds: [],
+          mutatedSinceLastStep: false,
+        }),
+      });
+
+      expect(r.info).not.toMatch(/lifecycle/);
+    });
+  });
+
+  describe("/theme", () => {
+    let tempHome: string;
+    let originalHome: string | undefined;
+    let originalUserProfile: string | undefined;
+    let originalTheme: string | undefined;
+
+    beforeEach(() => {
+      tempHome = mkdtempSync(join(tmpdir(), "jupiter-theme-slash-"));
+      originalHome = process.env.HOME;
+      originalUserProfile = process.env.USERPROFILE;
+      originalTheme = process.env.JUPITER_THEME;
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      process.env.JUPITER_THEME = "github-dark";
+    });
+
+    afterEach(() => {
+      process.env.HOME = originalHome;
+      process.env.USERPROFILE = originalUserProfile;
+      if (originalTheme === undefined) {
+        process.env.JUPITER_THEME = undefined;
+      } else {
+        process.env.JUPITER_THEME = originalTheme;
+      }
+      rmSync(tempHome, { recursive: true, force: true });
+    });
+
+    it("opens the theme picker when no argument is given", () => {
+      const r = handleSlash("theme", [], makeLoop());
+      expect(r.openThemePicker).toBe(true);
+      expect(r.info).toBeUndefined();
+    });
+
+    it("persists a registered theme", () => {
+      const r = handleSlash("theme", ["midnight"], makeLoop());
+      expect(r.info).toMatch(/theme saved: midnight/);
+      expect(r.openThemePicker).toBeUndefined();
+      expect(loadTheme()).toBe("midnight");
+    });
+
+    it("persists auto so env can resolve the active theme", () => {
+      const r = handleSlash("theme", ["auto"], makeLoop());
+      expect(r.info).toMatch(/active on next launch: dark/);
+      expect(loadTheme()).toBe("auto");
+    });
+
+    it("rejects unknown theme names", () => {
+      const r = handleSlash("theme", ["solarized"], makeLoop());
+      expect(r.info).toMatch(/unknown theme: solarized/);
+      expect(loadTheme()).toBeUndefined();
+    });
+  });
+
+  describe("/language", () => {
+    afterEach(() => {
+      setLanguageRuntime("EN");
+    });
+
+    it("opens arg picker when no argument given", () => {
+      const r = handleSlash("language", [], makeLoop());
+      expect(r.openArgPickerFor).toBe("language");
+    });
+
+    it("switches language and returns success message", () => {
+      const r = handleSlash("language", ["zh-CN"], makeLoop());
+      expect(getLanguage()).toBe("zh-CN");
+      expect(r.info).toBe("语言已切换为简体中文。");
+    });
+
+    it("switches back to English", () => {
+      setLanguageRuntime("zh-CN");
+      const r = handleSlash("language", ["EN"], makeLoop());
+      expect(getLanguage()).toBe("EN");
+      expect(r.info).toBe("Language switched to English.");
+    });
+
+    it("switches to German", () => {
+      const r = handleSlash("language", ["de"], makeLoop());
+      expect(getLanguage()).toBe("de");
+      expect(r.info).toBe("Sprache auf Deutsch umgestellt.");
+    });
+
+    it("returns error for unsupported language", () => {
+      const r = handleSlash("language", ["fr"], makeLoop());
+      expect(r.info).toMatch(/Unsupported/);
+      expect(r.info).toMatch(/fr/);
+      expect(getLanguage()).toBe("EN");
+    });
+
+    it("/lang is an alias for /language", () => {
+      const r = handleSlash("lang", ["zh-CN"], makeLoop());
+      expect(getLanguage()).toBe("zh-CN");
+      expect(r.info).toBe("语言已切换为简体中文。");
+    });
+
+    it("/skill list localizes built-in skill descriptions in Chinese", () => {
+      setLanguageRuntime("zh-CN");
+      const r = handleSlash("skill", ["list"], makeLoop(), { codeRoot: process.cwd() });
+      expect(r.info).toMatch(/用户技能/);
+      expect(r.info).toMatch(/\(builtin\)\s+qq/);
+      expect(r.info).not.toContain("Guide QQ channel setup and troubleshooting");
+    });
+
+    it("/skill qq resolves the builtin qq skill and reports localized run info in Chinese", () => {
+      setLanguageRuntime("zh-CN");
+      const r = handleSlash("skill", ["qq"], makeLoop(), { codeRoot: process.cwd() });
+      expect(r.info).toBe("▸ 正在运行技能：qq");
+      expect(r.resubmit).toContain("# Skill: qq");
+    });
+
+    it("fires onLanguageChange listeners", () => {
+      const cb = vi.fn();
+      const unsub = onLanguageChange(cb);
+      handleSlash("language", ["zh-CN"], makeLoop());
+      expect(cb).toHaveBeenCalledOnce();
+      unsub();
+    });
+  });
+});

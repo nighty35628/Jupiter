@@ -1,0 +1,491 @@
+import { extractToolExitCode } from "../tool-summary.js";
+import { elideFromCursor } from "./card-elision.js";
+import type {
+  Card,
+  CardId,
+  LiveCard,
+  PlanStep,
+  ReasoningCard,
+  StreamingCard,
+  ToolCard,
+  UserCard,
+} from "./cards.js";
+import type { AgentEvent } from "./events.js";
+import type { AgentState, Toast } from "./state.js";
+
+export function reduce(state: AgentState, event: AgentEvent): AgentState {
+  switch (event.type) {
+    case "user.submit":
+      return appendCard(state, makeUserCard(event.text));
+
+    case "turn.start":
+      return { ...state, turnInProgress: true };
+
+    case "turn.thinking":
+      return appendCard(
+        state,
+        makeLiveCard("thinking", `thinking · ${state.session.model}`, "brand"),
+      );
+
+    case "reasoning.start":
+      return appendCard(state, makeReasoningCard(event.id, event.model ?? state.session.model));
+
+    case "reasoning.chunk":
+      return mutateCard(state, event.id, "reasoning", (c) => ({ ...c, text: c.text + event.text }));
+
+    case "reasoning.end":
+      return mutateCard(state, event.id, "reasoning", (c) => ({
+        ...c,
+        paragraphs: event.paragraphs,
+        tokens: event.tokens,
+        streaming: false,
+        endedAt: Date.now(),
+        ...(event.aborted ? { aborted: true } : {}),
+      }));
+
+    case "streaming.start":
+      return appendCard(state, makeStreamingCard(event.id, event.model ?? state.session.model));
+
+    case "streaming.chunk":
+      return mutateCard(state, event.id, "streaming", (c) => ({ ...c, text: c.text + event.text }));
+
+    case "streaming.end":
+      return mutateCard(state, event.id, "streaming", (c) => ({
+        ...c,
+        done: true,
+        endedAt: Date.now(),
+        ...(event.aborted ? { aborted: true } : {}),
+      }));
+
+    case "tool.start":
+      return appendCard(state, makeToolCard(event.id, event.name, event.args));
+
+    case "tool.chunk":
+      return mutateCard(state, event.id, "tool", (c) => ({ ...c, output: c.output + event.text }));
+
+    case "tool.end": {
+      return mutateCard(state, event.id, "tool", (c) => {
+        const finalOutput = event.output ?? c.output;
+        const rejected = isPlanModeRejection(finalOutput);
+        return {
+          ...c,
+          done: true,
+          output: finalOutput,
+          exitCode: event.exitCode ?? extractToolExitCode(c.name, finalOutput),
+          elapsedMs: event.elapsedMs,
+          ...(event.aborted ? { aborted: true } : {}),
+          ...(rejected ? { rejected: true } : {}),
+        };
+      });
+    }
+
+    case "tool.retry":
+      return mutateCard(state, event.id, "tool", (c) => ({
+        ...c,
+        retry: { attempt: event.attempt, max: event.max },
+      }));
+
+    case "turn.abort":
+      return {
+        ...state,
+        turnInProgress: false,
+        composer: { ...state.composer, abortedHint: true },
+      };
+
+    case "turn.end": {
+      const sessionCost = state.status.sessionCost + event.usage.cost;
+      const sessionInputTokens = state.status.sessionInputTokens + event.usage.prompt;
+      const sessionOutputTokens = state.status.sessionOutputTokens + event.usage.output;
+      return {
+        ...state,
+        turnInProgress: false,
+        status: {
+          ...state.status,
+          cost: event.usage.cost,
+          sessionCost,
+          cacheHit: event.sessionCacheHit ?? event.usage.cacheHit,
+          promptTokens: event.usage.prompt,
+          promptCap: event.promptCap ?? state.status.promptCap,
+          sessionInputTokens,
+          sessionOutputTokens,
+          lastTurnMs: event.elapsedMs ?? state.status.lastTurnMs,
+        },
+      };
+    }
+
+    case "mode.change":
+      return { ...state, status: { ...state.status, mode: event.mode } };
+
+    case "network.change":
+      return {
+        ...state,
+        status: { ...state.status, network: event.state, networkDetail: event.detail },
+      };
+
+    case "language.change":
+      return { ...state, lang: event.lang as any };
+
+    case "session.update":
+      return { ...state, status: { ...state.status, ...event.patch } };
+
+    case "session.model.change":
+      return state.session.model === event.model
+        ? state
+        : { ...state, session: { ...state.session, model: event.model } };
+
+    case "session.effort.change":
+      return state.status.reasoningEffort === event.reasoningEffort
+        ? state
+        : { ...state, status: { ...state.status, reasoningEffort: event.reasoningEffort } };
+
+    case "mcp.loading": {
+      const current = state.status.mcpLoading;
+      if (event.total <= 0) {
+        if (!current) return state;
+        const { mcpLoading: _drop, ...rest } = state.status;
+        return { ...state, status: rest };
+      }
+      if (current && current.ready === event.ready && current.total === event.total) return state;
+      return {
+        ...state,
+        status: { ...state.status, mcpLoading: { ready: event.ready, total: event.total } },
+      };
+    }
+
+    case "focus.move":
+      return {
+        ...state,
+        focusedCardId: moveFocus(state.cards, state.focusedCardId, event.direction),
+      };
+
+    case "focus.set":
+      return { ...state, focusedCardId: event.cardId };
+
+    case "card.toggle":
+      return state;
+
+    case "composer.input":
+      return {
+        ...state,
+        composer: {
+          ...state.composer,
+          value: event.value,
+          cursor: event.value.length,
+          abortedHint: false,
+        },
+      };
+
+    case "composer.cursor":
+      return { ...state, composer: { ...state.composer, cursor: event.index } };
+
+    case "composer.history":
+      return state;
+
+    case "picker.open":
+      return { ...state, composer: { ...state.composer, picker: event.kind } };
+
+    case "picker.close":
+      return { ...state, composer: { ...state.composer, picker: null } };
+
+    case "toast.show":
+      return { ...state, toasts: [...state.toasts, makeToast(event)] };
+
+    case "toast.hide":
+      return { ...state, toasts: state.toasts.filter((t) => t.id !== event.id) };
+
+    case "live.show": {
+      const card: LiveCard = {
+        kind: "live",
+        id: event.id,
+        ts: event.ts,
+        variant: event.variant,
+        tone: event.tone,
+        text: event.text,
+        meta: event.meta,
+      };
+      const replaced = mutateCard(state, event.id, "live", () => card);
+      return replaced === state ? appendCard(state, card) : replaced;
+    }
+
+    case "tip.show":
+      return appendCard(state, {
+        kind: "tip",
+        id: event.id,
+        ts: event.ts,
+        topic: event.topic,
+        sections: event.sections,
+        footer: event.footer,
+        oneTime: event.oneTime,
+      });
+
+    case "session.reset":
+      return {
+        ...state,
+        cards: [],
+        cardIndex: new Map(),
+        elideCursor: 0,
+        focusedCardId: null,
+        toasts: [],
+        status: {
+          ...state.status,
+          cost: 0,
+          sessionCost: 0,
+          cacheHit: 0,
+          promptTokens: undefined,
+          promptCap: undefined,
+        },
+      };
+
+    case "session.fork": {
+      const idx = state.cardIndex.get(event.cardId);
+      if (idx === undefined) return state;
+      const cards = state.cards.slice(0, idx);
+      const cardIndex = new Map<CardId, number>();
+      for (let i = 0; i < cards.length; i++) cardIndex.set(cards[i]!.id, i);
+      const elideCursor = Math.min(state.elideCursor, cards.length);
+      return { ...state, cards, cardIndex, elideCursor, focusedCardId: null };
+    }
+
+    case "session.workspace.change":
+      return state.session.id === event.id && state.session.workspace === event.workspace
+        ? state
+        : {
+            ...state,
+            session: { ...state.session, id: event.id, workspace: event.workspace },
+          };
+
+    case "plan.show":
+      return appendCard(state, {
+        kind: "plan",
+        id: event.id,
+        ts: Date.now(),
+        title: event.title,
+        steps: event.variant === "active" ? advanceActivePlanSteps(event.steps) : event.steps,
+        variant: event.variant,
+      });
+
+    case "plan.drop": {
+      // Latest still-active plan flips to "replay" — preserves it in scrollback
+      // but signals "no longer the live plan" to selectors and UI.
+      let lastActiveIdx = -1;
+      for (let i = state.cards.length - 1; i >= 0; i--) {
+        const c = state.cards[i]!;
+        if (c.kind === "plan" && c.variant === "active") {
+          lastActiveIdx = i;
+          break;
+        }
+      }
+      if (lastActiveIdx < 0) return state;
+      const cards = state.cards.slice();
+      const target = cards[lastActiveIdx] as Extract<Card, { kind: "plan" }>;
+      cards[lastActiveIdx] = { ...target, variant: "replay" as const };
+      return { ...state, cards };
+    }
+
+    case "plan.step.complete": {
+      let changed = false;
+      const cards = state.cards.map((c) => {
+        if (c.kind !== "plan") return c;
+        let stepChanged = false;
+        const next = c.steps.map((s) => {
+          if (s.id !== event.stepId || s.status === "done") return s;
+          stepChanged = true;
+          return { ...s, status: "done" as const };
+        });
+        if (!stepChanged) return c;
+        changed = true;
+        return { ...c, steps: c.variant === "active" ? advanceActivePlanSteps(next) : next };
+      });
+      return changed ? { ...state, cards } : state;
+    }
+
+    case "plan.idle": {
+      // Turn ended — nothing is actually executing, so a "running" step on the
+      // live plan is a lie. Demote it back to "queued"; the next mark_step_complete
+      // will re-advance the running marker via advanceActivePlanSteps. Issue #1784.
+      let changed = false;
+      const cards = state.cards.map((c) => {
+        if (c.kind !== "plan" || c.variant !== "active") return c;
+        let stepChanged = false;
+        const next = c.steps.map((s) => {
+          if (s.status !== "running") return s;
+          stepChanged = true;
+          return { ...s, status: "queued" as const };
+        });
+        if (!stepChanged) return c;
+        changed = true;
+        return { ...c, steps: next };
+      });
+      return changed ? { ...state, cards } : state;
+    }
+
+    case "ctx.show":
+      return appendCard(state, {
+        kind: "ctx",
+        id: event.id,
+        ts: Date.now(),
+        text: event.text,
+        systemTokens: event.systemTokens,
+        toolsTokens: event.toolsTokens,
+        logTokens: event.logTokens,
+        inputTokens: event.inputTokens,
+        ctxMax: event.ctxMax,
+        toolsCount: event.toolsCount,
+        logMessages: event.logMessages,
+        topTools: event.topTools,
+      });
+
+    case "doctor.show":
+      return appendCard(state, {
+        kind: "doctor",
+        id: event.id,
+        ts: Date.now(),
+        checks: event.checks,
+      });
+
+    case "usage.show":
+      return appendCard(state, {
+        kind: "usage",
+        id: event.id,
+        ts: Date.now(),
+        turn: event.turn,
+        tokens: event.tokens,
+        cacheHit: event.cacheHit,
+        cost: event.cost,
+        sessionCost: event.sessionCost,
+        balance: event.balance,
+        balanceCurrency: event.balanceCurrency,
+        elapsedMs: event.elapsedMs,
+      });
+  }
+}
+
+function appendCard(state: AgentState, card: Card): AgentState {
+  const { cards: elided, cursor } = elideFromCursor(state.cards, state.elideCursor);
+  const cards = [...elided, card];
+  // Mutate the existing index — append-only mutation; structural rebuilds (fork/reset) replace it.
+  (state.cardIndex as Map<CardId, number>).set(card.id, cards.length - 1);
+  return { ...state, cards, cardIndex: state.cardIndex, elideCursor: cursor };
+}
+
+function mutateCard<K extends Card["kind"]>(
+  state: AgentState,
+  id: CardId,
+  kind: K,
+  patch: (card: Extract<Card, { kind: K }>) => Extract<Card, { kind: K }>,
+): AgentState {
+  const idx = state.cardIndex.get(id);
+  if (idx === undefined) return state;
+  const existing = state.cards[idx];
+  if (!existing || existing.kind !== kind) return state;
+  const next = state.cards.slice();
+  next[idx] = patch(existing as Extract<Card, { kind: K }>);
+  return { ...state, cards: next };
+}
+
+function moveFocus(
+  cards: ReadonlyArray<Card>,
+  current: CardId | null,
+  dir: "next" | "prev" | "first" | "last",
+): CardId | null {
+  const last = cards.length - 1;
+  if (last < 0) return null;
+  if (dir === "first") return cards[0]!.id;
+  if (dir === "last") return cards[last]!.id;
+  const idx = current ? cards.findIndex((c) => c.id === current) : -1;
+  if (idx < 0) return cards[last]!.id;
+  const next = dir === "next" ? Math.min(idx + 1, last) : Math.max(idx - 1, 0);
+  return cards[next]!.id;
+}
+
+let toastSeq = 0;
+function makeToast(event: Extract<AgentEvent, { type: "toast.show" }>): Toast {
+  toastSeq += 1;
+  return {
+    id: `toast-${toastSeq}`,
+    tone: event.tone,
+    title: event.title,
+    detail: event.detail,
+    bornAt: Date.now(),
+    ttlMs: event.ttlMs,
+  };
+}
+
+let cardSeq = 0;
+function nextId(prefix: string): string {
+  cardSeq += 1;
+  return `${prefix}-${cardSeq}`;
+}
+
+function makeUserCard(text: string): UserCard {
+  return { kind: "user", id: nextId("user"), ts: Date.now(), text };
+}
+
+function isSettledPlanStatus(status: PlanStep["status"]): boolean {
+  return status === "done" || status === "failed" || status === "blocked" || status === "skipped";
+}
+
+function advanceActivePlanSteps(steps: ReadonlyArray<PlanStep>): PlanStep[] {
+  const runningIndex = steps.findIndex((s) => !isSettledPlanStatus(s.status));
+  return steps.map((s, i) => {
+    if (isSettledPlanStatus(s.status)) return s;
+    const status: PlanStep["status"] = i === runningIndex ? "running" : "queued";
+    return s.status === status ? s : { ...s, status };
+  });
+}
+
+function makeReasoningCard(id: string, model?: string): ReasoningCard {
+  return {
+    kind: "reasoning",
+    id,
+    ts: Date.now(),
+    text: "",
+    paragraphs: 0,
+    tokens: 0,
+    streaming: true,
+    ...(model ? { model } : {}),
+  };
+}
+
+function makeStreamingCard(id: string, model?: string): StreamingCard {
+  return {
+    kind: "streaming",
+    id,
+    ts: Date.now(),
+    text: "",
+    done: false,
+    ...(model ? { model } : {}),
+  };
+}
+
+function makeToolCard(id: string, name: string, args: unknown): ToolCard {
+  return {
+    kind: "tool",
+    id,
+    ts: Date.now(),
+    name,
+    args,
+    output: "",
+    done: false,
+    elapsedMs: 0,
+  };
+}
+
+function makeLiveCard(
+  variant: LiveCard["variant"],
+  text: string,
+  tone: LiveCard["tone"],
+): LiveCard {
+  return { kind: "live", id: nextId("live"), ts: Date.now(), variant, text, tone };
+}
+
+/** Detect the plan-mode bounce marker emitted by ToolRegistry.dispatch when refusing a write tool. */
+function isPlanModeRejection(output: string): boolean {
+  if (!output) return false;
+  try {
+    const parsed = JSON.parse(output);
+    return parsed?.rejectedReason === "plan-mode";
+  } catch {
+    return false;
+  }
+}

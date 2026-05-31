@@ -1,0 +1,26 @@
+import { type RestoreResult, restoreCheckpoint } from "../../code/checkpoints.js";
+import type { DashboardContext } from "../context.js";
+import type { ApiResult } from "../router.js";
+
+export async function handleCheckpointRestore(
+  method: string,
+  _rest: string[],
+  body: string,
+  ctx: DashboardContext,
+): Promise<ApiResult> {
+  if (method !== "POST") return { status: 405, body: { error: "POST only" } };
+
+  const rootDir = ctx.getCurrentCwd?.();
+  if (!rootDir) return { status: 400, body: { error: "no active workspace" } };
+
+  let parsed: { id?: string };
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { status: 400, body: { error: "invalid JSON" } };
+  }
+  if (!parsed.id) return { status: 400, body: { error: "missing id" } };
+
+  const result: RestoreResult = restoreCheckpoint(rootDir, parsed.id);
+  return { status: 200, body: result };
+}

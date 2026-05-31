@@ -1,0 +1,27 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Jupiter",
+        "width": 1024,
+        "height": 720,
+        "minWidth": 480,
+        "minHeight": 320,
+        "center": true,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "backgroundColor": "#00000000"
+      }
+    ]
+  },
+  "bundle": {
+    "macOS": {
+      "hardenedRuntime": true,
+      "entitlements": "entitlements/main.plist"
+    },
+    "resources": {
+      "binaries/node": "node"
+    }
+  }
+}

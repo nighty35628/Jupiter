@@ -1,0 +1,103 @@
+name: Release mirror
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to mirror (e.g. v0.42.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror release assets to R2
+    runs-on: ubuntu-latest
+    env:
+      HAS_R2: ${{ secrets.R2_ACCESS_KEY_ID != '' && secrets.R2_SECRET_ACCESS_KEY != '' && secrets.R2_ACCOUNT_ID != '' && secrets.R2_BUCKET != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download release assets from GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p assets
+          gh release download "${{ steps.tag.outputs.name }}" \
+            -R "${{ github.repository }}" \
+            -D assets
+
+      # Rewrite bundle URLs inside latest.json (Tauri updater manifest)
+      # so the desktop pulls bundles from R2, not GitHub. Without this the
+      # updater fetches the small JSON from R2 but still downloads the
+      # heavy installer from github.com — defeating the mirror.
+      # No-op when latest.json is absent (CLI-only releases).
+      - name: Rewrite latest.json URLs → R2
+        if: env.HAS_R2 == 'true'
+        env:
+          R2_PUBLIC_BASE: https://pub-147fb53b9c1e4bbf891a257968619ea7.r2.dev
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          file=assets/latest.json
+          if [ ! -f "$file" ]; then
+            echo "no latest.json in release — skipping rewrite"
+            exit 0
+          fi
+          # GitHub URLs look like:
+          #   https://github.com/<owner>/<repo>/releases/download/<TAG>/<file>
+          # Rewrite to:
+          #   <R2_PUBLIC_BASE>/<TAG>/<file>
+          jq --arg base "$R2_PUBLIC_BASE" --arg tag "$TAG" '
+            .platforms |= with_entries(
+              .value.url |= sub("https://github.com/[^/]+/[^/]+/releases/download/[^/]+/"; "\($base)/\($tag)/")
+            )
+          ' "$file" > "$file.new"
+          mv "$file.new" "$file"
+          echo "rewrote latest.json:"
+          cat "$file"
+
+      - name: Configure AWS CLI for R2
+        if: env.HAS_R2 == 'true'
+        run: |
+          aws configure set aws_access_key_id "${{ secrets.R2_ACCESS_KEY_ID }}"
+          aws configure set aws_secret_access_key "${{ secrets.R2_SECRET_ACCESS_KEY }}"
+          aws configure set region auto
+
+      - name: Mirror to R2
+        if: env.HAS_R2 == 'true'
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 cp assets/ "s3://${R2_BUCKET}/${TAG}/" \
+            --recursive \
+            --endpoint-url "$ENDPOINT"
+          aws s3 cp assets/ "s3://${R2_BUCKET}/latest/" \
+            --recursive \
+            --endpoint-url "$ENDPOINT"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Mirror result"
+            echo ""
+            echo "- Tag: \`${{ steps.tag.outputs.name }}\`"
+            echo "- R2: ${{ env.HAS_R2 == 'true' && '✓ mirrored' || 'skipped (no R2 secrets)' }}"
+          } >> "$GITHUB_STEP_SUMMARY"

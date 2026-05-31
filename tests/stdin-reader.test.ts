@@ -1,0 +1,539 @@
+/** Stdin reader CSI parser — drives the state machine via `feed()`; safety net for the input layer. */
+
+import { describe, expect, it } from "vitest";
+import { type KeyEvent, StdinReader, sanitizePasteText } from "../src/cli/ui/stdin-reader.js";
+
+function setup() {
+  const reader = new StdinReader();
+  const events: KeyEvent[] = [];
+  reader.subscribe((ev) => events.push(ev));
+  return { reader, events };
+}
+
+describe("StdinReader — CSI sequences (well-behaved)", () => {
+  it("parses arrow keys", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[A");
+    reader.feed("\x1b[B");
+    reader.feed("\x1b[C");
+    reader.feed("\x1b[D");
+    expect(events).toEqual([
+      { input: "", upArrow: true },
+      { input: "", downArrow: true },
+      { input: "", rightArrow: true },
+      { input: "", leftArrow: true },
+    ]);
+  });
+
+  it("parses page-nav keys", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[5~");
+    reader.feed("\x1b[6~");
+    reader.feed("\x1b[3~");
+    expect(events).toEqual([
+      { input: "", pageUp: true },
+      { input: "", pageDown: true },
+      { input: "", delete: true },
+    ]);
+  });
+
+  it("parses Shift+Tab as `\\x1b[Z`", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[Z");
+    expect(events).toEqual([{ input: "", shift: true, tab: true }]);
+  });
+
+  it("parses Shift+Tab from modifier-encoded `\\x1b[1;2Z` (PowerShell variant, #373)", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[1;2Z");
+    expect(events).toEqual([{ input: "", shift: true, tab: true }]);
+  });
+
+  it("parses Shift+Tab from modifyOtherKeys `\\x1b[27;2;9~` and Kitty `\\x1b[9;2u` (#373)", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[27;2;9~");
+    reader.feed("\x1b[9;2u");
+    expect(events).toEqual([
+      { input: "", shift: true, tab: true },
+      { input: "", shift: true, tab: true },
+    ]);
+  });
+
+  it("parses SS3 arrow forms (`\\x1bO<letter>`)", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1bOA");
+    reader.feed("\x1bOC");
+    expect(events).toEqual([
+      { input: "", upArrow: true },
+      { input: "", rightArrow: true },
+    ]);
+  });
+
+  it("drops unknown CSI silently (no garbage text inserted)", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[42m"); // SGR — irrelevant to us, skip
+    expect(events).toEqual([]);
+  });
+
+  it("recovers `@` / `_` / `[` / `\\` / `]` / `^` from modifyOtherKeys CSI 27 (ghostty, issue #683)", () => {
+    const { reader, events } = setup();
+    // xterm modifyOtherKeys=2 re-encodes these because Ctrl+them yields control bytes.
+    reader.feed("\x1b[27;2;64~"); // Shift+2 = @
+    reader.feed("\x1b[27;2;95~"); // Shift+- = _
+    reader.feed("\x1b[27;1;91~"); // [
+    reader.feed("\x1b[27;1;92~"); // \
+    reader.feed("\x1b[27;1;93~"); // ]
+    reader.feed("\x1b[27;2;94~"); // Shift+6 = ^
+    expect(events).toEqual([
+      { input: "@", shift: true },
+      { input: "_", shift: true },
+      { input: "[" },
+      { input: "\\" },
+      { input: "]" },
+      { input: "^", shift: true },
+    ]);
+  });
+
+  it("recovers `@` / `_` from Kitty `<cp>;<mod>u` and bare `<cp>u`", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[64;2u"); // Shift+@ via Kitty
+    reader.feed("\x1b[95u"); // _ without modifier
+    expect(events).toEqual([{ input: "@", shift: true }, { input: "_" }]);
+  });
+
+  it("decodes Alt+letter and Ctrl+letter from modifyOtherKeys", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[27;3;97~"); // Alt+a
+    reader.feed("\x1b[27;5;65~"); // Ctrl+A (uppercase code in envelope)
+    expect(events).toEqual([
+      { input: "a", meta: true },
+      { input: "a", ctrl: true },
+    ]);
+  });
+});
+
+describe("StdinReader — CSI sequences (Windows ConPTY ESC-stripped)", () => {
+  it("recovers arrow keys when leading ESC is missing", () => {
+    const { reader, events } = setup();
+    reader.feed("[A");
+    reader.feed("[C");
+    expect(events).toEqual([
+      { input: "", upArrow: true },
+      { input: "", rightArrow: true },
+    ]);
+  });
+
+  it("recovers Shift+Tab from bare `[Z`", () => {
+    const { reader, events } = setup();
+    reader.feed("[Z");
+    expect(events).toEqual([{ input: "", shift: true, tab: true }]);
+  });
+
+  it("recovers PgUp / PgDn / Delete from bare CSI tails", () => {
+    const { reader, events } = setup();
+    reader.feed("[5~");
+    reader.feed("[6~");
+    reader.feed("[3~");
+    expect(events).toEqual([
+      { input: "", pageUp: true },
+      { input: "", pageDown: true },
+      { input: "", delete: true },
+    ]);
+  });
+});
+
+describe("StdinReader — single-byte keys", () => {
+  it("Enter / Tab / Backspace fire structured events", () => {
+    const { reader, events } = setup();
+    reader.feed("\r");
+    reader.feed("\t");
+    reader.feed("\x7f");
+    reader.feed("\b");
+    expect(events).toEqual([
+      { input: "", return: true },
+      { input: "", tab: true },
+      { input: "", backspace: true },
+      { input: "", backspace: true },
+    ]);
+  });
+
+  it("Ctrl+C surfaces as `{input:'c', ctrl:true}`", () => {
+    const { reader, events } = setup();
+    reader.feed("\x03");
+    expect(events).toEqual([{ input: "c", ctrl: true }]);
+  });
+
+  it("Ctrl+J (LF, 0x0A) surfaces distinctly from Enter so multiline can insert a newline", () => {
+    const { reader, events } = setup();
+    reader.feed("\r");
+    reader.feed("\n");
+    expect(events).toEqual([
+      { input: "", return: true },
+      { input: "j", ctrl: true },
+    ]);
+  });
+
+  it("modifyOtherKeys / kitty Shift+Enter sequences surface as `{return:true, shift:true}`", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[27;2;13~");
+    reader.feed("\x1b[13;2u");
+    expect(events).toEqual([
+      { input: "", return: true, shift: true },
+      { input: "", return: true, shift: true },
+    ]);
+  });
+
+  it("Ctrl+letter codes 0x01–0x1A map to a..z with ctrl flag", () => {
+    const { reader, events } = setup();
+    reader.feed("\x01"); // Ctrl+A
+    reader.feed("\x05"); // Ctrl+E
+    reader.feed("\x15"); // Ctrl+U
+    reader.feed("\x17"); // Ctrl+W
+    expect(events.map((e) => ({ input: e.input, ctrl: e.ctrl }))).toEqual([
+      { input: "a", ctrl: true },
+      { input: "e", ctrl: true },
+      { input: "u", ctrl: true },
+      { input: "w", ctrl: true },
+    ]);
+  });
+
+  it("printable runs are coalesced into one event", () => {
+    const { reader, events } = setup();
+    reader.feed("hello");
+    expect(events).toEqual([{ input: "hello" }]);
+  });
+
+  it("CJK printable runs are coalesced", () => {
+    const { reader, events } = setup();
+    reader.feed("你好世界");
+    expect(events).toEqual([{ input: "你好世界" }]);
+  });
+
+  it("printable run breaks at a CSI / control byte", () => {
+    const { reader, events } = setup();
+    // \t splits the printable run cleanly. \r / \n now route through the
+    // heuristic paste rescue when surrounded by text (#522), so they
+    // don't exercise the printable-coalescer split path anymore.
+    reader.feed("ab\tcd");
+    expect(events).toEqual([{ input: "ab" }, { input: "", tab: true }, { input: "cd" }]);
+  });
+});
+
+describe("StdinReader — bracketed paste", () => {
+  it("emits a single paste event for content between `\\x1b[200~` and `\\x1b[201~`", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[200~hello\nworld\x1b[201~");
+    expect(events).toEqual([{ input: "hello\nworld", paste: true }]);
+  });
+
+  it("normalizes Windows CRLF and bare CR line endings inside paste events", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[200~first\r\nsecond\rthird\x1b[201~");
+    expect(events).toEqual([{ input: "first\nsecond\nthird", paste: true }]);
+  });
+
+  it("paste content is collected across multiple feed calls (chunked stdin)", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[200~hello\n");
+    reader.feed("middle\n");
+    reader.feed("end\x1b[201~");
+    expect(events).toEqual([{ input: "hello\nmiddle\nend", paste: true }]);
+  });
+
+  it("ESC-stripped paste markers (ConPTY) — bare `[200~`/`[201~` works too", () => {
+    const { reader, events } = setup();
+    reader.feed("[200~paste content[201~");
+    expect(events).toEqual([{ input: "paste content", paste: true }]);
+  });
+
+  it("typing AFTER a paste is parsed as keystrokes again", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[200~pasted\x1b[201~hello");
+    expect(events).toEqual([{ input: "pasted", paste: true }, { input: "hello" }]);
+  });
+
+  it("printable runs do not eat a following paste-start prefix", () => {
+    const { reader, events } = setup();
+    // `ab` then bare paste-start then content then end.
+    reader.feed("ab[200~stuff[201~");
+    expect(events).toEqual([{ input: "ab" }, { input: "stuff", paste: true }]);
+  });
+
+  it("ESC-less arrow tail followed by another CSI prefix still recovers", () => {
+    const { reader, events } = setup();
+    reader.feed("[C[A");
+    expect(events).toEqual([
+      { input: "", rightArrow: true },
+      { input: "", upArrow: true },
+    ]);
+  });
+
+  it("typed `[DEBUG]` is not misread as left-arrow + EBUG] (#1771)", () => {
+    const { reader, events } = setup();
+    reader.feed("[DEBUG]");
+    expect(events).toEqual([{ input: "[DEBUG]" }]);
+  });
+
+  it("typed `[ABC]`-shaped tokens stay intact (no upArrow split)", () => {
+    const { reader, events } = setup();
+    reader.feed("[Aabc");
+    expect(events).toEqual([{ input: "[Aabc" }]);
+  });
+});
+
+describe("StdinReader — heuristic paste rescue (#522)", () => {
+  it("treats a multi-line chunk without paste markers as a single paste event", () => {
+    // Multiplexers / web-SSH gateways strip DECSET 2004 brackets; raw
+    // multi-line content used to fire one Enter per \r and submit N times.
+    const { reader, events } = setup();
+    reader.feed("first line\rsecond line\rthird line");
+    expect(events).toEqual([{ input: "first line\nsecond line\nthird line", paste: true }]);
+  });
+
+  it("treats a single-break chunk with text on both sides as a paste", () => {
+    const { reader, events } = setup();
+    reader.feed("hello\rworld");
+    expect(events).toEqual([{ input: "hello\nworld", paste: true }]);
+  });
+
+  it("leaves a bare Enter alone (\\r submits as before)", () => {
+    const { reader, events } = setup();
+    reader.feed("\r");
+    expect(events).toEqual([{ input: "", return: true }]);
+  });
+
+  it("leaves a bare CRLF alone (\\r\\n is one terminal-converted Enter, not paste)", () => {
+    const { reader, events } = setup();
+    reader.feed("\r\n");
+    // \r → return; \n → ctrl+j. Neither flagged as paste.
+    expect(events).toEqual([
+      { input: "", return: true },
+      { input: "j", ctrl: true },
+    ]);
+  });
+
+  it("leaves typed-then-Enter alone (`abc\\r` is not flagged as paste)", () => {
+    const { reader, events } = setup();
+    reader.feed("abc\r");
+    expect(events).toEqual([{ input: "abc" }, { input: "", return: true }]);
+  });
+
+  it("leaves Enter-then-typed alone (`\\rabc` is not flagged as paste)", () => {
+    const { reader, events } = setup();
+    reader.feed("\rabc");
+    expect(events).toEqual([{ input: "", return: true }, { input: "abc" }]);
+  });
+
+  it("does not interfere when the chunk already contains a real bracketed paste", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[200~one\ntwo\x1b[201~");
+    expect(events).toEqual([{ input: "one\ntwo", paste: true }]);
+  });
+
+  it("does not wrap chunks containing ESC (could be an arrow / control sequence)", () => {
+    const { reader, events } = setup();
+    // Text + arrow sequence — historically would interleave; never a paste.
+    reader.feed("a\x1b[Ab\x1b[A");
+    expect(events).toEqual([
+      { input: "a" },
+      { input: "", upArrow: true },
+      { input: "b" },
+      { input: "", upArrow: true },
+    ]);
+  });
+
+  it("normalizes \\r\\n line endings inside the heuristic so Windows pastes still get one event", () => {
+    const { reader, events } = setup();
+    reader.feed("first\r\nsecond\r\nthird");
+    // Whole chunk wrapped → paste accumulator delivers normalized logical lines.
+    expect(events).toEqual([{ input: "first\nsecond\nthird", paste: true }]);
+  });
+});
+
+describe("StdinReader — ESC ambiguity timer", () => {
+  it("standalone Esc (no follow-up byte arrives) eventually fires escape:true", async () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b");
+    // The reader schedules a 250ms timer. Wait it out.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(events).toEqual([{ input: "", escape: true }]);
+  });
+
+  it("ESC followed by a CSI within the timer window resolves to the CSI event", async () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b");
+    // Some delay — but less than 250ms.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    reader.feed("[A");
+    // No need to wait; the CSI completes the sequence immediately.
+    expect(events).toEqual([{ input: "", upArrow: true }]);
+  });
+});
+
+describe("StdinReader — ESC + char (Alt+key)", () => {
+  it("ESC followed by a non-CSI char fires meta:true", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1bx");
+    expect(events).toEqual([{ input: "x", meta: true }]);
+  });
+});
+
+describe("StdinReader — SGR mouse reports (issue #867)", () => {
+  it("dispatches wheel-up as mouseScrollUp (with ESC)", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[<64;10;5M");
+    expect(events).toEqual([{ input: "", mouseScrollUp: true, mouseRow: 5, mouseCol: 10 }]);
+  });
+
+  it("dispatches wheel-down as mouseScrollDown (with ESC)", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[<65;10;5M");
+    expect(events).toEqual([{ input: "", mouseScrollDown: true, mouseRow: 5, mouseCol: 10 }]);
+  });
+
+  it("dispatches left-click press + release", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[<0;3;7M");
+    reader.feed("\x1b[<0;3;7m");
+    expect(events).toEqual([
+      { input: "", mouseClick: true, mouseRow: 7, mouseCol: 3 },
+      { input: "", mouseRelease: true, mouseRow: 7, mouseCol: 3 },
+    ]);
+  });
+
+  it("drops mouse reports with unmapped buttons (no garbage text)", () => {
+    const { reader, events } = setup();
+    // Btn 2 = right-click. We don't surface it; the bytes still get consumed.
+    reader.feed("\x1b[<2;10;5M");
+    reader.feed("\x1b[<2;10;5m");
+    expect(events).toEqual([{ input: "", mouseRelease: true, mouseRow: 5, mouseCol: 10 }]);
+  });
+
+  it("drops ESC-stripped wheel reports (ConPTY) instead of leaking as text", () => {
+    const { reader, events } = setup();
+    reader.feed("[<64;10;5M");
+    expect(events).toEqual([{ input: "", mouseScrollUp: true, mouseRow: 5, mouseCol: 10 }]);
+  });
+
+  it("drops a burst of ESC-stripped reports without inserting any text", () => {
+    const { reader, events } = setup();
+    reader.feed("[<64;10;5M[<64;11;5M[<64;12;5M");
+    expect(events).toEqual([
+      { input: "", mouseScrollUp: true, mouseRow: 5, mouseCol: 10 },
+      { input: "", mouseScrollUp: true, mouseRow: 5, mouseCol: 11 },
+      { input: "", mouseScrollUp: true, mouseRow: 5, mouseCol: 12 },
+    ]);
+  });
+
+  it("printable text adjacent to an ESC-stripped report still arrives intact", () => {
+    const { reader, events } = setup();
+    reader.feed("ab[<64;10;5Mcd");
+    expect(events).toEqual([
+      { input: "ab" },
+      { input: "", mouseScrollUp: true, mouseRow: 5, mouseCol: 10 },
+      { input: "cd" },
+    ]);
+  });
+
+  it("ESC-stripped report with unmapped button is consumed silently", () => {
+    const { reader, events } = setup();
+    reader.feed("ab[<99;10;5Mcd");
+    expect(events).toEqual([{ input: "ab" }, { input: "cd" }]);
+  });
+
+  it("does not eat a literal `[<` that isn't a mouse report", () => {
+    const { reader, events } = setup();
+    reader.feed("[<not-a-mouse-report");
+    expect(events).toEqual([{ input: "[<not-a-mouse-report" }]);
+  });
+
+  it("drops legacy X10 mouse reports as a whole instead of leaking coordinate bytes", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[M`*%");
+    expect(events).toEqual([]);
+  });
+
+  it("drops legacy X10 mouse reports even when split after the prefix", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[M");
+    reader.feed("`*%");
+    expect(events).toEqual([]);
+  });
+
+  it("drops a legacy X10 mouse-report flood without surfacing prompt input (#1598)", () => {
+    const { reader, events } = setup();
+    for (let i = 0; i < 1000; i++) {
+      reader.feed("\x1b[M`*%");
+    }
+    expect(events).toEqual([]);
+  });
+
+  it("drops ESC-stripped legacy X10 mouse reports instead of leaking prompt input (#1598)", () => {
+    const { reader, events } = setup();
+    reader.feed("[M`*%");
+    expect(events).toEqual([]);
+  });
+
+  it("drops an ESC-stripped legacy X10 mouse-report flood without surfacing prompt input (#1598)", () => {
+    const { reader, events } = setup();
+    for (let i = 0; i < 1000; i++) {
+      reader.feed("[M`*%");
+    }
+    expect(events).toEqual([]);
+  });
+
+  it("keeps printable text around an ESC-stripped legacy X10 report intact", () => {
+    const { reader, events } = setup();
+    reader.feed("ab[M`*%cd");
+    expect(events).toEqual([{ input: "ab" }, { input: "cd" }]);
+  });
+});
+
+describe("sanitizePasteText (issue #849)", () => {
+  it("normalizes Windows CRLF and bare CR line endings (issue #1030)", () => {
+    expect(sanitizePasteText("first\r\nsecond\rthird")).toBe("first\nsecond\nthird");
+  });
+
+  it("strips bidi override controls (LRE/RLE/PDF/LRO/RLO/isolates)", () => {
+    const raw = "\u202ahello\u202c \u202bworld\u202c \u2066isolated\u2069";
+    expect(sanitizePasteText(raw)).toBe("hello world isolated");
+  });
+
+  it("strips zero-width spaces, BOM, word joiner", () => {
+    const raw = "\ufefffoo\u200bbar\u2060baz";
+    expect(sanitizePasteText(raw)).toBe("foobarbaz");
+  });
+
+  it("strips soft hyphen", () => {
+    expect(sanitizePasteText("dis\u00adcover")).toBe("discover");
+  });
+
+  it("preserves ZWJ inside emoji sequences (\ud83d\udc68\u200d\ud83d\udcbb)", () => {
+    const family = "\ud83d\udc68\u200d\ud83d\udcbb";
+    expect(sanitizePasteText(family)).toBe(family);
+  });
+
+  it("preserves ZWNJ and combining marks (e + \u0301 = \u00e9)", () => {
+    expect(sanitizePasteText("caf\u00e9 ka\u200cze")).toBe("caf\u00e9 ka\u200cze");
+  });
+
+  it("returns plain ASCII / CJK input unchanged", () => {
+    expect(sanitizePasteText("hello world")).toBe("hello world");
+    expect(sanitizePasteText("\u4f60\u597d\u4e16\u754c")).toBe("\u4f60\u597d\u4e16\u754c");
+  });
+});
+
+describe("StdinReader — paste content sanitization (issue #849)", () => {
+  it("strips invisible controls from a bracketed paste before dispatch", () => {
+    const { reader, events } = setup();
+    reader.feed("\x1b[200~\u202ahello\u202c \u200bworld\x1b[201~");
+    expect(events).toEqual([{ input: "hello world", paste: true }]);
+  });
+
+  it("keeps ZWJ emoji intact through the paste pipeline", () => {
+    const { reader, events } = setup();
+    const family = "\ud83d\udc68\u200d\ud83d\udcbb";
+    reader.feed(`\x1b[200~${family}\x1b[201~`);
+    expect(events).toEqual([{ input: family, paste: true }]);
+  });
+});

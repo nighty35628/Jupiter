@@ -1,0 +1,113 @@
+/** `/mcp` browser modal — keyboard-driven server list per design §24. */
+
+import { Box, Text } from "ink";
+import React, { useState } from "react";
+import { t } from "../../i18n/index.js";
+import { useKeystroke } from "./keystroke-context.js";
+import { toggleMcpDisabled } from "./mcp-disable.js";
+import { healthBadge } from "./mcp-health.js";
+import { type ApplyAppend, kickOffMcpReconnect } from "./mcp-reconnect-kickoff.js";
+import type { McpServerSummary } from "./slash/types.js";
+import { COLOR } from "./theme.js";
+
+export interface McpBrowserProps {
+  servers: McpServerSummary[];
+  configPath: string;
+  onClose: () => void;
+  /** Pushed by the modal when a key triggers async work (`r` reconnect). */
+  postInfo: (text: string) => void;
+  /** Optional — opt-in to append-drift acceptance on `r`. Without it, append-drift refuses. */
+  applyAppend?: ApplyAppend;
+}
+
+export function McpBrowser({
+  servers,
+  configPath,
+  onClose,
+  postInfo,
+  applyAppend,
+}: McpBrowserProps) {
+  const [index, setIndex] = useState(0);
+  const max = Math.max(0, servers.length - 1);
+
+  useKeystroke((ev) => {
+    if (ev.paste) return;
+    if (ev.upArrow) setIndex((i) => Math.max(0, i - 1));
+    else if (ev.downArrow) setIndex((i) => Math.min(max, i + 1));
+    else if (ev.escape) onClose();
+    else if (ev.input === "r") {
+      const target = servers[index];
+      if (!target) return;
+      // Hand the "starting" lifecycle line to scrollback and let the
+      // kickoff schedule the result line via postInfo. Close the modal
+      // so the line is visible immediately.
+      postInfo(kickOffMcpReconnect(target, postInfo, applyAppend));
+      onClose();
+    } else if (ev.input === "d") {
+      const target = servers[index];
+      if (!target) return;
+      // Persist `mcpDisabled` and close — takes effect on next launch.
+      postInfo(toggleMcpDisabled("disable", target.label));
+      onClose();
+    }
+  });
+
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Box>
+        <Text bold color={COLOR.brand}>
+          {t("mcpBrowser.title")}
+        </Text>
+        <Text
+          dim
+        >{`  \u00b7  ${configPath}  \u00b7  ${t("mcpBrowser.serverCount", { count: servers.length, s: servers.length === 1 ? "" : "s" })}`}</Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        {servers.length === 0 ? (
+          <Text dim>{t("mcpBrowser.empty")}</Text>
+        ) : (
+          servers.map((s, i) => (
+            <ServerRow key={s.label + s.spec} server={s} active={i === index} />
+          ))
+        )}
+      </Box>
+      <Box marginTop={1}>
+        <Text dim>{t("mcpBrowser.footer")}</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function ServerRow({ server, active }: { server: McpServerSummary; active: boolean }) {
+  const { label, toolCount, report } = server;
+  const resourceCount = report.resources.supported ? report.resources.items.length : 0;
+  const promptCount = report.prompts.supported ? report.prompts.items.length : 0;
+  const elapsed = report.elapsedMs;
+  const health = healthBadge(elapsed);
+  const counts = `${toolCount} tools · ${resourceCount} resources · ${promptCount} prompts`;
+
+  return (
+    <Box flexDirection="column" marginBottom={active ? 1 : 0}>
+      <Box>
+        <Text color={active ? COLOR.brand : undefined}>{active ? "▸  " : "   "}</Text>
+        <Text bold={active} color={active ? "#e6edf3" : undefined}>
+          {label.padEnd(14)}
+        </Text>
+        <Text color={health.color}>{`${health.glyph} ${health.label}`}</Text>
+        <Text dim>{`      ${counts}`}</Text>
+      </Box>
+      {active ? (
+        <Box>
+          <Text dim>{`     ${capabilityList(server)}`}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+function capabilityList(s: McpServerSummary): string {
+  const caps: string[] = ["tools/list", "tools/call"];
+  if (s.report.resources.supported) caps.push("resources/list");
+  if (s.report.prompts.supported) caps.push("prompts/list");
+  return caps.join("  ");
+}

@@ -1,0 +1,187 @@
+name: Release desktop
+
+# Tag namespace: `desktop-v<semver>` triggers desktop Tauri bundles.
+# Plain `v<semver>` tags are reserved for the npm CLI release (see
+# publish-npm.yml) — they intentionally do NOT trigger this workflow.
+# Bump the desktop with: `git tag desktop-vX.Y.Z && git push origin desktop-vX.Y.Z`.
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. desktop-v0.47.0). Required when running manually."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: bundle (${{ matrix.target.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # macOS now ships two single-arch shards so Apple Silicon and Intel
+          # users get separate DMGs. `rust` and `tauri` stay aligned per shard.
+          - { os: ubuntu-22.04, label: "linux-x64", rust: "x86_64-unknown-linux-gnu", tauri: "x86_64-unknown-linux-gnu" }
+          - { os: macos-15-intel, label: "macos-x64", rust: "x86_64-apple-darwin", tauri: "x86_64-apple-darwin" }
+          - { os: macos-14, label: "macos-arm64", rust: "aarch64-apple-darwin", tauri: "aarch64-apple-darwin" }
+          - { os: windows-latest, label: "windows-x64", rust: "x86_64-pc-windows-msvc", tauri: "x86_64-pc-windows-msvc" }
+    runs-on: ${{ matrix.target.os }}
+    # secrets.* isn't accessible from step-level if:, so expose presence as a
+    # job-level env. Treat "true"/"false" strings as booleans downstream.
+    env:
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Setup Rust (${{ matrix.target.rust }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.rust }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+          key: ${{ matrix.target.label }}
+
+      - name: Install Linux bundle deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Sync desktop version from tag
+        run: node scripts/sync-desktop-version.mjs "${{ steps.tag.outputs.name }}"
+
+      - name: Build CLI bundle (dist/)
+        run: npm run build
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm ci
+
+      - name: Download bundled Node runtime
+        working-directory: desktop
+        run: npm run bundle:node
+
+      - name: Verify bundled Node matches host arch (macOS)
+        if: startsWith(matrix.target.os, 'macos-')
+        working-directory: desktop
+        run: |
+          expected_arch=$(uname -m)
+          archs=$(lipo -archs src-tauri/binaries/node)
+          echo "node archs: $archs"
+          echo "expected arch: $expected_arch"
+          if [ "$archs" != "$expected_arch" ]; then
+            echo "Expected $expected_arch Node, got: $archs" >&2
+            exit 1
+          fi
+          codesign -d --entitlements :- src-tauri/binaries/node 2>&1 | grep -q "com.apple.security.inherit"
+
+      - name: Build & verify desktop frontend
+        working-directory: desktop
+        shell: bash
+        run: |
+          npm run build
+          test -f dist/index.html
+          ls dist/assets/*.js >/dev/null
+
+      # tauri-action signs OS bundles whenever the corresponding env vars are
+      # defined — including when they're defined to the empty string, which is
+      # what `secrets.UNSET` evaluates to. Gate each signing block on its
+      # certificate being non-empty so unsigned prereleases don't trip
+      # `security import` / `signtool` on missing certs.
+      - name: Build Tauri bundle (unsigned)
+        if: >-
+          (matrix.target.os != 'windows-latest' || env.HAS_WIN_CERT != 'true')
+          && (!startsWith(matrix.target.os, 'macos-') || env.HAS_APPLE_CERT != 'true')
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ steps.tag.outputs.name }}
+          releaseName: Jupiter ${{ steps.tag.outputs.name }}
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target.tauri }}
+
+      - name: Build Tauri bundle (Windows, signed)
+        if: matrix.target.os == 'windows-latest' && env.HAS_WIN_CERT == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ steps.tag.outputs.name }}
+          releaseName: Jupiter ${{ steps.tag.outputs.name }}
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target.tauri }}
+
+      - name: Build Tauri bundle (macOS, signed + notarized)
+        if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_CERT == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: desktop
+          tagName: ${{ steps.tag.outputs.name }}
+          releaseName: Jupiter ${{ steps.tag.outputs.name }}
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target.tauri }}
+
+      - name: Verify app Node inherits TCC grants (macOS)
+        if: startsWith(matrix.target.os, 'macos-')
+        working-directory: desktop
+        shell: bash
+        run: |
+          node_bin=$(find src-tauri/target -path '*/release/bundle/macos/*.app/Contents/Resources/node' -type f | head -n 1)
+          test -n "$node_bin"
+          codesign -vvv --strict "$node_bin"
+          codesign -d --entitlements :- "$node_bin" 2>&1 | grep -q "com.apple.security.inherit"

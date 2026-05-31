@@ -1,0 +1,292 @@
+/** Callbacks (not refs) so endpoints read live loop state per request, not a frozen closure. */
+
+import type { McpServerSummary } from "../cli/ui/slash/types.js";
+import type { EditMode } from "../config.js";
+import type { CacheFirstLoop } from "../loop.js";
+import type { ToolRegistry } from "../tools.js";
+import type { JobRegistry } from "../tools/jobs.js";
+
+export interface DashboardContext {
+  /** Caller resolves via `defaultConfigPath()`; module deliberately avoids `homedir()` so tests can redirect. */
+  configPath: string;
+  usageLogPath: string;
+  /** Override the sessions dir (events.jsonl readers); production reads `~/.jupiter/sessions`. */
+  sessionsDir?: string;
+  mode: "standalone" | "attached";
+
+  loop?: CacheFirstLoop;
+  tools?: ToolRegistry;
+  getMcpServers?: () => McpServerSummary[];
+  /** Per-spec bridge failures — drives the "未桥接" reason shown in the dashboard. */
+  getMcpFailures?: () => Array<{ spec: string; name: string; reason: string; at: number }>;
+  jobs?: JobRegistry;
+
+  /** Current code-mode root, if any. Drives the project-scoped allowlist. */
+  getCurrentCwd?: () => string | undefined;
+  /** Current edit gate. */
+  getEditMode?: () => EditMode | undefined;
+  /** Plan-mode toggle state. */
+  getPlanMode?: () => boolean;
+  /** Current pending-edit-block count. */
+  getPendingEditCount?: () => number;
+  /** Latest published version (background-fetched by App). Null = pending/offline. */
+  getLatestVersion?: () => string | null;
+  getSessionName?: () => string | null;
+
+  setEditMode?: (mode: EditMode) => EditMode;
+  setPlanMode?: (on: boolean) => void;
+  /** Side-channel to live loop — settings POST persists, this flips the running session. */
+  applyEffortLive?: (effort: import("../config.js").ReasoningEffort) => void;
+  /** Same model swap path /model <id> takes — live + persisted. */
+  applyModelLive?: (model: string) => void;
+  /** Cached model catalog. Null = in flight / failed; `[]` = API answered empty. */
+  getModels?: () => string[] | null;
+  /** Session USD cap; null disables. Re-arms the 80% warning latch. */
+  setBudgetUsdLive?: (usd: number | null) => void;
+  /** Auto-resubmit timer status — same shape `useLoopMode` exposes to slash handlers. */
+  getLoopRunStatus?: () => {
+    prompt: string;
+    intervalMs: number;
+    iter: number;
+    nextFireMs: number;
+  } | null;
+  /** Start the auto-resubmit timer. Same path the `/loop` slash takes. */
+  startAutoLoop?: (intervalMs: number, prompt: string) => void;
+  /** Clear the auto-resubmit timer. */
+  stopAutoLoop?: () => void;
+  /** Endpoints don't write the audit log themselves so tests can swap the implementation. */
+  audit?: (entry: AuditEntry) => void;
+
+  getMessages?: () => DashboardMessage[];
+  /** Events are JSON-serializable subsets — raw `LoopEvent` carries React-only state. */
+  subscribeEvents?: (handler: (event: DashboardEvent) => void) => () => void;
+  /** Routes through the TUI's `handleSubmit` so slashes, `!cmd`, `@path`, plan-mode gating all match. */
+  submitPrompt?: (text: string) => SubmitResult;
+  abortTurn?: () => void;
+  isBusy?: () => boolean;
+  getStats?: () => DashboardStats | null;
+
+  /** Snapshot of any modal currently up (for SSE clients that connect mid-modal). */
+  getActiveModal?: () => ActiveModal | null;
+  resolveShellConfirm?: (choice: "run_once" | "always_allow" | "deny") => void;
+  resolvePathConfirm?: (choice: "run_once" | "always_allow" | "deny") => void;
+  resolveChoiceConfirm?: (choice: ChoiceResolution) => void;
+  resolvePlanConfirm?: (choice: "approve" | "refine" | "cancel", text?: string) => void;
+  resolveEditReview?: (choice: "apply" | "reject" | "apply-rest-of-turn" | "flip-to-auto") => void;
+  resolveCheckpointConfirm?: (choice: "continue" | "revise" | "stop", text?: string) => void;
+  resolveReviseConfirm?: (choice: "accept" | "reject") => void;
+  /** Active picker (sessions / checkpoints / mcp marketplace / …) resolves into the live TUI component via a runtime ref. */
+  resolvePicker?: (resolution: PickerResolution) => void;
+  /** Active read-only viewer (replay-plan / …) — only `close` is meaningful since the viewer carries no selection state. */
+  resolveViewer?: (resolution: { action: "close" }) => void;
+
+  reloadHooks?: () => number;
+  reloadMcp?: () => Promise<number>;
+  /** Live session swap — pass a name to switch into an existing session, or `undefined` to mint a fresh one. Available only in attached mode (an active CLI session to swap inside of). */
+  switchSession?: (name: string | undefined) => { ok: true } | { ok: false; reason: string };
+  invokeMcpTool?: (
+    serverLabel: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => Promise<unknown>;
+  /** Without this, registry has the tool but the prefix shown to the model stays stale until restart. */
+  addToolToPrefix?: (spec: import("../types.js").ToolSpec) => boolean;
+}
+
+export type ChoiceResolution =
+  | { kind: "pick"; optionId: string }
+  | { kind: "custom"; text: string }
+  | { kind: "cancel" };
+
+/** Web-driven action against the picker that's currently up. `refine` and `load-more` keep the picker open; everything else closes it. */
+export type PickerResolution =
+  | { action: "pick"; id: string }
+  | { action: "delete"; id: string }
+  | { action: "rename"; id: string; text: string }
+  | { action: "new"; text?: string }
+  | { action: "install"; id: string }
+  | { action: "uninstall"; id: string }
+  | { action: "load-more" }
+  | { action: "refine"; query: string }
+  | { action: "cancel" };
+
+export type PickerAction = PickerResolution["action"];
+
+export interface PickerItem {
+  id: string;
+  title: string;
+  /** Secondary line — relative timestamp, branch, description. */
+  subtitle?: string;
+  /** Right-aligned tag — installed / active / source. */
+  badge?: string;
+  /** Trailing meta — file count, popularity, cost. */
+  meta?: string;
+}
+
+export interface DashboardStats {
+  /** Total turns this session. */
+  turns: number;
+  /** Cumulative session cost in USD. */
+  totalCostUsd: number;
+  /** Cost of the most recent turn. */
+  lastTurnCostUsd: number;
+  /** Input + output split — drives "in $X · out $Y" rendering. */
+  totalInputCostUsd: number;
+  totalOutputCostUsd: number;
+  /** Cache hit ratio across the session, 0..1. */
+  cacheHitRatio: number;
+  /** Cumulative prompt cache-hit tokens across the live session. */
+  cacheHitTokens?: number;
+  /** Cumulative prompt cache-miss tokens across the live session. */
+  cacheMissTokens?: number;
+  /** Cumulative output tokens across the live session. */
+  totalCompletionTokens?: number;
+  /** Prompt tokens of the most recent turn — feeds the ctx gauge. */
+  lastPromptTokens: number;
+  /** Per-model context cap in tokens (1_000_000 for V4). */
+  contextCapTokens: number;
+  /** Null while background fetch pending OR on offline/auth failure — SPA renders first entry. */
+  balance: Array<{
+    currency: string;
+    total_balance: string;
+    granted_balance?: string;
+    topped_up_balance?: string;
+  }> | null;
+}
+
+/** Active modal snapshot — same shape as a `modal-*-up` SSE event payload. */
+export type ActiveModal =
+  | {
+      kind: "shell";
+      command: string;
+      allowPrefix: string;
+      shellKind: "run_command" | "run_background";
+    }
+  | {
+      kind: "path";
+      path: string;
+      intent: "read" | "write";
+      toolName: string;
+      sandboxRoot: string;
+      allowPrefix: string;
+    }
+  | {
+      kind: "choice";
+      question: string;
+      options: Array<{ id: string; title: string; summary?: string }>;
+      allowCustom: boolean;
+    }
+  | { kind: "plan"; body: string }
+  | {
+      kind: "edit-review";
+      path: string;
+      /** Both halves for side-by-side diff; `preview` kept for older flat-string clients. */
+      search: string;
+      replace: string;
+      preview: string;
+      total: number;
+      remaining: number;
+    }
+  | {
+      kind: "checkpoint";
+      stepId: string;
+      title?: string;
+      completed: number;
+      total: number;
+    }
+  | {
+      kind: "revision";
+      reason: string;
+      remainingSteps: Array<{
+        id: string;
+        title: string;
+        action: string;
+        risk?: "low" | "med" | "high";
+      }>;
+      summary?: string;
+    }
+  | {
+      kind: "picker";
+      /** Discriminator for the underlying picker (sessions / checkpoints / mcp-marketplace / …). Drives empty-state copy + icon on the SPA. */
+      pickerKind: string;
+      title: string;
+      query?: string;
+      items: PickerItem[];
+      actions: PickerAction[];
+      hasMore?: boolean;
+      hint?: string;
+    }
+  | {
+      kind: "viewer";
+      /** Discriminator for the underlying viewer (replay-plan / …). */
+      viewerKind: string;
+      title: string;
+      /** Markdown / plain text body. */
+      body?: string;
+      /** Structured plan steps when viewerKind === "replay-plan". */
+      steps?: Array<{ id: string; title: string; status: "done" | "queued" }>;
+      meta?: string;
+    };
+
+/** One row of the conversation as the SPA renders it. */
+export interface DashboardMessage {
+  id: string;
+  role: "user" | "assistant" | "info" | "warning" | "tool";
+  text: string;
+  /** When `role === "tool"` — name of the tool that produced this result. */
+  toolName?: string;
+  /** Raw JSON args (role=tool) — lets SPA render tool-specific cards instead of a generic blob. */
+  toolArgs?: string;
+  /** Optional reasoning content for assistant messages (R1 / V4 thinking). */
+  reasoning?: string;
+  /** For `role === "warning"`: "low" = chatty self-correcting / counter (UI suppresses by default),
+   *  "high" / undefined = real event (compaction, abort, rate-limit) to surface inline. */
+  severity?: "low" | "high";
+}
+
+export type DashboardEvent =
+  | {
+      kind: "assistant_delta";
+      id: string;
+      contentDelta?: string;
+      reasoningDelta?: string;
+    }
+  | {
+      kind: "assistant_final";
+      id: string;
+      text: string;
+      reasoning?: string;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+        prompt_cache_hit_tokens?: number;
+        prompt_cache_miss_tokens?: number;
+      };
+      costUsd?: number;
+    }
+  | { kind: "tool_start"; id: string; toolName: string; args?: string }
+  | { kind: "tool"; id: string; toolName: string; content: string; args?: string }
+  | { kind: "warning"; id: string; text: string; severity?: "low" | "high" }
+  | { kind: "error"; id: string; text: string }
+  | { kind: "info"; id: string; text: string }
+  | { kind: "user"; id: string; text: string }
+  | { kind: "busy-change"; busy: boolean }
+  | { kind: "status"; text: string }
+  | { kind: "modal-up"; modal: ActiveModal }
+  | { kind: "modal-down"; modalKind: ActiveModal["kind"] }
+  | { kind: "ping" };
+
+export interface SubmitResult {
+  accepted: boolean;
+  reason?: string;
+}
+
+/** Append-only — same rules as `usage.jsonl`, never rewritten. */
+export interface AuditEntry {
+  ts: number;
+  /** `add-allowlist`, `remove-allowlist`, `set-edit-mode`, etc. */
+  action: string;
+  /** Free-form payload for the action. Keep PII out (no prompts). */
+  payload?: Record<string, unknown>;
+}

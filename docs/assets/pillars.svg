@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 360" role="img" aria-label="Jupiter four pillars — cache-first loop, R1 thought harvesting, tool-call repair, cost control">
+  <title>Jupiter four pillars</title>
+  <defs>
+    <style>
+      .sans { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; }
+      .ttl  { font-weight: 700; }
+      .num  { font-weight: 800; letter-spacing: 0.08em; }
+    </style>
+    <linearGradient id="ig" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#5eead4"/>
+      <stop offset="50%" stop-color="#93c5fd"/>
+      <stop offset="100%" stop-color="#c4b5fd"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(10, 10)">
+    <rect width="420" height="160" rx="12" ry="12" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="24" y="42" class="mono num" font-size="13" fill="url(#ig)">01 /</text>
+    <text x="24" y="74" class="sans ttl" font-size="20" fill="#e6edf3">Cache-first loop</text>
+    <text x="24" y="106" class="sans" font-size="13" fill="#8b949e">Append-only history with no in-place</text>
+    <text x="24" y="124" class="sans" font-size="13" fill="#8b949e">mutation. Byte prefix survives every tool</text>
+    <text x="24" y="142" class="sans" font-size="13" fill="#8b949e">call — the cache keeps hitting.</text>
+  </g>
+
+  <g transform="translate(450, 10)">
+    <rect width="420" height="160" rx="12" ry="12" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="24" y="42" class="mono num" font-size="13" fill="url(#ig)">02 /</text>
+    <text x="24" y="74" class="sans ttl" font-size="20" fill="#e6edf3">R1 thought harvesting</text>
+    <text x="24" y="106" class="sans" font-size="13" fill="#8b949e">Distills reasoning_content into typed plan</text>
+    <text x="24" y="124" class="sans" font-size="13" fill="#8b949e">state — subgoals, hypotheses, rejected paths.</text>
+    <text x="24" y="142" class="sans" font-size="13" fill="#8b949e">Signal kept, noise dropped.</text>
+  </g>
+
+  <g transform="translate(10, 190)">
+    <rect width="420" height="160" rx="12" ry="12" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="24" y="42" class="mono num" font-size="13" fill="url(#ig)">03 /</text>
+    <text x="24" y="74" class="sans ttl" font-size="20" fill="#e6edf3">Tool-call repair</text>
+    <text x="24" y="106" class="sans" font-size="13" fill="#8b949e">Schema flatten · JSON repair · scavenge from</text>
+    <text x="24" y="124" class="sans" font-size="13" fill="#8b949e">&lt;think&gt; · truncation. Four strategies for</text>
+    <text x="24" y="142" class="sans" font-size="13" fill="#8b949e">DeepSeek-specific quirks.</text>
+  </g>
+
+  <g transform="translate(450, 190)">
+    <rect width="420" height="160" rx="12" ry="12" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="24" y="42" class="mono num" font-size="13" fill="url(#ig)">04 /</text>
+    <text x="24" y="74" class="sans ttl" font-size="20" fill="#e6edf3">Cost control</text>
+    <text x="24" y="106" class="sans" font-size="13" fill="#8b949e">Cache-safe folding · aggressive-fold tier ·</text>
+    <text x="24" y="124" class="sans" font-size="13" fill="#8b949e">model-aware budgets. Context size managed</text>
+    <text x="24" y="142" class="sans" font-size="13" fill="#8b949e">without breaking prefix.</text>
+  </g>
+</svg>

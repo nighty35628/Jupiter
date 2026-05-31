@@ -1,0 +1,337 @@
+/** Version module — semver compare, npx detection, cached latest-version fetcher (mocked fetch). */
+
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  LATEST_CACHE_TTL_MS,
+  VERSION,
+  compareVersions,
+  configuredLatestRegistryUrl,
+  detectInstallSource,
+  detectNpmInstallPrefix,
+  getLatestVersion,
+  isNpxInstall,
+} from "../src/version.js";
+
+describe("VERSION", () => {
+  it("matches the published package.json version", () => {
+    const pkgPath = join(process.cwd(), "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    expect(VERSION).toBe(pkg.version);
+  });
+});
+
+describe("compareVersions", () => {
+  it("compares major/minor/patch numerically", () => {
+    expect(compareVersions("0.4.22", "0.4.22")).toBe(0);
+    expect(compareVersions("0.4.21", "0.4.22")).toBeLessThan(0);
+    expect(compareVersions("0.4.22", "0.4.21")).toBeGreaterThan(0);
+    expect(compareVersions("0.5.0", "0.4.99")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0", "0.99.99")).toBeGreaterThan(0);
+  });
+
+  it("treats pre-release suffix as lower than bare version", () => {
+    expect(compareVersions("0.4.22-rc.1", "0.4.22")).toBeLessThan(0);
+    expect(compareVersions("0.4.22", "0.4.22-rc.1")).toBeGreaterThan(0);
+    expect(compareVersions("0.4.22-alpha.1", "0.4.22-alpha.1")).toBe(0);
+    expect(compareVersions("0.4.22-alpha.1", "0.4.22-alpha.2")).toBeLessThan(0);
+  });
+
+  it("tolerates mismatched part counts", () => {
+    expect(compareVersions("1", "1.0.0")).toBe(0);
+    expect(compareVersions("1.2", "1.2.0")).toBe(0);
+    expect(compareVersions("1.2.0", "1.2.1")).toBeLessThan(0);
+  });
+});
+
+describe("isNpxInstall", () => {
+  const originalArgv1 = process.argv[1];
+  const originalUa = process.env.npm_config_user_agent;
+
+  afterEach(() => {
+    process.argv[1] = originalArgv1;
+    if (originalUa === undefined) {
+      // biome-ignore lint/performance/noDelete: restore missing env var exactly
+      delete process.env.npm_config_user_agent;
+    } else {
+      process.env.npm_config_user_agent = originalUa;
+    }
+  });
+
+  it("detects _npx path fragment", () => {
+    process.argv[1] = "/Users/x/.npm/_npx/abc123/node_modules/.bin/jupiter";
+    // biome-ignore lint/performance/noDelete: cover the no-env case
+    delete process.env.npm_config_user_agent;
+    expect(isNpxInstall()).toBe(true);
+  });
+
+  it("detects npx via user-agent string", () => {
+    process.argv[1] = "/usr/local/bin/jupiter";
+    process.env.npm_config_user_agent = "npx/10.2.4 npm/10.2.4 node/v20.10.0";
+    expect(isNpxInstall()).toBe(true);
+  });
+
+  it("returns false for plain global install", () => {
+    process.argv[1] = "/usr/local/lib/node_modules/jupiter/dist/cli/index.js";
+    // biome-ignore lint/performance/noDelete: cover the no-env case
+    delete process.env.npm_config_user_agent;
+    expect(isNpxInstall()).toBe(false);
+  });
+});
+
+describe("detectInstallSource", () => {
+  it("identifies npm via lib/node_modules/jupiter", () => {
+    expect(detectInstallSource("/usr/local/lib/node_modules/jupiter/dist/cli/index.js")).toBe(
+      "npm",
+    );
+  });
+
+  it("identifies npm via Windows %APPDATA%/npm path", () => {
+    expect(
+      detectInstallSource(
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\jupiter\\dist\\cli\\index.js",
+      ),
+    ).toBe("npm");
+  });
+
+  it("identifies npm via nvm path", () => {
+    expect(
+      detectInstallSource(
+        "/Users/me/.nvm/versions/node/v22.11.0/lib/node_modules/jupiter/dist/cli/index.js",
+      ),
+    ).toBe("npm");
+  });
+
+  it("identifies bun via .bun install dir", () => {
+    expect(
+      detectInstallSource("/Users/me/.bun/install/global/node_modules/jupiter/dist/cli/index.js"),
+    ).toBe("bun");
+  });
+
+  it("identifies bun via Windows .bun path", () => {
+    expect(
+      detectInstallSource(
+        "C:\\Users\\me\\.bun\\install\\global\\node_modules\\jupiter\\dist\\cli\\index.js",
+      ),
+    ).toBe("bun");
+  });
+
+  it("identifies pnpm via pnpm/global", () => {
+    expect(
+      detectInstallSource(
+        "/Users/me/.local/share/pnpm/global/5/node_modules/jupiter/dist/cli/index.js",
+      ),
+    ).toBe("pnpm");
+  });
+
+  it("identifies yarn via yarn/global", () => {
+    expect(
+      detectInstallSource("/Users/me/.config/yarn/global/node_modules/jupiter/dist/cli/index.js"),
+    ).toBe("yarn");
+  });
+
+  it("identifies npx via _npx fragment", () => {
+    expect(detectInstallSource("/Users/me/.npm/_npx/abc/node_modules/.bin/jupiter")).toBe("npx");
+  });
+
+  it("returns unknown for paths that match no known pattern", () => {
+    expect(detectInstallSource("/opt/custom/bin/jupiter")).toBe("unknown");
+  });
+
+  it("returns unknown for empty path", () => {
+    expect(detectInstallSource("")).toBe("unknown");
+  });
+});
+
+describe("detectNpmInstallPrefix", () => {
+  it("extracts the prefix from a POSIX lib/node_modules path", () => {
+    expect(detectNpmInstallPrefix("/usr/local/lib/node_modules/jupiter/dist/cli/index.js")).toBe(
+      "/usr/local",
+    );
+  });
+
+  it("extracts the prefix from an nvm-style path", () => {
+    expect(
+      detectNpmInstallPrefix(
+        "/Users/me/.nvm/versions/node/v22.11.0/lib/node_modules/jupiter/dist/cli/index.js",
+      ),
+    ).toBe("/Users/me/.nvm/versions/node/v22.11.0");
+  });
+
+  it("extracts the prefix from a Windows %APPDATA%/npm path", () => {
+    expect(
+      detectNpmInstallPrefix(
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\jupiter\\dist\\cli\\index.js",
+      ),
+    ).toBe("C:/Users/me/AppData/Roaming/npm");
+  });
+
+  it("returns null when no jupiter node_modules segment is present", () => {
+    expect(detectNpmInstallPrefix("/opt/custom/bin/jupiter")).toBeNull();
+  });
+
+  it("returns null for empty path", () => {
+    expect(detectNpmInstallPrefix("")).toBeNull();
+  });
+});
+
+describe("getLatestVersion", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "jupiter-version-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  function makeFetch(
+    body: unknown,
+    { ok = true, status = 200 }: { ok?: boolean; status?: number } = {},
+  ): typeof fetch {
+    return (async () =>
+      ({
+        ok,
+        status,
+        json: async () => body,
+      }) as unknown as Response) as typeof fetch;
+  }
+
+  it("fetches from the registry and caches the result", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return { ok: true, json: async () => ({ version: "0.9.9" }) } as unknown as Response;
+    }) as typeof fetch;
+
+    const v1 = await getLatestVersion({
+      homeDir: home,
+      fetchImpl,
+      registryUrl: "https://updates.jupiter.test/latest",
+    });
+    expect(v1).toBe("0.9.9");
+    expect(calls).toBe(1);
+
+    // Within TTL, no second network call.
+    const v2 = await getLatestVersion({
+      homeDir: home,
+      fetchImpl,
+      registryUrl: "https://updates.jupiter.test/latest",
+    });
+    expect(v2).toBe("0.9.9");
+    expect(calls).toBe(1);
+
+    // Cache file exists and parses.
+    const cacheFile = join(home, ".jupiter", "version-cache.json");
+    expect(existsSync(cacheFile)).toBe(true);
+    const parsed = JSON.parse(readFileSync(cacheFile, "utf8"));
+    expect(parsed.version).toBe("0.9.9");
+    expect(typeof parsed.checkedAt).toBe("number");
+  });
+
+  it("force:true bypasses the cache", async () => {
+    writeFileSync(join(home, ".jupiter-cache-preseed.json"), ""); // just ensures the tmp dir is real
+    // Preseed the cache directly.
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(home, ".jupiter"), { recursive: true });
+    writeFileSync(
+      join(home, ".jupiter", "version-cache.json"),
+      JSON.stringify({ version: "0.1.0", checkedAt: Date.now() }),
+    );
+
+    const fetchImpl = makeFetch({ version: "0.9.9" });
+    const v = await getLatestVersion({
+      homeDir: home,
+      fetchImpl,
+      force: true,
+      registryUrl: "https://updates.jupiter.test/latest",
+    });
+    expect(v).toBe("0.9.9");
+  });
+
+  it("honors an expired cache entry as stale and refetches", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(home, ".jupiter"), { recursive: true });
+    writeFileSync(
+      join(home, ".jupiter", "version-cache.json"),
+      JSON.stringify({
+        version: "0.1.0",
+        checkedAt: Date.now() - LATEST_CACHE_TTL_MS - 1000,
+      }),
+    );
+    const fetchImpl = makeFetch({ version: "0.9.9" });
+    const v = await getLatestVersion({
+      homeDir: home,
+      fetchImpl,
+      registryUrl: "https://updates.jupiter.test/latest",
+    });
+    expect(v).toBe("0.9.9");
+  });
+
+  it("returns null when fetch throws (offline)", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("ENOTFOUND");
+    }) as unknown as typeof fetch;
+    const v = await getLatestVersion({
+      homeDir: home,
+      fetchImpl,
+      registryUrl: "https://updates.jupiter.test/latest",
+    });
+    expect(v).toBeNull();
+  });
+
+  it("returns null when the registry returns non-OK", async () => {
+    const fetchImpl = makeFetch({}, { ok: false, status: 500 });
+    const v = await getLatestVersion({
+      homeDir: home,
+      fetchImpl,
+      registryUrl: "https://updates.jupiter.test/latest",
+    });
+    expect(v).toBeNull();
+  });
+
+  it("returns null when the body has no version string", async () => {
+    const fetchImpl = makeFetch({ notVersion: true });
+    const v = await getLatestVersion({
+      homeDir: home,
+      fetchImpl,
+      registryUrl: "https://updates.jupiter.test/latest",
+    });
+    expect(v).toBeNull();
+  });
+
+  it("swallows cache write failures silently", async () => {
+    // Point homeDir at a file (not a directory) — mkdirSync will
+    // fail and writeCache should ignore the error. Returned version
+    // is still the freshly fetched one.
+    const fetchImpl = makeFetch({ version: "0.9.9" });
+    const busted = join(home, "not-a-dir");
+    writeFileSync(busted, "blocker");
+    const v = await getLatestVersion({
+      homeDir: busted,
+      fetchImpl,
+      registryUrl: "https://updates.jupiter.test/latest",
+    });
+    expect(v).toBe("0.9.9");
+  });
+
+  it("does not call an inherited npm package when Jupiter has no configured update channel", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("should not fetch");
+    }) as unknown as typeof fetch;
+    await expect(getLatestVersion({ homeDir: home, fetchImpl, force: true })).resolves.toBeNull();
+  });
+
+  it("builds an own registry URL only from Jupiter env configuration", () => {
+    expect(configuredLatestRegistryUrl({})).toBeNull();
+    expect(
+      configuredLatestRegistryUrl({ JUPITER_REGISTRY_URL: "https://updates.example/latest" }),
+    ).toBe("https://updates.example/latest");
+    expect(configuredLatestRegistryUrl({ JUPITER_NPM_PACKAGE: "@me/jupiter" })).toBe(
+      "https://registry.npmjs.org/%40me%2Fjupiter/latest",
+    );
+  });
+});

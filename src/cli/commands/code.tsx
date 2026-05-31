@@ -1,0 +1,169 @@
+/** `jupiter code [dir]` — native filesystem tools + code system prompt, wraps `chat`. */
+
+import { readFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
+import { buildCodeToolset } from "../../code/setup.js";
+import {
+  DEFAULT_MODEL,
+  bridgeEndpointEnv,
+  loadModel,
+  normalizeMcpConfig,
+  readConfig,
+} from "../../config.js";
+import { loadDotenv } from "../../env.js";
+import { t } from "../../i18n/index.js";
+import { specToRaw } from "../../mcp/spec.js";
+import { detectForeignAgentPlatform } from "../../memory/project.js";
+import { sanitizeName } from "../../memory/session.js";
+import { markPhase } from "../startup-profile.js";
+import { chatCommand } from "./chat.js";
+
+export interface CodeOptions {
+  /** Directory to root the filesystem tools at. Defaults to process.cwd(). */
+  dir?: string;
+  /** Override the default `smart` model. */
+  model?: string;
+  /** Disable session persistence. */
+  noSession?: boolean;
+  /** Transcript file for replay/diff. */
+  transcript?: string;
+  /** Skip the session picker — always resume prior messages. */
+  forceResume?: boolean;
+  /** Skip the session picker — always wipe prior messages and start fresh. */
+  forceNew?: boolean;
+  /**
+   * Soft USD spend cap. Off by default. Same semantics as `chat`:
+   * warns at 80%, refuses next turn at 100%. Mid-session adjustable
+   * via `/budget <usd>` slash command.
+   */
+  budgetUsd?: number;
+  /** Suppress the auto-launched embedded web dashboard. */
+  noDashboard?: boolean;
+  /** When true and the dashboard is enabled, open its URL in the system default browser as soon as the server is ready. */
+  openDashboard?: boolean;
+  /** Pin the dashboard to a fixed port. `undefined` keeps ephemeral assignment. */
+  dashboardPort?: number;
+  /** Dashboard bind address (#968). `undefined` keeps the default 127.0.0.1. */
+  dashboardHost?: string;
+  /** Stable dashboard URL token (#968). `undefined` mints a fresh per-boot token. */
+  dashboardToken?: string;
+  /** Inline string appended to the code system prompt after the generated base prompt. */
+  systemAppend?: string;
+  /** Path to a UTF-8 text file whose contents are appended to the code system prompt. */
+  systemAppendFile?: string;
+  /** Disable SGR mouse tracking so the terminal keeps native selection and right-click behavior. */
+  noMouse?: boolean;
+}
+
+export async function codeCommand(opts: CodeOptions = {}): Promise<void> {
+  markPhase("code_command_enter");
+  const resolvedModel = opts.model?.trim() || loadModel() || DEFAULT_MODEL;
+  // Bridge .env + ~/.jupiter/config.json into process.env so buildCodeToolset's
+  // eager DeepSeekClient constructions (subagent client; semantic embedder) can
+  // pick up a key the user already configured via `jupiter setup`. chatCommand
+  // does the same dance — code.tsx wraps chatCommand but must also seed env
+  // before buildCodeToolset runs, which is BEFORE chatCommand.
+  loadDotenv();
+  bridgeEndpointEnv();
+  const { codeSystemPrompt } = await import("../../code/prompt.js");
+  const rootDir = resolve(opts.dir ?? process.cwd());
+  // Per-directory session so switching projects doesn't mix histories.
+  // `code-<sanitized-basename>` fits the session name rules without
+  // truncating most project names.
+  const session = opts.noSession ? undefined : `code-${sanitizeName(basename(rootDir))}`;
+
+  markPhase("semantic_bootstrap_start");
+  const { tools, jobs, registerRooted, reBootstrapSemantic, semantic } = await buildCodeToolset({
+    rootDir,
+  });
+  markPhase(
+    semantic.enabled ? "semantic_bootstrap_done_enabled" : "semantic_bootstrap_done_skipped",
+  );
+
+  process.stderr.write(
+    `${t("startup.codeRooted", {
+      rootDir,
+      session: session ?? t("startup.ephemeral"),
+      tools: tools.size,
+      semantic: semantic.enabled ? t("startup.semanticOn") : "",
+    })}\n`,
+  );
+
+  const foreign = detectForeignAgentPlatform(rootDir);
+  if (foreign) {
+    process.stderr.write(t("code.workspaceConflict", { platforms: foreign.join(", ") }));
+  }
+
+  // Belt-and-suspenders cleanup: even though spawn(detached:false)
+  // should tie child processes to the parent's lifetime, Windows cmd.exe
+  // wrappers occasionally leak. We DON'T install SIGINT/SIGTERM
+  // handlers here — that overrode Node's default "exit on Ctrl+C" with
+  // a silent no-op, which made Ctrl+C feel broken in the TUI. App.tsx
+  // owns the SIGINT path now (it shows the quit-armed banner and calls
+  // exit() on confirmation); this 'exit' hook just guarantees the job
+  // registry is drained on the way out, regardless of which exit path
+  // fired.
+  process.once("exit", () => {
+    void jobs.shutdown();
+  });
+
+  let systemAppendFileContents: string | undefined;
+  if (opts.systemAppend !== undefined && opts.systemAppend.trim().length === 0) {
+    process.stderr.write(t("code.systemAppendEmpty"));
+  }
+  if (opts.systemAppendFile) {
+    const filePath = resolve(opts.systemAppendFile);
+    try {
+      systemAppendFileContents = readFileSync(filePath, "utf8");
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      const errorDetails = e.code ? `[${e.code}] ${e.message}` : e.message;
+      process.stderr.write(t("code.systemAppendFileReadError", { filePath, errorDetails }));
+      process.exit(1);
+    }
+  }
+
+  // The rebuilder is re-invoked on `/new` and `/cwd`. `currentRoot` is the live
+  // pointer; `/cwd` updates it via `onRootChange` so the rebuild picks up the
+  // new workspace's JUPITER.md / memory without restarting the loop.
+  let currentRoot = rootDir;
+  let semanticEnabled = semantic.enabled;
+  const codeRebuildSystem = () =>
+    codeSystemPrompt(currentRoot, {
+      hasSemanticSearch: semanticEnabled,
+      systemAppend: opts.systemAppend,
+      systemAppendFile: systemAppendFileContents,
+      modelId: resolvedModel,
+    });
+  await chatCommand({
+    model: resolvedModel,
+    budgetUsd: opts.budgetUsd,
+    system: codeRebuildSystem(),
+    rebuildSystem: codeRebuildSystem,
+    transcript: opts.transcript,
+    session,
+    seedTools: tools,
+    codeMode: {
+      rootDir,
+      jobs,
+      reregisterTools: registerRooted,
+      reBootstrapSemantic: async (root: string) => {
+        const r = await reBootstrapSemantic(root);
+        semanticEnabled = r.enabled;
+        return r;
+      },
+      onRootChange: (newRoot: string) => {
+        currentRoot = newRoot;
+      },
+    },
+    mcp: normalizeMcpConfig(readConfig()).map(specToRaw),
+    forceResume: opts.forceResume,
+    forceNew: opts.forceNew,
+    noDashboard: opts.noDashboard,
+    openDashboard: opts.openDashboard,
+    dashboardPort: opts.dashboardPort,
+    dashboardHost: opts.dashboardHost,
+    dashboardToken: opts.dashboardToken,
+    noMouse: opts.noMouse,
+  });
+}

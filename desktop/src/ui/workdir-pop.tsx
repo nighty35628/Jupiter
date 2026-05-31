@@ -1,0 +1,148 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { I } from "../icons";
+import { t, useLang } from "../i18n";
+import { displayWorkspaceBasename, displayWorkspacePath } from "../workspace-display";
+
+type Anchor = { top?: number; bottom?: number; left: number };
+
+export function WorkdirPop({
+  open,
+  onClose,
+  recent,
+  current,
+  anchor,
+  onPick,
+  onBrowse,
+  onRemoveRecent,
+}: {
+  open: boolean;
+  onClose: () => void;
+  recent: string[];
+  current?: string;
+  anchor?: Anchor;
+  onPick: (path: string) => void;
+  onBrowse: () => void;
+  onRemoveRecent?: (path: string) => void;
+}) {
+  useLang();
+  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    const id = window.setTimeout(() => inputRef.current?.focus(), 40);
+    return () => window.clearTimeout(id);
+  }, [open]);
+
+  const items = useMemo(() => {
+    const list = recent.length > 0 ? recent : current ? [current] : [];
+    const q = query.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((p) => p.toLowerCase().includes(q));
+  }, [recent, current, query]);
+
+  if (!open) return null;
+
+  const left = anchor?.left ?? 240;
+  const positionStyle =
+    anchor?.bottom !== undefined
+      ? { bottom: anchor.bottom, left }
+      : { top: anchor?.top ?? 56, left };
+
+  return (
+    <div className="wd-mask" onMouseDown={onClose}>
+      <div className="wd-pop" style={positionStyle} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="wd-head">
+          <I.folder size={12} />
+          <span>{t("workdir.title")}</span>
+        </div>
+        <input
+          ref={inputRef}
+          className="wd-search"
+          placeholder={t("workdir.searchPlaceholder")}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              onClose();
+            } else if (e.key === "Enter" && items[0]) {
+              e.preventDefault();
+              onPick(items[0]);
+              onClose();
+            }
+          }}
+        />
+        <div className="wd-list">
+          {items.length === 0 ? (
+            <div
+              style={{
+                padding: "16px 12px",
+                fontSize: 11.5,
+                color: "var(--muted)",
+                fontFamily: "Geist Mono, monospace",
+              }}
+            >
+              {t("workdir.empty")}
+            </div>
+          ) : null}
+          {items.map((p) => {
+            const isCurrent = p === current;
+            const name = displayWorkspaceBasename(p, p);
+            const displayPath = displayWorkspacePath(p, p);
+            return (
+              <div
+                key={p}
+                className="wd-row"
+                onClick={() => {
+                  if (!isCurrent) onPick(p);
+                  onClose();
+                }}
+                title={displayPath}
+              >
+                <span className="ic">
+                  <I.folder size={12} />
+                </span>
+                <div className="b">
+                  <div className="p">{name}</div>
+                  <div className="br">{displayPath}</div>
+                </div>
+                {isCurrent ? (
+                  <span className="pin">
+                    <I.check size={11} />
+                  </span>
+                ) : onRemoveRecent ? (
+                  <button
+                    type="button"
+                    className="wd-del"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveRecent(p);
+                    }}
+                    title={t("workdir.removeRecent")}
+                  >
+                    <I.trash size={11} />
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+        <div className="wd-foot">
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => {
+              onBrowse();
+              onClose();
+            }}
+          >
+            <I.plus size={11} /> {t("workdir.browse")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

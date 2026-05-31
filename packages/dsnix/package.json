@@ -1,0 +1,36 @@
+{
+  "name": "dsnix",
+  "version": "0.52.0",
+  "description": "Short alias for jupiter — DeepSeek-native coding agent. Forwards to the jupiter CLI.",
+  "bin": {
+    "dsnix": "bin.cjs"
+  },
+  "files": [
+    "bin.cjs",
+    "README.md"
+  ],
+  "keywords": [
+    "jupiter",
+    "deepseek",
+    "coding-agent",
+    "cli",
+    "ai",
+    "alias"
+  ],
+  "homepage": "https://github.com/esengine/DeepSeek-Jupiter",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/esengine/DeepSeek-Jupiter.git",
+    "directory": "packages/dsnix"
+  },
+  "bugs": {
+    "url": "https://github.com/esengine/DeepSeek-Jupiter/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "jupiter": "0.52.0"
+  }
+}

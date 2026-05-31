@@ -1,0 +1,222 @@
+/** Generic pause gate — bridges tool functions and the App's modals via Promises. */
+// Tools call gate.ask(kind, payload) and await the result; the App subscribes
+// with gate.on() to show the right modal, then calls gate.resolve() on user pick.
+
+import type {
+  CheckpointVerdict,
+  ChoiceVerdict,
+  ConfirmationChoice,
+  PlanVerdict,
+  RevisionVerdict,
+} from "@jupiter/core-utils";
+
+export type { ConfirmationChoice, PlanVerdict, CheckpointVerdict, RevisionVerdict, ChoiceVerdict };
+
+export type ToolConfirmationAuditEvent =
+  | {
+      type: "tool.confirm.allow";
+      kind: "run_command" | "run_background";
+      payload: { command: string };
+    }
+  | {
+      type: "tool.confirm.deny";
+      kind: "run_command" | "run_background";
+      payload: { command: string };
+      denyContext?: string;
+    }
+  | {
+      type: "tool.confirm.always_allow";
+      kind: "run_command" | "run_background";
+      payload: { command: string };
+      prefix: string;
+    };
+
+interface PauseResponseMap {
+  run_command: ConfirmationChoice;
+  run_background: ConfirmationChoice;
+  path_access: ConfirmationChoice;
+  plan_proposed: PlanVerdict;
+  plan_checkpoint: CheckpointVerdict;
+  plan_revision: RevisionVerdict;
+  choice: ChoiceVerdict;
+}
+
+type PauseKind = keyof PauseResponseMap;
+
+interface PausePayloadMap {
+  run_command: { command: string; cwd?: string; timeoutSec?: number };
+  run_background: { command: string; cwd?: string; waitSec?: number };
+  path_access: {
+    /** Absolute path the tool wants to touch. */
+    path: string;
+    /** Why we're being asked — read leaks content, write mutates files. */
+    intent: "read" | "write";
+    /** The filesystem tool calling in — surfaced so users can see what's about to happen. */
+    toolName: string;
+    /** Sandbox root the path is escaping — surfaced for context. */
+    sandboxRoot: string;
+    /** Directory prefix that would be persisted if the user picks "always allow". */
+    allowPrefix: string;
+  };
+  plan_proposed: { plan: string; steps?: unknown[]; summary?: string };
+  plan_checkpoint: {
+    stepId: string;
+    title?: string;
+    result: string;
+    notes?: string;
+    completion?: unknown;
+  };
+  plan_revision: { reason: string; remainingSteps: unknown[]; summary?: string };
+  choice: { question: string; options: unknown[]; allowCustom: boolean };
+}
+
+export type PauseRequest = {
+  id: number;
+  kind: PauseKind;
+  payload: unknown;
+};
+
+type GateListener = (request: PauseRequest) => void;
+type AuditListener = (event: ToolConfirmationAuditEvent) => void;
+
+/** Named options for PauseGate.ask() — makes it obvious which field is kind vs payload. */
+export interface PauseAskOpts<K extends PauseKind = PauseKind> {
+  kind: K;
+  payload: PausePayloadMap[K];
+}
+
+export class PauseGate {
+  private _nextId = 0;
+  private _pending = new Map<number, { resolve: (data: unknown) => void; request: PauseRequest }>();
+  private _listeners: Set<GateListener> = new Set();
+  private _auditListener: AuditListener | null = null;
+
+  /** Block until the user responds. Takes a named options object so the
+   *  kind and payload fields don't get confused at the call site. */
+  ask<K extends PauseKind>(opts: PauseAskOpts<K>): Promise<PauseResponseMap[K]> {
+    const { kind, payload } = opts;
+    if (this._listeners.size === 0) {
+      throw new Error(
+        `${kind}: no confirmation listener registered — cannot prompt the user. This tool can only be used inside an interactive Jupiter session.`,
+      );
+    }
+    return new Promise((resolve) => {
+      const id = this._nextId++;
+      const request: PauseRequest = { id, kind, payload };
+      this._pending.set(id, { resolve: resolve as (d: unknown) => void, request });
+      for (const fn of this._listeners) {
+        try {
+          fn(request);
+        } catch {
+          /* listener error shouldn't break the gate */
+        }
+      }
+    });
+  }
+
+  /** Resolve a pending request. Called by the App's modal callback. */
+  resolve(id: number, data: unknown): void {
+    const p = this._pending.get(id);
+    if (!p) return;
+    this._pending.delete(id);
+    this.emitAuditEvent(p.request, data);
+    p.resolve(data);
+  }
+
+  /** Safe-cancel every outstanding request — frees stranded tool fns on Esc / /new. */
+  cancelAll(): void {
+    const ids = [...this._pending.keys()];
+    for (const id of ids) {
+      const p = this._pending.get(id);
+      if (!p) continue;
+      this._pending.delete(id);
+      p.resolve(safeCancelVerdict(p.request.kind));
+    }
+  }
+
+  /** Cancel one pending request — used by multi-tab hosts that need per-scope abort. */
+  cancel(id: number): boolean {
+    const p = this._pending.get(id);
+    if (!p) return false;
+    this._pending.delete(id);
+    p.resolve(safeCancelVerdict(p.request.kind));
+    return true;
+  }
+
+  setAuditListener(fn: AuditListener | null): void {
+    this._auditListener = fn;
+  }
+
+  /** Subscribe to new pause requests. Returns an unsubscribe function. */
+  on(fn: GateListener): () => void {
+    this._listeners.add(fn);
+    return () => {
+      this._listeners.delete(fn);
+    };
+  }
+
+  /** Current pending request, if any (polling fallback). */
+  get current(): PauseRequest | null {
+    for (const [, p] of this._pending) return p.request;
+    return null;
+  }
+
+  private emitAuditEvent(request: PauseRequest, data: unknown): void {
+    if (!this._auditListener) return;
+    if (request.kind !== "run_command" && request.kind !== "run_background") return;
+    if (!data || typeof data !== "object") return;
+    const choice = data as Partial<ConfirmationChoice>;
+    try {
+      switch (choice.type) {
+        case "run_once":
+          this._auditListener({
+            type: "tool.confirm.allow",
+            kind: request.kind,
+            payload: request.payload as { command: string },
+          });
+          break;
+        case "deny":
+          this._auditListener({
+            type: "tool.confirm.deny",
+            kind: request.kind,
+            payload: request.payload as { command: string },
+            denyContext: choice.denyContext,
+          });
+          break;
+        case "always_allow":
+          if (typeof choice.prefix !== "string") return;
+          this._auditListener({
+            type: "tool.confirm.always_allow",
+            kind: request.kind,
+            payload: request.payload as { command: string },
+            prefix: choice.prefix,
+          });
+          break;
+        default:
+          break;
+      }
+    } catch {
+      /* audit path must never break the gate */
+    }
+  }
+}
+
+function safeCancelVerdict(kind: PauseKind): unknown {
+  switch (kind) {
+    case "run_command":
+    case "run_background":
+    case "path_access":
+      return { type: "deny" };
+    case "plan_proposed":
+      return { type: "cancel" };
+    case "plan_checkpoint":
+      return { type: "stop" };
+    case "plan_revision":
+      return { type: "cancelled" };
+    case "choice":
+      return { type: "cancel" };
+  }
+}
+
+/** Singleton shared between tools and the App. */
+export const pauseGate = new PauseGate();

@@ -1,0 +1,92 @@
+/** Empty-session welcome card — JUPITER × 🐋 DeepSeek brand row + tagline + starter slash commands. */
+
+import { Box, Text } from "ink";
+// biome-ignore lint/style/useImportType: tsconfig jsx=react needs React in value scope for JSX compilation
+import React from "react";
+import { t } from "../../i18n/index.js";
+import { FG, TONE } from "./theme/tokens.js";
+
+export interface WelcomeBannerProps {
+  /** True when running `jupiter code`. Surfaces code-mode hints. */
+  inCodeMode?: boolean;
+  /** Pinned workspace root — only meaningful in code mode. Surfaced so first-time users see they can pass --dir at next launch. */
+  workspaceRoot?: string;
+  /** Live URL of the embedded dashboard, or null when it isn't running. */
+  dashboardUrl?: string | null;
+  /** Bumped on language change; forces re-render so t() picks up new locale. */
+  languageVersion?: number;
+}
+
+const HINTS = ["/help", "/skill", "/init", "/memory", "/cost"] as const;
+
+export function WelcomeBanner({
+  inCodeMode,
+  workspaceRoot,
+  dashboardUrl,
+}: WelcomeBannerProps): React.ReactElement {
+  const tagline = inCodeMode ? t("ui.taglineCode") : t("ui.taglineChat");
+  const taglineSub = t("ui.taglineSub");
+  const startTextRaw = t("ui.startSessionHint");
+
+  return (
+    <Box flexDirection="column" alignItems="center" marginY={1}>
+      <Box
+        flexDirection="column"
+        alignItems="center"
+        borderStyle="round"
+        borderColor={TONE.brand}
+        paddingX={4}
+        paddingY={1}
+      >
+        <Box flexDirection="row" gap={2}>
+          <Text color={TONE.brand} bold>
+            {"JUPITER"}
+          </Text>
+          <Text color={FG.faint}>{"×"}</Text>
+          <Box flexDirection="row" gap={1}>
+            <Text>{"🐋"}</Text>
+            <Text color={TONE.accent} bold>
+              {"DeepSeek"}
+            </Text>
+          </Box>
+        </Box>
+
+        <Box marginTop={1} flexDirection="column" alignItems="center">
+          <Text color={FG.body}>{tagline}</Text>
+          <Text color={FG.meta}>{taglineSub}</Text>
+        </Box>
+      </Box>
+
+      <Box marginTop={1}>
+        <Text color={FG.sub}>{startTextRaw}</Text>
+      </Box>
+
+      <Box marginTop={1} flexDirection="row" gap={3}>
+        {HINTS.map((cmd) => (
+          <Text key={cmd} color={FG.meta}>
+            {cmd}
+          </Text>
+        ))}
+      </Box>
+
+      {inCodeMode && workspaceRoot ? (
+        <Box marginTop={1} flexDirection="row" gap={1}>
+          <Text color={TONE.brand}>{t("welcomeBanner.workspace")}</Text>
+          <Text color={FG.faint}>{"·"}</Text>
+          <Text color={FG.body}>{workspaceRoot}</Text>
+          <Text color={FG.faint}>{t("welcomeBanner.relaunchHint")}</Text>
+        </Box>
+      ) : null}
+
+      {dashboardUrl ? (
+        <Box marginTop={1} flexDirection="row" gap={1}>
+          <Text color={TONE.brand} bold>
+            {t("welcomeBanner.dashboard")}
+          </Text>
+          <Text color={FG.faint}>{"·"}</Text>
+          <Text color={TONE.accent}>{dashboardUrl}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}

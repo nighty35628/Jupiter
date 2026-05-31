@@ -1,0 +1,2165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Jupiter · Agent TUI · Terminal-native design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ========================================================================
+   This page is BOTH a design doc and a faithful terminal screenshot.
+   - Mockup `<pre>` blocks use ONLY characters / styles a terminal can render:
+     · single monospace font (JetBrains Mono)
+     · sharp corners, no border-radius
+     · solid colors, no gradients
+     · no shadows
+     · box-drawing chars typed literally
+   - Page chrome (TOC, section headers, prose) uses normal HTML for browsing.
+   ======================================================================== */
+:root {
+  /* surfaces — match what the terminal will paint */
+  --bg:           #0a0c10;
+  --bg-input:     #0d1015;
+  --bg-code:      #06080c;
+  --bg-elev:      #11141a;
+
+  /* text */
+  --fg-0:         #e6edf3;
+  --fg-1:         #c9d1d9;
+  --fg-2:         #8b949e;
+  --fg-3:         #6e7681;
+  --fg-4:         #484f58;
+
+  /* accents — muted truecolor, GitHub-dark family */
+  --c-brand:      #79c0ff;   /* sky        — primary, in-progress */
+  --c-accent:     #d2a8ff;   /* purple     — reasoning, plan */
+  --c-violet:     #b395f5;   /* violet     — sub-agent */
+  --c-ok:         #7ee787;   /* green      — success */
+  --c-warn:       #f0b07d;   /* amber      — warning, approval */
+  --c-err:        #ff8b81;   /* coral red  — error */
+  --c-info:       #79c0ff;   /* same as brand */
+
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--fg-1); margin: 0; padding: 0; }
+body {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--c-brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Page shell ──────────────────────────────────────────────────── */
+.page {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  max-width: 1280px;
+  margin: 0 auto;
+  min-height: 100vh;
+}
+.toc {
+  position: sticky; top: 0; align-self: start;
+  height: 100vh; overflow-y: auto;
+  border-right: 1px solid #1a1d24;
+  padding: 28px 18px;
+  background: var(--bg);
+}
+.toc h1 { font-size: 14px; font-weight: 700; margin: 0 0 18px; color: var(--fg-0); letter-spacing: .04em; }
+.toc h1 .dot { color: var(--c-brand); margin-right: 8px; }
+.toc-section { font-size: 10px; text-transform: uppercase; letter-spacing: .14em; color: var(--fg-4); margin: 24px 0 6px; font-weight: 700; }
+.toc-section:first-of-type { margin-top: 0; }
+.toc ul { list-style: none; padding: 0; margin: 0; }
+.toc li a {
+  display: block; padding: 3px 6px; margin: 1px 0;
+  color: var(--fg-2); font-size: 12px; border-radius: 2px;
+}
+.toc li a:hover { color: var(--fg-0); background: #11141a; text-decoration: none; }
+
+main { padding: 32px 48px 40px 32px; min-width: 0; }
+.section { padding: 36px 0; border-bottom: 1px solid #14171e; }
+.section:last-child { border-bottom: none; }
+.section > h2 {
+  font-size: 24px; font-weight: 700; color: var(--fg-0);
+  margin: 0 0 6px; letter-spacing: -.005em;
+}
+.section > h2 .num { color: var(--fg-4); margin-right: 10px; font-weight: 500; }
+.section > .lede {
+  color: var(--fg-2); margin: 0 0 24px; font-size: 13px; max-width: 660px; line-height: 1.6;
+}
+.subsec { margin-bottom: 24px; }
+.subsec > h3 {
+  font-size: 14px; font-weight: 700; color: var(--fg-1);
+  margin: 28px 0 4px; letter-spacing: .02em;
+}
+.subsec > h3 .desc { color: var(--fg-3); font-weight: 400; margin-left: 10px; font-size: 12px; }
+.subsec > p { color: var(--fg-3); font-size: 12px; margin: 0 0 12px; max-width: 640px; line-height: 1.55; }
+
+/* ── Mockup containers — these are the "terminal screenshots" ─────── */
+.mock {
+  background: var(--bg);
+  border: 1px solid #14171e;
+  padding: 18px 22px;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--fg-1);
+  overflow-x: auto;
+  white-space: pre;
+  margin: 12px 0;
+  tab-size: 2;
+}
+/* When mockup is the WHOLE app shell, give it a larger frame so it reads as a window */
+.mock.shell { padding: 0; border-color: #1a1d24; }
+.mock.shell .ch { padding: 10px 22px; border-bottom: 1px solid #14171e; }
+.mock.shell .body { padding: 18px 22px 8px; min-height: 440px; }
+.mock.shell .composer { padding: 12px 22px 14px; border-top: 1px solid #14171e; }
+
+/* Color helpers that can appear inline in <pre> blocks */
+.brand   { color: var(--c-brand); }
+.accent  { color: var(--c-accent); }
+.violet  { color: var(--c-violet); }
+.ok      { color: var(--c-ok); }
+.warn    { color: var(--c-warn); }
+.err     { color: var(--c-err); }
+.info    { color: var(--c-info); }
+.fg0     { color: var(--fg-0); }
+.fg1     { color: var(--fg-1); }
+.fg2     { color: var(--fg-2); }
+.fg3     { color: var(--fg-3); }
+.fg4     { color: var(--fg-4); }
+.b       { font-weight: 700; }
+.i       { font-style: italic; }
+.u       { text-decoration: underline; }
+.inv     { background: var(--fg-1); color: var(--bg); }
+
+/* Streaming cursor */
+.cur     { display: inline-block; width: 0.55em; height: 1.05em; background: var(--c-brand); vertical-align: -2px; animation: blink 1s steps(2,start) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* Motion previews — actually run in the doc. In Ink these map to
+   setInterval-driven rerenders at the same cadence. */
+
+/* Circle spinner: rotate ◐ through 4 step stops. ◐→◓→◑→◒ visually = 0/90/180/270°. */
+.anim-spin             { display: inline-block; animation: spinRot 800ms steps(4, end) infinite; }
+@keyframes spinRot     { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* Braille spinner: 8-frame content swap on ::before. */
+.anim-braille          { display: inline-block; }
+.anim-braille::before  { content: '⠋'; animation: spinBraille 640ms steps(8, end) infinite; }
+@keyframes spinBraille {
+  0%   { content: '⠋'; }
+  12.5%{ content: '⠙'; }
+  25%  { content: '⠹'; }
+  37.5%{ content: '⠸'; }
+  50%  { content: '⠼'; }
+  62.5%{ content: '⠴'; }
+  75%  { content: '⠦'; }
+  87.5%{ content: '⠧'; }
+  100% { content: '⠋'; }
+}
+
+/* Focus pulse: opacity dim ↔ full. */
+.anim-pulse            { display: inline-block; animation: pulseFocus 1.4s ease-in-out infinite; }
+@keyframes pulseFocus  { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* Toast fade: hold 2s solid, drop to faint over 1s, repeat. */
+.anim-fade             { display: inline-block; animation: fadeToast 3s ease-out infinite; }
+@keyframes fadeToast   { 0%, 66% { opacity: 1; } 100% { opacity: .25; } }
+
+/* Countdown: 3 → 2 → 1 → 0 on 1Hz tick (4s loop). */
+.anim-countdown        { display: inline-block; }
+.anim-countdown::before{ content: '3'; animation: countdownCycle 4s steps(4, end) infinite; }
+@keyframes countdownCycle {
+  0%   { content: '3'; }
+  25%  { content: '2'; }
+  50%  { content: '1'; }
+  75%  { content: '0'; }
+  100% { content: '3'; }
+}
+
+/* Number ticker: 4 dollar values cycling, brand flash on the new value. */
+.anim-ticker           { display: inline-block; }
+.anim-ticker::before   { content: '$0.0014'; animation: tickerCycle 4s steps(4, end) infinite; }
+@keyframes tickerCycle {
+  0%   { content: '$0.0014'; }
+  25%  { content: '$0.0019'; }
+  50%  { content: '$0.0024'; }
+  75%  { content: '$0.0029'; }
+  100% { content: '$0.0014'; }
+}
+
+/* Card row that "appears" — used for new-row arrival. Slide-in is forbidden in
+   real TUI but in the HTML preview a quick fade demonstrates "row landed". */
+.anim-arrive           { animation: arriveFade 600ms ease-out 1; }
+@keyframes arriveFade  { from { opacity: 0; } to { opacity: 1; } }
+
+/* Header band — single-row backdrop that replaces full-box borders.
+   Renders as a bg-elev strip with a 3-cell colored left edge. The
+   bg→default transition between band and body is the visual divider;
+   no extra rule needed. In Ink: <Box backgroundColor="#171b23"> + Text. */
+.mock .band {
+  display: block;
+  background: #171b23;
+  margin: 0 -22px;
+  padding: 1px 22px;
+}
+.mock .band.acc    { box-shadow: inset 3px 0 0 var(--c-accent); }
+.mock .band.warn   { box-shadow: inset 3px 0 0 var(--c-warn); }
+.mock .band.err    { box-shadow: inset 3px 0 0 var(--c-err); }
+.mock .band.info   { box-shadow: inset 3px 0 0 var(--c-info); }
+.mock .band.ok     { box-shadow: inset 3px 0 0 var(--c-ok); }
+.mock .band.violet { box-shadow: inset 3px 0 0 var(--c-violet); }
+.mock .band.brand  { box-shadow: inset 3px 0 0 var(--c-brand); }
+.mock .band.ghost  { box-shadow: inset 3px 0 0 var(--fg-3); }
+
+/* Floating-panel surface — popovers / pickers / dropdowns.
+   Two-tone elevation: bg-elev under the whole panel, no border.
+   The first / last rows use a slightly lighter shade as inner padding. */
+.mock .panel { display: block; background: #11141a; margin: 0 -22px; padding: 1px 22px; }
+.mock .panel.head { background: #171b23; }
+.mock .panel.foot { background: #11141a; color: var(--fg-3); }
+
+/* Swatches */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.sw { border: 1px solid #14171e; }
+.sw .chip { height: 44px; }
+.sw .meta { padding: 6px 10px; font-size: 11px; }
+.sw .meta .name { color: var(--fg-1); display: block; font-weight: 700; }
+.sw .meta .hex { color: var(--fg-3); }
+
+.glyph-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 8px; }
+.glyph-tile { border: 1px solid #14171e; padding: 12px 10px; text-align: center; }
+.glyph-tile .g { font-size: 22px; color: var(--c-brand); margin-bottom: 4px; }
+.glyph-tile .n { font-size: 10px; color: var(--fg-3); }
+
+.kv { display: grid; grid-template-columns: 220px 1fr; gap: 4px 16px; font-size: 12px; max-width: 700px; }
+.kv .k { color: var(--fg-3); }
+.kv .v { color: var(--fg-1); }
+.kv kbd {
+  font-family: var(--font-mono); font-size: 11px;
+  padding: 1px 6px; border: 1px solid #1f232b;
+  background: #11141a; color: var(--fg-1);
+  display: inline-block; min-width: 16px; text-align: center;
+}
+
+/* Section meta tag above each card mockup */
+.tag {
+  display: inline-block; font-size: 10px;
+  text-transform: uppercase; letter-spacing: .12em;
+  color: var(--fg-4); font-weight: 700; margin-right: 12px;
+}
+.tag .cls { color: var(--c-brand); }
+
+/* Inline pill — bg-tinted chip used inside .mock rows for section labels,
+   model badges, and inline path refs. Padding lives INSIDE the content
+   (leading/trailing space chars) so column alignment in monospace
+   ASCII art is preserved. Terminal implementation: <Text backgroundColor=
+   color=> with real space chars on either side of the label. */
+.mock .pill {
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+/* Section pill — accent-tinted bg, accent fg. One per card type.
+   Color group matches the card's accent bar. */
+.mock .pill.sec-reason  { background: #2a1f3d; color: var(--c-accent); }
+.mock .pill.sec-tool    { background: #0f2230; color: var(--c-info); }
+.mock .pill.sec-shell   { background: #0f2230; color: var(--c-info); }
+.mock .pill.sec-task    { background: #0d1d2e; color: var(--c-brand); }
+.mock .pill.sec-plan    { background: #2a1f3d; color: var(--c-accent); }
+.mock .pill.sec-diff    { background: #11141a; color: var(--fg-1); }
+.mock .pill.sec-user    { background: #11141a; color: var(--fg-2); }
+.mock .pill.sec-warn    { background: #2b1f12; color: var(--c-warn); }
+.mock .pill.sec-err     { background: #2c1416; color: var(--c-err); }
+.mock .pill.sec-ok      { background: #102815; color: var(--c-ok); }
+/* State variants — same shape, swapped color when the card is in a non-default state. */
+.mock .pill.sec-task.s-done    { background: #102815; color: var(--c-ok); }
+.mock .pill.sec-task.s-failed  { background: #2c1416; color: var(--c-err); }
+/* Model pill — neutral bg-elev, color signals model class.
+   flash=brand/blue (cheap fast), pro=accent/purple (premium),
+   r1=violet (reasoner). Read at a glance without text. */
+.mock .pill.mdl-flash { background: #11141a; color: var(--c-brand); }
+.mock .pill.mdl-pro   { background: #11141a; color: var(--c-accent); }
+.mock .pill.mdl-r1    { background: #11141a; color: var(--c-violet); }
+/* Path pill — neutral bg-elev for filenames / paths inside tool rows.
+   Lower-weight so it reads as data not chrome. */
+.mock .pill.path { background: #11141a; color: var(--fg-2); font-weight: 500; letter-spacing: 0; }
+
+/* Body anchor — the ↳ corner glyph that sits at the start of the FIRST
+   body line, telling the eye "this is where the card body branches off
+   from the header above". Subtle, color-matches the card accent. */
+.mock .anchor       { color: var(--c-accent); }
+.mock .anchor.brand { color: var(--c-brand); }
+.mock .anchor.info  { color: var(--c-info); }
+.mock .anchor.violet{ color: var(--c-violet); }
+.mock .anchor.ok    { color: var(--c-ok); }
+.mock .anchor.err   { color: var(--c-err); }
+.mock .anchor.warn  { color: var(--c-warn); }
+.mock .anchor.fg3   { color: var(--fg-3); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <aside class="toc">
+    <h1><span class="dot">◈</span>Jupiter · TUI</h1>
+    <div class="toc-section">Foundations</div>
+    <ul>
+      <li><a href="#vision">Vision</a></li>
+      <li><a href="#shell">Inline shell</a></li>
+      <li><a href="#palette">Palette</a></li>
+      <li><a href="#glyphs">Glyphs</a></li>
+      <li><a href="#weights">Type weights</a></li>
+    </ul>
+    <div class="toc-section">Cards</div>
+    <ul>
+      <li><a href="#c-user">User message</a></li>
+      <li><a href="#c-reason">Reasoning</a></li>
+      <li><a href="#c-task">Task / Step</a></li>
+      <li><a href="#c-tool">Tool call</a></li>
+      <li><a href="#c-plan">Plan / Todo</a></li>
+      <li><a href="#c-diff">Diff</a></li>
+      <li><a href="#c-error">Error</a></li>
+      <li><a href="#c-warning">Warning</a></li>
+      <li><a href="#c-usage">Usage</a></li>
+      <li><a href="#c-subagent">Sub-agent</a></li>
+      <li><a href="#c-approval">Approval</a></li>
+      <li><a href="#c-streaming">Streaming</a></li>
+      <li><a href="#c-search">Search results</a></li>
+      <li><a href="#c-memory">Memory / Context</a></li>
+    </ul>
+    <div class="toc-section">Composer</div>
+    <ul>
+      <li><a href="#cm-empty">Empty / placeholder</a></li>
+      <li><a href="#cm-typing">Typing</a></li>
+      <li><a href="#cm-multiline">Multi-line</a></li>
+      <li><a href="#cm-history">History recall</a></li>
+      <li><a href="#cm-paste">Paste collapsed</a></li>
+      <li><a href="#cm-mention">@ mention picker</a></li>
+      <li><a href="#cm-slash">/ command picker</a></li>
+      <li><a href="#cm-slasharg">/ arg picker</a></li>
+      <li><a href="#cm-bang">! shell mode</a></li>
+      <li><a href="#cm-aborted">Aborted</a></li>
+    </ul>
+    <div class="toc-section">Status row</div>
+    <ul>
+      <li><a href="#ch-modes">Mode pills</a></li>
+      <li><a href="#ch-network">Network states</a></li>
+      <li><a href="#ch-countdown">Auto-confirm countdown</a></li>
+      <li><a href="#ch-cost">Live cost ticker</a></li>
+      <li><a href="#ch-record">Recording</a></li>
+    </ul>
+    <div class="toc-section">Modals</div>
+    <ul>
+      <li><a href="#m-plan-confirm">Plan · confirm</a></li>
+      <li><a href="#m-plan-refine">Plan · refine</a></li>
+      <li><a href="#m-plan-revise">Plan · revise</a></li>
+      <li><a href="#m-plan-checkpoint">Plan · checkpoint</a></li>
+      <li><a href="#m-workspace">Workspace switch</a></li>
+      <li><a href="#m-shell">Shell</a></li>
+      <li><a href="#m-edit">Edit · multi-file</a></li>
+      <li><a href="#m-deny">Deny w/ reason</a></li>
+      <li><a href="#m-choice">Generic choice</a></li>
+    </ul>
+    <div class="toc-section">Onboarding</div>
+    <ul>
+      <li><a href="#o-welcome">Welcome banner</a></li>
+      <li><a href="#o-setup">Setup wizard</a></li>
+      <li><a href="#o-session">Session picker</a></li>
+    </ul>
+    <div class="toc-section">Replay</div>
+    <ul>
+      <li><a href="#r-replay">Replay timeline</a></li>
+      <li><a href="#r-record">Record</a></li>
+      <li><a href="#r-stats">Stats panel</a></li>
+    </ul>
+    <div class="toc-section">MCP</div>
+    <ul>
+      <li><a href="#mcp-browse">Browse servers</a></li>
+    </ul>
+    <div class="toc-section">States</div>
+    <ul>
+      <li><a href="#s-empty">Empty session</a></li>
+      <li><a href="#s-stream-reason">Streaming reasoning</a></li>
+      <li><a href="#s-stdout">Long stdout</a></li>
+      <li><a href="#s-tool-empty">Tool · no output</a></li>
+      <li><a href="#s-subagent-deep">Sub-agent · deep</a></li>
+      <li><a href="#s-plan-resumed">Plan · resumed</a></li>
+      <li><a href="#s-plan-replay">Plan · replay</a></li>
+      <li><a href="#s-step-progress">Step progress</a></li>
+      <li><a href="#s-disconnect">Disconnect banner</a></li>
+    </ul>
+    <div class="toc-section">Inline</div>
+    <ul>
+      <li><a href="#i-file-ref">File:line ref</a></li>
+      <li><a href="#i-mention">@ mention</a></li>
+      <li><a href="#i-countdown">Countdown</a></li>
+      <li><a href="#i-highlight">Highlight</a></li>
+    </ul>
+    <div class="toc-section">Commands</div>
+    <ul>
+      <li><a href="#cmd-cost">/cost</a></li>
+      <li><a href="#cmd-context">/context</a></li>
+      <li><a href="#cmd-memory">/memory</a></li>
+      <li><a href="#cmd-doctor">/doctor</a></li>
+    </ul>
+    <div class="toc-section">Compare</div>
+    <ul>
+      <li><a href="#cmp-splitdiff">SplitDiff</a></li>
+    </ul>
+    <div class="toc-section">Live</div>
+    <ul>
+      <li><a href="#l-thinking">Thinking spinner</a></li>
+      <li><a href="#l-ctx-pressure">Context pressure</a></li>
+      <li><a href="#l-undo">Undo banner</a></li>
+      <li><a href="#l-aborted">Aborted card</a></li>
+      <li><a href="#l-retry">Tool retry / repair</a></li>
+      <li><a href="#l-checkpoint">Checkpoint fired</a></li>
+    </ul>
+    <div class="toc-section">Markdown</div>
+    <ul>
+      <li><a href="#md-inline">Inline</a></li>
+      <li><a href="#md-block">Block</a></li>
+    </ul>
+    <div class="toc-section">More cards</div>
+    <ul>
+      <li><a href="#editor">Editor mode</a></li>
+      <li><a href="#toasts">Toasts</a></li>
+      <li><a href="#help">Help &amp; keys</a></li>
+      <li><a href="#bang-out">Shell output (!)</a></li>
+      <li><a href="#diffapp">DiffApp standalone</a></li>
+      <li><a href="#quota">Account &amp; quota</a></li>
+      <li><a href="#mcp-life">MCP lifecycle</a></li>
+      <li><a href="#sessionops">Session ops</a></li>
+      <li><a href="#dropped">Dropped surfaces</a></li>
+    </ul>
+    <div class="toc-section">Motion</div>
+    <ul>
+      <li><a href="#motion">Cadence &amp; primitives</a></li>
+      <li><a href="#edges">Edge cases</a></li>
+    </ul>
+    <div class="toc-section">Patterns</div>
+    <ul>
+      <li><a href="#interaction">Interaction</a></li>
+      <li><a href="#demo">Demo flow</a></li>
+    </ul>
+  </aside>
+
+  <main>
+
+  <!-- ──────────────────────────── Vision ──────────────────────────── -->
+  <section class="section" id="vision">
+    <div class="tag"><span class="cls">v0.2</span> · TERMINAL-FAITHFUL</div>
+    <h2><span class="num">·</span>Vision</h2>
+    <p class="lede">
+      Every visual element on this page is something the terminal can paint:
+      box-drawing characters, truecolor fg/bg, bold/dim/italic, and a single
+      monospace font. No rounded corners, no shadows, no gradients —
+      <em>that's</em> what makes it look like a terminal app instead of a web UI
+      pretending to be one. Inspirations: <a href="https://k9scli.io/" target="_blank">k9s</a>,
+      <a href="https://github.com/aristocratos/btop" target="_blank">btop</a>,
+      <a href="https://github.com/jesseduffield/lazygit" target="_blank">lazygit</a>,
+      <a href="https://github.com/charmbracelet/glow" target="_blank">glow</a>.
+    </p>
+  </section>
+
+  <!-- ──────────────────────────── Shell ───────────────────────────── -->
+  <section class="section" id="shell">
+    <h2><span class="num">01</span>Inline shell</h2>
+    <p class="lede">Two zones, no fullscreen. <strong>Scrollback</strong> on top — every card prints once and stays in the terminal's native scroll history (mouse wheel works, ⇧+drag selection works, copy-paste works). <strong>Composer block</strong> at the bottom — sticky via Ink's normal render loop, holds the live status row + input + hint. Nothing app-managed scrolls; the terminal's own scrollback is the source of truth.</p>
+    <p class="lede" style="margin-top:8px"><em>No top chrome.</em> A top status bar would be pushed off-screen the moment a card prints. Live state (mode / cost / cache / balance) sits in the bottom strip above the input — the only row Ink can pin reliably without alt-screen. Session metadata (workspace · branch · model) prints once at session start as the first row of scrollback and is allowed to scroll away.</p>
+
+<div class="mock shell">
+<pre class="body">
+  <span class="fg4">◈ session-7  ·  main  ·  ~/projects/jupiter  ·  deepseek-chat</span>
+
+    <span class="pill sec-user">&nbsp;YOU&nbsp;</span>  <span class="fg4">· just now</span>
+    <span class="anchor fg3">↳</span> <span class="fg1">refactor the SKIP_DIRS list out of chunker.ts so directory_tree</span>
+      <span class="fg1">can reuse it</span>
+
+  <span class="accent">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-pro">&nbsp;v4-pro&nbsp;</span>  <span class="fg4">412 tok · 3 ¶</span>                                  <span class="fg3">3.1s</span>
+
+  <span class="brand">▎</span> <span class="pill sec-task">&nbsp;TASK&nbsp;</span>  <span class="b fg0">2 / 5  Refactor exclude config</span>                       <span class="fg3">4.2s · </span><span class="brand">running</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>   <span class="anchor brand">↳</span> <span class="fg2">Pull SKIP_DIRS / SKIP_FILES out of chunker.ts so directory_tree</span>
+  <span class="brand">▎</span>     <span class="fg2">can reuse them.</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>   <span class="ok">✓</span>  <span class="b fg1">read   </span> <span class="pill path">&nbsp;src/index/semantic/chunker.ts&nbsp;</span>   <span class="fg3">0.08s · 250 lines</span>
+  <span class="brand">▎</span>   <span class="ok">✓</span>  <span class="b fg1">read   </span> <span class="pill path">&nbsp;src/tools/filesystem.ts&nbsp;</span>          <span class="fg3">0.07s · 712 lines</span>
+  <span class="brand">▎</span>   <span class="ok">✓</span>  <span class="b fg1">write  </span> <span class="pill path">&nbsp;src/index/config.ts&nbsp;</span>              <span class="fg3">0.12s · created</span>
+  <span class="brand">▎</span>   <span class="brand">▶</span>  <span class="b fg1">edit   </span> <span class="pill path">&nbsp;src/tools/filesystem.ts&nbsp;</span>          <span class="brand">running…</span>
+  <span class="brand">▎</span>   <span class="fg4">○</span>  <span class="b fg3">verify </span> <span class="fg3">npm run typecheck &amp;&amp; npm test</span>     <span class="fg4">queued</span>
+
+  <span class="brand">▎</span> <span class="brand b">▶</span>  <span class="fg1">The change maps to three edits — I'll start with the config module,</span>
+  <span class="brand">▎</span>    <span class="fg1">then the chunker, then wire it through the CLI command. Each step</span>
+  <span class="brand">▎</span>    <span class="fg1">ships a passing test before moving on</span><span class="cur"></span>
+</pre>
+<pre class="composer"><span class="fg4">─────────────────────────────────────────────────────────────────────────────────────</span>
+  <span class="ok">●</span> <span class="fg2">auto</span>   <span class="fg3">·</span>   <span class="fg2">session-7 · main</span>   <span class="fg3">·</span>   <span class="fg2">$0.018 session</span>   <span class="fg3">·</span>   <span class="fg2">¥28.4</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+
+<span class="b brand">›</span> <span class="fg3">type a message · / for commands · @ to attach a file</span>
+
+  <span class="fg4">⏎ send  ·  ^J newline  ·  ↑↓ history  ·  esc abort  ·  ctrl-c quit</span></pre>
+</div>
+
+    <p class="lede" style="margin-top:18px;margin-bottom:0">
+      Fixed-width baseline: 88 cols. Cards reflow at narrower widths (down to ~60).
+      Wider terminals get extra right-side gutter (we don't full-bleed past 100 cols).
+    </p>
+  </section>
+
+  <!-- ──────────────────────────── Palette ─────────────────────────── -->
+  <section class="section" id="palette">
+    <h2><span class="num">02</span>Palette</h2>
+    <p class="lede">Truecolor (24-bit). Every modern terminal supports it — Windows Terminal, iTerm2, VS Code, kitty, alacritty, gnome-terminal, WezTerm. We're not back-porting to 16-color VTs.</p>
+
+    <div class="subsec">
+      <h3>Surfaces<span class="desc">solid backgrounds — never tint over user's terminal bg</span></h3>
+      <div class="swatches">
+        <div class="sw"><div class="chip" style="background:#0a0c10"></div><div class="meta"><span class="name">--bg</span><span class="hex">#0a0c10</span></div></div>
+        <div class="sw"><div class="chip" style="background:#0d1015"></div><div class="meta"><span class="name">--bg-input</span><span class="hex">#0d1015</span></div></div>
+        <div class="sw"><div class="chip" style="background:#06080c"></div><div class="meta"><span class="name">--bg-code</span><span class="hex">#06080c</span></div></div>
+        <div class="sw"><div class="chip" style="background:#11141a"></div><div class="meta"><span class="name">--bg-elev</span><span class="hex">#11141a</span></div></div>
+      </div>
+    </div>
+
+    <div class="subsec">
+      <h3>Accents<span class="desc">one color identifies a card type — never two on the same card</span></h3>
+      <div class="swatches">
+        <div class="sw"><div class="chip" style="background:#79c0ff"></div><div class="meta"><span class="name">brand · sky</span><span class="hex">#79c0ff</span></div></div>
+        <div class="sw"><div class="chip" style="background:#d2a8ff"></div><div class="meta"><span class="name">accent · purple</span><span class="hex">#d2a8ff</span></div></div>
+        <div class="sw"><div class="chip" style="background:#b395f5"></div><div class="meta"><span class="name">violet</span><span class="hex">#b395f5</span></div></div>
+        <div class="sw"><div class="chip" style="background:#7ee787"></div><div class="meta"><span class="name">ok · green</span><span class="hex">#7ee787</span></div></div>
+        <div class="sw"><div class="chip" style="background:#f0b07d"></div><div class="meta"><span class="name">warn · amber</span><span class="hex">#f0b07d</span></div></div>
+        <div class="sw"><div class="chip" style="background:#ff8b81"></div><div class="meta"><span class="name">err · coral</span><span class="hex">#ff8b81</span></div></div>
+      </div>
+    </div>
+
+    <div class="subsec">
+      <h3>Text<span class="desc">five-step grayscale, hierarchy via tone not size</span></h3>
+      <div class="swatches">
+        <div class="sw"><div class="chip" style="background:#e6edf3"></div><div class="meta"><span class="name">fg-0</span><span class="hex">#e6edf3 · titles</span></div></div>
+        <div class="sw"><div class="chip" style="background:#c9d1d9"></div><div class="meta"><span class="name">fg-1</span><span class="hex">#c9d1d9 · body</span></div></div>
+        <div class="sw"><div class="chip" style="background:#8b949e"></div><div class="meta"><span class="name">fg-2</span><span class="hex">#8b949e · sub</span></div></div>
+        <div class="sw"><div class="chip" style="background:#6e7681"></div><div class="meta"><span class="name">fg-3</span><span class="hex">#6e7681 · meta</span></div></div>
+        <div class="sw"><div class="chip" style="background:#484f58"></div><div class="meta"><span class="name">fg-4</span><span class="hex">#484f58 · faint</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────── Glyphs ──────────────────────────── -->
+  <section class="section" id="glyphs">
+    <h2><span class="num">03</span>Glyph vocabulary</h2>
+    <p class="lede">All Unicode, all renderable in JetBrains Mono / Cascadia Code / SF Mono / DejaVu Sans Mono. Color comes from the card type, not the glyph.</p>
+
+    <div class="subsec">
+      <h3>Card types <span class="desc">one glyph per card · always at column 0</span></h3>
+      <div class="glyph-grid">
+        <div class="glyph-tile"><div class="g fg3">◇</div><div class="n">user msg</div></div>
+        <div class="glyph-tile"><div class="g accent">◆</div><div class="n">reasoning</div></div>
+        <div class="glyph-tile"><div class="g brand">▶</div><div class="n">running</div></div>
+        <div class="glyph-tile"><div class="g info">▣</div><div class="n">tool call</div></div>
+        <div class="glyph-tile"><div class="g accent">⊞</div><div class="n">plan / todo</div></div>
+        <div class="glyph-tile"><div class="g ok">±</div><div class="n">diff / edit</div></div>
+        <div class="glyph-tile"><div class="g err">✖</div><div class="n">error</div></div>
+        <div class="glyph-tile"><div class="g warn">⚠</div><div class="n">warning</div></div>
+        <div class="glyph-tile"><div class="g brand">Σ</div><div class="n">usage / cost</div></div>
+        <div class="glyph-tile"><div class="g violet">⌬</div><div class="n">sub-agent</div></div>
+        <div class="glyph-tile"><div class="g warn">?</div><div class="n">approval</div></div>
+        <div class="glyph-tile"><div class="g info">⊙</div><div class="n">search</div></div>
+        <div class="glyph-tile"><div class="g fg3">⌑</div><div class="n">memory</div></div>
+      </div>
+    </div>
+
+    <div class="subsec">
+      <h3>Status / state<span class="desc">used inside cards — color carries the state</span></h3>
+      <div class="glyph-grid">
+        <div class="glyph-tile"><div class="g ok">✓</div><div class="n">success</div></div>
+        <div class="glyph-tile"><div class="g brand">▶</div><div class="n">in progress</div></div>
+        <div class="glyph-tile"><div class="g fg4">○</div><div class="n">queued</div></div>
+        <div class="glyph-tile"><div class="g err">✗</div><div class="n">failed</div></div>
+        <div class="glyph-tile"><div class="g warn">!</div><div class="n">blocked</div></div>
+        <div class="glyph-tile"><div class="g fg3">▸</div><div class="n">collapsed</div></div>
+        <div class="glyph-tile"><div class="g fg3">▾</div><div class="n">expanded</div></div>
+        <div class="glyph-tile"><div class="g brand">●</div><div class="n">focused</div></div>
+      </div>
+    </div>
+
+    <div class="subsec">
+      <h3>Structural<span class="desc">box-drawing + block characters — terminal native</span></h3>
+      <div class="glyph-grid">
+        <div class="glyph-tile"><div class="g brand">▎</div><div class="n">accent bar</div></div>
+        <div class="glyph-tile"><div class="g fg3">┌─┐│└┘</div><div class="n">box (sharp)</div></div>
+        <div class="glyph-tile"><div class="g fg2">█▓▒░</div><div class="n">density</div></div>
+        <div class="glyph-tile"><div class="g brand">▰▱</div><div class="n">progress</div></div>
+        <div class="glyph-tile"><div class="g fg3">─</div><div class="n">rule</div></div>
+        <div class="glyph-tile"><div class="g fg3">·</div><div class="n">separator</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────── Type weights ────────────────────── -->
+  <section class="section" id="weights">
+    <h2><span class="num">04</span>Type weights</h2>
+    <p class="lede">Terminal can't change font size. Hierarchy comes from <strong>weight</strong>, <strong>tone</strong> (fg-0 → fg-4), and <strong>style</strong> (italic). That's it. No sizes, no spacing tricks.</p>
+
+<pre class="mock">
+<span class="b fg0">Title         </span>  <span class="fg4">·</span>  bold + fg-0   <span class="fg4">·</span>  card titles, key names
+<span class="fg1">Body          </span>  <span class="fg4">·</span>  regular fg-1  <span class="fg4">·</span>  primary content text
+<span class="fg2">Sub / hint    </span>  <span class="fg4">·</span>  regular fg-2  <span class="fg4">·</span>  card subtitles, group labels
+<span class="fg3">Meta          </span>  <span class="fg4">·</span>  regular fg-3  <span class="fg4">·</span>  timing, counts, secondary
+<span class="fg4">Faint         </span>  <span class="fg4">·</span>  regular fg-4  <span class="fg4">·</span>  inactive, queued, dim borders
+<span class="i fg3">Reasoning text</span>  <span class="fg4">·</span>  italic + fg-3 <span class="fg4">·</span>  thinking blocks (always italicised)
+<span class="b brand">Accent       </span>   <span class="fg4">·</span>  bold + color  <span class="fg4">·</span>  glyphs, status pills, focus
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ CARDS ════════════════════════════ -->
+
+  <!-- User message -->
+  <section class="section" id="c-user">
+    <h2><span class="num">05</span>Cards · user message</h2>
+    <p class="lede">No accent bar — the user's input is the conversational anchor, deserves a quieter treatment than agent activity. The <span class="pill sec-user">&nbsp;YOU&nbsp;</span> pill uses a neutral bg with muted fg so it reads as identification, not status.</p>
+    <div class="tag">CARD · <span class="cls">.user</span></div>
+<pre class="mock">    <span class="pill sec-user">&nbsp;YOU&nbsp;</span>  <span class="fg4">· 2 min ago</span>
+    <span class="anchor fg3">↳</span> <span class="fg1">refactor the SKIP_DIRS list out of chunker.ts so directory_tree</span>
+      <span class="fg1">can reuse it</span>
+</pre>
+    <p class="lede">Body anchor uses the muted <span class="anchor fg3">↳</span> (fg-3) — the user card has no accent color to take from, so the anchor stays neutral.</p>
+  </section>
+
+  <!-- Reasoning -->
+  <section class="section" id="c-reason">
+    <h2><span class="num">06</span>Cards · reasoning</h2>
+    <p class="lede"><strong>No collapse / expand</strong> — TUI can't host interactive disclosure cleanly. The card adapts to content size in <strong>four tiers</strong>: streaming (live tail), settled-short (full body), settled-long (head + tail, middle elided), <strong>settled-XL (tail only — head dropped)</strong>. The XL drop is deliberate: at &gt;800 tok the opening is almost always restating the prompt the model has since moved past, while the conclusion carries the actionable synthesis. Header carries two <strong>bg-tinted pills</strong> — a <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span> section pill and a model pill (color = model class). Body is italic + dim so it never competes with primary content. The <span class="anchor">↳</span> anchor marks the absolute beginning of the body — it appears only when that beginning is actually visible (so it's absent in streaming-with-overflow and in XL).</p>
+
+    <div class="tag">HEADER + BODY ANATOMY</div>
+<pre class="mock">  <span class="accent">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-pro">&nbsp;v4-pro&nbsp;</span>  <span class="fg4">412 tok · 3 ¶</span>                                  <span class="fg3">3.1s</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="anchor">↳</span> <span class="i fg3">first line of body…</span>
+  <span class="accent">▎</span>     <span class="i fg3">subsequent lines align under the anchor's content column</span>
+       <span class="fg4">↑ rule</span>  <span class="fg4">↑ section pill</span>   <span class="fg4">↑ model pill</span>  <span class="fg4">↑ counts</span>                              <span class="fg4">↑ duration</span>
+</pre>
+    <p class="lede">Two pills replace the old <code>◆</code> glyph + emoji prefix. Section pill is accent-purple-tinted bg with accent fg — one fixed style per card type. Model pill uses neutral bg-elev with <strong>fg color = model class</strong>: <span class="pill mdl-flash">&nbsp;v4-flash&nbsp;</span> sky-blue (cheap), <span class="pill mdl-pro">&nbsp;v4-pro&nbsp;</span> purple (premium), <span class="pill mdl-r1">&nbsp;r1&nbsp;</span> violet (reasoner). Color carries the signal — no emoji needed. The <span class="anchor">↳</span> body anchor is a project-wide convention: every card body section opens with one in the card's accent color.</p>
+
+    <div class="tag">STREAMING · <span class="cls">.reasoning .streaming</span> · live tail-3-lines while bytes arrive</div>
+<pre class="mock">  <span class="accent">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-r1">&nbsp;r1&nbsp;</span>  <span class="fg4">247 tok</span>                                  <span class="fg3">1.2s · </span><span class="brand">thinking…</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="fg4">⋮  earlier lines scrolled past preview window</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>     <span class="i fg3">First weighing two approaches: should I patch the chunker to</span>
+  <span class="accent">▎</span>     <span class="i fg3">accept a config arg, or pull the constants up to a shared</span>
+  <span class="accent">▎</span>     <span class="i fg3">module… going with shared module since it's cleaner.</span><span class="cur"></span>
+</pre>
+    <p class="lede">Tail-3-lines is a fixed window — newer lines push older lines into the dim <span class="fg4">⋮</span> gutter mark. <strong>No <span class="anchor">↳</span> anchor</strong> when overflow is active — the absolute body start has scrolled past, so labelling the visible top as "body begins" would be a lie. The <span class="fg4">⋮</span> gutter is the indicator that content is scrolling past. Block cursor on the live edge. Token count ticks live; duration freezes on stream end. (When streaming starts and content is still under 3 lines, the <span class="anchor">↳</span> appears normally on the absolute first line — it disappears the moment overflow kicks in.)</p>
+
+    <div class="tag">SETTLED · SHORT · <span class="cls">.reasoning .settled .short</span> · ≤ ~4 lines, render in full</div>
+<pre class="mock">  <span class="accent">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-pro">&nbsp;v4-pro&nbsp;</span>  <span class="fg4">87 tok · 1 ¶</span>                                  <span class="fg3">1.2s</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="anchor">↳</span> <span class="i fg3">The user wants the storm guard to soften, not be removed. Plan: track</span>
+  <span class="accent">▎</span>     <span class="i fg3">first-vs-second storm per turn, only end the turn on the second one.</span>
+  <span class="accent">▎</span>     <span class="i fg3">Keep the warning copy plain.</span>
+</pre>
+    <p class="lede">No elision needed — full reasoning fits in the visual budget. Header gains <span class="fg4">N ¶</span> paragraph count once the stream settles.</p>
+
+    <div class="tag">SETTLED · LONG · <span class="cls">.reasoning .settled .long</span> · &gt; 4 lines OR &gt; 200 tok, head + tail paragraphs · middle elided</div>
+<pre class="mock">  <span class="accent">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-r1">&nbsp;r1&nbsp;</span>  <span class="fg4">412 tok · 3 ¶</span>                                  <span class="fg3">3.1s</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="anchor">↳</span> <span class="i fg3">Two paths: replace the hardcoded list when config is set, or merge</span>
+  <span class="accent">▎</span>     <span class="i fg3">user values in. The first matches the explicit "config-driven" ask;</span>
+  <span class="accent">▎</span>     <span class="i fg3">the second is safer default.</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="fg4">⋯  1 ¶ elided  ·  /reasoning last  ⋯</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>     <span class="i fg3">Files to touch: chunker.ts (drop constants, accept resolved config),</span>
+  <span class="accent">▎</span>     <span class="i fg3">filesystem.ts (drop its own copy), and the index command (load + pass).</span>
+</pre>
+    <p class="lede">First paragraph (thesis — "what I'm trying to do") and last paragraph (conclusion — "what I decided") always render. Middle paragraphs collapse to a single faint elision row that names the count <em>and</em> the slash command to retrieve the full body. The tail paragraph does NOT carry its own <span class="anchor">↳</span> — the anchor only marks the absolute beginning of the body. Vertical budget stays bounded (~9 lines).</p>
+
+    <div class="tag">SETTLED · XL · <span class="cls">.reasoning .settled .xl</span> · &gt; 800 tok OR any single ¶ &gt; 6 lines · TAIL ONLY · head dropped</div>
+<pre class="mock">  <span class="accent">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-r1">&nbsp;r1&nbsp;</span>  <span class="fg4">2,847 tok · 7 ¶</span>                                <span class="fg3">8.2s</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="fg4">⋯  6 ¶ + ~2,540 tok scrolled past  ·  /reasoning last  to view full  ⋯</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>     <span class="i fg3">All suppressed paths are wired through and the auto-escalate label</span>
+  <span class="accent">▎</span>     <span class="i fg3">flips from "storm-broken" to "repeat-loop". Tests cover both the</span>
+  <span class="accent">▎</span>     <span class="i fg3">bad-args recovery and the second-storm fallback paths.</span>
+</pre>
+    <p class="lede"><strong>Tail-only</strong> — at this scale the head paragraph is almost always restating the prompt or weighing options the model has since moved past. The conclusion is the actionable summary, so we keep that and drop the rest. No <span class="anchor">↳</span> anchor (the absolute body start isn't visible). The <code>⋯</code> elision row reports <em>both</em> paragraph count and approximate tokens scrolled past so the user can judge what they're not seeing — and the <code>/reasoning last</code> command brings up the full body in a pager when they need to. Vertical budget bounded at ~6 lines no matter how big the input. Triggered by total &gt; 800 tok OR any single paragraph that wouldn't fit in 6 lines on its own.</p>
+
+    <div class="tag">EMPTY · <span class="cls">.reasoning .none</span> · model returned non-thinking response</div>
+<pre class="mock">  <span class="fg4">▎</span> <span class="pill sec-reason" style="opacity:.55">&nbsp;REASONING&nbsp;</span>  <span class="fg4">no thinking — direct answer</span>
+</pre>
+    <p class="lede">When the producing model emits an empty <code>reasoning_content</code> (instruct-mode v4 on a simple prompt), surface a single dim line so the absence is explained, not silently missing. Section pill renders at reduced opacity to signal "card type was attempted but skipped". No body, no anchor. Clarifies "did the model skip thinking" vs. "is the panel broken".</p>
+  </section>
+
+  <!-- Task / Step -->
+  <section class="section" id="c-task">
+    <h2><span class="num">07</span>Cards · task / step</h2>
+    <p class="lede">A multi-step work unit — wraps tool calls + reasoning under one header. The <span class="pill sec-task">&nbsp;TASK&nbsp;</span> section pill recolors with state: <span class="pill sec-task">&nbsp;TASK&nbsp;</span> running (brand), <span class="pill sec-task s-done">&nbsp;TASK&nbsp;</span> done (ok), <span class="pill sec-task s-failed">&nbsp;TASK&nbsp;</span> failed (err). Step counter sits next to the pill so progress is visible without reading title text.</p>
+
+    <div class="tag">RUNNING · <span class="cls">.task .running</span></div>
+<pre class="mock">  <span class="brand">▎</span> <span class="pill sec-task">&nbsp;TASK&nbsp;</span>  <span class="b fg0">2 / 5  Refactor exclude config</span>                       <span class="fg3">4.2s · </span><span class="brand">running</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>   <span class="anchor brand">↳</span> <span class="fg2">Pull SKIP_DIRS / SKIP_FILES out of chunker.ts so directory_tree</span>
+  <span class="brand">▎</span>     <span class="fg2">can reuse them.</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>   <span class="ok">✓</span>  <span class="b fg1">read   </span> <span class="pill path">&nbsp;src/index/semantic/chunker.ts&nbsp;</span>   <span class="fg3">0.08s · 250 lines</span>
+  <span class="brand">▎</span>   <span class="ok">✓</span>  <span class="b fg1">read   </span> <span class="pill path">&nbsp;src/tools/filesystem.ts&nbsp;</span>          <span class="fg3">0.07s · 712 lines</span>
+  <span class="brand">▎</span>   <span class="ok">✓</span>  <span class="b fg1">write  </span> <span class="pill path">&nbsp;src/index/config.ts&nbsp;</span>              <span class="fg3">0.12s · created</span>
+  <span class="brand">▎</span>   <span class="brand">▶</span>  <span class="b fg1">edit   </span> <span class="pill path">&nbsp;src/tools/filesystem.ts&nbsp;</span>          <span class="brand">running…</span>
+  <span class="brand">▎</span>   <span class="fg4">○</span>  <span class="b fg3">verify </span> <span class="fg3">npm run typecheck && npm test</span>     <span class="fg4">queued</span>
+</pre>
+    <p class="lede">Tool rows inside the task body use the path-pill style for filenames — bg-elev tint, fg-2, regular weight. Reads as data not chrome. Step counter format <code>N / M</code> sits where the title used to start, so glancing at any task row tells you progress at a glance.</p>
+
+    <div class="tag">DONE · <span class="cls">.task .done</span></div>
+<pre class="mock">  <span class="ok">▎</span> <span class="pill sec-task s-done">&nbsp;TASK&nbsp;</span>  <span class="b fg1">1 / 5  Read chunker + filesystem</span>             <span class="fg3">0.4s · 2 tools · </span><span class="ok">done</span>
+</pre>
+    <p class="lede">Done tasks render as a single header row — body is omitted permanently (not collapsed-but-recallable). The user can recall what happened from the events log if needed.</p>
+
+    <div class="tag">FAILED · <span class="cls">.task .failed</span></div>
+<pre class="mock">  <span class="err">▎</span> <span class="pill sec-task s-failed">&nbsp;TASK&nbsp;</span>  <span class="b fg0">4 / 5  Sandbox check</span>                              <span class="fg3">0.2s · </span><span class="err">failed</span>
+  <span class="err">▎</span>
+  <span class="err">▎</span>   <span class="anchor err">↳</span> <span class="ok">✓</span>  <span class="b fg1">read   </span> <span class="pill path">&nbsp;src/sandbox/policy.ts&nbsp;</span>     <span class="fg3">0.04s · 88 lines</span>
+  <span class="err">▎</span>     <span class="err">✗</span>  <span class="b fg1">verify </span> <span class="pill path">&nbsp;policy.allows("rm")&nbsp;</span>        <span class="err">denied</span>
+</pre>
+    <p class="lede">Failed tasks always render their body — the user needs the failure trail visible without recall. Anchor uses err color to match the card.</p>
+  </section>
+
+  <!-- Tool call -->
+  <section class="section" id="c-tool">
+    <h2><span class="num">08</span>Cards · tool call</h2>
+    <p class="lede">Single tool invocation. Section pill <span class="pill sec-tool">&nbsp;TOOL&nbsp;</span> uses info-cyan; the tool function name follows in info-bold; the path/target sits in a path-pill. Quick scan order: card type → which tool → what target → how it went.</p>
+
+    <div class="tag">QUICK · <span class="cls">.tool .quick</span> · single-row, no body — fast read-only ops</div>
+<pre class="mock">  <span class="info">▎</span> <span class="pill sec-tool">&nbsp;TOOL&nbsp;</span>  <span class="b info">read_file</span>  <span class="pill path">&nbsp;src/cli/ui/App.tsx&nbsp;</span>          <span class="fg3">0.08s · 1224 lines · </span><span class="ok">ok</span>
+</pre>
+    <p class="lede">Default state for fast read-only tools (read_file, search_content, directory_tree). No body, no recall — the result is summarized in the metadata strip. If the user wants the file content, the file's at the path; jupiter won't waste rows redrawing it.</p>
+
+    <div class="tag">PREVIEW · <span class="cls">.tool .preview</span> · short body when output ≤ 6 lines and worth surfacing</div>
+<pre class="mock">  <span class="info">▎</span> <span class="pill sec-tool">&nbsp;TOOL&nbsp;</span>  <span class="b info">search_content</span>  <span class="pill path">&nbsp;"stormBreaker"&nbsp;</span>            <span class="fg3">0.21s · 4 hits · </span><span class="ok">ok</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="anchor info">↳</span> <span class="pill path">&nbsp;src/repair/storm.ts&nbsp;</span><span class="fg3">:13</span>  <span class="fg2">export class StormBreaker {</span>
+  <span class="info">▎</span>     <span class="pill path">&nbsp;src/repair/index.ts&nbsp;</span><span class="fg3">:33</span>  <span class="fg2">private readonly storm: StormBreaker;</span>
+  <span class="info">▎</span>     <span class="pill path">&nbsp;src/repair/index.ts&nbsp;</span><span class="fg3">:38</span>  <span class="fg2">this.storm = new StormBreaker(opts.stormWindow ?? 6, ...);</span>
+  <span class="info">▎</span>     <span class="pill path">&nbsp;tests/repair/storm.test.ts&nbsp;</span><span class="fg3">:2</span>  <span class="fg2">import { StormBreaker } from "...";</span>
+</pre>
+    <p class="lede">Used for grep / search / list outputs where 4-6 hit lines is the answer. Body anchor on the first hit row; subsequent rows align under it.</p>
+
+    <div class="tag">SHELL · <span class="cls">.tool .shell</span> · long stdout · tail-window with overflow ⋮</div>
+<pre class="mock">  <span class="info">▎</span> <span class="pill sec-shell">&nbsp;SHELL&nbsp;</span>  <span class="b info">run_command</span>  <span class="pill path">&nbsp;npm run verify&nbsp;</span>             <span class="fg3">23.4s · 1818 lines · </span><span class="ok">exit 0</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="fg4">⋮  1812 lines streamed past preview window</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="anchor info">↳</span> <span class="fg2">Test Files  </span><span class="ok">115 passed (115)</span>
+  <span class="info">▎</span>     <span class="fg2">     Tests  </span><span class="ok">1818 passed (1818)</span>
+  <span class="info">▎</span>     <span class="fg2">  Duration  </span><span class="fg2">23.81s</span>
+</pre>
+    <p class="lede">Long stdout follows the same tail-window pattern as streaming reasoning — tail-3-lines plus a <span class="fg4">⋮</span> overflow gutter. The full stream is on disk in the events log; recall via <code>/output last</code> if needed.</p>
+
+    <div class="tag">FAILED · <span class="cls">.tool .failed</span> · err-tinted pill, error message inline</div>
+<pre class="mock">  <span class="err">▎</span> <span class="pill sec-tool">&nbsp;TOOL&nbsp;</span>  <span class="b info">edit_file</span>  <span class="pill path">&nbsp;src/loop.ts&nbsp;</span>                   <span class="fg3">0.05s · </span><span class="err">failed</span>
+  <span class="err">▎</span>
+  <span class="err">▎</span>   <span class="anchor err">↳</span> <span class="err">✗</span> <span class="fg1">SEARCH text not found — model emitted `repairCalls` but file</span>
+  <span class="err">▎</span>     <span class="fg1">  has `repairedCalls`. Suggest /retry with corrected name.</span>
+</pre>
+    <p class="lede">Failure cards switch the rule color to err and surface the error inline (not collapsed). Most useful info first: what kind of failure + the actionable hint.</p>
+  </section>
+
+  <!-- Plan / Todo -->
+  <section class="section" id="c-plan">
+    <h2><span class="num">09</span>Cards · plan / todo</h2>
+    <p class="lede">Ordered checklist. <span class="pill sec-plan">&nbsp;PLAN&nbsp;</span> pill + plan title + progress fraction in the header. State per item via the bracket char + color: <span class="ok">[✓]</span> done · <span class="brand">[▶]</span> running · <span class="fg4">[ ]</span> queued · <span class="warn">[!]</span> blocked · <span class="err">[✗]</span> failed.</p>
+    <div class="tag">CARD · <span class="cls">.plan</span></div>
+<pre class="mock">  <span class="accent">▎</span> <span class="pill sec-plan">&nbsp;PLAN&nbsp;</span>  <span class="b fg0">Migrate selection to terminal-native</span>             <span class="fg3">5 / 7 done</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="anchor">↳</span> <span class="ok">[✓]</span> <span class="fg3">1. Snapshot current selection state</span>
+  <span class="accent">▎</span>     <span class="ok">[✓]</span> <span class="fg3">2. Drop @xterm/headless dep</span>
+  <span class="accent">▎</span>     <span class="ok">[✓]</span> <span class="fg3">3. Remove screen-mirror.ts</span>
+  <span class="accent">▎</span>     <span class="ok">[✓]</span> <span class="fg3">4. Strip LogSelection from log-frame.tsx</span>
+  <span class="accent">▎</span>     <span class="ok">[✓]</span> <span class="fg3">5. Strip drag handlers from App.tsx</span>
+  <span class="accent">▎</span>     <span class="brand">[▶]</span> <span class="b fg0">6. Add /copy slash command</span>          <span class="fg4">←</span> <span class="brand">in progress</span>
+  <span class="accent">▎</span>     <span class="fg4">[ ]</span> <span class="fg2">7. Update CHANGELOG &amp; push</span>
+</pre>
+    <p class="lede">Body anchor on the first plan item; subsequent items align under it. The footer action row from the previous design is dropped — TUI doesn't host per-item interactive shortcuts cleanly. Plan revision happens via slash commands (<code>/plan revise</code>, <code>/plan skip 4</code>) which are discoverable through <code>/help</code>.</p>
+
+    <div class="tag">XL · <span class="cls">.plan .xl</span> · &gt; 12 items · head + tail with middle elided, same as Reasoning XL</div>
+<pre class="mock">  <span class="accent">▎</span> <span class="pill sec-plan">&nbsp;PLAN&nbsp;</span>  <span class="b fg0">v0.24 release readiness</span>                          <span class="fg3">8 / 18 done</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="anchor">↳</span> <span class="ok">[✓]</span> <span class="fg3">1. Bump version + CHANGELOG entry</span>
+  <span class="accent">▎</span>     <span class="ok">[✓]</span> <span class="fg3">2. Run full verify gate</span>
+  <span class="accent">▎</span>     <span class="brand">[▶]</span> <span class="b fg0">3. Update docs/MIGRATION.md</span>           <span class="fg4">←</span> <span class="brand">in progress</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="fg4">⋯  12 items elided  ·  /plan view  ⋯</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>     <span class="fg4">[ ]</span> <span class="fg2">17. Tag release</span>
+  <span class="accent">▎</span>     <span class="fg4">[ ]</span> <span class="fg2">18. Publish to npm</span>
+</pre>
+    <p class="lede">Same head + tail elision pattern as Reasoning XL — first 3 items + last 2 items + a middle elision row. The currently-running item is always promoted into the head window even if it would otherwise fall in the elided range, so progress stays visible.</p>
+  </section>
+
+  <!-- Diff -->
+  <section class="section" id="c-diff">
+    <h2><span class="num">10</span>Cards · diff / edit</h2>
+    <p class="lede">Per-file changeset. Removed lines coral-red foreground · added green foreground · context dim. No background tinting (fights user's terminal bg). Footer = apply / skip / reject.</p>
+    <div class="tag">CARD · <span class="cls">.diff</span></div>
+<pre class="mock">  <span class="ok">▎</span> <span class="ok b">± Edit</span>  <span class="fg2">src/index/semantic/chunker.ts</span>           <span class="ok">+12</span><span class="fg4"> / </span><span class="err">-47</span>     <span class="fg4">▾</span>
+  <span class="ok">▎</span>
+  <span class="ok">▎</span>     <span class="fg4 i">@@ -30,40 +30,5 @@</span>
+  <span class="ok">▎</span>      <span class="fg2">/** Skip lists shared with src/tools/filesystem.ts */</span>
+  <span class="ok">▎</span>     <span class="err">-const SKIP_DIRS: ReadonlySet&lt;string&gt; = new Set([</span>
+  <span class="ok">▎</span>     <span class="err">-  "node_modules", ".git", ".hg",</span>
+  <span class="ok">▎</span>     <span class="fg4">-  ... 18 more lines collapsed</span>
+  <span class="ok">▎</span>     <span class="err">-]);</span>
+  <span class="ok">▎</span>     <span class="ok">+import { DEFAULT_INDEX_EXCLUDES } from "../config.js";</span>
+  <span class="ok">▎</span>     <span class="ok">+const SKIP_DIRS = new Set(DEFAULT_INDEX_EXCLUDES.dirs);</span>
+  <span class="ok">▎</span>
+  <span class="ok">▎</span>   <span class="b ok">[a] apply</span>   <span class="fg2">[s] skip</span>   <span class="b err">[r] reject</span>
+</pre>
+  </section>
+
+  <!-- Error -->
+  <section class="section" id="c-error">
+    <h2><span class="num">11</span>Cards · error</h2>
+    <p class="lede">Failed tool call or hard error. Stack folded by default. Coral-red bar + glyph; the body stays at fg-1 except the actual error message line.</p>
+    <div class="tag">CARD · <span class="cls">.error</span></div>
+<pre class="mock">  <span class="err">▎</span> <span class="err b">✖ Error</span>  <span class="fg2">tool call failed</span>                                  <span class="fg3">2 retries</span>  <span class="fg4">▾</span>
+  <span class="err">▎</span>
+  <span class="err">▎</span>   <span class="b brand">read_file</span>  <span class="fg2">src/index/semantic/chunker.ts</span>
+  <span class="err">▎</span>
+  <span class="err">▎</span>   <span class="err">ENOENT: no such file or directory, open</span>
+  <span class="err">▎</span>   <span class="err">'/usr/local/etc/secrets/api.key'</span>
+  <span class="err">▎</span>
+  <span class="err">▎</span>   <span class="fg2">The agent attempted to read outside the sandbox root. Path was</span>
+  <span class="err">▎</span>   <span class="fg2">normalised but the absolute prefix put it outside.</span>
+  <span class="err">▎</span>
+  <span class="err">▎</span>   <span class="fg3">▸ stack trace</span>
+  <span class="err">▎</span>
+  <span class="err">▎</span>   <span class="b err">[r] retry</span>   <span class="fg2">[s] skip</span>
+</pre>
+  </section>
+
+  <!-- Warning -->
+  <section class="section" id="c-warning">
+    <h2><span class="num">12</span>Cards · warning</h2>
+    <p class="lede">Non-fatal: degraded service, slow upstream, soft policy hit. No actions usually — informational.</p>
+    <div class="tag">CARD · <span class="cls">.warn</span></div>
+<pre class="mock">  <span class="warn">▎</span> <span class="warn b">⚠ MCP server slow</span>                              <span class="fg3">notion · 8.4s elapsed</span>  <span class="fg4">▾</span>
+  <span class="warn">▎</span>
+  <span class="warn">▎</span>   <span class="fg1">The </span><span class="b brand">notion</span><span class="fg1"> server hasn't responded to </span><span class="b brand">tools/list</span><span class="fg1"> in 8.4s.</span>
+  <span class="warn">▎</span>   <span class="fg1">The session continues without it; reconnection on next turn.</span>
+</pre>
+  </section>
+
+  <!-- Usage / Cost -->
+  <section class="section" id="c-usage">
+    <h2><span class="num">13</span>Cards · usage / cost</h2>
+    <p class="lede">Per-turn meter with three tracks (prompt / reason / output) plus a session running total. Bars use density blocks <span class="brand">█</span><span class="fg4">░</span> — terminal renders these natively.</p>
+    <div class="tag">CARD · <span class="cls">.usage</span></div>
+<pre class="mock">  <span class="brand">▎</span> <span class="brand b">Σ Usage</span>  <span class="fg2">turn 12</span>                                  <span class="fg3">$0.0014 · 1.2s</span>  <span class="fg4">▾</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>    <span class="fg2">prompt   </span> <span class="brand">██</span><span class="fg4">░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span>  <span class="b fg1">41,238</span> <span class="fg3">/ 1M  · 4.1%</span>
+  <span class="brand">▎</span>    <span class="fg2">reason   </span> <span class="accent">░</span><span class="fg4">░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span>  <span class="b fg1">412</span>
+  <span class="brand">▎</span>    <span class="fg2">output   </span> <span class="brand">░</span><span class="fg4">░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span>  <span class="b fg1">1,847</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>    <span class="fg2">cache hit</span> <span class="ok">██████████████████████████</span><span class="fg4">░░░</span>  <span class="b ok">91.3%</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>    <span class="fg3">session </span><span class="b fg1">⛁ $0.018</span>  <span class="fg4">·</span>  <span class="fg3">balance </span><span class="b fg1">¥ 28.4</span>   <span class="fg4">≈ ¥0.10 / turn at this rate</span>
+</pre>
+  </section>
+
+  <!-- Sub-agent -->
+  <section class="section" id="c-subagent">
+    <h2><span class="num">14</span>Cards · sub-agent</h2>
+    <p class="lede">Forked agent runs in a nested mini-stream. Each nesting level adds another <span class="violet">▎</span> bar — depth is visually obvious without extra chrome.</p>
+    <div class="tag">CARD · <span class="cls">.subagent</span></div>
+<pre class="mock">  <span class="violet">▎</span> <span class="violet b">⌬ Sub-agent · code-reviewer</span>                                  <span class="violet">running</span>  <span class="fg4">▾</span>
+  <span class="violet">▎</span>
+  <span class="violet">▎</span>   <span class="fg3">Task   </span> <span class="fg2">review the diff in src/index/config.ts for safety</span>
+  <span class="violet">▎</span>   <span class="fg3">Tools  </span> <span class="fg2">read_file, search_content</span>
+  <span class="violet">▎</span>
+  <span class="violet">▎</span>   <span class="fg3">▸ sub-agent stream</span>
+  <span class="violet">▎</span>   <span class="violet">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-flash">&nbsp;v4-flash&nbsp;</span>  <span class="fg4">134 tok · 2 ¶</span>
+  <span class="violet">▎</span>   <span class="violet">▎</span> <span class="info">▣</span> <span class="b fg1">read_file</span>  <span class="fg2">src/index/config.ts</span>                  <span class="fg3">0.08s</span>
+  <span class="violet">▎</span>   <span class="violet">▎</span> <span class="brand">▶</span> <span class="brand">streaming response …</span>
+</pre>
+  </section>
+
+  <!-- Approval -->
+  <section class="section" id="c-approval">
+    <h2><span class="num">15</span>Cards · approval prompt</h2>
+    <p class="lede">Modal — cannot scroll past until resolved. Header band uses bg-elev + 3-cell amber left edge; body sits on default bg. The bg→default transition is the visual divider, no extra ruling required.</p>
+    <div class="tag">CARD · <span class="cls">.approval</span></div>
+<pre class="mock"><span class="band warn"> <span class="b warn">?</span>  <span class="b fg0">Approve · run_command</span>                                                            <span class="warn">awaiting</span> </span>
+
+  <span class="fg1">The agent wants to run:</span>
+
+      <span class="b err">$ rm -rf node_modules dist</span>
+
+  <span class="fg3">Working dir</span>   <span class="fg1">/home/user/project</span>
+  <span class="fg3">Effect     </span>   <span class="warn">removes 12,847 files (228 MB)</span>
+
+  <span class="b warn">▸</span> <span class="b fg0">allow once</span>     <span class="fg3">run this command, ask again next time</span>
+    <span class="fg2">allow always</span>   <span class="fg3">remember `rm -rf` for this project</span>
+    <span class="fg2">deny</span>           <span class="fg3">skip; agent will pick an alternative</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ pick  ·  ⏎ confirm  ·  esc cancel</span>
+</pre>
+  </section>
+
+  <!-- Streaming -->
+  <section class="section" id="c-streaming">
+    <h2><span class="num">16</span>Cards · streaming response</h2>
+    <p class="lede">Live text in progress. Brand-blue accent bar like a task card, but the body is bare prose — no glyph header, just a leading <span class="brand">▶</span> caret on the first line and a blinking <span class="cur"></span> cursor at the tail.</p>
+    <div class="tag">CARD · <span class="cls">.streaming</span></div>
+<pre class="mock">  <span class="brand">▎</span> <span class="brand b">▶</span>  <span class="fg1">The change you described maps cleanly to the existing</span>
+  <span class="brand">▎</span>    <span class="b brand">ResolvedIndexConfig</span><span class="fg1"> structure. Three edits are needed:</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>    <span class="fg1">1. </span><span class="b brand">src/index/config.ts</span><span class="fg1">: add the new </span><span class="b">excludePatterns</span><span class="fg1"> field</span>
+  <span class="brand">▎</span>    <span class="fg1">2. </span><span class="b brand">src/cli/ui/App.tsx</span><span class="fg1">: surface it in the Settings card</span>
+  <span class="brand">▎</span>    <span class="fg1">3. </span><span class="b brand">tests/index-config.test.ts</span><span class="fg1">: cover the merge semantics</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>    <span class="fg1">Want me to draft the diff?</span><span class="cur"></span>
+</pre>
+  </section>
+
+  <!-- Search -->
+  <section class="section" id="c-search">
+    <h2><span class="num">17</span>Cards · search results</h2>
+    <p class="lede">Hit list grouped by file. Match terms inverse-highlighted (terminal native). Each row clickable — opens a tool-call card focused on that file:line.</p>
+    <div class="tag">CARD · <span class="cls">.search</span></div>
+<pre class="mock">  <span class="info">▎</span> <span class="info b">⊙ Search</span>  <span class="fg2">"writeClipboard"</span>           <span class="fg3">3 hits in 2 files · 0.04s</span>     <span class="fg4">▾</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="b fg0">src/cli/ui/clipboard.ts</span>
+  <span class="info">▎</span>     <span class="fg4">  15 │</span>  <span class="fg2">export function </span><span class="b inv">writeClipboard</span><span class="fg2">(text: string): ClipboardWrite</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="b fg0">src/cli/ui/App.tsx</span>
+  <span class="info">▎</span>     <span class="fg4">  85 │</span>  <span class="fg2">import { </span><span class="b inv">writeClipboard</span><span class="fg2"> } from "./clipboard.js";</span>
+  <span class="info">▎</span>     <span class="fg4">1491 │</span>      <span class="b inv">writeClipboard</span><span class="fg2">(text);</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="fg3">↑↓ navigate   ⏎ open hit   [n] narrow…</span>
+</pre>
+  </section>
+
+  <!-- Memory / Context -->
+  <section class="section" id="c-memory">
+    <h2><span class="num">18</span>Cards · memory / context</h2>
+    <p class="lede">What's currently in scope from persistent memory. Default <strong>collapsed</strong> — a one-line summary. Expanded breaks down by category (user / feedback / project / reference).</p>
+    <div class="tag">COLLAPSED · <span class="cls">.memory</span></div>
+<pre class="mock">  <span class="fg3">▎</span> <span class="b fg2">⌑ Context</span>  <span class="fg3">·  4 user · 2 feedback · 1 reference</span>             <span class="fg3">~1.2K tok</span>  <span class="fg4">▸</span>
+</pre>
+    <div class="tag">EXPANDED · <span class="cls">.memory[open]</span></div>
+<pre class="mock">  <span class="fg3">▎</span> <span class="b fg2">⌑ Context</span>  <span class="fg3">·  4 user · 2 feedback · 1 reference</span>             <span class="fg3">~1.2K tok</span>  <span class="fg4">▾</span>
+  <span class="fg3">▎</span>
+  <span class="fg3">▎</span>   <span class="fg4">USER</span>
+  <span class="fg3">▎</span>   <span class="fg3">◇</span> <span class="fg2">Jupiter maintainer · prefers terse Mandarin replies</span>
+  <span class="fg3">▎</span>   <span class="fg3">◇</span> <span class="fg2">Windows Terminal + PowerShell · CNY/RMB balance</span>
+  <span class="fg3">▎</span>
+  <span class="fg3">▎</span>   <span class="fg4">FEEDBACK</span>
+  <span class="fg3">▎</span>   <span class="warn">✦</span> <span class="fg2">No </span><span class="b">Co-Authored-By: Claude</span><span class="fg2"> trailer in commits</span>
+  <span class="fg3">▎</span>   <span class="warn">✦</span> <span class="fg2">Comments document </span><span class="i">why</span><span class="fg2">, not chat history</span>
+  <span class="fg3">▎</span>
+  <span class="fg3">▎</span>   <span class="fg4">REFERENCE</span>
+  <span class="fg3">▎</span>   <span class="info">→</span> <span class="fg2">Linear "INGEST" project tracks pipeline bugs</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Composer ════════════════════════════ -->
+  <section class="section" id="composer">
+    <h2><span class="num">19</span>Composer · input states</h2>
+    <p class="lede">The composer is the bottom-sticky input zone. One row of input + one row of hints. Pickers (`/`, `@`, history) overlay above the input row, never below — mouse / scroll never hides them.</p>
+
+    <h3 id="cm-empty">Empty / placeholder<span class="desc">first row, no text yet</span></h3>
+    <div class="tag">CARD · <span class="cls">.composer .empty</span></div>
+<pre class="mock"><span class="b brand">›</span> <span class="fg3">type a message · / for commands · @ to attach a file</span>
+
+  <span class="fg4">⏎ send  ·  ^J newline  ·  ↑↓ history  ·  esc abort  ·  ctrl-c quit</span>
+</pre>
+
+    <h3 id="cm-typing">Typing<span class="desc">cursor at end of single line</span></h3>
+    <div class="tag">CARD · <span class="cls">.composer .typing</span></div>
+<pre class="mock"><span class="b brand">›</span> <span class="fg1">refactor the SKIP_DIRS list out of chunker.ts so directory_tree</span><span class="cur"></span>
+
+  <span class="fg4">⏎ send  ·  ^J newline  ·  ↑↓ history  ·  esc abort  ·  ctrl-c quit</span>
+</pre>
+
+    <h3 id="cm-multiline">Multi-line<span class="desc">^J inserts newline; continuations indent under the prompt glyph</span></h3>
+    <div class="tag">CARD · <span class="cls">.composer .multiline</span></div>
+<pre class="mock"><span class="b brand">›</span> <span class="fg1">refactor the SKIP_DIRS list out of chunker.ts</span>
+  <span class="fg1">so directory_tree can reuse it,</span>
+  <span class="fg1">also strip the duplicate from filesystem.ts</span><span class="cur"></span>
+
+  <span class="fg4">⏎ send  ·  ^J newline  ·  ↑↓ history  ·  esc abort  ·  ctrl-c quit</span>
+</pre>
+
+    <h3 id="cm-history">History recall<span class="desc">↑ pops a popover with prior turns; ↵ loads the highlighted entry into the input</span></h3>
+    <div class="tag">POPOVER · <span class="cls">.composer .history</span></div>
+<pre class="mock"><span class="band ghost"> <span class="b fg2">history</span>  <span class="fg4">·  12 / 47</span>                                                                  </span>
+
+    <span class="fg4">14 ·  3m</span>  <span class="fg2">show the last failing tool call</span>
+    <span class="fg4">13 ·  8m</span>  <span class="fg2">what's the cache hit rate today</span>
+  <span class="brand">▸</span> <span class="fg4">12 · 14m</span>  <span class="b fg0">refactor the SKIP_DIRS list out of chunker.ts so directory_tree …</span>
+    <span class="fg4">11 · 22m</span>  <span class="fg2">drop the screen-mirror module entirely</span>
+    <span class="fg4">10 ·  1h</span>  <span class="fg2">why is the indexer skipping .gitignore'd dirs?</span>
+
+  <span class="fg4">↑↓ pick  ·  ⏎ load  ·  esc cancel</span>
+
+<span class="b brand">›</span> <span class="fg1">refactor the SKIP_DIRS list out of chunker.ts so directory_tree can …</span>
+</pre>
+
+    <h3 id="cm-paste">Paste collapsed<span class="desc">large clipboard payloads collapse to a chip; ^O expands into a separate panel</span></h3>
+    <div class="tag">CARD · <span class="cls">.composer .paste</span></div>
+<pre class="mock"><span class="b brand">›</span> <span class="fg1">here's the stack trace:</span>
+  <span class="fg3">┌</span> <span class="fg2">📋 pasted</span>  <span class="b fg1">142 lines · 4.8 KB</span>  <span class="fg3">·</span> <span class="fg2">stacktrace</span>  <span class="fg4">^O expand · ⌫ remove</span> <span class="fg3">┐</span>
+  <span class="fg1">what's going on?</span><span class="cur"></span>
+
+  <span class="fg4">⏎ send  ·  ^J newline  ·  ↑↓ history  ·  esc abort  ·  ctrl-c quit</span>
+</pre>
+
+    <h3 id="cm-mention">@ mention picker<span class="desc">typing `@` opens a file picker filtered by the substring after it</span></h3>
+    <div class="tag">POPOVER · <span class="cls">.composer .mention</span></div>
+<pre class="mock"><span class="band ghost"> <span class="b fg2">files</span>  <span class="fg4">·  "ui/log" · 8 matches</span>                                                          </span>
+
+  <span class="brand">▸</span> <span class="b fg0">src/cli/ui/log-frame.tsx</span>                              <span class="fg3">1134 lines · ts</span>
+    <span class="fg2">src/cli/ui/log-rows.tsx</span>                               <span class="fg3"> 613 lines · ts</span>
+    <span class="fg2">src/cli/ui/EventLog.tsx</span>                               <span class="fg3"> 961 lines · ts</span>
+    <span class="fg2">src/cli/ui/LiveRows.tsx</span>                               <span class="fg3"> 360 lines · ts</span>
+    <span class="fg4">… 4 more</span>
+
+  <span class="fg4">↑↓ pick  ·  ⏎ insert  ·  esc cancel</span>
+
+<span class="b brand">›</span> <span class="fg1">why is </span><span class="warn u">@ui/log</span><span class="cur"></span>
+</pre>
+
+    <h3 id="cm-slash">/ command picker<span class="desc">typing `/` opens slash-command picker; descriptions are dim, names are fg-0</span></h3>
+    <div class="tag">POPOVER · <span class="cls">.composer .slash</span></div>
+<pre class="mock"><span class="band ghost"> <span class="b fg2">commands</span>                                                                                </span>
+
+  <span class="brand">▸</span> <span class="b fg0">/cost   </span>  <span class="fg2">show cost &amp; token usage for this turn</span>
+    <span class="b fg1">/context</span>  <span class="fg2">show what's currently in the prompt context</span>
+    <span class="b fg1">/memory </span>  <span class="fg2">view / edit persistent memory</span>
+    <span class="b fg1">/diff   </span>  <span class="fg2">diff session changes vs HEAD</span>
+    <span class="b fg1">/copy   </span>  <span class="fg2">copy last N rows to clipboard</span>
+    <span class="b fg1">/init   </span>  <span class="fg2">generate CLAUDE.md from current repo</span>
+    <span class="b fg1">/doctor </span>  <span class="fg2">health check (api / index / workspace)</span>
+    <span class="b fg1">/clear  </span>  <span class="fg2">clear the on-screen scrollback</span>
+    <span class="fg4">… 6 more</span>
+
+  <span class="fg4">↑↓ pick  ·  ⏎ run  ·  esc cancel</span>
+
+<span class="b brand">›</span> <span class="fg1">/</span><span class="cur"></span>
+</pre>
+
+    <h3 id="cm-slasharg">/ arg picker<span class="desc">commands with required args open a second-stage picker</span></h3>
+    <div class="tag">POPOVER · <span class="cls">.composer .slasharg</span></div>
+<pre class="mock"><span class="band ghost"> <span class="b fg2">/copy</span>  <span class="fg4">·  pick range</span>                                                                    </span>
+
+  <span class="brand">▸</span> <span class="b fg0">last 1   </span>  <span class="fg2">most recent card only</span>
+    <span class="b fg1">last 5   </span>  <span class="fg2">last five cards</span>
+    <span class="b fg1">last 10  </span>  <span class="fg2">last ten cards</span>
+    <span class="b fg1">all      </span>  <span class="fg2">whole session</span>
+    <span class="b fg1">custom…  </span>  <span class="fg2">type a number</span>
+
+  <span class="fg4">↑↓ pick  ·  ⏎ run  ·  esc cancel</span>
+
+<span class="b brand">›</span> <span class="fg1">/copy </span><span class="cur"></span>
+</pre>
+
+    <h3 id="cm-bang">! shell mode<span class="desc">leading `!` swaps the prompt to a shell; sends the line to a shell tool, not the model</span></h3>
+    <div class="tag">CARD · <span class="cls">.composer .bang</span></div>
+<pre class="mock"><span class="b err">$</span> <span class="fg1">git status</span><span class="cur"></span>
+
+  <span class="warn">shell mode</span>  <span class="fg4">·</span>  <span class="fg4">⏎ run  ·  esc back to chat  ·  output appears as a tool card above</span>
+</pre>
+
+    <h3 id="cm-aborted">Aborted<span class="desc">esc during a turn — the agent stops, the composer reopens with a faint hint</span></h3>
+    <div class="tag">CARD · <span class="cls">.composer .aborted</span></div>
+<pre class="mock"><span class="b brand">›</span> <span class="cur"></span>
+
+  <span class="fg4">turn aborted by user · </span><span class="warn">esc</span><span class="fg4"> again to clear · </span><span class="brand">⏎</span><span class="fg4"> to ask a follow-up</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Status row ════════════════════════════ -->
+  <section class="section" id="chrome">
+    <h2><span class="num">20</span>Status row · live state</h2>
+    <p class="lede">Single row pinned <strong>above the composer input</strong>. The only place live state can sit reliably without alt-screen — Ink redraws this row every frame, so it never scrolls away. Carries: mode pill · session id · running cost · balance · cache hit. Mockups below show the row + the input/hint underneath for context.</p>
+
+    <h3 id="ch-modes">Mode pills<span class="desc">one of: auto · ask · plan · edit; pill color reflects the action class</span></h3>
+<pre class="mock">  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="ok">●</span> <span class="fg2">auto</span>     <span class="fg3">·</span>   <span class="fg2">session-7 · main</span>   <span class="fg3">·</span>   <span class="fg2">$0.018</span>   <span class="fg3">·</span>   <span class="fg2">¥28.4</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="warn">◐</span> <span class="fg2">ask</span>      <span class="fg3">·</span>   <span class="fg2">session-7 · main</span>   <span class="fg3">·</span>   <span class="fg2">$0.018</span>   <span class="fg3">·</span>   <span class="fg2">¥28.4</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="accent">⊞</span> <span class="fg2">plan</span>     <span class="fg3">·</span>   <span class="fg2">session-7 · main</span>   <span class="fg3">·</span>   <span class="fg2">$0.018</span>   <span class="fg3">·</span>   <span class="fg2">¥28.4</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="ok">±</span> <span class="fg2">edit</span>     <span class="fg3">·</span>   <span class="fg2">session-7 · main</span>   <span class="fg3">·</span>   <span class="fg2">$0.018</span>   <span class="fg3">·</span>   <span class="fg2">¥28.4</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+</pre>
+
+    <h3 id="ch-network">Network states<span class="desc">dot color = state; verbose text appears only when not green</span></h3>
+<pre class="mock">  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="ok">●</span> <span class="fg2">auto · online</span>             <span class="fg3">·</span>   <span class="fg2">session-7 · main</span>   <span class="fg3">·</span>   <span class="fg2">$0.018</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="warn">◌</span> <span class="warn">auto · slow · 4.2s p95</span>    <span class="fg3">·</span>   <span class="fg2">session-7 · main</span>   <span class="fg3">·</span>   <span class="fg2">$0.018</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="err">✗</span> <span class="err">disconnect · retry 3/5</span>    <span class="fg3">·</span>   <span class="fg2">session-7 · main</span>   <span class="fg3">·</span>   <span class="fg2">$0.018</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="brand">↻</span> <span class="brand">reconnecting…</span>             <span class="fg3">·</span>   <span class="fg2">session-7 · main</span>   <span class="fg3">·</span>   <span class="fg2">$0.018</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+</pre>
+
+    <h3 id="ch-countdown">Auto-confirm countdown<span class="desc">in auto mode after a tool emits an approval — countdown digit flashes brand, esc to cancel</span></h3>
+<pre class="mock">  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="ok">●</span> <span class="fg2">auto</span>   <span class="fg3">·</span>   <span class="warn">approving in </span><span class="b brand">3</span><span class="warn">s · esc to interrupt</span>   <span class="fg3">·</span>   <span class="accent">cache 91%</span>
+</pre>
+
+    <h3 id="ch-cost">Live cost ticker<span class="desc">turn cost on the left, session total on the right; balance ¥ shows when DeepSeek wallet is hooked</span></h3>
+<pre class="mock">  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="ok">●</span> <span class="fg2">auto</span>   <span class="fg3">·</span>   <span class="brand">▸</span> <span class="b fg1">$0.0014 turn</span>  <span class="fg3">·</span>  <span class="fg2">$0.0193 session</span>  <span class="fg3">·</span>  <span class="fg2">¥30.5</span>  <span class="fg3">·</span>  <span class="accent">cache 91%</span>
+</pre>
+
+    <h3 id="ch-record">Recording<span class="desc">REC pill replaces the mode pill while a recording is being written</span></h3>
+<pre class="mock">  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="err b">●REC</span> <span class="err">1.4 MB · 142 evt</span>   <span class="fg3">·</span>   <span class="fg2">→ ~/.jupiter/recordings/2026-04-29.jsonl</span>   <span class="fg3">·</span>   <span class="fg4">^R stop  ·  ^P pause</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Modals ════════════════════════════ -->
+  <section class="section" id="modals">
+    <h2><span class="num">21</span>Modals · the full family</h2>
+    <p class="lede">Every modal opens with a <strong>header band</strong> — a single bg-elev row with a 3-cell colored left edge that signals the action class (warn / accent / info / err / ok). Body sits on default bg below; the bg→default transition is the divider, so no full-box border is needed. Up/down picks, ⏎ confirms, esc cancels — always.</p>
+
+    <h3 id="m-plan-confirm">Plan · confirm<span class="desc">drafted plan above; the user picks the disposition</span></h3>
+    <div class="tag">CARD · <span class="cls">.modal.plan-confirm</span></div>
+<pre class="mock"><span class="band acc"> <span class="b accent">⊞</span>  <span class="b fg0">Approve plan</span>                                                                  <span class="accent">awaiting</span> </span>
+
+  <span class="fg1">The agent has drafted a </span><span class="b fg0">5-step plan</span><span class="fg1"> above.</span>
+
+  <span class="b accent">▸</span> <span class="b fg0">accept</span>      <span class="fg3">run it now, in order</span>
+    <span class="fg2">refine</span>      <span class="fg3">give the agent more guidance, draft a new plan</span>
+    <span class="fg2">revise</span>      <span class="fg3">edit the plan inline before running</span>
+    <span class="fg2">reject</span>      <span class="fg3">discard, agent will retry from scratch</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ pick  ·  ⏎ confirm  ·  esc cancel</span>
+</pre>
+
+    <h3 id="m-plan-refine">Plan · refine<span class="desc">free-text guidance that goes back into the planner prompt</span></h3>
+    <div class="tag">CARD · <span class="cls">.modal.plan-refine</span></div>
+<pre class="mock"><span class="band acc"> <span class="b accent">✎</span>  <span class="b fg0">Refine plan</span>                                                                          </span>
+
+  <span class="fg2">Tell the agent what to change about the plan above. Free text; the planner</span>
+  <span class="fg2">re-runs with this added as guidance.</span>
+
+  <span class="b brand">›</span> <span class="fg1">skip step 4 — the sandbox check is overkill, just rely on the verify gate</span><span class="cur"></span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">⏎ submit  ·  esc cancel</span>
+</pre>
+
+    <h3 id="m-plan-revise">Plan · revise<span class="desc">structural edit of the plan: skip / reorder / strike steps without retalking to the model</span></h3>
+    <div class="tag">CARD · <span class="cls">.modal.plan-revise</span></div>
+<pre class="mock"><span class="band acc"> <span class="b accent">✎</span>  <span class="b fg0">Revise plan</span>  <span class="fg2">·  5 steps</span>                                                                </span>
+
+     <span class="ok">[✓]</span> <span class="fg2">1. Read chunker + filesystem</span>
+     <span class="ok">[✓]</span> <span class="fg2">2. Drop @xterm/headless dep</span>
+     <span class="fg4">[s]</span> <span class="fg4 i">3. Remove screen-mirror.ts</span>                              <span class="warn">← skipped</span>
+   <span class="brand">▸</span> <span class="brand">[ ]</span> <span class="b fg0">4. Strip drag handlers from App.tsx</span>
+     <span class="fg4">[ ]</span> <span class="fg2">5. Run verify gate</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ focus  ·  space toggle skip  ·  k/j move  ·  ⏎ accept  ·  esc cancel</span>
+</pre>
+
+    <h3 id="m-plan-checkpoint">Plan · checkpoint<span class="desc">snapshot the plan + workspace before running so abort can resume cleanly</span></h3>
+    <div class="tag">CARD · <span class="cls">.modal.plan-checkpoint</span></div>
+<pre class="mock"><span class="band acc"> <span class="b accent">⛁</span>  <span class="b fg0">Save checkpoint</span>                                                                      </span>
+
+  <span class="fg1">Snapshot current plan + workspace before running?</span>
+
+  <span class="fg3">If something goes wrong mid-run, you can resume the plan from this exact</span>
+  <span class="fg3">state instead of starting over.</span>
+
+  <span class="b accent">▸</span> <span class="b fg0">save &amp; continue</span>   <span class="fg3">recommended for plans &gt; 3 steps</span>
+    <span class="fg2">skip</span>              <span class="fg3">run without snapshotting</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ pick  ·  ⏎ confirm  ·  esc cancel</span>
+</pre>
+
+    <h3 id="m-workspace">Workspace · switch<span class="desc">opening a different folder mid-session — surfaces unsaved-plan risk</span></h3>
+    <div class="tag">CARD · <span class="cls">.modal.workspace</span></div>
+<pre class="mock"><span class="band warn"> <span class="b warn">?</span>  <span class="b fg0">Switch workspace</span>                                                                    </span>
+
+  <span class="fg3">current</span>   <span class="b fg1">~/projects/jupiter</span>
+  <span class="fg3">new    </span>   <span class="b warn">~/work/customer-portal</span>
+
+  <span class="fg2">Switching ends the current session. Plan progress (3 of 7 done) will be</span>
+  <span class="fg2">archived; you can replay it later via </span><span class="b">/replay</span><span class="fg2">.</span>
+
+  <span class="b warn">▸</span> <span class="b fg0">open &amp; archive plan</span>     <span class="fg3">recommended</span>
+    <span class="fg2">open &amp; discard plan</span>     <span class="fg3">throw away the snapshot</span>
+    <span class="fg2">cancel</span>                  <span class="fg3">stay in this workspace</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ pick  ·  ⏎ confirm  ·  esc cancel</span>
+</pre>
+
+    <h3 id="m-shell">Shell<span class="desc">tighter than the generic approval card — shows just the command + 3-way choice</span></h3>
+    <div class="tag">CARD · <span class="cls">.modal.shell</span></div>
+<pre class="mock"><span class="band warn"> <span class="b warn">?</span>  <span class="b fg0">Shell command</span>                                                                        </span>
+
+      <span class="b fg0">$ npm run verify</span>
+
+  <span class="fg3">cwd     </span>   <span class="fg1">~/projects/jupiter</span>
+  <span class="fg3">timeout </span>   <span class="fg1">120s</span>
+
+  <span class="b warn">▸</span> <span class="b fg0">allow once</span>      <span class="fg3">run this command, ask again next time</span>
+    <span class="fg2">allow always</span>    <span class="fg3">remember `npm run verify` for this project</span>
+    <span class="fg2">deny</span>            <span class="fg3">skip; agent will pick an alternative</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ pick  ·  ⏎ confirm  ·  esc cancel</span>
+</pre>
+
+    <h3 id="m-edit">Edit · multi-file<span class="desc">batch confirmation when several files change in one turn</span></h3>
+    <div class="tag">CARD · <span class="cls">.modal.edit</span></div>
+<pre class="mock"><span class="band ok"> <span class="b ok">±</span>  <span class="b fg0">Apply 3 edits</span>                                                                  <span class="warn">awaiting</span> </span>
+
+  <span class="fg2">src/index/config.ts</span>                          <span class="ok">+84</span><span class="fg4"> / </span><span class="err">  -0</span>   <span class="fg3">created</span>
+  <span class="fg2">src/index/semantic/chunker.ts</span>                <span class="ok">+12</span><span class="fg4"> / </span><span class="err"> -47</span>
+  <span class="fg2">src/tools/filesystem.ts</span>                      <span class="ok"> +4</span><span class="fg4"> / </span><span class="err"> -28</span>
+
+  <span class="b ok">▸</span> <span class="b fg0">apply all</span>          <span class="fg3">land all three, run verify next</span>
+    <span class="fg2">review one by one</span>  <span class="fg3">step through each diff card with [a/s/r]</span>
+    <span class="fg2">reject all</span>         <span class="fg3">discard everything; agent will revise</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ pick  ·  ⏎ confirm  ·  esc cancel</span>
+</pre>
+
+    <h3 id="m-deny">Deny w/ reason<span class="desc">after pressing "deny" on any approval — optional free-text feeds the next attempt</span></h3>
+    <div class="tag">CARD · <span class="cls">.modal.deny</span></div>
+<pre class="mock"><span class="band err"> <span class="b err">✗</span>  <span class="b fg0">Deny — provide context</span>                                                          <span class="fg3">optional</span> </span>
+
+  <span class="fg2">Tell the agent why you denied this. The next attempt will see your reason</span>
+  <span class="fg2">as additional context.</span>
+
+  <span class="b brand">›</span> <span class="fg1">that command would clobber my git stash — try with `git stash --keep-index` instead</span><span class="cur"></span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">⏎ submit  ·  esc skip (deny without reason)</span>
+</pre>
+
+    <h3 id="m-choice">Generic choice<span class="desc">for ambiguous prompts the agent can't resolve on its own; info-blue border (non-destructive)</span></h3>
+    <div class="tag">CARD · <span class="cls">.modal.choice</span></div>
+<pre class="mock"><span class="band info"> <span class="b info">?</span>  <span class="b fg0">Continue with this approach?</span>                                                          </span>
+
+  <span class="fg1">My confidence in step 4 is low — the policy file format may have changed</span>
+  <span class="fg1">in a way I can't verify without running it.</span>
+
+  <span class="b info">▸</span> <span class="b fg0">continue</span>                  <span class="fg3">trust me, run it</span>
+    <span class="fg2">try a different approach</span>  <span class="fg3">drop this branch, plan again</span>
+    <span class="fg2">abort</span>                     <span class="fg3">stop here, give me the partial result</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ pick  ·  ⏎ confirm  ·  esc cancel</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Onboarding ════════════════════════════ -->
+  <section class="section" id="onboarding">
+    <h2><span class="num">22</span>Onboarding · welcome / setup / picker</h2>
+    <p class="lede">Pre-session screens. These print to scrollback like everything else; once dismissed they don't come back unless the user explicitly opens them again.</p>
+
+    <h3 id="o-welcome">Welcome banner<span class="desc">first launch in a workspace · single-print, then the empty session screen</span></h3>
+    <div class="tag">SCREEN · <span class="cls">.welcome</span></div>
+<pre class="mock">                  <span class="brand">╔═══════════════════════════════════╗</span>
+                  <span class="brand">║</span>                                   <span class="brand">║</span>
+                  <span class="brand">║</span>            <span class="b brand">◈  JUPITER</span>            <span class="brand">║</span>
+                  <span class="brand">║</span>                                   <span class="brand">║</span>
+                  <span class="brand">║</span>      <span class="fg2">DeepSeek-native coding agent</span> <span class="brand">║</span>
+                  <span class="brand">║</span>      <span class="fg3">cache-first · flash-first</span>    <span class="brand">║</span>
+                  <span class="brand">║</span>                                   <span class="brand">║</span>
+                  <span class="brand">╚═══════════════════════════════════╝</span>
+
+                <span class="fg2">type a message to start your session</span>
+
+                <span class="fg3">/help</span>   <span class="fg4">·</span>   <span class="fg3">/init</span>   <span class="fg4">·</span>   <span class="fg3">/memory</span>   <span class="fg4">·</span>   <span class="fg3">/cost</span>
+</pre>
+
+    <h3 id="o-setup">Setup wizard<span class="desc">launched on first run or via `jupiter setup`; key/value rows, ↑↓ between fields</span></h3>
+    <div class="tag">SCREEN · <span class="cls">.setup</span></div>
+<pre class="mock"> <span class="b brand">◈ JUPITER · setup</span>
+
+  <span class="fg3">Provider</span>           <span class="brand">▸</span> <span class="b fg0">DeepSeek</span>      <span class="fg2">Anthropic</span>      <span class="fg2">OpenAI</span>      <span class="fg4">↩ pick</span>
+
+  <span class="fg3">Model</span>                <span class="b fg1">deepseek-chat</span>   <span class="fg4">·</span>  <span class="fg3">tab to cycle</span>
+
+  <span class="fg3">API key</span>              <span class="fg1">••••••••••••••••••••••••••••</span>  <span class="ok">✓</span> <span class="fg3">verified</span>
+
+  <span class="fg3">Default mode</span>         <span class="ok">●</span> <span class="b fg1">auto</span>     <span class="fg2">◐ ask</span>     <span class="fg2">⊞ plan</span>     <span class="fg4">space toggle</span>
+
+  <span class="fg3">Telemetry</span>          <span class="brand">▸</span> <span class="b fg0">on</span> <span class="fg2">(anonymous)</span>     <span class="fg2">off</span>
+
+  <span class="fg3">Workspace root</span>       <span class="b fg1">~/projects/jupiter</span>
+
+  <span class="fg3">Index database</span>       <span class="ok">✓</span> <span class="fg2">~/.jupiter/index/jupiter.db</span>  <span class="fg3">12 days fresh</span>
+
+  ─────────────────────────────────────────────────────────────────────────
+  <span class="fg4">↑↓ field  ·  ⏎ next  ·  esc back  ·  ctrl-s save &amp; exit</span>
+</pre>
+
+    <h3 id="o-session">Session picker<span class="desc">resume an old session or start fresh; sorted newest-first</span></h3>
+    <div class="tag">SCREEN · <span class="cls">.session-picker</span></div>
+<pre class="mock"> <span class="b brand">◈ JUPITER · pick a session</span>  <span class="fg3">·</span>  <span class="fg2">~/projects/jupiter</span>
+
+  <span class="brand">▸</span> <span class="b fg0">session-7</span>  <span class="fg3">·</span> <span class="fg2">main</span> <span class="fg3">·</span> <span class="fg1">refactor exclude config</span>             <span class="fg3">2 min ago</span>   <span class="fg2">18 turns · $0.18</span>
+    <span class="fg2">session-6</span>  <span class="fg3">·</span> <span class="fg2">main</span> <span class="fg3">·</span> <span class="fg2">TUI redesign</span>                        <span class="fg3">yesterday</span>   <span class="fg2">44 turns · $0.62</span>
+    <span class="fg2">session-5</span>  <span class="fg3">·</span> <span class="fg2">feat-bg</span> <span class="fg3">·</span> <span class="fg2">MCP probe</span>                        <span class="fg3">2 days ago</span>  <span class="fg2"> 7 turns · $0.04</span>
+    <span class="fg2">session-4</span>  <span class="fg3">·</span> <span class="fg2">main</span> <span class="fg3">·</span> <span class="fg2">v0.13 row pipeline</span>                  <span class="fg3">3 days ago</span>  <span class="fg2">93 turns · $1.42</span>
+    <span class="fg4">… 12 more</span>
+
+  ─────────────────────────────────────────────────────────────────────────
+  <span class="fg4">↑↓ pick  ·  ⏎ open  ·  [n] new session  ·  [d] delete  ·  [r] rename  ·  esc quit</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Replay ════════════════════════════ -->
+  <section class="section" id="replay">
+    <h2><span class="num">23</span>Replay &amp; Record</h2>
+    <p class="lede">Replay re-renders an old session's events.jsonl in card form. Record snapshots the live event stream for later replay or as bug repro material.</p>
+
+    <h3 id="r-replay">Replay timeline<span class="desc">read-only; bottom strip controls playback like a video scrubber</span></h3>
+    <div class="tag">SCREEN · <span class="cls">.replay</span></div>
+<pre class="mock"> <span class="b brand">◈ JUPITER · replay</span>  <span class="fg3">·</span>  <span class="fg2">session-6 · main · "TUI redesign"</span>      <span class="fg3">⏸ 12 / 44 turns</span>
+
+  <span class="fg3">◇</span> <span class="b fg2">you</span>  <span class="fg4">· 14:22:11</span>
+    <span class="fg1">abandon fullscreen mode, switch to inline scrollback</span>
+
+
+  <span class="accent">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-pro">&nbsp;v4-pro&nbsp;</span>  <span class="fg4">587 tok · 4 ¶</span>                                  <span class="fg3">4.7s</span>
+
+
+  <span class="accent">▎</span> <span class="accent b">⊞ Plan · 5 steps</span>                                       <span class="fg3">5 of 5 done</span>  <span class="fg4">▾</span>
+  <span class="accent">▎</span>    <span class="ok">[✓]</span> <span class="fg3">1. Snapshot current selection state</span>
+  <span class="accent">▎</span>    <span class="ok">[✓]</span> <span class="fg3">2. Drop @xterm/headless dep</span>
+  <span class="accent">▎</span>    <span class="fg4">…</span>
+
+
+  <span class="fg3">─────────────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg2">⏮ first</span>   <span class="fg2">⏪ -10</span>   <span class="fg2">◀ -1</span>    <span class="b brand">⏯ play</span>    <span class="fg2">▶ +1</span>   <span class="fg2">⏩ +10</span>   <span class="fg2">⏭ last</span>      <span class="fg3">speed</span> <span class="b fg0">1×</span>   <span class="fg3">·</span>   <span class="fg4">[q] quit</span>
+</pre>
+
+    <h3 id="r-record">Record<span class="desc">while recording, the REC pill replaces the mode pill in the bottom status row (see §20 · Recording)</span></h3>
+    <div class="tag">SCREEN · <span class="cls">.record</span></div>
+<pre class="mock">  <span class="fg2">… normal session cards stream as usual above …</span>
+
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="err b">●REC</span> <span class="err">1.4 MB · 142 evt</span>   <span class="fg3">·</span>   <span class="fg2">→ ~/.jupiter/recordings/2026-04-29.jsonl</span>   <span class="fg3">·</span>   <span class="fg4">^R stop · ^P pause</span>
+
+<span class="b brand">›</span> <span class="fg3">type a message · / for commands · @ to attach a file</span>
+</pre>
+
+    <h3 id="r-stats">Stats panel<span class="desc">replay-only overlay (or `/stats` in live) — turn-by-turn drill-down</span></h3>
+    <div class="tag">SCREEN · <span class="cls">.stats</span></div>
+<pre class="mock"> <span class="b brand">Σ Stats</span>  <span class="fg3">·</span> <span class="fg2">session-6 · 44 turns · 1h 12m</span>
+
+  <span class="fg3">turn</span>  <span class="fg3">role     </span>  <span class="fg3">tokens (in / out)</span>   <span class="fg3">tools</span>  <span class="fg3">cache</span>      <span class="fg3">cost     </span>  <span class="fg3">elapsed</span>
+  <span class="fg2">────  ─────────  ──────────────────  ─────  ─────────  ──────────  ────────</span>
+  <span class="fg1">  1   user</span>      <span class="fg2">    412 /     0</span>     <span class="fg2"> ·   </span>  <span class="fg2">    ·    </span>  <span class="fg2">     ·    </span>  <span class="fg2">    ·  </span>
+  <span class="fg1">  2   assistant</span> <span class="fg1">  37,121 / 1,847</span>     <span class="b fg1">  3  </span>  <span class="ok">  91.2%  </span>  <span class="fg1">  $0.0014</span>  <span class="fg1">   1.2s</span>
+  <span class="fg1">  3   user</span>      <span class="fg2">     12 /     0</span>     <span class="fg2"> ·   </span>  <span class="fg2">    ·    </span>  <span class="fg2">     ·    </span>  <span class="fg2">    ·  </span>
+  <span class="fg1">  4   assistant</span> <span class="fg1">  38,003 / 2,402</span>     <span class="b fg1">  5  </span>  <span class="ok">  93.7%  </span>  <span class="fg1">  $0.0016</span>  <span class="fg1">   1.6s</span>
+  <span class="fg1">  …</span>
+  <span class="fg2">────  ─────────  ──────────────────  ─────  ─────────  ──────────  ────────</span>
+  <span class="b fg0">total</span>            <span class="b fg1">1,612,840 / 84,202</span>  <span class="b fg1"> 142 </span>  <span class="b ok">  91.8%  </span>  <span class="b fg1">  $0.62  </span>  <span class="b fg1"> 1h 12m</span>
+
+  <span class="fg4">↑↓ pick row  ·  ⏎ jump in replay  ·  q quit</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ MCP ════════════════════════════ -->
+  <section class="section" id="mcp">
+    <h2><span class="num">24</span>MCP · server browser</h2>
+    <p class="lede">Jupiter talks to MCP servers (notion / linear / github / fs / …). The browser is a focused panel — list of attached servers, their tool surface, last health-check.</p>
+
+    <div class="tag">SCREEN · <span class="cls">.mcp-browse</span></div>
+<pre class="mock" id="mcp-browse"> <span class="b brand">◈ MCP browser</span>  <span class="fg3">·</span>  <span class="fg2">~/.jupiter/mcp.json · 4 servers</span>
+
+  <span class="brand">▸</span>  <span class="b fg0">notion</span>          <span class="ok">●</span> <span class="fg2">healthy · 142ms</span>      <span class="fg3">12 tools · 8 resources · 0 prompts</span>
+                     <span class="fg3">tools/list</span>      <span class="fg3">tools/call</span>     <span class="fg3">resources/list</span>     <span class="fg3">prompts/list</span>
+
+     <span class="b fg1">linear</span>          <span class="warn">◌</span> <span class="warn">slow · 4.2s p95</span>     <span class="fg3"> 7 tools · 3 resources · 0 prompts</span>
+
+     <span class="b fg1">github</span>          <span class="ok">●</span> <span class="fg2">healthy · 88ms </span>      <span class="fg3">22 tools · 0 resources · 4 prompts</span>
+
+     <span class="b fg1">fs-local</span>        <span class="err">✗</span> <span class="err">handshake failed · ENOENT</span>     <span class="fg3">─</span>
+
+  ─────────────────────────────────────────────────────────────────────────
+  <span class="fg4">↑↓ pick  ·  ⏎ inspect tools  ·  [r] reconnect  ·  [d] disable  ·  esc quit</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ States ════════════════════════════ -->
+  <section class="section" id="states">
+    <h2><span class="num">25</span>States · empty / streaming / nesting / banners</h2>
+    <p class="lede">The variants below are not new card types — they're alternate states of cards already covered, plus a few session-level overlays.</p>
+
+    <h3 id="s-empty">Empty session<span class="desc">after /clear or first launch — the only place we volunteer slash-command hints</span></h3>
+<pre class="mock">
+
+                  <span class="b fg2">◈   nothing yet — say something</span>
+
+                  <span class="fg3">/help</span>     <span class="fg4">commands &amp; shortcuts</span>
+                  <span class="fg3">/init</span>     <span class="fg4">generate CLAUDE.md from this repo</span>
+                  <span class="fg3">/memory</span>   <span class="fg4">view persistent memory</span>
+                  <span class="fg3">/cost</span>     <span class="fg4">token usage &amp; spend so far</span>
+
+</pre>
+
+    <h3 id="s-stream-reason">Streaming reasoning<span class="desc">live tail-3-lines while bytes arrive; settles into one of the three sized variants in §06 once the stream ends</span></h3>
+<pre class="mock">  <span class="accent">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-r1">&nbsp;r1&nbsp;</span>  <span class="fg4">247 tok</span>                                  <span class="fg3">1.2s · </span><span class="brand">thinking…</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="fg4">⋮  earlier lines scrolled past preview window</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>   <span class="i fg3">Two paths: replace the hardcoded list when config is set, or merge</span>
+  <span class="accent">▎</span>   <span class="i fg3">user values in. The first matches the explicit "config-driven" ask;</span>
+  <span class="accent">▎</span>   <span class="i fg3">the second is safer default. Going with the first since the user's</span><span class="cur"></span>
+</pre>
+
+    <h3 id="s-stdout">Long stdout streaming<span class="desc">e.g. npm install — tail mode, auto-scroll, ⏯ pauses to let you read</span></h3>
+<pre class="mock">  <span class="info">▎</span> <span class="info b">▣ run_command</span>  <span class="fg2">npm install</span>                          <span class="fg3">12.4s · </span><span class="brand">streaming…</span>     <span class="fg4">▾</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="fg3">$ npm install</span>
+  <span class="info">▎</span>   <span class="fg3">⠋ resolving (1542 packages)</span>
+  <span class="info">▎</span>   <span class="fg2">added react@18.3.1</span>
+  <span class="info">▎</span>   <span class="fg2">added react-dom@18.3.1</span>
+  <span class="info">▎</span>   <span class="fg2">added ink@5.1.0</span>
+  <span class="info">▎</span>   <span class="fg2">added ink-text-input@6.0.0</span>
+  <span class="info">▎</span>   <span class="fg2">…</span>
+  <span class="info">▎</span>   <span class="fg4">[tail · auto-scroll · ⏯ to pause · ⌫ collapse]</span>
+</pre>
+
+    <h3 id="s-tool-empty">Tool · no output<span class="desc">tool ran but returned nothing useful — single line, no expand</span></h3>
+<pre class="mock">  <span class="info">▎</span> <span class="info b">▣ search_content</span>  <span class="fg2">"writeClipboard"</span>          <span class="fg3">0.04s · 0 hits</span>           <span class="fg4">▸</span>
+</pre>
+
+    <h3 id="s-subagent-deep">Sub-agent · deep nesting<span class="desc">each level adds a bar — depth becomes obvious without indent text</span></h3>
+<pre class="mock">  <span class="violet">▎</span> <span class="violet b">⌬ Sub-agent · researcher</span>                                       <span class="violet">running</span>  <span class="fg4">▾</span>
+  <span class="violet">▎</span>
+  <span class="violet">▎</span>   <span class="violet">▎</span> <span class="violet b">⌬ Sub-agent · code-reader</span>                                  <span class="violet">running</span>  <span class="fg4">▾</span>
+  <span class="violet">▎</span>   <span class="violet">▎</span>
+  <span class="violet">▎</span>   <span class="violet">▎</span>   <span class="violet">▎</span> <span class="info b">▣ read_file</span>  <span class="fg2">src/cli/ui/App.tsx</span>           <span class="fg3">0.08s</span>
+  <span class="violet">▎</span>   <span class="violet">▎</span>   <span class="violet">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-flash">&nbsp;v4-flash&nbsp;</span>  <span class="fg4">62 tok · 1 ¶</span>
+  <span class="violet">▎</span>   <span class="violet">▎</span>
+  <span class="violet">▎</span>   <span class="violet">▎</span>   <span class="brand">▶</span> <span class="brand">summarising findings…</span>
+  <span class="violet">▎</span>
+  <span class="violet">▎</span>   <span class="brand">▶</span> <span class="brand">aggregating sub-agent reports…</span>
+</pre>
+
+    <h3 id="s-plan-resumed">Plan · resumed<span class="desc">loaded from a prior session checkpoint; the resume marker shows where to pick up</span></h3>
+<pre class="mock">  <span class="accent">▎</span> <span class="accent b">⊞ Plan · resumed from session-6</span>                <span class="fg3">3 of 7 done · </span><span class="brand">⏮ resume</span>     <span class="fg4">▾</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>    <span class="ok">[✓]</span> <span class="fg3">1. Snapshot current selection state</span>
+  <span class="accent">▎</span>    <span class="ok">[✓]</span> <span class="fg3">2. Drop @xterm/headless dep</span>
+  <span class="accent">▎</span>    <span class="ok">[✓]</span> <span class="fg3">3. Remove screen-mirror.ts</span>
+  <span class="accent">▎</span>    <span class="brand">[▸]</span> <span class="b fg0">4. Strip LogSelection from log-frame.tsx</span>      <span class="fg4">←</span> <span class="brand">resume here</span>
+  <span class="accent">▎</span>    <span class="fg4">[ ]</span> <span class="fg2">5. Strip drag handlers from App.tsx</span>
+  <span class="accent">▎</span>    <span class="fg4">[ ]</span> <span class="fg2">6. Add /copy slash command</span>
+  <span class="accent">▎</span>    <span class="fg4">[ ]</span> <span class="fg2">7. Update CHANGELOG &amp; push</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>    <span class="fg3">[↵] resume   [r] revise   [d] discard checkpoint</span>
+</pre>
+
+    <h3 id="s-plan-replay">Plan · replay archive<span class="desc">historical, read-only — single line until expanded; ⏪ icon and dim accent</span></h3>
+<pre class="mock">  <span class="fg4">▎</span> <span class="fg3 b">⊞ Plan · ⏪ archive</span>  <span class="fg4">· session-3 · 2026-04-26</span>            <span class="fg3">7 of 7 done</span>  <span class="fg4">▸</span>
+</pre>
+
+    <h3 id="s-step-progress">Step progress<span class="desc">single-line completion notice — emitted between steps so you don't need to expand the task card</span></h3>
+<pre class="mock">  <span class="ok">✓</span> <span class="b fg1">Step 3 of 5</span>  <span class="fg2">·  Remove screen-mirror.ts</span>                <span class="fg3">0.4s · </span><span class="ok">done</span>
+</pre>
+
+    <h3 id="s-disconnect">Disconnect banner<span class="desc">network fell over mid-turn — toast-style above the composer, persists until reconnect</span></h3>
+<pre class="mock">  <span class="err">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="err">✗</span> <span class="b err">Disconnected from api.deepseek.com</span>  <span class="fg2">— retrying in </span><span class="b err">4</span><span class="fg2">s</span>          <span class="fg4">[r] retry now · [c] cancel turn</span>
+  <span class="err">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Inline ════════════════════════════ -->
+  <section class="section" id="inline">
+    <h2><span class="num">26</span>Inline elements</h2>
+    <p class="lede">Tiny stylings the agent (or user) drops <em>inside</em> running text — they're not cards, they're enrichments. Each pattern is recognised by a regex on emit and styled by the renderer.</p>
+
+    <h3 id="i-file-ref">File:line reference<span class="desc">recognised: `path/to/file.ts:42`. Sky underlined; OSC-8 hyperlink so terminals that support it open the editor at that line.</span></h3>
+<pre class="mock">  <span class="fg1">The change you described maps cleanly to </span><span class="brand u">src/index/config.ts:24</span><span class="fg1">,</span>
+  <span class="fg1">where </span><span class="b">DEFAULT_INDEX_EXCLUDES</span><span class="fg1"> is defined. See also </span><span class="brand u">src/cli/ui/App.tsx:1491</span><span class="fg1">.</span>
+</pre>
+
+    <h3 id="i-mention">@ mention<span class="desc">amber underline distinguishes user-attached files from agent-discovered references</span></h3>
+<pre class="mock">  <span class="fg1">As we discussed in </span><span class="warn u">@src/index/config.ts</span><span class="fg1"> and </span><span class="warn u">@CLAUDE.md</span><span class="fg1">, the rules</span>
+  <span class="fg1">should live in one place.</span>
+</pre>
+
+    <h3 id="i-countdown">Countdown<span class="desc">live-decrementing digit, brand color, used in approval / disconnect banners</span></h3>
+<pre class="mock">  <span class="fg2">auto-approving in </span><span class="b brand">3</span><span class="fg2">…</span>           <span class="fg2">retrying in </span><span class="b err">4</span><span class="fg2">s…</span>           <span class="fg2">timeout in </span><span class="b warn">12</span><span class="fg2">s…</span>
+</pre>
+
+    <h3 id="i-highlight">Highlight<span class="desc">terminal-native inverse for substring matches; used in search hits and `/find` output</span></h3>
+<pre class="mock">  <span class="fg2">function </span><span class="b inv">writeClipboard</span><span class="fg2">(text: string): ClipboardWrite</span>
+  <span class="fg2">import { </span><span class="b inv">writeClipboard</span><span class="fg2"> } from "./clipboard.js";</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Commands ════════════════════════════ -->
+  <section class="section" id="commands">
+    <h2><span class="num">27</span>Command outputs</h2>
+    <p class="lede">Slash commands emit a card just like any other event. Most reuse existing card types — `/cost` produces a Usage card, `/context` produces a Memory card. The two interactive ones (`/memory`, `/doctor`) get their own variants.</p>
+
+    <h3 id="cmd-cost">/cost<span class="desc">prints a one-shot Usage card for the most recent turn</span></h3>
+<pre class="mock">  <span class="fg3">◇</span> <span class="b fg2">you</span>  <span class="fg4">· just now</span>
+    <span class="fg1">/cost</span>
+
+
+  <span class="brand">▎</span> <span class="brand b">Σ Usage</span>  <span class="fg2">turn 12</span>                                  <span class="fg3">$0.0014 · 1.2s</span>  <span class="fg4">▾</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>    <span class="fg2">prompt   </span> <span class="brand">██</span><span class="fg4">░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span>  <span class="b fg1">41,238</span> <span class="fg3">/ 1M  · 4.1%</span>
+  <span class="brand">▎</span>    <span class="fg2">cache hit</span> <span class="ok">██████████████████████████</span><span class="fg4">░░░</span>  <span class="b ok">91.3%</span>
+  <span class="brand">▎</span>    <span class="fg3">session </span><span class="b fg1">⛁ $0.018</span>  <span class="fg4">·</span>  <span class="fg3">balance </span><span class="b fg1">¥ 28.4</span>
+</pre>
+
+    <h3 id="cmd-context">/context<span class="desc">prints a Memory card with what's in the current prompt, including system + history budget</span></h3>
+<pre class="mock">  <span class="fg3">◇</span> <span class="b fg2">you</span>  <span class="fg4">· just now</span>
+    <span class="fg1">/context</span>
+
+
+  <span class="fg3">▎</span> <span class="b fg2">⌑ Context</span>  <span class="fg3">·  4 user · 2 feedback · 1 reference</span>             <span class="fg3">~1.2K tok</span>  <span class="fg4">▾</span>
+  <span class="fg3">▎</span>
+  <span class="fg3">▎</span>   <span class="fg4">SYSTEM      </span>  <span class="fg2">CLAUDE.md (132 lines)            </span>     <span class="fg3">~480 tok</span>
+  <span class="fg3">▎</span>   <span class="fg4">MEMORY      </span>  <span class="fg2">7 entries from MEMORY.md         </span>     <span class="fg3">~720 tok</span>
+  <span class="fg3">▎</span>   <span class="fg4">HISTORY     </span>  <span class="fg2">last 8 turns kept verbatim       </span>     <span class="fg3">~38K tok</span>
+  <span class="fg3">▎</span>   <span class="fg4">TOOLS       </span>  <span class="fg2">14 tools (incl. 4 MCP)           </span>     <span class="fg3">~1.8K tok</span>
+  <span class="fg3">▎</span>   <span class="fg4">FILES       </span>  <span class="fg2">2 attached via @                 </span>     <span class="fg3">~6.2K tok</span>
+</pre>
+
+    <h3 id="cmd-memory">/memory<span class="desc">interactive memory editor; navigate, edit, delete entries</span></h3>
+<pre class="mock">  <span class="fg3">▎</span> <span class="b fg2">⌑ Memory</span>                                      <span class="fg3">7 entries · ~2.1K tok</span>  <span class="fg4">▾</span>
+  <span class="fg3">▎</span>
+  <span class="fg3">▎</span>   <span class="fg4">USER (3)</span>
+  <span class="fg3">▎</span>   <span class="brand">▸</span> <span class="b fg0">Jupiter maintainer · prefers terse Mandarin replies</span>
+  <span class="fg3">▎</span>     <span class="fg2">Windows Terminal + PowerShell · CNY/RMB balance</span>
+  <span class="fg3">▎</span>     <span class="fg2">Internal checkpoints over git pollution</span>
+  <span class="fg3">▎</span>
+  <span class="fg3">▎</span>   <span class="fg4">FEEDBACK (3)</span>
+  <span class="fg3">▎</span>     <span class="fg2">No Co-Authored-By: Claude trailer in commits</span>
+  <span class="fg3">▎</span>     <span class="fg2">Comments document why, not chat history</span>
+  <span class="fg3">▎</span>     <span class="fg2">Use libs for text width / unicode</span>
+  <span class="fg3">▎</span>
+  <span class="fg3">▎</span>   <span class="fg4">REFERENCE (1)</span>
+  <span class="fg3">▎</span>     <span class="fg2">Linear "INGEST" project tracks pipeline bugs</span>
+  <span class="fg3">▎</span>
+  <span class="fg3">▎</span>   <span class="fg3">[a] add new   [e] edit focused   [d] delete focused   ↑↓ navigate</span>
+</pre>
+
+    <h3 id="cmd-doctor">/doctor<span class="desc">health check — pass/fail per check, summary at the bottom</span></h3>
+<pre class="mock">  <span class="info">▎</span> <span class="info b">⚕ Doctor</span>                                            <span class="fg3">7 checks · 6 passed · 1 warn</span>  <span class="fg4">▾</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="ok">✓</span>  <span class="b fg1">node version       </span>  <span class="fg2">v22.10.0                       </span>  <span class="ok">OK</span>
+  <span class="info">▎</span>   <span class="ok">✓</span>  <span class="b fg1">api key            </span>  <span class="fg2">present, 47 chars               </span>  <span class="ok">OK</span>
+  <span class="info">▎</span>   <span class="ok">✓</span>  <span class="b fg1">deepseek reachable </span>  <span class="fg2">api.deepseek.com 142ms          </span>  <span class="ok">OK</span>
+  <span class="info">▎</span>   <span class="ok">✓</span>  <span class="b fg1">workspace          </span>  <span class="fg2">writable, in git, on main       </span>  <span class="ok">OK</span>
+  <span class="info">▎</span>   <span class="ok">✓</span>  <span class="b fg1">CLAUDE.md          </span>  <span class="fg2">found, 132 lines                </span>  <span class="ok">OK</span>
+  <span class="info">▎</span>   <span class="warn">⚠</span>  <span class="b fg1">index database     </span>  <span class="fg2">12 days stale, run </span><span class="b">/reindex</span>       <span class="warn">warn</span>
+  <span class="info">▎</span>   <span class="ok">✓</span>  <span class="b fg1">permissions        </span>  <span class="fg2">~/.jupiter readable + writable </span>  <span class="ok">OK</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Compare ════════════════════════════ -->
+  <section class="section" id="splitdiff">
+    <h2><span class="num">28</span>Compare · SplitDiff</h2>
+    <p class="lede">Side-by-side diff of one file. Used for `/diff &lt;file&gt;` and historical compares. Both panes share line numbers so the eye can sweep across; matching anchor lines align.</p>
+
+    <div class="tag">CARD · <span class="cls">.splitdiff</span></div>
+<pre class="mock" id="cmp-splitdiff">  <span class="ok">▎</span> <span class="ok b">± Compare</span>  <span class="fg2">src/cli/ui/App.tsx</span>                                <span class="ok">+12</span><span class="fg4"> / </span><span class="err">-47</span>     <span class="fg4">▾</span>
+  <span class="ok">▎</span>
+  <span class="ok">▎</span>     <span class="b fg2">HEAD</span>                                          <span class="b fg2">working tree</span>
+  <span class="ok">▎</span>     <span class="fg4">───────────────────────────────────────</span>       <span class="fg4">───────────────────────────────────────</span>
+  <span class="ok">▎</span>     <span class="fg4">   1</span>  <span class="fg2">/** App.tsx — primary chat … */</span>           <span class="fg4">   1</span>  <span class="fg2">/** App.tsx — chat surface … */</span>
+  <span class="ok">▎</span>     <span class="fg4">   2</span>                                              <span class="fg4">   2</span>
+  <span class="ok">▎</span>     <span class="fg4">   3</span>  <span class="fg2">import React from "react";</span>                 <span class="fg4">   3</span>  <span class="fg2">import React from "react";</span>
+  <span class="ok">▎</span>     <span class="fg4">   …</span>  <span class="fg4">…</span>                                          <span class="fg4">   …</span>  <span class="fg4">…</span>
+  <span class="ok">▎</span>     <span class="fg4"> 142</span>  <span class="err">&lt;Box&gt;</span>                                       <span class="fg4"> 142</span>  <span class="ok">&lt;InlineShell&gt;</span>
+  <span class="ok">▎</span>     <span class="fg4"> 143</span>  <span class="err">  &lt;LogFrame ...&gt;</span>                            <span class="fg4"> 143</span>  <span class="ok">  &lt;CardStream ...&gt;</span>
+  <span class="ok">▎</span>     <span class="fg4"> 144</span>  <span class="err">&lt;/Box&gt;</span>                                      <span class="fg4"> 144</span>  <span class="ok">&lt;/InlineShell&gt;</span>
+  <span class="ok">▎</span>
+  <span class="ok">▎</span>   <span class="fg4">↑↓ scroll  ·  h/l switch pane  ·  n/N next/prev hunk  ·  q quit</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Live indicators ════════════════════════════ -->
+  <section class="section" id="live">
+    <h2><span class="num">29</span>Live indicators</h2>
+    <p class="lede">Transient one-row signals that print inline, between cards. They're not cards (no accent bar, no expand) — just a visual notification you can scroll past.</p>
+
+    <h3 id="l-thinking">Thinking spinner<span class="desc">window between user msg and the first reasoning / streaming card</span></h3>
+<pre class="mock">  <span class="brand">◐</span> <span class="fg2">thinking · deepseek-chat</span>  <span class="fg3">·</span> <span class="brand">2.3s</span>                                    <span class="fg4">esc abort</span>
+</pre>
+<pre class="mock"><span class="fg4">    spinner cycles: ◐ ◓ ◑ ◒  (200ms cadence, ink-spinner pattern)</span>
+</pre>
+
+    <h3 id="l-ctx-pressure">Context pressure<span class="desc">prompt budget warning at 80% / 95% / over-limit</span></h3>
+<pre class="mock">  <span class="warn">▎</span> <span class="warn b">⚠ Context</span>  <span class="fg2">821K / 1M  ·  82%</span>                                          <span class="fg4">▾</span>
+  <span class="warn">▎</span>   <span class="fg2">approaching the budget; older turns will be dropped past 95%</span>
+</pre>
+<pre class="mock">  <span class="err">▎</span> <span class="err b">✖ Context</span>  <span class="fg2">990K / 1M  ·  99%</span>                                          <span class="fg4">▾</span>
+  <span class="err">▎</span>   <span class="fg2">trimming oldest 12 turns to fit; expect some short-term memory loss</span>
+</pre>
+
+    <h3 id="l-undo">Undo banner<span class="desc">ctrl+z reverted an edit; banner stays for ~5s</span></h3>
+<pre class="mock">  <span class="brand">↶</span> <span class="b fg1">Undid:</span> <span class="fg2">edit src/cli/ui/App.tsx</span>  <span class="ok">+12</span><span class="fg4"> / </span><span class="err">-47</span>             <span class="fg3">5s · ctrl+y to redo</span>
+</pre>
+
+    <h3 id="l-aborted">Aborted card<span class="desc">esc cut a streaming / tool card mid-flight; the card retains what was printed and tags itself stopped</span></h3>
+<pre class="mock">  <span class="fg4">▎</span> <span class="fg3 b">▶ — aborted —</span>                                              <span class="fg3">1.2s · </span><span class="warn">stopped</span>
+  <span class="fg4">▎</span>   <span class="fg2">The change you described maps cleanly to the existing</span>
+  <span class="fg4">▎</span>   <span class="fg2">ResolvedIndexConfig structure. Three edits ar…</span><span class="fg4">[truncated by esc]</span>
+</pre>
+
+    <h3 id="l-retry">Tool retry / repair<span class="desc">cache-first loop retried a failed call — header annotates the attempt</span></h3>
+<pre class="mock">  <span class="info">▎</span> <span class="info b">▣ run_command</span>  <span class="fg2">npm run typecheck</span>                          <span class="warn">↻ retry 1/3</span>     <span class="fg4">▾</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="fg4">[last attempt timed out at 30s · increasing to 60s]</span>
+  <span class="info">▎</span>   <span class="fg3">$ npm run typecheck</span>
+  <span class="info">▎</span>   <span class="fg3">…</span>
+</pre>
+
+    <h3 id="l-checkpoint">Checkpoint fired<span class="desc">internal checkpoint system snapshot landed (auto, never via git)</span></h3>
+<pre class="mock">  <span class="ok">⛁</span> <span class="b fg1">Checkpoint saved</span>  <span class="fg3">·  edit-history#142  ·  3 files · 248 bytes</span>      <span class="fg4">/undo to revert</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Markdown ════════════════════════════ -->
+  <section class="section" id="markdown">
+    <h2><span class="num">30</span>Markdown rendering</h2>
+    <p class="lede">Reference for how markdown elements look when emitted by the model inside reasoning / streaming / assistant cards. Inline spans are styled in place; block elements get their own row.</p>
+
+    <h3 id="md-inline">Inline<span class="desc">styling that doesn't break the line</span></h3>
+<pre class="mock">  <span class="fg1">A normal sentence with </span><span class="b fg0">bold</span><span class="fg1"> and </span><span class="i fg1">italic</span><span class="fg1"> and </span><span class="b i fg0">both</span><span class="fg1"> mixed in.</span>
+  <span class="fg1">Inline code looks like </span><span class="band ghost" style="margin:0;padding:0 6px;display:inline"><span class="fg0">stringWidth(s)</span></span><span class="fg1"> — bg-elev pad, fg-0.</span>
+  <span class="fg1">A link reads as </span><span class="brand u">jump to docs</span><span class="fg3"> (https://jupiter.dev/docs)</span><span class="fg1">.</span>
+  <span class="fg1">A file ref like </span><span class="brand u">src/cli/ui/App.tsx:142</span><span class="fg1"> is sky underline.</span>
+  <span class="fg1">A keyboard hint: </span><span class="band ghost" style="margin:0;padding:0 6px;display:inline"><span class="fg0">⏎</span></span><span class="fg1"> </span><span class="band ghost" style="margin:0;padding:0 6px;display:inline"><span class="fg0">esc</span></span><span class="fg1"> — same chip style as inline code.</span>
+</pre>
+
+    <h3 id="md-block">Block<span class="desc">elements that take whole rows</span></h3>
+<pre class="mock">  <span class="band ghost"> <span class="b fg0">Heading 2</span> </span>
+
+  <span class="fg1">A paragraph below a heading. Headings render as a band; H1 / H2 / H3</span>
+  <span class="fg1">share the same styling — terminal can't change font size.</span>
+
+  <span class="fg3">▎</span> <span class="i fg2">A blockquote.  Sky bar + italic dim, single rule.</span>
+
+  <span class="fg1">A bulleted list:</span>
+    <span class="fg3">·</span> <span class="fg1">first item</span>
+    <span class="fg3">·</span> <span class="fg1">second item</span>
+    <span class="fg3">·</span> <span class="fg1">third item</span>
+
+  <span class="fg1">A numbered list:</span>
+    <span class="fg3">1.</span> <span class="fg1">first step</span>
+    <span class="fg3">2.</span> <span class="fg1">second step</span>
+
+  <span class="fg1">A code block — bg-elev panel, no box, monospace already (we're a TUI):</span>
+
+  <span class="band ghost"> <span class="fg0">const SKIP = new Set(["node_modules", ".git"]);</span>
+<span class="band ghost">  <span class="fg0">if (SKIP.has(name)) continue;</span></span>
+<span class="band ghost"> </span>
+
+  <span class="fg1">A table — borders are rule chars, no box-drawing:</span>
+
+      <span class="b fg2">name      </span>  <span class="b fg2">size  </span>  <span class="b fg2">role</span>
+      <span class="fg4">────      </span>  <span class="fg4">────  </span>  <span class="fg4">────</span>
+      <span class="fg1">App.tsx   </span>  <span class="fg1">4.7K  </span>  <span class="fg1">root + loop</span>
+      <span class="fg1">log-frame </span>  <span class="fg1">1.1K  </span>  <span class="fg1">renderer</span>
+      <span class="fg1">PromptIn  </span>  <span class="fg1">  569 </span>  <span class="fg1">composer</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+
+  <span class="fg1">A horizontal rule above looks like that — fg-4 hairline.</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Editor mode ════════════════════════════ -->
+  <section class="section" id="editor">
+    <h2><span class="num">31</span>Editor mode</h2>
+    <p class="lede">Triggered by <span class="b">/edit &lt;file&gt;</span> or <span class="b">ctrl+e</span> on a focused diff card. Replaces the composer block (input + status row) with an inline editor pane bound to one file. Esc returns to chat with the buffer intact (dirty marker stays).</p>
+
+    <div class="tag">PANE · <span class="cls">.editor</span></div>
+<pre class="mock"><span class="band ok"> <span class="b ok">±</span>  <span class="b fg0">edit</span>  <span class="fg2">src/cli/ui/App.tsx</span>                                   <span class="warn">dirty</span> <span class="fg3">·  4740 lines</span> </span>
+
+       <span class="fg4">  1</span>   <span class="fg2">/** App.tsx — primary chat surface, owns log + input. */</span>
+       <span class="fg4">  2</span>
+       <span class="fg4">  3</span>   <span class="fg2">import React from "react";</span>
+       <span class="fg4">  …</span>
+   <span class="brand">▸</span> <span class="fg4">142</span>   <span class="ok">&lt;InlineShell&gt;</span>
+       <span class="fg4">143</span>   <span class="ok">  &lt;CardStream ...&gt;</span>
+       <span class="fg4">144</span>   <span class="ok">&lt;/InlineShell&gt;</span>
+       <span class="fg4">  …</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ scroll  ·  ⏎ edit row  ·  ^s save  ·  ^z undo  ·  ^y redo  ·  esc back to chat</span>
+</pre>
+
+    <div class="tag">SAVING · <span class="cls">.editor.saving</span></div>
+<pre class="mock"><span class="band ok"> <span class="b ok">±</span>  <span class="b fg0">edit</span>  <span class="fg2">src/cli/ui/App.tsx</span>                              <span class="brand">saving…</span> <span class="fg3">·  4740 lines</span> </span>
+</pre>
+
+    <div class="tag">SAVED · <span class="cls">.editor.saved</span></div>
+<pre class="mock"><span class="band ok"> <span class="b ok">±</span>  <span class="b fg0">edit</span>  <span class="fg2">src/cli/ui/App.tsx</span>                          <span class="ok">✓ saved · 0.2s</span> <span class="fg3">·  4740 lines</span> </span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Toasts ════════════════════════════ -->
+  <section class="section" id="toasts">
+    <h2><span class="num">32</span>Toasts · transient banners</h2>
+    <p class="lede">A toast appears <strong>just above the status row hairline</strong>, pushing the status row down by one row for ~3s, then unmounts. Used for events the user should notice but doesn't need to act on. Disconnect (§25) is the persistent variant — sticks until resolved.</p>
+
+    <div class="tag">SUCCESS · <span class="cls">.toast.ok</span></div>
+<pre class="mock">  <span class="ok">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="ok">✓</span> <span class="b fg1">Checkpoint saved</span>  <span class="fg2">·  142 events  ·  3 files snapshotted</span>           <span class="fg4">3s</span>
+</pre>
+
+    <div class="tag">INFO · <span class="cls">.toast.info</span></div>
+<pre class="mock">  <span class="info">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="info">ⓘ</span> <span class="b fg1">Memory updated</span>  <span class="fg2">·  1 entry added · feedback / no-coauthor</span>          <span class="fg4">3s</span>
+</pre>
+
+    <div class="tag">WARN · <span class="cls">.toast.warn</span></div>
+<pre class="mock">  <span class="warn">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="warn">⚠</span> <span class="b fg1">MCP `notion` slow</span>  <span class="fg2">·  8.4s p95 over the last 5 calls</span>                <span class="fg4">5s</span>
+</pre>
+
+    <div class="tag">ERR · <span class="cls">.toast.err</span></div>
+<pre class="mock">  <span class="err">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="err">✗</span> <span class="b fg1">Tool denied</span>  <span class="fg2">·  rm -rf node_modules · sandbox policy</span>               <span class="fg4">5s</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Help & keys ════════════════════════════ -->
+  <section class="section" id="help">
+    <h2><span class="num">33</span>Help &amp; key reference</h2>
+    <p class="lede">Two surfaces: a printed <span class="b">/help</span> card that scrolls into history, and a transient <span class="b">?</span> overlay that takes over the composer for as long as you hold the key.</p>
+
+    <h3 id="help-card">/help · printed card<span class="desc">scrollable, comprehensive; reuses the regular card shell</span></h3>
+<pre class="mock">  <span class="info">▎</span> <span class="info b">ⓘ Help</span>  <span class="fg2">· keys, commands, modes</span>                                       <span class="fg4">▾</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="b fg2">COMPOSER</span>
+  <span class="info">▎</span>     <span class="b fg0">⏎     </span>  <span class="fg2">send the message</span>
+  <span class="info">▎</span>     <span class="b fg0">^J    </span>  <span class="fg2">newline (multi-line input)</span>
+  <span class="info">▎</span>     <span class="b fg0">↑↓    </span>  <span class="fg2">cycle history</span>
+  <span class="info">▎</span>     <span class="b fg0">/     </span>  <span class="fg2">slash command picker</span>
+  <span class="info">▎</span>     <span class="b fg0">@     </span>  <span class="fg2">file attachment / mention</span>
+  <span class="info">▎</span>     <span class="b fg0">!     </span>  <span class="fg2">shell mode (one-shot bash)</span>
+  <span class="info">▎</span>     <span class="b fg0">esc   </span>  <span class="fg2">abort current turn</span>
+  <span class="info">▎</span>     <span class="b fg0">^c    </span>  <span class="fg2">quit</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="b fg2">CARDS</span>
+  <span class="info">▎</span>     <span class="b fg0">j / k </span>  <span class="fg2">focus next / prev</span>
+  <span class="info">▎</span>     <span class="b fg0">⏎     </span>  <span class="fg2">expand / collapse focused</span>
+  <span class="info">▎</span>     <span class="b fg0">y     </span>  <span class="fg2">copy focused card text</span>
+  <span class="info">▎</span>     <span class="b fg0">?     </span>  <span class="fg2">key overlay</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="b fg2">MODES</span>
+  <span class="info">▎</span>     <span class="b fg0">/auto </span>  <span class="fg2">approve all tool calls</span>
+  <span class="info">▎</span>     <span class="b fg0">/ask  </span>  <span class="fg2">prompt for each tool call</span>
+  <span class="info">▎</span>     <span class="b fg0">/plan </span>  <span class="fg2">draft a plan before executing</span>
+  <span class="info">▎</span>     <span class="b fg0">/edit </span>  <span class="fg2">enter editor mode on focused file</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="b fg2">SLASH COMMANDS</span>  <span class="fg3">— full list at /help all</span>
+  <span class="info">▎</span>     <span class="b fg0">/cost  /context  /memory  /diff  /copy  /init  /doctor</span>
+</pre>
+
+    <h3 id="help-overlay">? overlay<span class="desc">transient cheat-sheet — replaces composer for as long as `?` is held; releases on any keypress</span></h3>
+<pre class="mock">  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="band ghost"> <span class="b fg0">shortcuts</span>  <span class="fg3">·  press any key to dismiss</span>                                            </span>
+
+   <span class="b fg0">⏎    </span> <span class="fg2">send       </span>      <span class="b fg0">↑↓   </span> <span class="fg2">history    </span>      <span class="b fg0">/    </span> <span class="fg2">commands</span>
+   <span class="b fg0">^J   </span> <span class="fg2">newline    </span>      <span class="b fg0">@    </span> <span class="fg2">attach     </span>      <span class="b fg0">!    </span> <span class="fg2">shell mode</span>
+   <span class="b fg0">esc  </span> <span class="fg2">abort      </span>      <span class="b fg0">^c   </span> <span class="fg2">quit       </span>      <span class="b fg0">^L   </span> <span class="fg2">clear screen</span>
+   <span class="b fg0">j / k</span> <span class="fg2">focus card </span>      <span class="b fg0">y    </span> <span class="fg2">copy card  </span>      <span class="b fg0">?    </span> <span class="fg2">this overlay</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Bang shell output ════════════════════════════ -->
+  <section class="section" id="bang-out">
+    <h2><span class="num">34</span>Shell output (! mode)</h2>
+    <p class="lede">When the user submits with a leading <span class="b">!</span>, the line bypasses the model and runs as a shell command via the same tool-call path. It lands as a regular <span class="b">▣ shell</span> tool card — same expand/collapse rules as any other tool result.</p>
+
+<pre class="mock">  <span class="fg3">◇</span> <span class="b fg2">you</span>  <span class="fg4">· just now</span>
+    <span class="fg1">! git status</span>
+
+
+  <span class="info">▎</span> <span class="info b">▣ shell</span>  <span class="fg2">git status</span>                                  <span class="fg3">0.04s · </span><span class="ok">exit 0</span>     <span class="fg4">▾</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="fg2">On branch main</span>
+  <span class="info">▎</span>   <span class="fg2">Your branch is up to date with 'origin/main'.</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="fg2">nothing to commit, working tree clean</span>
+</pre>
+
+<pre class="mock">  <span class="info">▎</span> <span class="info b">▣ shell</span>  <span class="fg2">git push</span>                                    <span class="fg3">2.1s · </span><span class="err">exit 1</span>     <span class="fg4">▾</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="err">error: failed to push some refs to 'origin'</span>
+  <span class="info">▎</span>   <span class="fg2">hint: Updates were rejected because the remote contains work…</span>
+  <span class="info">▎</span>   <span class="fg2">hint: integrate the remote changes first.</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ DiffApp ════════════════════════════ -->
+  <section class="section" id="diffapp">
+    <h2><span class="num">35</span>DiffApp · standalone CLI</h2>
+    <p class="lede">Invoked as <span class="b">jupiter diff &lt;file&gt;</span> — a one-shot terminal app that opens a SplitDiff card with a session intro at the top and a key hint at the bottom. No composer, no agent. Quits on <span class="b">q</span> / <span class="b">esc</span> / <span class="b">^c</span>.</p>
+
+<pre class="mock">  <span class="fg4">$ jupiter diff src/cli/ui/App.tsx</span>
+
+  <span class="fg4">◈ diff  ·  ~/projects/jupiter  ·  src/cli/ui/App.tsx  ·  HEAD → working</span>
+
+
+  <span class="ok">▎</span> <span class="ok b">± Compare</span>  <span class="fg2">src/cli/ui/App.tsx</span>                            <span class="ok">+12</span><span class="fg4"> / </span><span class="err">-47</span>     <span class="fg4">▾</span>
+  <span class="ok">▎</span>
+  <span class="ok">▎</span>     <span class="b fg2">HEAD</span>                                          <span class="b fg2">working tree</span>
+  <span class="ok">▎</span>     <span class="fg4">───────────────────────────────────────</span>       <span class="fg4">───────────────────────────────────────</span>
+  <span class="ok">▎</span>     <span class="fg4">   1</span>  <span class="fg2">/** App.tsx — primary chat … */</span>           <span class="fg4">   1</span>  <span class="fg2">/** App.tsx — chat surface … */</span>
+  <span class="ok">▎</span>     <span class="fg4">   …</span>  <span class="fg4">…</span>                                          <span class="fg4">   …</span>  <span class="fg4">…</span>
+  <span class="ok">▎</span>     <span class="fg4"> 142</span>  <span class="err">&lt;Box&gt;</span>                                       <span class="fg4"> 142</span>  <span class="ok">&lt;InlineShell&gt;</span>
+  <span class="ok">▎</span>     <span class="fg4"> 144</span>  <span class="err">&lt;/Box&gt;</span>                                      <span class="fg4"> 144</span>  <span class="ok">&lt;/InlineShell&gt;</span>
+
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ scroll  ·  h/l switch pane  ·  n/N next/prev hunk  ·  q quit</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Account & quota ════════════════════════════ -->
+  <section class="section" id="quota">
+    <h2><span class="num">36</span>Account &amp; quota</h2>
+    <p class="lede">Three states: balance low (warn) · exhausted (err) · rate limited (warn). Each lands as a regular card so it's part of scrollback and the user can scroll up to find it later.</p>
+
+    <div class="tag">CARD · <span class="cls">.quota.low</span></div>
+<pre class="mock">  <span class="warn">▎</span> <span class="warn b">⚠ Balance low</span>  <span class="fg2">·  ¥ 1.24 remaining</span>                                       <span class="fg4">▾</span>
+  <span class="warn">▎</span>
+  <span class="warn">▎</span>   <span class="fg2">At your current burn rate (¥0.10 / turn) ≈ 12 more turns.</span>
+  <span class="warn">▎</span>   <span class="fg2">Top up at </span><span class="brand u">https://platform.deepseek.com/usage</span><span class="fg2">.</span>
+</pre>
+
+    <div class="tag">CARD · <span class="cls">.quota.out</span></div>
+<pre class="mock">  <span class="err">▎</span> <span class="err b">✖ Out of balance</span>  <span class="fg2">·  ¥ 0.00</span>                                              <span class="fg4">▾</span>
+  <span class="err">▎</span>
+  <span class="err">▎</span>   <span class="fg2">Cannot send. Composer disabled until top-up.</span>
+  <span class="err">▎</span>   <span class="fg2">Top up at </span><span class="brand u">https://platform.deepseek.com/usage</span><span class="fg2">,</span>
+  <span class="err">▎</span>   <span class="fg2">then </span><span class="b">/refresh</span><span class="fg2"> to re-check.</span>
+</pre>
+
+    <div class="tag">CARD · <span class="cls">.quota.rate</span></div>
+<pre class="mock">  <span class="warn">▎</span> <span class="warn b">⚠ Rate limited</span>  <span class="fg2">·  retry in </span><span class="b warn">4</span><span class="fg2">s</span>                                          <span class="fg4">▾</span>
+  <span class="warn">▎</span>
+  <span class="warn">▎</span>   <span class="fg2">api.deepseek.com responded 429: 60 RPM exceeded</span>
+  <span class="warn">▎</span>   <span class="fg2">Jupiter will retry automatically with backoff. esc to cancel.</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ MCP lifecycle ════════════════════════════ -->
+  <section class="section" id="mcp-life">
+    <h2><span class="num">37</span>MCP lifecycle</h2>
+    <p class="lede">One-line cards for each lifecycle event of an MCP server connection. Steady-state servers don't print anything — only state <em>changes</em> emit a card so scrollback isn't noise.</p>
+
+<pre class="mock">  <span class="info">⌘</span> <span class="b fg1">MCP · notion</span>          <span class="brand">↻ handshake…</span>   <span class="fg3">initialise → tools/list → resources/list</span>
+
+  <span class="info">⌘</span> <span class="b fg1">MCP · notion</span>          <span class="ok">✓ connected</span>    <span class="fg3">12 tools · 8 resources · 142ms</span>
+
+  <span class="info">⌘</span> <span class="b fg1">MCP · notion</span>          <span class="warn">◌ slow</span>         <span class="fg3">tools/list took 8.4s · added p95 to context</span>
+
+  <span class="info">⌘</span> <span class="b fg1">MCP · notion</span>          <span class="brand">↻ reconnect 2/5</span>  <span class="fg3">backoff 4s</span>
+
+  <span class="info">⌘</span> <span class="b fg1">MCP · notion</span>          <span class="err">✖ failed</span>      <span class="fg3">handshake error · ENOENT: server binary missing</span>
+
+  <span class="info">⌘</span> <span class="b fg1">MCP · notion</span>          <span class="fg4">○ disabled</span>     <span class="fg3">via /mcp disable notion</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Session ops ════════════════════════════ -->
+  <section class="section" id="sessionops">
+    <h2><span class="num">38</span>Session ops</h2>
+    <p class="lede">One-line outputs from <span class="b">/fork</span>, <span class="b">/archive</span>, <span class="b">/resume</span>, <span class="b">/reset</span>. They land as a single inline row so the chain of session state changes is readable in scrollback.</p>
+
+<pre class="mock">  <span class="ok">◍</span> <span class="b fg1">Forked</span> <span class="fg2">session-7 → session-8</span>  <span class="fg3">from turn 12 · 142 events copied</span>      <span class="fg4">jupiter --session=session-8</span>
+
+  <span class="brand">⌑</span> <span class="b fg1">Archived</span> <span class="fg2">session-7</span>            <span class="fg3">~/.jupiter/sessions/session-7.jsonl  ·  /resume to bring back</span>
+
+  <span class="brand">↺</span> <span class="b fg1">Resumed</span> <span class="fg2">session-7</span>             <span class="fg3">at turn 12 · 142 events replayed · plan reloaded</span>
+
+  <span class="warn">⚠</span> <span class="b fg1">Reset</span> <span class="fg2">— session-9 cleared</span>      <span class="fg3">142 events archived · /resume session-9 to recover</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Dropped surfaces ════════════════════════════ -->
+  <section class="section" id="dropped">
+    <h2><span class="num">39</span>Dropped surfaces</h2>
+    <p class="lede">Things that <em>used to exist</em> in older Jupiter versions but don't fit the inline + bottom-pinned model. Listed here so the absence is intentional, not a TODO.</p>
+
+    <h3>File tree sidebar</h3>
+    <p style="color:var(--fg-3);font-size:12px;margin:4px 0 12px;max-width:640px">A persistent sidebar requires alt-screen (otherwise it'd scroll away with content). Replaced by <span class="b">@</span> mention picker (§19) for picking files into a turn, and <span class="b">/files</span> slash command for an on-demand printable file list. Same job, no sticky chrome required.</p>
+
+    <h3>Persistent top chrome bar</h3>
+    <p style="color:var(--fg-3);font-size:12px;margin:4px 0 12px;max-width:640px">Replaced by the bottom status row (§20). Anything that was on the top bar (mode pill / cost / cache / balance) now lives one row above the input — Ink can pin it, top-row positioning can't.</p>
+
+    <h3>App-managed scroll viewport</h3>
+    <p style="color:var(--fg-3);font-size:12px;margin:4px 0 12px;max-width:640px">No more <span class="b">↑ 24  ▕───●─────▏  62%  ↓ 12</span> indicator. The terminal's native scrollback is the source of truth — wheel up, ⇧+drag to select, the OS handles it. Jupiter doesn't try to clip / paginate.</p>
+
+    <h3>Mouse-tracking modes</h3>
+    <p style="color:var(--fg-3);font-size:12px;margin:4px 0 0;max-width:640px">No <span class="b">?1002h</span> / <span class="b">?1006h</span> button-event tracking. Without alt-screen there's no point — and disabling it lets the terminal's native selection (⇧+drag, double-click word, triple-click line) just work.</p>
+  </section>
+
+  <!-- ════════════════════════════ Motion ════════════════════════════ -->
+  <section class="section" id="motion">
+    <h2><span class="num">40</span>Motion &amp; cadence</h2>
+    <p class="lede">Terminals don't do tweens, opacity, or sub-cell positions. What Ink <em>can</em> do is rerender any row on an interval — that gives us discrete-frame animation, color steps, and content swaps. Below: the seven primitives we use, their cadence, and what we never try.</p>
+
+    <p class="lede" style="margin-top:0;color:var(--fg-3)"><strong style="color:var(--fg-1)">Live previews below</strong> — every animation in this section actually runs. If you don't see motion you're either looking at a screenshot or your browser is too old (needs CSS <code style="background:#11141a;padding:1px 4px">content</code> animation, ≥ Chrome 109 / Firefox 119 / Safari 16).</p>
+
+    <h3>1 · Spinner — circle<span class="desc">200ms / frame · 4-frame cycle · used for "thinking" / model wait</span></h3>
+<pre class="mock">  <span class="brand b anim-spin">◐</span> <span class="fg2">thinking · deepseek-chat</span>  <span class="fg3">·</span> <span class="brand">2.3s</span>                                    <span class="fg4">esc abort</span>
+
+  <span class="fg4">frames cycle:  ◐  →  ◓  →  ◑  →  ◒  →  ◐ …  (the live row above is rotating ◐ at 200ms / step)</span>
+</pre>
+
+    <h3>2 · Spinner — braille<span class="desc">80ms / frame · 8-frame cycle · used for tool calls (faster, distinguishable from "thinking")</span></h3>
+<pre class="mock">  <span class="info">▎</span> <span class="info b">▣ run_command</span>  <span class="fg2">npm install</span>          <span class="brand b anim-braille"></span> <span class="brand">12.4s</span>     <span class="fg4">▾</span>
+
+  <span class="fg4">frames cycle:  ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧  (live row above swaps content every 80ms)</span>
+</pre>
+
+    <h3>3 · Streaming cursor<span class="desc">1s blink · always at the tail of in-progress streaming content</span></h3>
+<pre class="mock">  <span class="brand">▎</span> <span class="brand b">▶</span>  <span class="fg1">The change you described maps cleanly to the existing</span>
+  <span class="brand">▎</span>    <span class="b brand">ResolvedIndexConfig</span><span class="fg1"> structure. Three edits are needed</span><span class="cur"></span>
+
+  <span class="fg4">cycle: on (500ms)  →  off (500ms)  →  …  the brand block at the tail above is the live cursor</span>
+</pre>
+
+    <h3>4 · Focus pulse<span class="desc">accent bar pulses at 1.4s ease-in-out when a card is the current focus</span></h3>
+<pre class="mock">  <span class="anim-pulse"><span class="brand">▎</span></span> <span class="brand b">⊞ Plan · Migrate selection</span>     <span class="fg3">5 of 7 done</span>     <span class="brand">●</span> <span class="b brand">FOCUSED</span>  <span class="fg4">▸</span>
+
+  <span class="fg4">opacity: .35  →  1.0  →  .35  →  …  ease-in-out  (the bar to the left is the live pulse)</span>
+</pre>
+
+    <h3>5 · Toast fade<span class="desc">solid 2s → fade to faint over 1s → unmount. Tone drop, not alpha (which terminals can't do)</span></h3>
+<pre class="mock"><span class="anim-fade"><span class="ok">  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="ok">✓</span> <span class="b fg1">Checkpoint saved</span>  <span class="fg2">·  142 events  ·  3 files snapshotted</span></span>
+
+  <span class="fg4">cycle: solid 2s  →  dim over 1s  →  loop. In Ink we replace opacity with a fg-1→fg-2→fg-3 ramp.</span>
+</pre>
+
+    <h3>6 · Number ticker<span class="desc">data-driven · new value flashes brand for one render frame then settles to fg-1</span></h3>
+<pre class="mock">  <span class="brand">▸</span> <span class="b brand anim-ticker"></span> <span class="fg2"> turn</span>      <span class="fg3">·</span>      <span class="fg2">cycles every 4s in this preview · in real session, ticks on each cost-emit event</span>
+
+  <span class="fg4">applies to: cost ticker, cache hit %, balance ¥, token counters</span>
+</pre>
+
+    <h3>7 · Countdown<span class="desc">1Hz tick · digit flashes brand on each step · used in auto-confirm + disconnect retry</span></h3>
+<pre class="mock">  <span class="warn">approving in </span><span class="b brand anim-countdown"></span><span class="warn">s · esc to interrupt</span>
+
+  <span class="fg4">cadence 1000ms · digit always brand · surrounding text stays warn · flash-and-step, no slide</span>
+</pre>
+
+    <h3>8 · Row arrival<span class="desc">a 600ms fade-in when a new card lands. The only transition we permit — and only for newly-printed cards, never for already-on-screen content</span></h3>
+<pre class="mock anim-arrive">  <span class="ok">▎</span> <span class="ok b">✓ Step 1 of 5 · Read chunker + filesystem</span>           <span class="fg3">0.4s · 2 tools · </span><span class="ok">done</span>  <span class="fg4">▸</span>
+
+  <span class="fg4">a one-shot fade from opacity 0 to 1; reload the page to see this row appear again</span>
+</pre>
+
+    <h3>Things we never do<span class="desc">these are unsafe / ineffective in a terminal cell grid</span></h3>
+<pre class="mock">  <span class="err">✗</span>  <span class="fg2">sliding / position transitions</span>          <span class="fg3">terminals only redraw whole rows</span>
+  <span class="err">✗</span>  <span class="fg2">opacity / alpha fade</span>                    <span class="fg3">no opacity per cell — drop tone instead</span>
+  <span class="err">✗</span>  <span class="fg2">color gradients across cells</span>            <span class="fg3">stutters at 256 / 16 color depth</span>
+  <span class="err">✗</span>  <span class="fg2">marquee / scrolling text</span>                <span class="fg3">hides content, hurts scrollback</span>
+  <span class="err">✗</span>  <span class="fg2">whole-screen flash / inverse blink</span>      <span class="fg3">accessibility hazard, photosensitive risk</span>
+  <span class="err">✗</span>  <span class="fg2">automatic auto-scroll override</span>          <span class="fg3">terminal scrollback is the user's, not ours</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Edge cases ════════════════════════════ -->
+  <section class="section" id="edges">
+    <h2><span class="num">41</span>Edge cases</h2>
+    <p class="lede">Smaller surfaces I missed in the per-feature pass — clipboard feedback, empty pickers, fatal crash, dirty exit. Each reuses an existing pattern (toast / picker / card), no new primitives.</p>
+
+    <h3 id="ec-clipboard">Clipboard copy feedback<span class="desc">y key on a focused card or /copy — shows an ok toast</span></h3>
+<pre class="mock">  <span class="ok">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="ok">✓</span> <span class="b fg1">Copied to clipboard</span>  <span class="fg2">·  3 cards  ·  1.4 KB</span>                              <span class="fg4">3s</span>
+</pre>
+
+    <h3 id="ec-empty-pick">Empty picker<span class="desc">/ or @ with no matches — picker stays open with a single zero-state row</span></h3>
+<pre class="mock"><span class="band ghost"> <span class="b fg2">commands</span>  <span class="fg4">·  "/xyz"</span>                                                                </span>
+
+  <span class="fg4">no matches.</span>  <span class="fg3">type to filter or esc to close</span>
+
+<span class="b brand">›</span> <span class="fg1">/xyz</span><span class="cur"></span>
+</pre>
+
+    <h3 id="ec-fatal">Fatal crash<span class="desc">unhandled exception in the agent loop — print the trace, offer /report, exit cleanly on ^c</span></h3>
+<pre class="mock"><span class="band err"> <span class="b err">✖</span>  <span class="b fg0">Jupiter crashed</span>  <span class="fg2">·  this is a bug, not your fault</span>                           </span>
+
+  <span class="b err">TypeError: Cannot read property 'then' of undefined</span>
+      <span class="fg2">at App.tsx:142:18</span>
+      <span class="fg2">at processTicksAndRejections (node:internal/process/task_queues:96:5)</span>
+      <span class="fg3">… 4 more frames hidden</span>
+
+  <span class="fg2">The session log is preserved at:</span>
+    <span class="brand u">~/.jupiter/sessions/session-7.jsonl</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="b ok">[r] /report</span>  <span class="fg2">file an issue with the trace + last 10 events</span>
+  <span class="fg2">[s] stack</span>     <span class="fg3">show the full trace</span>
+  <span class="fg2">[c] copy</span>      <span class="fg3">copy crash report to clipboard</span>
+  <span class="fg2">^c</span>            <span class="fg3">quit</span>
+</pre>
+
+    <h3 id="ec-dirty">Dirty exit warning<span class="desc">^c with unsaved editor buffer — block once, second ^c discards</span></h3>
+<pre class="mock"><span class="band warn"> <span class="b warn">⚠</span>  <span class="b fg0">Unsaved editor buffer</span>                                                                </span>
+
+  <span class="fg2">src/cli/ui/App.tsx has </span><span class="ok">+12</span><span class="fg2"> / </span><span class="err">-3</span><span class="fg2"> unsaved.</span>
+
+  <span class="b warn">▸</span> <span class="b fg0">save &amp; quit</span>     <span class="fg3">^s then quit</span>
+    <span class="fg2">discard &amp; quit</span>   <span class="fg3">^c again</span>
+    <span class="fg2">cancel</span>           <span class="fg3">esc — back to editor</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ pick  ·  ⏎ confirm  ·  esc cancel</span>
+</pre>
+
+    <h3 id="ec-truncate">Long card · "show more"<span class="desc">a card whose collapsed preview hits the row budget — truncate with a single dim row</span></h3>
+<pre class="mock">  <span class="info">▎</span> <span class="info b">▣ search_content</span>  <span class="fg2">"writeClipboard"</span>           <span class="fg3">3 hits in 2 files</span>          <span class="fg4">▾</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="b fg0">src/cli/ui/clipboard.ts</span>
+  <span class="info">▎</span>     <span class="fg4">  15 │</span>  <span class="fg2">export function </span><span class="b inv">writeClipboard</span><span class="fg2">(text: string)</span>
+  <span class="info">▎</span>
+  <span class="info">▎</span>   <span class="fg4">… 4 more rows  ·  press space to load all  ·  ⏎ to expand fully</span>
+</pre>
+
+    <h3 id="ec-no-mcp">All MCP servers offline<span class="desc">when zero MCP tools are available, the agent says so explicitly so the user isn't confused why /tools is short</span></h3>
+<pre class="mock">  <span class="warn">⌘</span> <span class="fg2">All 4 MCP servers offline</span>     <span class="fg3">notion · linear · github · fs-local</span>     <span class="fg4">/mcp browse</span>
+</pre>
+  </section>
+
+  <!-- ════════════════════════════ Patterns ═══════════════════════════ -->
+  <section class="section" id="interaction">
+    <h2><span class="num">42</span>Interaction</h2>
+    <p class="lede">Mouse + keyboard parity. Focus a card, expand, fire actions — every click target has a key.</p>
+
+    <div class="subsec">
+      <h3>Focused vs unfocused <span class="desc">focus = brighten the accent bar from dim to full</span></h3>
+<pre class="mock">  <span class="fg4">▎</span> <span class="fg3">⊞ Plan · Migrate selection</span>                                              <span class="fg4">▸</span>
+  <span class="accent">▎</span> <span class="accent b">⊞ Plan · Migrate selection</span>           <span class="fg3">5 of 7 done</span>     <span class="brand">●</span> <span class="b brand">FOCUSED</span>  <span class="fg4">▸</span>
+</pre>
+    </div>
+
+    <div class="subsec">
+      <h3>Keyboard parity <span class="desc">no mouse required — every action has a key</span></h3>
+      <div class="kv">
+        <div class="k">expand / collapse focused card</div><div class="v"><kbd>↵</kbd></div>
+        <div class="k">focus next / prev card</div><div class="v"><kbd>j</kbd> / <kbd>k</kbd></div>
+        <div class="k">focus next / prev action button</div><div class="v"><kbd>tab</kbd> / <kbd>⇧tab</kbd></div>
+        <div class="k">fire focused action / open search hit</div><div class="v"><kbd>↵</kbd></div>
+        <div class="k">jump to top / bottom</div><div class="v"><kbd>home</kbd> / <kbd>end</kbd></div>
+        <div class="k">page scroll up / down</div><div class="v"><kbd>pgup</kbd> / <kbd>pgdn</kbd></div>
+        <div class="k">slash command picker</div><div class="v"><kbd>/</kbd></div>
+        <div class="k">file mention / attach</div><div class="v"><kbd>@</kbd></div>
+        <div class="k">abort current turn</div><div class="v"><kbd>esc</kbd></div>
+        <div class="k">approve modal pick / confirm</div><div class="v"><kbd>↑</kbd> <kbd>↓</kbd> · <kbd>↵</kbd></div>
+        <div class="k">copy text from screen</div><div class="v"><kbd>shift</kbd>+drag (terminal native)</div>
+        <div class="k">copy beyond viewport</div><div class="v"><kbd>/</kbd>copy [last N]</div>
+        <div class="k">quit</div><div class="v"><kbd>ctrl</kbd>+<kbd>c</kbd></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════ Demo ════════════════════════════════ -->
+  <section class="section" id="demo">
+    <h2><span class="num">43</span>Demo flow</h2>
+    <p class="lede">A real session, in card order. User asks → context sweep → reasoning → plan → step (tools) → diff → approval. Terminal scrolls naturally as cards arrive.</p>
+
+<pre class="mock">  <span class="fg3">◇</span> <span class="b fg2">you</span>  <span class="fg4">· just now</span>
+    <span class="fg1">refactor the SKIP_DIRS list out of chunker.ts so directory_tree can reuse it</span>
+
+
+  <span class="fg3">▎</span> <span class="b fg2">⌑ Context</span>  <span class="fg3">·  4 user · 2 feedback · 1 reference</span>             <span class="fg3">~1.2K tok</span>  <span class="fg4">▸</span>
+
+
+  <span class="accent">▎</span> <span class="pill sec-reason">&nbsp;REASONING&nbsp;</span>  <span class="pill mdl-r1">&nbsp;r1&nbsp;</span>  <span class="fg4">412 tok · 3 ¶</span>                                  <span class="fg3">3.1s</span>
+
+
+  <span class="accent">▎</span> <span class="accent b">⊞ Plan · 5 steps</span>                                      <span class="fg3">0 of 5 done</span>  <span class="fg4">▾</span>
+  <span class="accent">▎</span>
+  <span class="accent">▎</span>    <span class="brand">[▶]</span> <span class="b fg0">1. Read chunker + filesystem to understand current structure</span>
+  <span class="accent">▎</span>    <span class="fg4">[ ]</span> <span class="fg2">2. Create src/index/config.ts with shared defaults</span>
+  <span class="accent">▎</span>    <span class="fg4">[ ]</span> <span class="fg2">3. Strip constants from chunker.ts</span>
+  <span class="accent">▎</span>    <span class="fg4">[ ]</span> <span class="fg2">4. Strip duplicate from filesystem.ts</span>
+  <span class="accent">▎</span>    <span class="fg4">[ ]</span> <span class="fg2">5. Run verify gate</span>
+
+
+  <span class="brand">▎</span> <span class="brand b">▶ Step 1 · Read chunker + filesystem</span>                          <span class="fg3">0.4s</span>     <span class="fg4">▾</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>   <span class="ok">✓</span>  <span class="b fg1">read   </span> <span class="fg2">src/index/semantic/chunker.ts</span>      <span class="fg3">0.08s · 250 lines</span>
+  <span class="brand">▎</span>   <span class="ok">✓</span>  <span class="b fg1">read   </span> <span class="fg2">src/tools/filesystem.ts</span>            <span class="fg3">0.07s · 712 lines</span>
+
+
+  <span class="brand">▎</span> <span class="brand b">▶ Step 2 · Create src/index/config.ts</span>                         <span class="fg3">0.2s</span>     <span class="fg4">▾</span>
+  <span class="brand">▎</span>
+  <span class="brand">▎</span>   <span class="ok">✓</span>  <span class="b fg1">write  </span> <span class="fg2">src/index/config.ts</span>                <span class="fg3">0.12s · 84 lines · created</span>
+
+
+  <span class="ok">▎</span> <span class="ok b">± Edit</span>  <span class="fg2">src/index/semantic/chunker.ts</span>           <span class="ok">+12</span><span class="fg4"> / </span><span class="err">-47</span>     <span class="fg4">▾</span>
+  <span class="ok">▎</span>
+  <span class="ok">▎</span>     <span class="fg4 i">@@ -30,40 +30,5 @@</span>
+  <span class="ok">▎</span>     <span class="err">-const SKIP_DIRS: ReadonlySet&lt;string&gt; = new Set([</span>
+  <span class="ok">▎</span>     <span class="err">-  "node_modules", ".git", ".hg",</span>
+  <span class="ok">▎</span>     <span class="fg4">-  ... 18 more lines</span>
+  <span class="ok">▎</span>     <span class="err">-]);</span>
+  <span class="ok">▎</span>     <span class="ok">+import { DEFAULT_INDEX_EXCLUDES } from "../config.js";</span>
+  <span class="ok">▎</span>     <span class="ok">+const SKIP_DIRS = new Set(DEFAULT_INDEX_EXCLUDES.dirs);</span>
+
+
+<span class="band warn"> <span class="b warn">?</span>  <span class="b fg0">Approve · apply edits to 2 files</span>                                                <span class="warn">awaiting</span> </span>
+
+  <span class="fg1">The agent wants to apply the edit shown above plus a related one in</span>
+  <span class="b brand">src/tools/filesystem.ts</span><span class="fg1">.</span>
+
+  <span class="b warn">▸</span> <span class="b fg0">apply both</span>      <span class="fg3">land both edits, run verify next</span>
+    <span class="fg2">apply this only</span> <span class="fg3">land chunker.ts; review filesystem.ts separately</span>
+    <span class="fg2">reject</span>          <span class="fg3">discard both; agent will revise</span>
+
+  <span class="fg4">─────────────────────────────────────────────────────────────────────────────</span>
+  <span class="fg3">↑↓ pick  ·  ⏎ confirm  ·  esc cancel</span>
+</pre>
+  </section>
+
+  <footer style="padding:48px 0 24px;color:var(--fg-4);font-size:11px;text-align:center;border-top:1px solid #14171e;margin-top:32px">
+    Jupiter · Agent TUI · terminal-faithful design v0.2 · everything on this page is renderable in JetBrains Mono / Cascadia Code with truecolor
+  </footer>
+
+  </main>
+</div>
+</body>
+</html>

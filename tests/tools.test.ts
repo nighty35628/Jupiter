@@ -1,0 +1,798 @@
+import { describe, expect, it, vi } from "vitest";
+import { EngineeringLifecycleRuntime } from "../src/code/lifecycle.js";
+import { ToolRegistry } from "../src/tools.js";
+
+describe("ToolRegistry", () => {
+  it("registers and dispatches a tool with JSON args", async () => {
+    const reg = new ToolRegistry();
+    reg.register<{ a: number; b: number }, number>({
+      name: "add",
+      description: "add two ints",
+      parameters: {
+        type: "object",
+        properties: { a: { type: "integer" }, b: { type: "integer" } },
+        required: ["a", "b"],
+      },
+      fn: ({ a, b }) => a + b,
+    });
+    expect(reg.has("add")).toBe(true);
+    const result = await reg.dispatch("add", '{"a":2,"b":3}');
+    expect(result).toBe("5");
+  });
+
+  it("emits tool.call audit events with parsed args", async () => {
+    const reg = new ToolRegistry();
+    const seen: Array<{ name: string; args: Record<string, unknown> }> = [];
+    reg.register({
+      name: "echo",
+      fn: (args: { msg: string; apiKey: string }) => args.msg,
+    });
+    reg.setAuditListener((event) => {
+      seen.push({
+        name: event.name,
+        args: JSON.parse(JSON.stringify(event.args)) as Record<string, unknown>,
+      });
+    });
+
+    await reg.dispatch("echo", '{"msg":"hi","apiKey":"secret-value"}');
+
+    expect(seen).toEqual([
+      {
+        name: "echo",
+        args: { msg: "hi", apiKey: "secret-value" },
+      },
+    ]);
+  });
+
+  it("returns structured error for unknown tool", async () => {
+    const reg = new ToolRegistry();
+    const out = await reg.dispatch("nope", "{}");
+    expect(JSON.parse(out)).toEqual({ error: "unknown tool: nope" });
+  });
+
+  it("handles invalid JSON arguments gracefully", async () => {
+    const reg = new ToolRegistry();
+    reg.register({ name: "noop", fn: () => "ok" });
+    const out = await reg.dispatch("noop", "{bad json");
+    expect(JSON.parse(out).error).toMatch(/invalid tool arguments JSON/);
+  });
+
+  it("emits OpenAI-shaped specs", () => {
+    const reg = new ToolRegistry();
+    reg.register({
+      name: "echo",
+      description: "echo input",
+      parameters: {
+        type: "object",
+        properties: { msg: { type: "string" } },
+        required: ["msg"],
+      },
+      fn: ({ msg }: { msg: string }) => msg,
+    });
+    const spec = reg.specs()[0]!;
+    expect(spec.type).toBe("function");
+    expect(spec.function.name).toBe("echo");
+    expect(spec.function.parameters.required).toEqual(["msg"]);
+  });
+
+  it("does NOT flatten shallow schemas", () => {
+    const reg = new ToolRegistry();
+    reg.register({
+      name: "shallow",
+      parameters: {
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "number" } },
+        required: ["a"],
+      },
+      fn: () => "ok",
+    });
+    expect(reg.wasFlattened("shallow")).toBe(false);
+    expect(reg.specs()[0]!.function.parameters.properties).toHaveProperty("a");
+  });
+
+  it("auto-flattens deep schemas and re-nests args on dispatch", async () => {
+    const reg = new ToolRegistry();
+    let received: any = null;
+    reg.register({
+      name: "deep",
+      parameters: {
+        type: "object",
+        required: ["user"],
+        properties: {
+          user: {
+            type: "object",
+            required: ["profile"],
+            properties: {
+              profile: {
+                type: "object",
+                required: ["name"],
+                properties: {
+                  name: { type: "string" },
+                  age: { type: "integer" },
+                },
+              },
+            },
+          },
+        },
+      },
+      fn: (args: any) => {
+        received = args;
+        return "ok";
+      },
+    });
+
+    expect(reg.wasFlattened("deep")).toBe(true);
+    const spec = reg.specs()[0]!;
+    expect(spec.function.parameters.properties).toHaveProperty("user.profile.name");
+    expect(spec.function.parameters.properties).toHaveProperty("user.profile.age");
+
+    // Model emits flat dot-notation args (as it would after seeing the flat spec).
+    await reg.dispatch("deep", '{"user.profile.name":"alice","user.profile.age":30}');
+    expect(received).toEqual({ user: { profile: { name: "alice", age: 30 } } });
+  });
+
+  it("auto-flattens wide schemas (>10 leaf params)", () => {
+    const reg = new ToolRegistry();
+    const props: Record<string, { type: string }> = {};
+    for (let i = 0; i < 15; i++) props[`p${i}`] = { type: "string" };
+    reg.register({
+      name: "wide",
+      parameters: { type: "object", properties: props },
+      fn: () => "ok",
+    });
+    expect(reg.wasFlattened("wide")).toBe(true);
+  });
+
+  it("dispatch passes through nested args even when tool was flattened (defensive)", async () => {
+    const reg = new ToolRegistry();
+    let received: any = null;
+    reg.register({
+      name: "deep",
+      parameters: {
+        type: "object",
+        properties: {
+          a: {
+            type: "object",
+            properties: {
+              b: { type: "object", properties: { c: { type: "string" } } },
+            },
+          },
+        },
+      },
+      fn: (args: any) => {
+        received = args;
+        return "ok";
+      },
+    });
+    expect(reg.wasFlattened("deep")).toBe(true);
+    // Some models may ignore the flat spec and emit nested args anyway.
+    await reg.dispatch("deep", '{"a":{"b":{"c":"hi"}}}');
+    expect(received).toEqual({ a: { b: { c: "hi" } } });
+  });
+
+  it("truncates oversized results when maxResultChars is set", async () => {
+    const reg = new ToolRegistry();
+    const big = "x".repeat(50_000);
+    reg.register({
+      name: "bloat",
+      parameters: { type: "object", properties: {} },
+      fn: () => big,
+    });
+    const out = await reg.dispatch("bloat", "{}", { maxResultChars: 1000 });
+    expect(out.length).toBeLessThan(2000);
+    expect(out).toMatch(/truncated/);
+  });
+
+  it("passes results through unchanged when maxResultChars is absent", async () => {
+    const reg = new ToolRegistry();
+    const big = "x".repeat(50_000);
+    reg.register({
+      name: "bloat",
+      parameters: { type: "object", properties: {} },
+      fn: () => big,
+    });
+    const out = await reg.dispatch("bloat", "{}");
+    expect(out.length).toBe(50_000);
+  });
+
+  it("autoFlatten:false opts out", () => {
+    const reg = new ToolRegistry({ autoFlatten: false });
+    reg.register({
+      name: "deep",
+      parameters: {
+        type: "object",
+        properties: {
+          a: {
+            type: "object",
+            properties: { b: { type: "object", properties: { c: { type: "string" } } } },
+          },
+        },
+      },
+      fn: () => "ok",
+    });
+    expect(reg.wasFlattened("deep")).toBe(false);
+    expect(reg.specs()[0]!.function.parameters.properties).toHaveProperty("a");
+  });
+
+  describe("tool interceptor", () => {
+    it("short-circuits dispatch when interceptor returns a string", async () => {
+      const reg = new ToolRegistry();
+      let fnCalled = false;
+      reg.register({
+        name: "edit_file",
+        fn: () => {
+          fnCalled = true;
+          return "should not run";
+        },
+      });
+      reg.setToolInterceptor((name) => (name === "edit_file" ? "queued" : null));
+      const out = await reg.dispatch("edit_file", '{"path":"foo"}');
+      expect(out).toBe("queued");
+      expect(fnCalled).toBe(false);
+    });
+
+    it("passes intercepted tool results through the result augmenter", async () => {
+      const reg = new ToolRegistry();
+      const seen: Array<{ name: string; result: string }> = [];
+      reg.register({ name: "edit_file", fn: () => "should not run" });
+      reg.addToolInterceptor("review-gate", () => "▸ edit blocks: 1/1 applied");
+      reg.setResultAugmenter((name, _args, result) => {
+        seen.push({ name, result });
+        return `${result}\naugmented`;
+      });
+
+      const out = await reg.dispatch("edit_file", '{"path":"src/app.ts"}');
+
+      expect(out).toBe("▸ edit blocks: 1/1 applied\naugmented");
+      expect(seen).toEqual([{ name: "edit_file", result: "▸ edit blocks: 1/1 applied" }]);
+    });
+
+    it("falls through to tool.fn when interceptor returns null", async () => {
+      const reg = new ToolRegistry();
+      reg.register({ name: "read_file", fn: () => "content" });
+      reg.setToolInterceptor(() => null);
+      const out = await reg.dispatch("read_file", "{}");
+      expect(out).toBe("content");
+    });
+
+    it("receives parsed args (including flattened→nested)", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "edit_file",
+        fn: () => "ok",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" }, search: { type: "string" } },
+          required: ["path"],
+        },
+      });
+      let seen: Record<string, unknown> | null = null;
+      reg.setToolInterceptor((_name, args) => {
+        seen = args;
+        return "captured";
+      });
+      await reg.dispatch("edit_file", '{"path":"a","search":"b"}');
+      expect(seen).toEqual({ path: "a", search: "b" });
+    });
+
+    it("does not fire in plan mode — plan-mode refusal wins", async () => {
+      const reg = new ToolRegistry();
+      let interceptorCalled = false;
+      reg.register({ name: "edit_file", fn: () => "ok" });
+      reg.setToolInterceptor(() => {
+        interceptorCalled = true;
+        return "queued";
+      });
+      reg.setPlanMode(true);
+      const out = await reg.dispatch("edit_file", '{"path":"x"}');
+      expect(JSON.parse(out).error).toMatch(/unavailable in plan mode/);
+      expect(interceptorCalled).toBe(false);
+    });
+
+    it("setToolInterceptor(null) clears a prior install", async () => {
+      const reg = new ToolRegistry();
+      reg.register({ name: "edit_file", fn: () => "fn-output" });
+      reg.setToolInterceptor(() => "queued");
+      expect(await reg.dispatch("edit_file", "{}")).toBe("queued");
+      reg.setToolInterceptor(null);
+      expect(await reg.dispatch("edit_file", "{}")).toBe("fn-output");
+    });
+
+    it("runs ordered interceptors before the legacy interceptor", async () => {
+      const reg = new ToolRegistry();
+      const seen: string[] = [];
+      reg.register({ name: "edit_file", fn: () => "ok" });
+      reg.addToolInterceptor("first", () => {
+        seen.push("first");
+        return null;
+      });
+      reg.addToolInterceptor("second", () => {
+        seen.push("second");
+        return "blocked";
+      });
+      reg.setToolInterceptor(() => {
+        seen.push("legacy");
+        return null;
+      });
+
+      const out = await reg.dispatch("edit_file", "{}");
+
+      expect(out).toBe("blocked");
+      expect(seen).toEqual(["first", "second"]);
+    });
+
+    it("can remove an ordered interceptor by id", async () => {
+      const reg = new ToolRegistry();
+      reg.register({ name: "edit_file", fn: () => "ok" });
+      const remove = reg.addToolInterceptor("blocker", () => "blocked");
+      remove();
+
+      const out = await reg.dispatch("edit_file", "{}");
+
+      expect(out).toBe("ok");
+    });
+
+    it("sharpens repeated identical interceptor rejections", async () => {
+      const reg = new ToolRegistry();
+      reg.register({ name: "multi_edit", fn: () => "ok" });
+      reg.addToolInterceptor("lifecycle", () =>
+        JSON.stringify({
+          error: "multi_edit blocked",
+          rejectedReason: "engineering-lifecycle",
+        }),
+      );
+
+      const first = JSON.parse(await reg.dispatch("multi_edit", '{"edits":[]}'));
+      const second = JSON.parse(await reg.dispatch("multi_edit", '{"edits":[]}'));
+
+      expect(first.consecutiveInterceptorRejection).toBeUndefined();
+      expect(second.consecutiveInterceptorRejection).toBe(true);
+      expect(second.error).toMatch(/do not retry identical args/);
+    });
+
+    it("sharpens repeated lifecycle gate rejections when JSON key order changes", async () => {
+      const lifecycle = new EngineeringLifecycleRuntime({ mode: "strict" });
+      const reg = new ToolRegistry();
+      reg.register({ name: "run_command", fn: () => "should not run" });
+      reg.addToolInterceptor("engineering-lifecycle", lifecycle.guardToolCall);
+
+      const first = JSON.parse(
+        await reg.dispatch("run_command", '{"command":"rm -rf dist","cwd":"/repo"}'),
+      );
+      const second = JSON.parse(
+        await reg.dispatch("run_command", '{"cwd":"/repo","command":"rm -rf dist"}'),
+      );
+
+      expect(first.rejectedReason).toBe("engineering-lifecycle");
+      expect(first.consecutiveInterceptorRejection).toBeUndefined();
+      expect(second.rejectedReason).toBe("engineering-lifecycle");
+      expect(second.consecutiveInterceptorRejection).toBe(true);
+      expect(second.error).toMatch(/do not retry identical args/);
+    });
+
+    it("sharpens repeated lifecycle gate rejections for high-risk call corpus", async () => {
+      const cases: Array<{ name: string; args: Record<string, unknown> }> = [
+        {
+          name: "multi_edit",
+          args: {
+            edits: [
+              { path: "src/a.ts", search: "a", replace: "b" },
+              { path: "src/b.ts", search: "a", replace: "b" },
+            ],
+          },
+        },
+        { name: "delete_file", args: { path: "src/old.ts" } },
+        { name: "run_command", args: { command: "npm install left-pad", cwd: "/repo" } },
+      ];
+
+      for (const item of cases) {
+        const lifecycle = new EngineeringLifecycleRuntime({ mode: "strict" });
+        const reg = new ToolRegistry();
+        reg.register({ name: item.name, fn: () => "should not run" });
+        reg.addToolInterceptor("engineering-lifecycle", lifecycle.guardToolCall);
+
+        const rawArgs = JSON.stringify(item.args);
+        const first = JSON.parse(await reg.dispatch(item.name, rawArgs));
+        const second = JSON.parse(await reg.dispatch(item.name, rawArgs));
+
+        expect(first.rejectedReason).toBe("engineering-lifecycle");
+        expect(first.consecutiveInterceptorRejection).toBeUndefined();
+        expect(second.rejectedReason).toBe("engineering-lifecycle");
+        expect(second.consecutiveInterceptorRejection).toBe(true);
+      }
+    });
+
+    it("sharpens repeated edit gate rejections from review-mode text", async () => {
+      const reg = new ToolRegistry();
+      reg.register({ name: "edit_file", fn: () => "should not run" });
+      reg.setToolInterceptor((name, args) => {
+        if (name !== "edit_file") return null;
+        return `User rejected this edit to ${String(args.path)}. Don't retry the same SEARCH/REPLACE; either try a different approach or ask the user what they want instead.`;
+      });
+
+      const rawArgs = JSON.stringify({
+        path: "src/app.ts",
+        search: "oldValue",
+        replace: "newValue",
+      });
+      const first = await reg.dispatch("edit_file", rawArgs);
+      const second = JSON.parse(await reg.dispatch("edit_file", rawArgs));
+
+      expect(first).toMatch(/User rejected this edit to src\/app\.ts/);
+      expect(second.rejectedReason).toBe("edit-gate");
+      expect(second.consecutiveInterceptorRejection).toBe(true);
+      expect(second.error).toMatch(/do not retry identical args/);
+      expect(second.error).toMatch(/different edit/);
+    });
+
+    it("surfaces interceptor throws as structured errors", async () => {
+      const reg = new ToolRegistry();
+      reg.register({ name: "edit_file", fn: () => "ok" });
+      reg.setToolInterceptor(() => {
+        throw new Error("boom");
+      });
+      const out = await reg.dispatch("edit_file", "{}");
+      expect(JSON.parse(out).error).toMatch(/interceptor failed — boom/);
+    });
+  });
+
+  describe("rate limit", () => {
+    it("does not consume quota for unknown tools", async () => {
+      const reg = new ToolRegistry({
+        rateLimit: { aggregate: { maxCalls: 1, windowSeconds: 60 }, tools: {} },
+      });
+      let calls = 0;
+      reg.register({ name: "ok", fn: () => String(++calls) });
+
+      await reg.dispatch("missing", "{}");
+      expect(await reg.dispatch("ok", "{}")).toBe("1");
+      expect(JSON.parse(await reg.dispatch("ok", "{}")).error).toBe("rate_limited");
+      expect(calls).toBe(1);
+    });
+
+    it("does not consume quota for malformed or missing required args", async () => {
+      const reg = new ToolRegistry({
+        rateLimit: { aggregate: { maxCalls: 1, windowSeconds: 60 }, tools: {} },
+      });
+      let calls = 0;
+      reg.register({
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+        fn: () => String(++calls),
+      });
+
+      await reg.dispatch("read_file", "{bad json");
+      await reg.dispatch("read_file", "{}");
+      expect(await reg.dispatch("read_file", '{"path":"a"}')).toBe("1");
+      expect(JSON.parse(await reg.dispatch("read_file", '{"path":"b"}')).error).toBe(
+        "rate_limited",
+      );
+      expect(calls).toBe(1);
+    });
+
+    it("does not consume quota for plan-mode refusals", async () => {
+      const reg = new ToolRegistry({
+        rateLimit: { aggregate: { maxCalls: 1, windowSeconds: 60 }, tools: {} },
+      });
+      let calls = 0;
+      reg.register({ name: "edit_file", fn: () => String(++calls) });
+
+      reg.setPlanMode(true);
+      await reg.dispatch("edit_file", "{}");
+      reg.setPlanMode(false);
+
+      expect(await reg.dispatch("edit_file", "{}")).toBe("1");
+      expect(JSON.parse(await reg.dispatch("edit_file", "{}")).error).toBe("rate_limited");
+      expect(calls).toBe(1);
+    });
+
+    it("does not consume quota for interceptor short-circuits", async () => {
+      const reg = new ToolRegistry({
+        rateLimit: { aggregate: { maxCalls: 1, windowSeconds: 60 }, tools: {} },
+      });
+      let calls = 0;
+      reg.register({ name: "edit_file", fn: () => String(++calls) });
+      reg.setToolInterceptor(() => "queued");
+
+      expect(await reg.dispatch("edit_file", "{}")).toBe("queued");
+      reg.setToolInterceptor(null);
+      expect(await reg.dispatch("edit_file", "{}")).toBe("1");
+      expect(JSON.parse(await reg.dispatch("edit_file", "{}")).error).toBe("rate_limited");
+      expect(calls).toBe(1);
+    });
+
+    it("consumes quota before the tool fn awaits", async () => {
+      const reg = new ToolRegistry({
+        rateLimit: { aggregate: { maxCalls: 1, windowSeconds: 60 }, tools: {} },
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      reg.register({
+        name: "slow",
+        fn: async () => {
+          await gate;
+          return "done";
+        },
+      });
+
+      const first = reg.dispatch("slow", "{}");
+      const second = reg.dispatch("slow", "{}");
+      release();
+
+      expect(JSON.parse(await second).error).toBe("rate_limited");
+      expect(await first).toBe("done");
+    });
+
+    it("does not call fn or audit when rate-limited", async () => {
+      const reg = new ToolRegistry({
+        rateLimit: { aggregate: { maxCalls: 1, windowSeconds: 60 }, tools: {} },
+      });
+      let calls = 0;
+      const audit: string[] = [];
+      reg.register({ name: "echo", fn: () => String(++calls) });
+      reg.setAuditListener((event) => audit.push(event.name));
+
+      expect(await reg.dispatch("echo", "{}")).toBe("1");
+      const blocked = JSON.parse(await reg.dispatch("echo", "{}"));
+
+      expect(blocked).toMatchObject({ error: "rate_limited", tool: "echo" });
+      expect(calls).toBe(1);
+      expect(audit).toEqual(["echo"]);
+    });
+  });
+
+  describe("isParallelSafe", () => {
+    it("returns true when the tool opts in", () => {
+      const reg = new ToolRegistry();
+      reg.register({ name: "read_thing", parallelSafe: true, fn: () => "ok" });
+      expect(reg.isParallelSafe("read_thing")).toBe(true);
+    });
+
+    it("defaults to false on unannotated tools", () => {
+      const reg = new ToolRegistry();
+      reg.register({ name: "do_thing", fn: () => "ok" });
+      expect(reg.isParallelSafe("do_thing")).toBe(false);
+    });
+
+    it("returns false for unknown tools", () => {
+      const reg = new ToolRegistry();
+      expect(reg.isParallelSafe("nope")).toBe(false);
+    });
+  });
+
+  describe("required parameter validation", () => {
+    it("returns a structured error when a required param is missing entirely", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "read_file",
+        description: "read a file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path to read." },
+          },
+          required: ["path"],
+        },
+        fn: ({ path }: { path: string }) => `read ${path}`,
+      });
+      const out = await reg.dispatch("read_file", "{}");
+      expect(JSON.parse(out).error).toMatch(/missing required parameter "path"/);
+    });
+
+    it("lets the tool fn handle empty string — JSON Schema required only checks presence, not emptiness", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+          },
+          required: ["path"],
+        },
+        fn: ({ path }: { path: string }) => `read ${path}`,
+      });
+      const out = await reg.dispatch("read_file", '{"path": ""}');
+      expect(out).toBe("read ");
+    });
+
+    it("passes through when all required params are present and non-empty", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+          },
+          required: ["path"],
+        },
+        fn: ({ path }: { path: string }) => `read ${path}`,
+      });
+      const out = await reg.dispatch("read_file", '{"path": "/foo/bar.ts"}');
+      expect(out).toBe("read /foo/bar.ts");
+    });
+
+    it("skips validation when the schema has no required list (all params optional)", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "optional_tool",
+        parameters: {
+          type: "object",
+          properties: {
+            msg: { type: "string" },
+          },
+        },
+        fn: () => "ok",
+      });
+      const out = await reg.dispatch("optional_tool", "{}");
+      expect(out).toBe("ok");
+    });
+
+    it("passes through when required param is a nested object (not a string)", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "write_file",
+        parameters: {
+          type: "object",
+          properties: {
+            file: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                content: { type: "string" },
+              },
+            },
+          },
+          required: ["file"],
+        },
+        fn: ({ file }: { file: { path: string; content: string } }) => `wrote ${file.path}`,
+      });
+      const out = await reg.dispatch("write_file", '{"file": {"path": "/foo", "content": "hi"}}');
+      expect(out).toBe("wrote /foo");
+    });
+  });
+
+  describe("malformed-args storm guard (issue #651)", () => {
+    function readFileReg(): ToolRegistry {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+        fn: ({ path }: { path: string }) => `read ${path}`,
+      });
+      return reg;
+    }
+
+    it("first malformed call returns the normal missing-param error", async () => {
+      const reg = readFileReg();
+      const out = await reg.dispatch("read_file", "{}");
+      const parsed = JSON.parse(out);
+      expect(parsed.error).toMatch(/missing required parameter "path"/);
+      expect(parsed.consecutiveMalformed).toBeUndefined();
+    });
+
+    it("2nd consecutive identical malformed call short-circuits with a sharper error", async () => {
+      const reg = readFileReg();
+      await reg.dispatch("read_file", "{}");
+      const out = await reg.dispatch("read_file", "{}");
+      const parsed = JSON.parse(out);
+      expect(parsed.consecutiveMalformed).toBe(true);
+      expect(parsed.error).toMatch(/DO NOT retry with identical args/);
+    });
+
+    it("a successful call between two malformed ones clears the streak", async () => {
+      const reg = readFileReg();
+      await reg.dispatch("read_file", "{}"); // 1st malformed
+      await reg.dispatch("read_file", '{"path": "ok.txt"}'); // success — clears
+      const out = await reg.dispatch("read_file", "{}"); // 1st-again, NOT 2nd-consecutive
+      const parsed = JSON.parse(out);
+      expect(parsed.consecutiveMalformed).toBeUndefined();
+    });
+
+    it("different malformed args to the same tool do not trip the guard", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "edit",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" }, body: { type: "string" } },
+          required: ["path", "body"],
+        },
+        fn: () => "edited",
+      });
+      await reg.dispatch("edit", '{"path": "x"}'); // missing body
+      const out = await reg.dispatch("edit", '{"body": "y"}'); // missing path — different shape
+      const parsed = JSON.parse(out);
+      expect(parsed.consecutiveMalformed).toBeUndefined();
+    });
+
+    it("invalid JSON, identical twice, also short-circuits", async () => {
+      const reg = readFileReg();
+      await reg.dispatch("read_file", "{not json");
+      const out = await reg.dispatch("read_file", "{not json");
+      const parsed = JSON.parse(out);
+      expect(parsed.consecutiveMalformed).toBe(true);
+      expect(parsed.error).toMatch(/invalid tool arguments JSON/);
+    });
+
+    it("per-tool tracking — malformed read_file does not affect a separate edit_file tool", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+        fn: () => "r",
+      });
+      reg.register({
+        name: "edit_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+        fn: () => "e",
+      });
+      await reg.dispatch("read_file", "{}");
+      const out = await reg.dispatch("edit_file", "{}"); // first time for edit_file
+      const parsed = JSON.parse(out);
+      expect(parsed.consecutiveMalformed).toBeUndefined();
+    });
+  });
+
+  describe("isReadOnlyCall — buggy readOnlyCheck", () => {
+    it("warns when readOnlyCheck throws and treats the call as not read-only", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "buggy_tool",
+        readOnlyCheck: () => {
+          throw new Error("check is buggy");
+        },
+        fn: () => "ok",
+      });
+      reg.setPlanMode(true);
+      const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const out = await reg.dispatch("buggy_tool", "{}");
+        expect(JSON.parse(out).error).toMatch(/unavailable in plan mode/);
+        const writes = writeSpy.mock.calls.map((c) => String(c[0]));
+        expect(
+          writes.some((w) => w.includes("readOnlyCheck for buggy_tool threw: check is buggy")),
+        ).toBe(true);
+      } finally {
+        writeSpy.mockRestore();
+      }
+    });
+
+    it("stays silent when readOnlyCheck succeeds", async () => {
+      const reg = new ToolRegistry();
+      reg.register({
+        name: "good_tool",
+        readOnlyCheck: () => true,
+        fn: () => "ok",
+      });
+      reg.setPlanMode(true);
+      const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await reg.dispatch("good_tool", "{}");
+        const writes = writeSpy.mock.calls.map((c) => String(c[0]));
+        expect(writes.some((w) => w.includes("readOnlyCheck for"))).toBe(false);
+      } finally {
+        writeSpy.mockRestore();
+      }
+    });
+  });
+});

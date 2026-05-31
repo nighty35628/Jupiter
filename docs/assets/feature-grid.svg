@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 570" role="img" aria-label="Jupiter capability grid — twelve features covering renderer, MCP, plan mode, permissions, dashboard, sessions, hooks, semantic search, checkpoints, effort knob, replay, event log">
+  <title>Jupiter capabilities</title>
+  <defs>
+    <style>
+      .sans { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; }
+      .ttl  { font-weight: 700; }
+    </style>
+    <linearGradient id="ig" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#5eead4"/>
+      <stop offset="50%" stop-color="#93c5fd"/>
+      <stop offset="100%" stop-color="#c4b5fd"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(10, 10)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">◈</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Cell-diff renderer</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">Custom TUI on Yoga, no Ink.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Wide-char · emoji · paste · resize-clean.</text>
+  </g>
+  <g transform="translate(300, 10)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">⊕</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">MCP first-class</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">stdio · Streamable HTTP transports.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Tools, resources, prompts.</text>
+  </g>
+  <g transform="translate(590, 10)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">✎</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Plan mode</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">Review proposed edits before writes.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Plan checkpoints persist across runs.</text>
+  </g>
+
+  <g transform="translate(10, 150)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">⊞</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Permissions</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">allow · ask · deny per tool.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Granular shell rules. Teachable.</text>
+  </g>
+  <g transform="translate(300, 150)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">▣</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Embedded dashboard</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">Live cache hit · cost · session timeline</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">· MCP health. localhost companion.</text>
+  </g>
+  <g transform="translate(590, 150)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">⌨</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Persistent sessions</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">Per-workspace, named, resumable.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">--resume restores state fully.</text>
+  </g>
+
+  <g transform="translate(10, 290)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">⚙</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Hooks · skills · memory</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">Shell on lifecycle events.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Skill packs + project memory.</text>
+  </g>
+  <g transform="translate(300, 290)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">◎</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Semantic search</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">jupiter index builds embeddings.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Local Ollama or DeepSeek-hosted.</text>
+  </g>
+  <g transform="translate(590, 290)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">↺</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Auto-checkpoints</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">Cursor-style session-scoped rollback.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Never pollutes git history.</text>
+  </g>
+
+  <g transform="translate(10, 430)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">◐</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">/effort knob</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">Switch reasoning depth per turn.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Slash command and CLI flag.</text>
+  </g>
+  <g transform="translate(300, 430)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">▶</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Transcript replay</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">jupiter replay re-renders sessions.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Bug reports, demos, audits.</text>
+  </g>
+  <g transform="translate(590, 430)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">¶</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Event log</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">events.jsonl sidecar + reducers.</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Build dashboards or analytics.</text>
+  </g>
+</svg>

@@ -1,0 +1,1478 @@
+/** Dashboard server — token/CSRF gates, endpoint shapes, permissions CRUD against a real http server. */
+
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { addProjectShellAllowed, loadProjectShellAllowed, readConfig } from "../src/config.js";
+import type { DashboardContext } from "../src/server/context.js";
+import {
+  type DashboardServerHandle,
+  constantTimeEquals,
+  startDashboardServer,
+} from "../src/server/index.js";
+import { ToolRegistry } from "../src/tools.js";
+
+interface FetchResult {
+  status: number;
+  body: any;
+  headers: Headers;
+}
+
+async function call(
+  url: string,
+  opts: { method?: string; token?: string; tokenInHeader?: boolean; body?: unknown } = {},
+): Promise<FetchResult> {
+  const method = opts.method ?? "GET";
+  const u = new URL(url);
+  if (opts.token && !opts.tokenInHeader) {
+    u.searchParams.set("token", opts.token);
+  }
+  const headers: Record<string, string> = {};
+  if (opts.token && opts.tokenInHeader) {
+    headers["X-Jupiter-Token"] = opts.token;
+  }
+  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(u.toString(), {
+    method,
+    headers,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+  });
+  const text = await res.text();
+  let parsed: any = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = text;
+  }
+  return { status: res.status, body: parsed, headers: res.headers };
+}
+
+describe("constantTimeEquals", () => {
+  it("returns true for matching strings", () => {
+    expect(constantTimeEquals("abc", "abc")).toBe(true);
+  });
+  it("returns false for length mismatch (short-circuit)", () => {
+    expect(constantTimeEquals("abc", "abcd")).toBe(false);
+  });
+  it("returns false for content mismatch", () => {
+    expect(constantTimeEquals("abc", "abd")).toBe(false);
+  });
+});
+
+describe("dashboard server: auth + CSRF", () => {
+  let dir: string;
+  let cfgPath: string;
+  let usagePath: string;
+  let handle: DashboardServerHandle | null = null;
+  const TOKEN = "deadbeefcafebabe1234567890abcdefdeadbeefcafebabe1234567890abcdef";
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "jupiter-dashtest-"));
+    cfgPath = join(dir, "config.json");
+    usagePath = join(dir, "usage.jsonl");
+    handle = await startDashboardServer(
+      {
+        mode: "standalone",
+        configPath: cfgPath,
+        usageLogPath: usagePath,
+      },
+      { token: TOKEN },
+    );
+  });
+
+  afterEach(async () => {
+    await handle?.close();
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects /api/overview without a token", async () => {
+    const r = await call(`${handle!.url.split("?")[0]}api/overview`);
+    expect(r.status).toBe(401);
+    expect(r.body.error).toMatch(/token/i);
+  });
+
+  it("accepts /api/overview with token in query", async () => {
+    const r = await call(`${handle!.url.split("?")[0]}api/overview`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.mode).toBe("standalone");
+    expect(typeof r.body.version).toBe("string");
+  });
+
+  it("accepts /api/overview with token in header", async () => {
+    const r = await call(`${handle!.url.split("?")[0]}api/overview`, {
+      token: TOKEN,
+      tokenInHeader: true,
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it("rejects POST mutations when token is in query (CSRF defence)", async () => {
+    // Add an entry first via the helper so the project has something to
+    // be mutated against. Mutations require codeRoot anyway, so this
+    // ALSO doubles as the standalone-mode rejection test.
+    addProjectShellAllowed("/some/proj", "lint", cfgPath);
+    const r = await call(`${handle!.url.split("?")[0]}api/permissions`, {
+      method: "POST",
+      token: TOKEN,
+      // tokenInHeader: false → token only in query
+      body: { prefix: "test" },
+    });
+    expect(r.status).toBe(403);
+    expect(r.body.error).toMatch(/CSRF|header/i);
+  });
+
+  it("rejects POST mutations with no token", async () => {
+    const r = await call(`${handle!.url.split("?")[0]}api/permissions`, {
+      method: "POST",
+      body: { prefix: "test" },
+    });
+    expect(r.status).toBe(403);
+  });
+
+  it("rejects /api with a wrong token (constant-time mismatch)", async () => {
+    const r = await call(`${handle!.url.split("?")[0]}api/overview`, {
+      token: "0".repeat(TOKEN.length),
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it("404s an unknown endpoint (token-gated)", async () => {
+    const r = await call(`${handle!.url.split("?")[0]}api/nonsuch`, { token: TOKEN });
+    expect(r.status).toBe(404);
+  });
+
+  it("405s on wrong method (e.g. POST overview)", async () => {
+    const r = await call(`${handle!.url.split("?")[0]}api/overview`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: {},
+    });
+    expect(r.status).toBe(405);
+  });
+});
+
+describe("dashboard server: endpoints", () => {
+  let dir: string;
+  let cfgPath: string;
+  let usagePath: string;
+  let handle: DashboardServerHandle | null = null;
+  const TOKEN = "f".repeat(64);
+  const PROJ = "/test/project";
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "jupiter-dash-ep-"));
+    cfgPath = join(dir, "config.json");
+    usagePath = join(dir, "usage.jsonl");
+  });
+
+  afterEach(async () => {
+    await handle?.close();
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function boot(extra: Partial<DashboardContext> = {}): Promise<string> {
+    handle = await startDashboardServer(
+      {
+        mode: "attached",
+        configPath: cfgPath,
+        usageLogPath: usagePath,
+        ...extra,
+      },
+      { token: TOKEN },
+    );
+    return handle.url.split("?")[0]!;
+  }
+
+  it("GET /api/overview returns the live overview shape", async () => {
+    const tools = new ToolRegistry();
+    const base = await boot({
+      tools,
+      getCurrentCwd: () => PROJ,
+      getEditMode: () => "review",
+      getPlanMode: () => false,
+      getPendingEditCount: () => 0,
+    });
+    const r = await call(`${base}api/overview`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.mode).toBe("attached");
+    expect(r.body.cwd).toBe(PROJ);
+    expect(r.body.editMode).toBe("review");
+    expect(r.body.planMode).toBe(false);
+    expect(r.body.pendingEdits).toBe(0);
+    expect(r.body.toolCount).toBe(0);
+    expect(r.body.cockpit).toBeDefined();
+    expect(r.body.cockpit.balance).toBeNull();
+    expect(r.body.cockpit.tokens7d).toBeNull();
+    expect(r.body.cockpit.currentSession).toBeNull();
+  });
+
+  it("GET /api/usage returns aggregateUsage + record count", async () => {
+    const base = await boot();
+    const r = await call(`${base}api/usage`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.recordCount).toBe(0);
+    expect(r.body.buckets).toHaveLength(4);
+    expect(r.body.byModel).toEqual([]);
+  });
+
+  it("GET /api/tools returns 503 in standalone mode", async () => {
+    handle = await startDashboardServer(
+      { mode: "standalone", configPath: cfgPath, usageLogPath: usagePath },
+      { token: TOKEN },
+    );
+    const base = handle.url.split("?")[0]!;
+    const r = await call(`${base}api/tools`, { token: TOKEN });
+    expect(r.status).toBe(503);
+    expect(r.body.available).toBe(false);
+  });
+
+  it("GET /api/semantic reports incompatible on-disk index against current config", async () => {
+    const proj = mkdtempSync(join(tmpdir(), "jupiter-dash-sem-"));
+    try {
+      const semanticDir = join(proj, ".jupiter", "semantic");
+      await mkdir(semanticDir, { recursive: true });
+      await writeFile(
+        cfgPath,
+        JSON.stringify({
+          semantic: {
+            provider: "openai-compat",
+            openaiCompat: {
+              baseUrl: "https://api.example.com/v1/embeddings",
+              apiKey: "sk-openai1234567890abcd",
+              model: "bge-m3",
+            },
+          },
+        }),
+        "utf8",
+      );
+      await writeFile(
+        join(semanticDir, "index.meta.json"),
+        JSON.stringify({
+          version: 1,
+          provider: "ollama",
+          model: "nomic-embed-text",
+          dim: 768,
+          updatedAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+      await writeFile(join(semanticDir, "index.jsonl"), "", "utf8");
+
+      const base = await boot({ getCurrentCwd: () => proj });
+      const r = await call(`${base}api/semantic`, { token: TOKEN });
+      expect(r.status).toBe(200);
+      expect(r.body.index.exists).toBe(true);
+      expect(r.body.index.compatible).toBe(false);
+      expect(r.body.index.mismatch).toBe("provider");
+      expect(r.body.index.builtWith.provider).toBe("ollama");
+      expect(r.body.index.current.provider).toBe("openai-compat");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/tools enumerates registered tools when attached", async () => {
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "echo",
+      description: "echoes back",
+      readOnly: true,
+      parameters: { type: "object", properties: {} },
+      fn: async () => "ok",
+    });
+    const base = await boot({ tools });
+    const r = await call(`${base}api/tools`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.total).toBe(1);
+    expect(r.body.tools[0].name).toBe("echo");
+    expect(r.body.tools[0].readOnly).toBe(true);
+  });
+
+  it("GET /api/skills lists and edits flat-format project skills (#586)", async () => {
+    const proj = mkdtempSync(join(tmpdir(), "jupiter-dash-skills-"));
+    try {
+      const skillsDir = join(proj, ".jupiter", "skills");
+      const folderDir = join(skillsDir, "folder-skill");
+      const flatPath = join(skillsDir, "flat-skill.md");
+      await mkdir(folderDir, { recursive: true });
+      await writeFile(
+        join(folderDir, "SKILL.md"),
+        "---\ndescription: Folder skill\n---\nfolder body\n",
+        "utf8",
+      );
+      await writeFile(flatPath, "---\ndescription: Flat skill\n---\nflat body\n", "utf8");
+      await writeFile(join(skillsDir, "notes.txt"), "not a skill\n", "utf8");
+
+      const audited: Array<{ action: string; payload?: unknown }> = [];
+      const base = await boot({
+        getCurrentCwd: () => proj,
+        audit: (e) => audited.push({ action: e.action, payload: e.payload }),
+      });
+
+      const list = await call(`${base}api/skills`, { token: TOKEN });
+      expect(list.status).toBe(200);
+      expect(list.body.project.map((s: { name: string }) => s.name)).toEqual([
+        "flat-skill",
+        "folder-skill",
+      ]);
+      const flat = list.body.project.find((s: { name: string }) => s.name === "flat-skill");
+      expect(flat).toMatchObject({
+        name: "flat-skill",
+        scope: "project",
+        description: "Flat skill",
+        path: flatPath,
+      });
+
+      const read = await call(`${base}api/skills/project/flat-skill`, { token: TOKEN });
+      expect(read.status).toBe(200);
+      expect(read.body.path).toBe(flatPath);
+      expect(read.body.body).toContain("flat body");
+
+      const updated = "---\ndescription: Flat skill updated\n---\nnew body\n";
+      const save = await call(`${base}api/skills/project/flat-skill`, {
+        method: "POST",
+        token: TOKEN,
+        tokenInHeader: true,
+        body: { body: updated },
+      });
+      expect(save.status).toBe(200);
+      expect(save.body.path).toBe(flatPath);
+      expect(await readFile(flatPath, "utf8")).toBe(updated);
+
+      const del = await call(`${base}api/skills/project/flat-skill`, {
+        method: "DELETE",
+        token: TOKEN,
+        tokenInHeader: true,
+      });
+      expect(del.status).toBe(200);
+      expect(existsSync(flatPath)).toBe(false);
+      expect(audited.map((e) => e.action)).toEqual(["save-skill", "delete-skill"]);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/skills returns custom skills and path status", async () => {
+    const proj = mkdtempSync(join(tmpdir(), "jupiter-dash-skills-custom-proj-"));
+    const custom = mkdtempSync(join(tmpdir(), "jupiter-dash-skills-custom-"));
+    try {
+      await writeFile(
+        cfgPath,
+        JSON.stringify({ skills: { paths: [custom, join(proj, "missing")] } }),
+        "utf8",
+      );
+      await mkdir(join(custom, "custom-skill"), { recursive: true });
+      await writeFile(
+        join(custom, "custom-skill", "SKILL.md"),
+        "---\ndescription: Custom skill\n---\ncustom body\n",
+        "utf8",
+      );
+      const base = await boot({ getCurrentCwd: () => proj });
+      const list = await call(`${base}api/skills`, { token: TOKEN });
+      expect(list.status).toBe(200);
+      expect(list.body.custom.map((s: { name: string }) => s.name)).toEqual(["custom-skill"]);
+      expect(list.body.paths.custom.map((p: { status: string }) => p.status)).toEqual([
+        "ok",
+        "missing",
+      ]);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+      rmSync(custom, { recursive: true, force: true });
+    }
+  });
+
+  it("POST /api/skills rejects content missing a description frontmatter line (#583)", async () => {
+    const proj = mkdtempSync(join(tmpdir(), "jupiter-dash-skills-desc-"));
+    try {
+      const audited: Array<{ action: string }> = [];
+      const base = await boot({
+        getCurrentCwd: () => proj,
+        audit: (e) => audited.push({ action: e.action }),
+      });
+      const target = join(proj, ".jupiter", "skills", "silent-fail", "SKILL.md");
+
+      const noFrontmatter = await call(`${base}api/skills/project/silent-fail`, {
+        method: "POST",
+        token: TOKEN,
+        tokenInHeader: true,
+        body: { body: "# just a body, no frontmatter\n" },
+      });
+      expect(noFrontmatter.status).toBe(400);
+      expect(noFrontmatter.body.error).toMatch(/description/);
+
+      const blankDesc = await call(`${base}api/skills/project/silent-fail`, {
+        method: "POST",
+        token: TOKEN,
+        tokenInHeader: true,
+        body: { body: "---\nname: silent-fail\ndescription:   \n---\nbody\n" },
+      });
+      expect(blankDesc.status).toBe(400);
+      expect(existsSync(target)).toBe(false);
+
+      const ok = await call(`${base}api/skills/project/silent-fail`, {
+        method: "POST",
+        token: TOKEN,
+        tokenInHeader: true,
+        body: { body: "---\ndescription: does the thing\n---\nbody\n" },
+      });
+      expect(ok.status).toBe(200);
+      expect(existsSync(target)).toBe(true);
+      expect(audited.map((e) => e.action)).toEqual(["save-skill"]);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/permissions lists builtin always; project list when cwd is set", async () => {
+    addProjectShellAllowed(PROJ, "npm run build", cfgPath);
+    const base = await boot({ getCurrentCwd: () => PROJ, getEditMode: () => "review" });
+    const r = await call(`${base}api/permissions`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.builtin.length).toBeGreaterThan(10); // we ship 30+ builtin entries
+    expect(r.body.project).toContain("npm run build");
+    expect(r.body.editMode).toBe("review");
+  });
+
+  it("POST /api/permissions adds a prefix and audits the action", async () => {
+    const audited: Array<{ action: string; payload?: unknown }> = [];
+    const base = await boot({
+      getCurrentCwd: () => PROJ,
+      getEditMode: () => "review",
+      audit: (e) => audited.push({ action: e.action, payload: e.payload }),
+    });
+    const r = await call(`${base}api/permissions`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { prefix: "deploy.sh" },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.added).toBe(true);
+    expect(loadProjectShellAllowed(PROJ, cfgPath)).toContain("deploy.sh");
+    expect(audited[0]?.action).toBe("add-allowlist");
+  });
+
+  it("POST /api/permissions rejects a builtin entry (409)", async () => {
+    const base = await boot({ getCurrentCwd: () => PROJ });
+    const r = await call(`${base}api/permissions`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { prefix: "git status" },
+    });
+    expect(r.status).toBe(409);
+  });
+
+  it("DELETE /api/permissions removes a prefix", async () => {
+    addProjectShellAllowed(PROJ, "deploy.sh", cfgPath);
+    const base = await boot({ getCurrentCwd: () => PROJ });
+    const r = await call(`${base}api/permissions`, {
+      method: "DELETE",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { prefix: "deploy.sh" },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.removed).toBe(true);
+    expect(loadProjectShellAllowed(PROJ, cfgPath)).not.toContain("deploy.sh");
+  });
+
+  it("POST /api/permissions/clear without confirm:true returns 400", async () => {
+    addProjectShellAllowed(PROJ, "x", cfgPath);
+    const base = await boot({ getCurrentCwd: () => PROJ });
+    const r = await call(`${base}api/permissions/clear`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: {},
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("POST /api/permissions/clear with confirm:true wipes the project list", async () => {
+    addProjectShellAllowed(PROJ, "x", cfgPath);
+    addProjectShellAllowed(PROJ, "y", cfgPath);
+    const base = await boot({ getCurrentCwd: () => PROJ });
+    const r = await call(`${base}api/permissions/clear`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { confirm: true },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.dropped).toBe(2);
+    expect(loadProjectShellAllowed(PROJ, cfgPath)).toEqual([]);
+  });
+
+  it("Permissions mutations refuse without a current project (503)", async () => {
+    const base = await boot({}); // no getCurrentCwd
+    const r = await call(`${base}api/permissions`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { prefix: "x" },
+    });
+    expect(r.status).toBe(503);
+  });
+});
+
+describe("dashboard server: SPA shell", () => {
+  let handle: DashboardServerHandle | null = null;
+  let dir: string;
+  const TOKEN = "a".repeat(64);
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "jupiter-dash-spa-"));
+    handle = await startDashboardServer(
+      {
+        mode: "standalone",
+        configPath: join(dir, "config.json"),
+        usageLogPath: join(dir, "usage.jsonl"),
+      },
+      { token: TOKEN },
+    );
+  });
+
+  afterEach(async () => {
+    await handle?.close();
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("GET / serves index.html with the token + mode injected", async () => {
+    const r = await call(handle!.url, { token: TOKEN });
+    expect(r.status).toBe(200);
+    const html = String(r.body);
+    expect(html).toContain(TOKEN); // token interpolated into <meta>
+    expect(html).toContain("standalone"); // mode interpolated
+    expect(html).toContain("<title>Jupiter</title>");
+  });
+
+  it("rendered index.html replaces ALL token placeholders, not just the first", async () => {
+    // Regression: String.replace(s, r) only swaps the first occurrence.
+    // The HTML template has __JUPITER_TOKEN__ in three spots (meta,
+    // css href, script src). Browser hits 401 on every asset fetch
+    // when only the meta tag gets the real token.
+    const r = await call(handle!.url, { token: TOKEN });
+    const html = String(r.body);
+    expect(html).not.toContain("__JUPITER_TOKEN__");
+    expect(html).not.toContain("__JUPITER_MODE__");
+    // Sanity: every asset URL should embed the live token, not the placeholder.
+    const assetMatches = html.match(/\/assets\/[^"]+/g) ?? [];
+    for (const url of assetMatches) {
+      expect(url).toContain(`token=${TOKEN}`);
+    }
+  });
+
+  it("GET /assets/app.js requires the token", async () => {
+    const noToken = await call(`${handle!.url.split("?")[0]}assets/app.js`);
+    expect(noToken.status).toBe(401);
+  });
+
+  const dashAppExists = existsSync(join(process.cwd(), "dashboard", "dist", "app.js"));
+  (dashAppExists ? it : it.skip)("GET /assets/app.js serves the script when authed", async () => {
+    const r = await call(`${handle!.url.split("?")[0]}assets/app.js`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toMatch(/javascript/);
+  });
+});
+
+describe("dashboard server: chat bridge", () => {
+  let dir: string;
+  let cfgPath: string;
+  let usagePath: string;
+  let handle: DashboardServerHandle | null = null;
+  const TOKEN = "c".repeat(64);
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "jupiter-dash-chat-"));
+    cfgPath = join(dir, "config.json");
+    usagePath = join(dir, "usage.jsonl");
+  });
+
+  afterEach(async () => {
+    await handle?.close();
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function boot(extra: Partial<DashboardContext> = {}): Promise<string> {
+    handle = await startDashboardServer(
+      {
+        mode: "attached",
+        configPath: cfgPath,
+        usageLogPath: usagePath,
+        ...extra,
+      },
+      { token: TOKEN },
+    );
+    return handle.url.split("?")[0]!;
+  }
+
+  it("GET /api/messages returns the snapshot from getMessages()", async () => {
+    const base = await boot({
+      getMessages: () => [
+        { id: "u1", role: "user", text: "hello" },
+        { id: "a1", role: "assistant", text: "hi" },
+      ],
+      isBusy: () => false,
+    });
+    const r = await call(`${base}api/messages`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.messages).toHaveLength(2);
+    expect(r.body.messages[0].text).toBe("hello");
+    expect(r.body.busy).toBe(false);
+  });
+
+  it("GET /api/messages returns [] when no callback wired (standalone)", async () => {
+    const base = await boot({});
+    const r = await call(`${base}api/messages`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.messages).toEqual([]);
+  });
+
+  it("POST /api/submit accepts a prompt when not busy", async () => {
+    const submitted: string[] = [];
+    const base = await boot({
+      isBusy: () => false,
+      submitPrompt: (text) => {
+        submitted.push(text);
+        return { accepted: true };
+      },
+    });
+    const r = await call(`${base}api/submit`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { prompt: "build me a thing" },
+    });
+    expect(r.status).toBe(202);
+    expect(r.body.accepted).toBe(true);
+    expect(submitted).toEqual(["build me a thing"]);
+  });
+
+  it("POST /api/submit returns 409 when the loop is busy", async () => {
+    const base = await boot({
+      submitPrompt: () => ({ accepted: false, reason: "loop is busy" }),
+    });
+    const r = await call(`${base}api/submit`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { prompt: "x" },
+    });
+    expect(r.status).toBe(409);
+    expect(r.body.accepted).toBe(false);
+    expect(r.body.reason).toMatch(/busy/i);
+  });
+
+  it("POST /api/submit rejects empty prompts (400)", async () => {
+    const base = await boot({ submitPrompt: () => ({ accepted: true }) });
+    const r = await call(`${base}api/submit`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { prompt: "   " },
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("POST /api/submit returns 503 when no submitPrompt callback wired", async () => {
+    const base = await boot({});
+    const r = await call(`${base}api/submit`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { prompt: "x" },
+    });
+    expect(r.status).toBe(503);
+  });
+
+  it("POST /api/abort fires the abortTurn callback", async () => {
+    let aborted = 0;
+    const base = await boot({ abortTurn: () => aborted++ });
+    const r = await call(`${base}api/abort`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+    });
+    expect(r.status).toBe(202);
+    expect(aborted).toBe(1);
+  });
+
+  it("GET /api/events streams events from subscribeEvents", async () => {
+    let activeHandler: ((ev: any) => void) | null = null;
+    const base = await boot({
+      isBusy: () => false,
+      subscribeEvents: (h) => {
+        activeHandler = h;
+        return () => {
+          activeHandler = null;
+        };
+      },
+    });
+
+    // Open SSE in a fetch request — abort signal lets us close it.
+    const ac = new AbortController();
+    const res = await fetch(`${base}api/events?token=${TOKEN}`, {
+      signal: ac.signal,
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/event-stream/);
+    expect(activeHandler).not.toBeNull();
+
+    // Read one chunk — should contain the bootstrapping busy-change
+    // frame the SSE handler emits to seed initial client state.
+    const reader = res.body!.getReader();
+    const { value: firstChunk } = await reader.read();
+    const firstText = new TextDecoder().decode(firstChunk!);
+    expect(firstText).toContain("busy-change");
+
+    // Push a synthetic event, expect the next chunk to contain it.
+    activeHandler!({ kind: "info", id: "x", text: "hello world" });
+    const { value: secondChunk } = await reader.read();
+    const secondText = new TextDecoder().decode(secondChunk!);
+    expect(secondText).toContain("hello world");
+
+    // Tear down. Disconnect cleanup is an integration concern not
+    // worth a flaky timing-dependent assertion; the events.ts cleanup
+    // logic is straightforward (unsubscribe in `req.on("close")`).
+    reader.cancel().catch(() => undefined);
+    ac.abort();
+  });
+
+  it("GET /api/events replays the active modal so mid-modal connects see the gate (#1770)", async () => {
+    const base = await boot({
+      isBusy: () => false,
+      subscribeEvents: () => () => undefined,
+      getActiveModal: () => ({
+        kind: "shell",
+        command: "npm install",
+        allowPrefix: "npm",
+        shellKind: "stdin",
+      }),
+    });
+    const ac = new AbortController();
+    const res = await fetch(`${base}api/events?token=${TOKEN}`, { signal: ac.signal });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    let combined = "";
+    for (let i = 0; i < 3 && !combined.includes("modal-up"); i++) {
+      const { value } = await reader.read();
+      if (value) combined += new TextDecoder().decode(value);
+    }
+    expect(combined).toContain("modal-up");
+    expect(combined).toContain("npm install");
+    reader.cancel().catch(() => undefined);
+    ac.abort();
+  });
+
+  it("GET /api/events without a subscribeEvents callback returns 503", async () => {
+    const base = await boot({});
+    const r = await fetch(`${base}api/events?token=${TOKEN}`);
+    expect(r.status).toBe(503);
+    await r.body?.cancel();
+  });
+});
+
+describe("dashboard server: v0.13 panels", () => {
+  let dir: string;
+  let cfgPath: string;
+  let usagePath: string;
+  let handle: DashboardServerHandle | null = null;
+  let savedHome: string | undefined;
+  let savedUserProfile: string | undefined;
+  const TOKEN = "d".repeat(64);
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "jupiter-dash-v013-"));
+    cfgPath = join(dir, "config.json");
+    usagePath = join(dir, "usage.jsonl");
+    // Handlers like /api/health still walk `homedir()/.jupiter/{sessions,memory,semantic}`,
+    // so without redirecting HOME the test reads the dev's real history. On a machine
+    // with ~20k sessions the readdir + per-file statSync chain blows past the 5s default.
+    savedHome = process.env.HOME;
+    savedUserProfile = process.env.USERPROFILE;
+    process.env.HOME = dir;
+    process.env.USERPROFILE = dir;
+    handle = await startDashboardServer(
+      {
+        mode: "attached",
+        configPath: cfgPath,
+        usageLogPath: usagePath,
+      },
+      { token: TOKEN },
+    );
+  });
+
+  afterEach(async () => {
+    await handle?.close();
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    // biome-ignore lint/performance/noDelete: env-var "= undefined" stringifies, must really unset
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    // biome-ignore lint/performance/noDelete: env-var "= undefined" stringifies, must really unset
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+  });
+
+  it("GET /api/health returns disk + version + jobs shape", async () => {
+    const base = handle!.url.split("?")[0]!;
+    const r = await call(`${base}api/health`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(typeof r.body.version).toBe("string");
+    expect(r.body.sessions).toBeDefined();
+    expect(typeof r.body.sessions.totalBytes).toBe("number");
+    expect(r.body.memory).toBeDefined();
+    expect(r.body.semantic).toBeDefined();
+    expect(r.body.usageLog).toBeDefined();
+  });
+
+  it("GET /api/sessions returns an empty list when nothing's stored", async () => {
+    const base = handle!.url.split("?")[0]!;
+    const r = await call(`${base}api/sessions`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body.sessions)).toBe(true);
+  });
+
+  it("GET /api/sessions/<missing> returns 404", async () => {
+    const base = handle!.url.split("?")[0]!;
+    const r = await call(`${base}api/sessions/no-such-session`, { token: TOKEN });
+    expect(r.status).toBe(404);
+  });
+
+  it("GET /api/sessions returns canSwitch=false when no switchSession callback is wired", async () => {
+    const base = handle!.url.split("?")[0]!;
+    const r = await call(`${base}api/sessions`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.canSwitch).toBe(false);
+  });
+
+  it("POST /api/sessions/new returns 503 without an attached switchSession callback", async () => {
+    const base = handle!.url.split("?")[0]!;
+    const r = await call(`${base}api/sessions/new`, {
+      token: TOKEN,
+      tokenInHeader: true,
+      method: "POST",
+    });
+    expect(r.status).toBe(503);
+  });
+
+  it("DELETE /api/sessions/<missing> returns 404", async () => {
+    const base = handle!.url.split("?")[0]!;
+    const r = await call(`${base}api/sessions/never-existed`, {
+      token: TOKEN,
+      tokenInHeader: true,
+      method: "DELETE",
+    });
+    expect(r.status).toBe(404);
+  });
+
+  it("GET /api/plans returns empty array when no archives exist", async () => {
+    const base = handle!.url.split("?")[0]!;
+    const r = await call(`${base}api/plans`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body.plans)).toBe(true);
+  });
+
+  it("GET /api/usage/series returns the daily roll-up shape", async () => {
+    const base = handle!.url.split("?")[0]!;
+    const r = await call(`${base}api/usage/series`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body.days)).toBe(true);
+    expect(typeof r.body.recordCount).toBe("number");
+  });
+});
+
+describe("dashboard server: modal mirroring (workspace / checkpoint / revision)", () => {
+  let dir: string;
+  let cfgPath: string;
+  let usagePath: string;
+  let handle: DashboardServerHandle | null = null;
+  const TOKEN = "e".repeat(64);
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "jupiter-dash-modal-"));
+    cfgPath = join(dir, "config.json");
+    usagePath = join(dir, "usage.jsonl");
+  });
+
+  afterEach(async () => {
+    await handle?.close();
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function boot(extra: Partial<DashboardContext> = {}): Promise<string> {
+    handle = await startDashboardServer(
+      { mode: "attached", configPath: cfgPath, usageLogPath: usagePath, ...extra },
+      { token: TOKEN },
+    );
+    return handle.url.split("?")[0]!;
+  }
+
+  it("POST /api/modal/resolve forwards a checkpoint revise + feedback", async () => {
+    const calls: Array<[string, string | undefined]> = [];
+    const base = await boot({
+      resolveCheckpointConfirm: (c, t) => calls.push([c, t]),
+    });
+    const r = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "checkpoint", choice: "revise", text: "tighten the loop" },
+    });
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([["revise", "tighten the loop"]]);
+  });
+
+  it("POST /api/modal/resolve passes plain checkpoint continue without text", async () => {
+    const calls: Array<[string, string | undefined]> = [];
+    const base = await boot({
+      resolveCheckpointConfirm: (c, t) => calls.push([c, t]),
+    });
+    const r = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "checkpoint", choice: "continue" },
+    });
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([["continue", undefined]]);
+  });
+
+  it("POST /api/modal/resolve routes revision accept / reject", async () => {
+    const calls: string[] = [];
+    const base = await boot({
+      resolveReviseConfirm: (c) => calls.push(c),
+    });
+    const accept = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "revision", choice: "accept" },
+    });
+    expect(accept.status).toBe(200);
+    const reject = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "revision", choice: "reject" },
+    });
+    expect(reject.status).toBe(200);
+    expect(calls).toEqual(["accept", "reject"]);
+  });
+
+  it("POST /api/modal/resolve returns 503 when a resolver isn't wired", async () => {
+    const base = await boot({});
+    const r = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "checkpoint", choice: "continue" },
+    });
+    expect(r.status).toBe(503);
+  });
+
+  it("POST /api/modal/resolve dispatches picker pick / delete / install / uninstall", async () => {
+    const calls: unknown[] = [];
+    const base = await boot({ resolvePicker: (r) => calls.push(r) });
+    for (const action of ["pick", "delete", "install", "uninstall"] as const) {
+      const r = await call(`${base}api/modal/resolve`, {
+        method: "POST",
+        token: TOKEN,
+        tokenInHeader: true,
+        body: { kind: "picker", action, id: `row-${action}` },
+      });
+      expect(r.status).toBe(200);
+    }
+    expect(calls).toEqual([
+      { action: "pick", id: "row-pick" },
+      { action: "delete", id: "row-delete" },
+      { action: "install", id: "row-install" },
+      { action: "uninstall", id: "row-uninstall" },
+    ]);
+  });
+
+  it("POST /api/modal/resolve carries picker rename / new / refine text", async () => {
+    const calls: unknown[] = [];
+    const base = await boot({ resolvePicker: (r) => calls.push(r) });
+    const rename = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "picker", action: "rename", id: "abc", text: "new-name" },
+    });
+    expect(rename.status).toBe(200);
+    const newAction = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "picker", action: "new", text: "scratch" },
+    });
+    expect(newAction.status).toBe(200);
+    const refine = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "picker", action: "refine", query: "search-term" },
+    });
+    expect(refine.status).toBe(200);
+    expect(calls).toEqual([
+      { action: "rename", id: "abc", text: "new-name" },
+      { action: "new", text: "scratch" },
+      { action: "refine", query: "search-term" },
+    ]);
+  });
+
+  it("POST /api/modal/resolve accepts picker load-more and cancel without payload", async () => {
+    const calls: unknown[] = [];
+    const base = await boot({ resolvePicker: (r) => calls.push(r) });
+    const more = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "picker", action: "load-more" },
+    });
+    expect(more.status).toBe(200);
+    const cancel = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "picker", action: "cancel" },
+    });
+    expect(cancel.status).toBe(200);
+    expect(calls).toEqual([{ action: "load-more" }, { action: "cancel" }]);
+  });
+
+  it("POST /api/modal/resolve rejects picker pick without id and unknown action", async () => {
+    const calls: unknown[] = [];
+    const base = await boot({ resolvePicker: (r) => calls.push(r) });
+    const noId = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "picker", action: "pick" },
+    });
+    expect(noId.status).toBe(400);
+    const bogus = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "picker", action: "explode" },
+    });
+    expect(bogus.status).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
+  it("POST /api/modal/resolve returns 503 when picker resolver is not wired", async () => {
+    const base = await boot({});
+    const r = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "picker", action: "cancel" },
+    });
+    expect(r.status).toBe(503);
+  });
+
+  it("POST /api/modal/resolve dispatches viewer close", async () => {
+    const calls: unknown[] = [];
+    const base = await boot({ resolveViewer: (r) => calls.push(r) });
+    const r = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "viewer", action: "close" },
+    });
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([{ action: "close" }]);
+  });
+
+  it("POST /api/modal/resolve rejects viewer actions other than close", async () => {
+    const calls: unknown[] = [];
+    const base = await boot({ resolveViewer: (r) => calls.push(r) });
+    const r = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "viewer", action: "next" },
+    });
+    expect(r.status).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
+  it("POST /api/modal/resolve returns 503 when viewer resolver is not wired", async () => {
+    const base = await boot({});
+    const r = await call(`${base}api/modal/resolve`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { kind: "viewer", action: "close" },
+    });
+    expect(r.status).toBe(503);
+  });
+});
+
+describe("dashboard server: D-1 settings + auto-loop surface", () => {
+  let dir: string;
+  let cfgPath: string;
+  let usagePath: string;
+  let handle: DashboardServerHandle | null = null;
+  const TOKEN = "f".repeat(64);
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "jupiter-d1-"));
+    cfgPath = join(dir, "config.json");
+    usagePath = join(dir, "usage.jsonl");
+  });
+
+  afterEach(async () => {
+    await handle?.close();
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function boot(extra: Partial<DashboardContext> = {}): Promise<string> {
+    handle = await startDashboardServer(
+      { mode: "attached", configPath: cfgPath, usageLogPath: usagePath, ...extra },
+      { token: TOKEN },
+    );
+    return handle.url.split("?")[0]!;
+  }
+
+  it("POST /api/settings routes budgetUsd / model to live callbacks", async () => {
+    const calls: Record<string, unknown[]> = {
+      budgetUsd: [],
+      model: [],
+    };
+    const base = await boot({
+      setBudgetUsdLive: (v) => calls.budgetUsd!.push(v),
+      applyModelLive: (v) => calls.model!.push(v),
+    });
+    const r = await call(`${base}api/settings`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { budgetUsd: 2.5, model: "deepseek-v4-pro" },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.changed).toEqual(expect.arrayContaining(["budgetUsd", "model"]));
+    expect(calls.budgetUsd).toEqual([2.5]);
+    expect(calls.model).toEqual(["deepseek-v4-pro"]);
+  });
+
+  it("POST /api/settings persists and applies editMode", async () => {
+    const editModeCalls: unknown[] = [];
+    const base = await boot({
+      getEditMode: () => "review",
+      setEditMode: (mode) => {
+        editModeCalls.push(mode);
+        return mode;
+      },
+    });
+    const r = await call(`${base}api/settings`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { editMode: "auto" },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.changed).toContain("editMode");
+    expect(readConfig(cfgPath).editMode).toBe("auto");
+    expect(editModeCalls).toEqual(["auto"]);
+  });
+
+  it("POST /api/settings rejects invalid editMode", async () => {
+    const base = await boot();
+    const r = await call(`${base}api/settings`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { editMode: "danger" },
+    });
+    expect(r.status).toBe(400);
+    expect(readConfig(cfgPath).editMode).toBeUndefined();
+  });
+
+  it("POST /api/settings rejects non-positive budgetUsd", async () => {
+    const base = await boot({ setBudgetUsdLive: () => undefined });
+    const negative = await call(`${base}api/settings`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { budgetUsd: -1 },
+    });
+    expect(negative.status).toBe(400);
+  });
+
+  it("POST /api/settings accepts null budgetUsd to clear the cap", async () => {
+    const budgetCalls: unknown[] = [];
+    const base = await boot({ setBudgetUsdLive: (v) => budgetCalls.push(v) });
+    const r = await call(`${base}api/settings`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { budgetUsd: null },
+    });
+    expect(r.status).toBe(200);
+    expect(budgetCalls).toEqual([null]);
+  });
+
+  it("GET /api/loop/status returns null when nothing is running", async () => {
+    const base = await boot({ getLoopRunStatus: () => null });
+    const r = await call(`${base}api/loop/status`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.status).toBeNull();
+  });
+
+  it("GET /api/loop/status returns the live status snapshot", async () => {
+    const snap = { prompt: "ping", intervalMs: 30_000, iter: 3, nextFireMs: 12_000 };
+    const base = await boot({ getLoopRunStatus: () => snap });
+    const r = await call(`${base}api/loop/status`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.status).toEqual(snap);
+  });
+
+  it("POST /api/loop/start forwards intervalMs and prompt", async () => {
+    const calls: Array<[number, string]> = [];
+    const base = await boot({ startAutoLoop: (ms, p) => calls.push([ms, p]) });
+    const r = await call(`${base}api/loop/start`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { intervalMs: 30_000, prompt: "check the deploy" },
+    });
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([[30_000, "check the deploy"]]);
+  });
+
+  it("POST /api/loop/start rejects out-of-range interval and missing prompt", async () => {
+    const base = await boot({ startAutoLoop: () => undefined });
+    const tooFast = await call(`${base}api/loop/start`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { intervalMs: 1_000, prompt: "x" },
+    });
+    expect(tooFast.status).toBe(400);
+    const noPrompt = await call(`${base}api/loop/start`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { intervalMs: 30_000, prompt: "" },
+    });
+    expect(noPrompt.status).toBe(400);
+  });
+
+  it("POST /api/loop/stop calls the stop hook", async () => {
+    let stopped = 0;
+    const base = await boot({
+      stopAutoLoop: () => {
+        stopped++;
+      },
+    });
+    const r = await call(`${base}api/loop/stop`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+    });
+    expect(r.status).toBe(200);
+    expect(stopped).toBe(1);
+  });
+
+  it("GET /api/models returns the cached catalog + pricing + current model", async () => {
+    const base = await boot({ getModels: () => ["deepseek-v4-flash", "deepseek-v4-pro"] });
+    const r = await call(`${base}api/models`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.models).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
+    expect(r.body.pricing["deepseek-v4-flash"]).toBeDefined();
+    expect(r.body.pricing["deepseek-v4-flash"].output).toBeGreaterThan(0);
+  });
+
+  it("GET /api/models returns null catalog when getModels is not wired", async () => {
+    const base = await boot({});
+    const r = await call(`${base}api/models`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(r.body.models).toBeNull();
+    expect(r.body.pricing).toBeDefined();
+  });
+
+  it("returns 503 when loop callbacks are not wired", async () => {
+    const base = await boot({});
+    const status = await call(`${base}api/loop/status`, { token: TOKEN });
+    expect(status.status).toBe(503);
+    const start = await call(`${base}api/loop/start`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { intervalMs: 30_000, prompt: "x" },
+    });
+    expect(start.status).toBe(503);
+    const stop = await call(`${base}api/loop/stop`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+    });
+    expect(stop.status).toBe(503);
+  });
+});
+
+describe("dashboard server: checkpoint API", () => {
+  let dir: string;
+  let cfgPath: string;
+  let usagePath: string;
+  let handle: DashboardServerHandle | null = null;
+  const TOKEN = "f".repeat(64);
+  let cwd: string;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "jupiter-dash-cp-"));
+    cfgPath = join(dir, "config.json");
+    usagePath = join(dir, "usage.jsonl");
+    // Init a tiny git repo so checkpoint-create works
+    cwd = join(dir, "repo");
+    await mkdir(cwd, { recursive: true });
+    await writeFile(join(cwd, "hello.txt"), "hello world\n");
+    const { execSync } = await import("node:child_process");
+    // Strip GIT_* env vars so execSync doesn't inherit them from a calling
+    // git operation (e.g. when this suite runs under a pre-push hook).
+    // Without this, `git commit` would resolve GIT_DIR from the env and
+    // operate on the parent repo, not the temp dir — and `git config
+    // user.email test@test.com` would silently rewrite the parent's
+    // committer identity.
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const k of Object.keys(env)) {
+      if (k.startsWith("GIT_")) delete env[k];
+    }
+    execSync("git init", { cwd, env });
+    execSync("git config user.email test@test.com", { cwd, env });
+    execSync("git config user.name test", { cwd, env });
+    execSync("git add -A", { cwd, env });
+    execSync("git commit -m init", { cwd, env });
+  });
+
+  afterEach(async () => {
+    await handle?.close();
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function boot(): Promise<string> {
+    handle = await startDashboardServer(
+      {
+        mode: "attached",
+        configPath: cfgPath,
+        usageLogPath: usagePath,
+        getCurrentCwd: () => cwd,
+      },
+      { token: TOKEN },
+    );
+    return handle.url.split("?")[0]!;
+  }
+
+  it("POST /api/checkpoint-create creates a snapshot", async () => {
+    const base = await boot();
+    const r = await call(`${base}api/checkpoint-create`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { name: "snap1" },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.id).toBeDefined();
+    expect(r.body.name).toBe("snap1");
+    expect(r.body.fileCount).toBe(1); // only hello.txt tracked by git
+    expect(r.body.bytes).toBeGreaterThan(0);
+  });
+
+  it("POST /api/checkpoint-create fails without name", async () => {
+    const base = await boot();
+    const r = await call(`${base}api/checkpoint-create`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: {},
+    });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toContain("missing name");
+  });
+
+  it("GET /api/checkpoints lists all checkpoints", async () => {
+    const base = await boot();
+    // Create one
+    await call(`${base}api/checkpoint-create`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { name: "snap1" },
+    });
+    const r = await call(`${base}api/checkpoints`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body)).toBe(true);
+    expect(r.body.length).toBe(1);
+    expect(r.body[0].name).toBe("snap1");
+  });
+
+  it("GET /api/checkpoint-diffs returns diffs for a checkpoint", async () => {
+    const base = await boot();
+    const created = await call(`${base}api/checkpoint-create`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { name: "snap1" },
+    });
+    // Modify file after snapshot so diff is non-empty
+    await writeFile(join(cwd, "hello.txt"), "hello world from checkpoint\n");
+    const r = await call(`${base}api/checkpoint-diffs?id=${created.body.id}`, { token: TOKEN });
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body)).toBe(true);
+    expect(r.body.length).toBe(1);
+    expect(r.body[0].file).toBe("hello.txt");
+    expect(r.body[0].additions).toBeGreaterThan(0);
+  });
+
+  it("POST /api/checkpoint-restore restores files from snapshot", async () => {
+    const base = await boot();
+    const created = await call(`${base}api/checkpoint-create`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { name: "snap1" },
+    });
+    // Modify file after snapshot
+    await writeFile(join(cwd, "hello.txt"), "hello world from checkpoint\n");
+    const r = await call(`${base}api/checkpoint-restore`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { id: created.body.id },
+    });
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body.restored)).toBe(true);
+    expect(r.body.restored).toContain("hello.txt");
+    expect(Array.isArray(r.body.removed)).toBe(true);
+    // File should be back to snapshot content
+    const content = await readFile(join(cwd, "hello.txt"), "utf8");
+    expect(content).toBe("hello world\n");
+  });
+
+  it("POST /api/checkpoint-delete removes snapshot", async () => {
+    const base = await boot();
+    const created = await call(`${base}api/checkpoint-create`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { name: "snap1" },
+    });
+    const del = await call(`${base}api/checkpoint-delete`, {
+      method: "POST",
+      token: TOKEN,
+      tokenInHeader: true,
+      body: { id: created.body.id },
+    });
+    expect(del.status).toBe(200);
+    expect(del.body.deleted).toBe(created.body.id);
+    // List should be empty
+    const list = await call(`${base}api/checkpoints`, { token: TOKEN });
+    expect(list.body.length).toBe(0);
+  });
+});

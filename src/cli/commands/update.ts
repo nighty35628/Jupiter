@@ -1,0 +1,182 @@
+import { spawn } from "node:child_process";
+import {
+  type InstallSource,
+  VERSION,
+  compareVersions,
+  detectInstallSource,
+  detectNpmInstallPrefix,
+  getLatestVersion,
+} from "../../version.js";
+
+export type UpdateAction =
+  | "up-to-date"
+  | "newer-local"
+  | "npx-hint"
+  | "manual-hint"
+  | "run-install";
+
+export interface UpdatePlan {
+  action: UpdateAction;
+  /** Human-readable summary; the CLI prints this verbatim. */
+  message: string;
+  command?: string[];
+}
+
+export interface PlanUpdateInput {
+  current: string;
+  latest: string;
+  installSource: InstallSource;
+  /** Pin npm to this prefix so nvm/fnm can't redirect the install. */
+  npmPrefix?: string | null;
+  packageName?: string | null;
+}
+
+export const DEFAULT_JUPITER_PACKAGE = "jupiter";
+
+export function updatePackageName(input?: string | null): string {
+  return input?.trim() || process.env.JUPITER_NPM_PACKAGE?.trim() || DEFAULT_JUPITER_PACKAGE;
+}
+
+export function manualUpdateCommands(packageName = updatePackageName()): readonly string[] {
+  return [
+    `npm install -g ${packageName}@latest`,
+    `bun add -g ${packageName}`,
+    `pnpm add -g ${packageName}@latest`,
+    `yarn global add ${packageName}@latest`,
+  ];
+}
+
+export const MANUAL_UPDATE_COMMANDS: readonly string[] = manualUpdateCommands();
+
+/** Pure decision — split out so tests don't need to spawn child processes or hit the network. */
+export function planUpdate(input: PlanUpdateInput): UpdatePlan {
+  const packageName = updatePackageName(input.packageName);
+  const diff = compareVersions(input.current, input.latest);
+  if (diff > 0) {
+    return {
+      action: "newer-local",
+      message: `current (${input.current}) is newer than the published ${input.latest} — nothing to do.`,
+    };
+  }
+  if (diff === 0) {
+    return { action: "up-to-date", message: `Jupiter ${input.current} is up to date.` };
+  }
+  if (input.installSource === "npx") {
+    return {
+      action: "npx-hint",
+      message: [
+        `Jupiter ${input.latest} is available.`,
+        `you're running via npx — the next \`npx ${packageName} ...\` launch will auto-fetch`,
+        "the latest (npx caches packages for a short window). to force a refresh",
+        "sooner, clear the cache: `npm cache clean --force`.",
+      ].join("\n"),
+    };
+  }
+  if (input.installSource === "unknown") {
+    return {
+      action: "manual-hint",
+      message: [
+        `Jupiter ${input.latest} is available, but the install source could not be determined automatically.`,
+        "run one of these manually based on how you installed Jupiter:",
+        ...manualUpdateCommands(packageName).map((c) => `  ${c}`),
+      ].join("\n"),
+    };
+  }
+  const command = buildUpdateCommand(input.installSource, input.npmPrefix ?? null, packageName);
+  return {
+    action: "run-install",
+    message: `upgrading Jupiter ${input.current} → ${input.latest} (via ${input.installSource})`,
+    command,
+  };
+}
+
+function buildUpdateCommand(
+  source: Exclude<InstallSource, "npx" | "unknown">,
+  npmPrefix: string | null,
+  packageName: string,
+): string[] {
+  switch (source) {
+    case "npm":
+      return npmPrefix
+        ? ["npm", "--prefix", npmPrefix, "install", "-g", `${packageName}@latest`]
+        : ["npm", "install", "-g", `${packageName}@latest`];
+    case "bun":
+      return ["bun", "add", "-g", packageName];
+    case "pnpm":
+      return ["pnpm", "add", "-g", `${packageName}@latest`];
+    case "yarn":
+      return ["yarn", "global", "add", `${packageName}@latest`];
+  }
+}
+
+export interface UpdateCommandOptions {
+  /** Skip spawning the package manager; print the decision only. */
+  dryRun?: boolean;
+  /** Test seam: override the registry lookup. Returns null = offline. */
+  fetchLatest?: () => Promise<string | null>;
+  /** Test seam: override the install-source detector. */
+  detectSource?: () => InstallSource;
+  /** Test seam: override the npm prefix detector. */
+  detectPrefix?: () => string | null;
+  /** Test seam: override the spawner. Must return exit code. */
+  spawnInstall?: (argv: string[]) => Promise<number>;
+  /** Test seam: stdout writer. */
+  write?: (msg: string) => void;
+  /** Test seam: process exit — tests don't want to tear down vitest. */
+  exit?: (code: number) => void;
+}
+
+function defaultSpawn(argv: string[]): Promise<number> {
+  return new Promise((resolve, reject) => {
+    // `shell: true` on Windows is what lets `npm` resolve to `npm.cmd`
+    // without routing through our `prepareSpawn` helper. The args here
+    // are literal strings under our control — no user input flows in,
+    // so injection is not a concern. Avoiding `prepareSpawn` keeps
+    // this command free of a dep on the shell tools module.
+    const child = spawn(argv[0]!, argv.slice(1), {
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => resolve(code ?? 1));
+  });
+}
+
+export async function updateCommand(opts: UpdateCommandOptions = {}): Promise<void> {
+  const write = opts.write ?? ((m: string) => process.stdout.write(m));
+  const exit = opts.exit ?? ((c: number) => process.exit(c));
+  const fetchLatest = opts.fetchLatest ?? (() => getLatestVersion({ force: true }));
+  const detectSource = opts.detectSource ?? (() => detectInstallSource());
+  const detectPrefix = opts.detectPrefix ?? (() => detectNpmInstallPrefix());
+  const doSpawn = opts.spawnInstall ?? defaultSpawn;
+
+  write(`current: Jupiter ${VERSION}\n`);
+  const latest = await fetchLatest();
+  if (!latest) {
+    write("Jupiter update channel is not configured or unreachable.\n");
+    exit(1);
+    return;
+  }
+  write(`latest:  Jupiter ${latest}\n`);
+
+  const installSource = detectSource();
+  const npmPrefix = installSource === "npm" ? detectPrefix() : null;
+  const plan = planUpdate({ current: VERSION, latest, installSource, npmPrefix });
+  write(`\n${plan.message}\n`);
+
+  if (plan.action === "manual-hint") {
+    exit(1);
+    return;
+  }
+  if (plan.action !== "run-install" || !plan.command) return;
+  if (opts.dryRun) {
+    write(`(dry run) would run: ${plan.command.join(" ")}\n`);
+    return;
+  }
+  write(`\nrunning: ${plan.command.join(" ")}\n`);
+  const code = await doSpawn(plan.command);
+  if (code !== 0) {
+    write(`\n${plan.command[0]} exited with code ${code}. upgrade did not complete.\n`);
+    exit(code);
+  }
+}

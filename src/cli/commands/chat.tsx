@@ -1,0 +1,451 @@
+import { render } from "ink";
+import React, { useMemo, useState } from "react";
+import {
+  type ReasoningEffort,
+  bridgeEndpointEnv,
+  loadApiKey,
+  loadHistoryScrollMode,
+  loadToolRateLimit,
+  normalizeMcpConfig,
+  readConfig,
+  searchEnabled,
+} from "../../config.js";
+import { loadDotenv } from "../../env.js";
+import { t } from "../../i18n/index.js";
+import {
+  deleteSession,
+  freshSessionName,
+  listSessionsForWorkspace,
+  renameSession,
+  resolveSession,
+} from "../../memory/session.js";
+import { QQChannel } from "../../qq/channel.js";
+import { TelegramChannel } from "../../telegram/channel.js";
+import { ToolRegistry } from "../../tools.js";
+import { registerChoiceTool } from "../../tools/choice.js";
+import { registerMemoryTools } from "../../tools/memory.js";
+import { registerWebTools } from "../../tools/web.js";
+import { stopAndSaveCpuProfile } from "../cpu-prof.js";
+import { markPhase } from "../startup-profile.js";
+import { App } from "../ui/App.js";
+import { SessionPicker } from "../ui/SessionPicker.js";
+import { Setup } from "../ui/Setup.js";
+import { drainTtyResponses } from "../ui/drain-tty.js";
+import type { ResolvedHistoryScrollMode } from "../ui/history-scroll-mode.js";
+import { resolveHistoryScrollMode } from "../ui/history-scroll-mode.js";
+import { KeystrokeProvider } from "../ui/keystroke-context.js";
+import { disableMouseMode, enableMouseMode } from "../ui/mouse-mode.js";
+import { installResizeBroadcaster } from "../ui/resize-broadcaster.js";
+import type { McpServerSummary } from "../ui/slash.js";
+import {
+  type McpLifecycleNotice,
+  type McpLifecycleSink,
+  type McpRuntime,
+  type ProgressInfo,
+  createMcpRuntime,
+} from "./mcp-runtime.js";
+
+export type { McpLifecycleNotice, McpLifecycleSink, McpRuntime, ProgressInfo };
+
+export interface ChatOptions {
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  system: string;
+  /** Re-runs the prompt builder on /new so JUPITER.md edits don't need a restart. Should produce the same string `system` was built from. */
+  rebuildSystem?: () => string;
+  transcript?: string;
+  /**
+   * Soft USD cap on session spend. Undefined → no cap (default).
+   * The loop warns once at 80% and refuses to start a new turn at
+   * 100%. Users can bump or clear via `/budget <usd>` / `/budget off`
+   * mid-session.
+   */
+  budgetUsd?: number;
+  session?: string;
+  /** Zero or more MCP server specs. Each: `"name=cmd args..."` or `"cmd args..."`. */
+  mcp?: string[];
+  /** Global prefix — only used when a single anonymous server is given. */
+  mcpPrefix?: string;
+  /**
+   * Pre-built ToolRegistry used as a seed. MCP bridges (if any) are
+   * layered on top of whatever's already registered. Used by
+   * `jupiter code` to register native filesystem tools in place of
+   * the old `npx -y @modelcontextprotocol/server-filesystem` subprocess.
+   */
+  seedTools?: ToolRegistry;
+  /**
+   * Enable SEARCH/REPLACE edit-block processing after each assistant turn.
+   * Set by `jupiter code`; plain `jupiter chat` leaves this off.
+   */
+  codeMode?: {
+    rootDir: string;
+    jobs?: import("../../tools/jobs.js").JobRegistry;
+    /**
+     * `/cwd <path>` callback — re-registers every rootDir-dependent
+     * native tool against the new path. Optional so embedders that
+     * don't want live cwd switching can omit it (the slash command
+     * then falls back to non-tool updates only).
+     */
+    reregisterTools?: (rootDir: string) => void;
+    /** Async tail of `/cwd` — re-probe the new dir for a semantic index. */
+    reBootstrapSemantic?: (rootDir: string) => Promise<{ enabled: boolean }>;
+    /** Notify the launcher that the workspace root just changed — lets the rebuildSystem closure see the new dir. */
+    onRootChange?: (newRoot: string) => void;
+  };
+  /** Skip the session picker — assume "Resume" (backwards-compatible auto-continue). */
+  forceResume?: boolean;
+  /** Skip the session picker — assume "New" (wipe the session file and start fresh). */
+  forceNew?: boolean;
+  /**
+   * When true, suppress auto-launch of the embedded web dashboard.
+   * Default behavior (false/undefined) is to boot it on mount so the
+   * URL is visible in the status bar.
+   */
+  noDashboard?: boolean;
+  /** When true and the dashboard is enabled, open its URL in the system default browser as soon as the server is ready. */
+  openDashboard?: boolean;
+  /** Pin the dashboard to a fixed port. `undefined` keeps ephemeral assignment. */
+  dashboardPort?: number;
+  /** Dashboard bind address (#968). `undefined` keeps the default 127.0.0.1. */
+  dashboardHost?: string;
+  /** Stable dashboard URL token (#968). `undefined` mints a fresh per-boot token. */
+  dashboardToken?: string;
+  /** Disable SGR mouse tracking so the terminal keeps native selection and right-click behavior. */
+  noMouse?: boolean;
+}
+
+interface RootProps extends ChatOptions {
+  initialKey: string | undefined;
+  tools: ToolRegistry | undefined;
+  mcpSpecs: string[];
+  mcpServers: McpServerSummary[];
+  /** App.tsx writes its progress handler here on mount so MCP frames flow into OngoingToolRow. */
+  progressSink: { current: ((info: ProgressInfo) => void) | null };
+  /** Show the SessionPicker (full list) when no --session was specified and saved sessions exist. */
+  showPicker: boolean;
+  /** Hot-reload runtime — passed through to App so /mcp browse + dashboard can bridge after install. */
+  mcpRuntime: McpRuntime;
+  /** One-time startup info rows shown after App mounts. */
+  startupInfoHints: string[];
+  /** Resolved app/native scroll behavior for chat history. */
+  historyScrollMode: ResolvedHistoryScrollMode;
+  /** Pre-created QQ channel (started before TUI mounts). */
+  qqChannel?: QQChannel;
+  telegramChannel?: TelegramChannel;
+  /** App fills this ref on mount so QQ messages flow into the TUI input queue. */
+  qqSubmitRef: { current: ((text: string) => void) | null };
+  /** App fills this ref on mount so QQ errors appear in the TUI log. */
+  qqErrorRef: { current: ((msg: string) => void) | null };
+  telegramSubmitRef: { current: ((text: string) => void) | null };
+  telegramErrorRef: { current: ((msg: string) => void) | null };
+}
+
+function Root({
+  initialKey,
+  tools,
+  mcpSpecs,
+  mcpServers,
+  progressSink,
+  showPicker,
+  mcpRuntime,
+  startupInfoHints,
+  historyScrollMode,
+  ...appProps
+}: RootProps) {
+  const [key, setKey] = useState<string | undefined>(initialKey);
+  const [pickerOpen, setPickerOpen] = useState(showPicker);
+  const [activeSession, setActiveSession] = useState<string | undefined>(appProps.session);
+  const [activeRoot, setActiveRoot] = useState<string>(
+    () => appProps.codeMode?.rootDir ?? process.cwd(),
+  );
+  const workspaceRoot = activeRoot;
+  const [sessions, setSessions] = useState(() => listSessionsForWorkspace(workspaceRoot));
+  const codeMode = useMemo(() => {
+    if (!appProps.codeMode) return undefined;
+    return {
+      ...appProps.codeMode,
+      rootDir: activeRoot,
+      onRootChange: (newRoot: string) => {
+        appProps.codeMode?.onRootChange?.(newRoot);
+        setActiveRoot(newRoot);
+        setSessions(listSessionsForWorkspace(newRoot));
+      },
+    };
+  }, [appProps.codeMode, activeRoot]);
+
+  if (!key) {
+    return (
+      <KeystrokeProvider>
+        <Setup
+          onReady={(k) => {
+            bridgeEndpointEnv();
+            setKey(k);
+          }}
+        />
+      </KeystrokeProvider>
+    );
+  }
+  bridgeEndpointEnv();
+
+  if (pickerOpen) {
+    return (
+      <KeystrokeProvider>
+        <SessionPicker
+          sessions={sessions}
+          workspace={workspaceRoot}
+          onChoose={(outcome) => {
+            if (outcome.kind === "open") {
+              setActiveSession(outcome.name);
+              setPickerOpen(false);
+              return;
+            }
+            if (outcome.kind === "new") {
+              setActiveSession(freshSessionName(activeSession));
+              setPickerOpen(false);
+              return;
+            }
+            if (outcome.kind === "delete") {
+              deleteSession(outcome.name);
+              setSessions(listSessionsForWorkspace(workspaceRoot));
+              return;
+            }
+            if (outcome.kind === "rename") {
+              renameSession(outcome.name, outcome.newName);
+              setSessions(listSessionsForWorkspace(workspaceRoot));
+              return;
+            }
+            if (outcome.kind === "quit") {
+              void (async () => {
+                await stopAndSaveCpuProfile();
+                process.exit(0);
+              })();
+            }
+          }}
+        />
+      </KeystrokeProvider>
+    );
+  }
+
+  return (
+    <KeystrokeProvider>
+      <App
+        key={activeSession ?? "__new__"}
+        model={appProps.model}
+        reasoningEffort={appProps.reasoningEffort}
+        system={appProps.system}
+        rebuildSystem={appProps.rebuildSystem}
+        transcript={appProps.transcript}
+        budgetUsd={appProps.budgetUsd}
+        session={activeSession}
+        tools={tools}
+        mcpSpecs={mcpSpecs}
+        mcpServers={mcpServers}
+        mcpRuntime={mcpRuntime}
+        progressSink={progressSink}
+        startupInfoHints={startupInfoHints}
+        codeMode={codeMode}
+        noDashboard={appProps.noDashboard}
+        openDashboard={appProps.openDashboard}
+        dashboardPort={appProps.dashboardPort}
+        dashboardHost={appProps.dashboardHost}
+        dashboardToken={appProps.dashboardToken}
+        qqChannel={appProps.qqChannel}
+        telegramChannel={appProps.telegramChannel}
+        qqSubmitRef={appProps.qqSubmitRef}
+        qqErrorRef={appProps.qqErrorRef}
+        telegramSubmitRef={appProps.telegramSubmitRef}
+        telegramErrorRef={appProps.telegramErrorRef}
+        historyScrollMode={historyScrollMode}
+        onSwitchSession={setActiveSession}
+      />
+    </KeystrokeProvider>
+  );
+}
+
+export async function chatCommand(opts: ChatOptions): Promise<void> {
+  markPhase("chat_command_enter");
+  loadDotenv();
+  const initialKey = loadApiKey();
+  markPhase("config_loaded");
+
+  const requestedSpecs = opts.mcp ?? [];
+  // Shared progress sink: the bridge's onProgress callback writes
+  // through `progressSink.current`, which App.tsx sets to its UI
+  // updater on mount. Started null so early progress frames (before
+  // the App has mounted) are dropped rather than buffered.
+  const progressSink: { current: ((info: ProgressInfo) => void) | null } = { current: null };
+  // Seed registry from the caller (e.g. jupiter code's native
+  // filesystem tools) — MCP bridges layer on top rather than
+  // replacing. When no seed AND no MCP, tools stays undefined and
+  // the loop runs as a bare chat.
+  let tools: ToolRegistry | undefined = opts.seedTools;
+  if (requestedSpecs.length > 0 && !tools) {
+    tools = new ToolRegistry({ rateLimit: loadToolRateLimit() });
+  }
+  const launchWorkspace = opts.codeMode?.rootDir ?? process.cwd();
+  let activeWorkspace = launchWorkspace;
+  const codeMode = opts.codeMode
+    ? {
+        ...opts.codeMode,
+        onRootChange: (newRoot: string) => {
+          activeWorkspace = newRoot;
+          opts.codeMode?.onRootChange?.(newRoot);
+        },
+      }
+    : undefined;
+
+  const runtime = createMcpRuntime({
+    getTools: () => tools,
+    getMcpPrefix: () => opts.mcpPrefix,
+    getRequestedCount: () => requestedSpecs.length,
+    getWorkspaceDir: () => activeWorkspace,
+    progressSink,
+  });
+
+  // MCP bridging deferred to App.tsx mount — handshakes are 100ms–2s each
+  // and we don't want the alt-screen UI to block on the slowest one.
+  const mcpSpecs = [...requestedSpecs];
+  const mcpServers: McpServerSummary[] = [];
+  const cfg = readConfig();
+  const historyScrollMode = resolveHistoryScrollMode({
+    configured: loadHistoryScrollMode(),
+    env: process.env,
+    platform: process.platform,
+  });
+  const startupInfoHints: string[] = [];
+  const hasAnyMcp = normalizeMcpConfig(cfg).length > 0 || mcpSpecs.length > 0;
+  if (cfg.setupCompleted === true && !hasAnyMcp) {
+    startupInfoHints.push(t("mcpHealth.emptyHint"));
+  }
+
+  // Register web search/fetch tools unless explicitly disabled. DDG
+  // backs them with no key required; the model invokes them whenever
+  // a question needs info fresher than its training data.
+  if (searchEnabled()) {
+    if (!tools) tools = new ToolRegistry({ rateLimit: loadToolRateLimit() });
+    registerWebTools(tools);
+  }
+
+  // Memory tools — available in every session, not just code mode.
+  // Chat-mode callers get global scope only; project scope requires
+  // the seedTools path from `jupiter code` (which registers its own
+  // MemoryStore bound to rootDir before chatCommand runs).
+  // `run_skill` is registered later in App.tsx (where the client
+  // exists) so it can wire the subagent runner for runAs:subagent
+  // skills.
+  if (!opts.seedTools) {
+    if (!tools) tools = new ToolRegistry({ rateLimit: loadToolRateLimit() });
+    registerMemoryTools(tools, {});
+    // `ask_choice` — branching primitive, useful in chat too (stylistic
+    // preferences, doc language, library picks). Independent of plan
+    // mode, which chat doesn't have anyway.
+    registerChoiceTool(tools);
+  }
+
+  // resolveSession handles --new (timestamped name, old session preserved)
+  // and --resume (latest prefixed). Default falls through to the latest
+  // prefixed-or-base.
+  const { resolved: resolvedSession } = resolveSession(
+    opts.session,
+    opts.forceNew,
+    opts.forceResume,
+  );
+  const showPicker =
+    !opts.session && !opts.forceResume && listSessionsForWorkspace(launchWorkspace).length > 0;
+
+  markPhase("ink_render_call");
+
+  // Create QQ channel before the TUI mounts so connection setup stays
+  // outside React lifecycle timing and the WebSocket handshake remains
+  // deterministic.
+  const qqSubmitRef: { current: ((text: string) => void) | null } = { current: null };
+  const qqErrorRef: { current: ((msg: string) => void) | null } = { current: null };
+  const telegramSubmitRef: { current: ((text: string) => void) | null } = { current: null };
+  const telegramErrorRef: { current: ((msg: string) => void) | null } = { current: null };
+  const qqRequested = cfg.qq?.enabled === true;
+  const telegramRequested = cfg.telegram?.enabled === true;
+  let qqChannel: QQChannel | undefined;
+  let telegramChannel: TelegramChannel | undefined;
+  if (qqRequested) {
+    const channel = new QQChannel({
+      onSubmitMessage: (text) => qqSubmitRef.current?.(text),
+      onError: (msg) => qqErrorRef.current?.(msg),
+    });
+    process.stderr.write("Connecting QQ bot...\n");
+    try {
+      await channel.start();
+      qqChannel = channel;
+      process.stderr.write("QQ bot connected\n");
+    } catch (err) {
+      process.stderr.write(`QQ bot failed: ${(err as Error).message}\n`);
+    }
+  }
+  if (telegramRequested) {
+    const channel = new TelegramChannel({
+      onSubmitMessage: (text) => telegramSubmitRef.current?.(text),
+      onError: (msg) => telegramErrorRef.current?.(msg),
+    });
+    process.stderr.write("Connecting Telegram bot...\n");
+    try {
+      await channel.start();
+      telegramChannel = channel;
+      process.stderr.write("Telegram bot connected\n");
+    } catch (err) {
+      process.stderr.write(`Telegram bot failed: ${(err as Error).message}\n`);
+    }
+  }
+
+  // Before render() — shims Ink's per-card useBoxMetrics resize subscribe
+  // path so N cards don't accumulate N native stdout listeners.
+  installResizeBroadcaster();
+
+  // Wheel scrolling. Opt-out via `mouseTracking: false` for users who
+  // prefer native drag-select copy (Shift+drag still selects with mouse
+  // mode on in most terminals). exit hooks cover hard kills so the
+  // sequence doesn't leak into the parent shell.
+  if (!opts.noMouse && cfg.mouseTracking !== false) {
+    enableMouseMode(historyScrollMode);
+    process.once("exit", disableMouseMode);
+    process.once("SIGINT", () => {
+      disableMouseMode();
+      process.exit(130);
+    });
+    process.once("SIGTERM", () => {
+      disableMouseMode();
+      process.exit(143);
+    });
+  }
+
+  const { waitUntilExit } = render(
+    <Root
+      initialKey={initialKey}
+      tools={tools}
+      mcpSpecs={mcpSpecs}
+      mcpServers={mcpServers}
+      mcpRuntime={runtime}
+      progressSink={progressSink}
+      startupInfoHints={startupInfoHints}
+      historyScrollMode={historyScrollMode}
+      showPicker={showPicker}
+      {...opts}
+      codeMode={codeMode}
+      session={resolvedSession}
+      qqChannel={qqChannel}
+      telegramChannel={telegramChannel}
+      qqSubmitRef={qqSubmitRef}
+      qqErrorRef={qqErrorRef}
+      telegramSubmitRef={telegramSubmitRef}
+      telegramErrorRef={telegramErrorRef}
+    />,
+    { exitOnCtrlC: true, incrementalRendering: true },
+  );
+  try {
+    await waitUntilExit();
+  } finally {
+    disableMouseMode();
+    await runtime.closeAll();
+    qqChannel?.stop();
+    telegramChannel?.stop();
+    await drainTtyResponses();
+  }
+}

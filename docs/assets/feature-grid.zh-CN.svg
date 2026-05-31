@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 570" role="img" aria-label="Jupiter 能力一览 — 12 张卡片：渲染器、MCP、计划模式、权限、仪表盘、会话、Hooks、语义检索、checkpoint、effort 旋钮、重放、事件日志">
+  <title>Jupiter 能力一览</title>
+  <defs>
+    <style>
+      .sans { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; }
+      .ttl  { font-weight: 700; }
+    </style>
+    <linearGradient id="ig" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#5eead4"/>
+      <stop offset="50%" stop-color="#93c5fd"/>
+      <stop offset="100%" stop-color="#c4b5fd"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(10, 10)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">◈</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">自研 cell-diff 渲染器</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">基于 Yoga，不依赖 Ink。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">宽字符 · emoji · 粘贴 · resize 全干净。</text>
+  </g>
+  <g transform="translate(300, 10)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">⊕</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">MCP 一等公民</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">stdio · Streamable HTTP 双传输。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">工具 / 资源 / 提示词全套。</text>
+  </g>
+  <g transform="translate(590, 10)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">✎</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">计划模式</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">修改在落盘前先 review。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Plan checkpoint 跨运行持久化。</text>
+  </g>
+
+  <g transform="translate(10, 150)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">⊞</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">权限系统</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">每个工具 allow / ask / deny。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">shell 命令粒度规则，可教。</text>
+  </g>
+  <g transform="translate(300, 150)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">▣</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">内嵌仪表盘</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">实时缓存命中、成本、会话时间线、</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">MCP 健康。localhost 伴生面板。</text>
+  </g>
+  <g transform="translate(590, 150)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">⌨</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">持久化会话</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">按工作区组织、命名、可恢复。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">--resume 完全还原状态。</text>
+  </g>
+
+  <g transform="translate(10, 290)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">⚙</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Hooks · Skills · Memory</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">生命周期事件触发 shell。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">Skill 包 + 项目级 memory。</text>
+  </g>
+  <g transform="translate(300, 290)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">◎</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">语义检索</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">jupiter index 构建 embedding 索引。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">本地 Ollama 或 DeepSeek 托管。</text>
+  </g>
+  <g transform="translate(590, 290)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">↺</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">自动 checkpoint</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">Cursor 风格会话级 AI 编辑回滚。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">不污染 git 历史。</text>
+  </g>
+
+  <g transform="translate(10, 430)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">◐</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">/effort 旋钮</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">每回合切换 reasoning 深度。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">斜杠命令 + CLI flag 双入口。</text>
+  </g>
+  <g transform="translate(300, 430)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">▶</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">Transcript 重放</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">jupiter replay 重渲染会话。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">bug 复现、演示、审计。</text>
+  </g>
+  <g transform="translate(590, 430)">
+    <rect width="280" height="130" rx="10" ry="10" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="22" y="42" class="mono" font-size="22" fill="url(#ig)">¶</text>
+    <text x="54" y="40" class="sans ttl" font-size="14" fill="#e6edf3">事件日志</text>
+    <text x="22" y="72" class="sans" font-size="12" fill="#8b949e">events.jsonl 旁路日志 + reducer。</text>
+    <text x="22" y="92" class="sans" font-size="12" fill="#8b949e">自建仪表盘或分析。</text>
+  </g>
+</svg>

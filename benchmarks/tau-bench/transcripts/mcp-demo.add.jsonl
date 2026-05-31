@@ -1,0 +1,6 @@
+{"role":"_meta","meta":{"version":1,"source":"jupiter run","model":"deepseek-chat","startedAt":"2026-04-22T00:50:25.468Z"}}
+{"ts":"2026-04-22T00:50:25.469Z","turn":1,"role":"user","content":"Use the add tool to compute 17+25, then briefly confirm the result."}
+{"ts":"2026-04-22T00:50:28.556Z","turn":1,"role":"assistant_final","content":"I'll compute 17 + 25 using the add tool.","usage":{"prompt_tokens":442,"completion_tokens":70,"total_tokens":512,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":442},"cost":0.00019634,"model":"deepseek-chat","prefixHash":"585d4a0a16fe84b7"}
+{"ts":"2026-04-22T00:50:28.557Z","turn":1,"role":"tool","content":"42","tool":"add","args":"{\"a\": 17, \"b\": 25}"}
+{"ts":"2026-04-22T00:50:29.858Z","turn":1,"role":"assistant_final","content":"The result is 42. 17 + 25 = 42.","usage":{"prompt_tokens":530,"completion_tokens":15,"total_tokens":545,"prompt_cache_hit_tokens":512,"prompt_cache_miss_tokens":18},"cost":0.0000572,"model":"deepseek-chat","prefixHash":"585d4a0a16fe84b7"}
+{"ts":"2026-04-22T00:50:29.858Z","turn":1,"role":"done","content":"The result is 42. 17 + 25 = 42."}

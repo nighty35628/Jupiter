@@ -1,0 +1,130 @@
+/** Wizard data-transform — buildSpec → parseMcpSpec round-trip; bugs here = silent config-save failures. */
+
+import React from "react";
+import { afterEach, describe, expect, it } from "vitest";
+import { Wizard, buildSpec, validateDeepSeekApiKey } from "../src/cli/ui/Wizard.js";
+import { setLanguageRuntime, t } from "../src/i18n/index.js";
+import { parseMcpSpec } from "../src/mcp/spec.js";
+import { render } from "./helpers/ink-test.js";
+
+describe("Wizard.buildSpec → parseMcpSpec round-trip", () => {
+  it("builds a filesystem spec the parser accepts", () => {
+    const spec = buildSpec("filesystem", { filesystem: "/tmp/safe" });
+    expect(spec).toBe("filesystem=npx -y @modelcontextprotocol/server-filesystem /tmp/safe");
+    const parsed = parseMcpSpec(spec);
+    if (parsed.transport !== "stdio") throw new Error("expected stdio");
+    expect(parsed.name).toBe("filesystem");
+    expect(parsed.command).toBe("npx");
+    expect(parsed.args).toEqual(["-y", "@modelcontextprotocol/server-filesystem", "/tmp/safe"]);
+  });
+
+  it("omits the trailing userArg when the catalog entry needs none", () => {
+    const spec = buildSpec("memory", {});
+    expect(spec).toBe("memory=npx -y @modelcontextprotocol/server-memory");
+    const parsed = parseMcpSpec(spec);
+    expect(parsed.name).toBe("memory");
+  });
+
+  it("quotes directory paths that contain spaces", () => {
+    const spec = buildSpec("filesystem", { filesystem: "/Users/me/My Documents" });
+    // Inside quotes, the parser should re-join the path as a single arg.
+    const parsed = parseMcpSpec(spec);
+    if (parsed.transport !== "stdio") throw new Error("expected stdio");
+    expect(parsed.args.at(-1)).toBe("/Users/me/My Documents");
+  });
+
+  it("returns the name bare when the catalog entry is unknown", () => {
+    // Defensive: if someone manually edits config.json and the wizard
+    // sees an unfamiliar name on re-run, we degrade gracefully rather
+    // than throwing.
+    expect(buildSpec("not-in-catalog", {})).toBe("not-in-catalog");
+  });
+});
+
+describe("Wizard — shell-exec discoverability (issue #866)", () => {
+  afterEach(() => {
+    setLanguageRuntime("EN");
+  });
+
+  it("EN saved-step hint surfaces the per-call shell-exec gate", () => {
+    setLanguageRuntime("EN");
+    const hint = t("wizard.savedShellHint");
+    expect(hint).toMatch(/shell/i);
+    expect(hint.toLowerCase()).toContain("allow always");
+  });
+
+  it("zh-CN saved-step hint surfaces the per-call shell-exec gate", () => {
+    setLanguageRuntime("zh-CN");
+    const hint = t("wizard.savedShellHint");
+    expect(hint).toContain("shell");
+    expect(hint).toContain("allow always");
+  });
+});
+
+describe("Wizard — first-launch language picker", () => {
+  afterEach(() => {
+    setLanguageRuntime("EN");
+  });
+
+  it("shows the language step first, with both supported languages", () => {
+    const { lastFrame, unmount } = render(<Wizard onComplete={() => {}} />);
+    const out = lastFrame() ?? "";
+    expect(out).toContain("Choose your language");
+    expect(out).toContain("English");
+    expect(out).toContain("简体中文");
+    unmount();
+  });
+
+  it("shows the title in zh-CN when runtime language is set to zh-CN", () => {
+    setLanguageRuntime("zh-CN");
+    const { lastFrame, unmount } = render(<Wizard onComplete={() => {}} />);
+    const out = lastFrame() ?? "";
+    expect(out).toContain("选择语言");
+    expect(out).toContain("English");
+    expect(out).toContain("简体中文");
+    unmount();
+  });
+});
+
+describe("Wizard API-key validation", () => {
+  it("accepts a key when DeepSeek auth check succeeds", async () => {
+    const fetcher = async () => new Response(JSON.stringify({ data: [] }), { status: 200 });
+
+    await expect(
+      validateDeepSeekApiKey("sk-valid1234567890", { fetch: fetcher as typeof fetch }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("rejects a key when DeepSeek returns 401", async () => {
+    const fetcher = async () => new Response("unauthorized", { status: 401 });
+
+    await expect(
+      validateDeepSeekApiKey("sk-invalid12345678", { fetch: fetcher as typeof fetch }),
+    ).resolves.toEqual({ ok: false, reason: "rejected" });
+  });
+
+  it("keeps setup on the API-key step when validation cannot complete", async () => {
+    const fetcher = async () => new Response("maintenance", { status: 503 });
+
+    await expect(
+      validateDeepSeekApiKey("sk-valid1234567890", { fetch: fetcher as typeof fetch }),
+    ).resolves.toMatchObject({ ok: false, reason: "failed", message: "HTTP 503" });
+  });
+
+  it("hits /models, not /user/balance — third-party endpoints (DashScope etc.) accept it", async () => {
+    const calls: string[] = [];
+    const fetcher = async (url: string) => {
+      calls.push(url);
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    await expect(
+      validateDeepSeekApiKey("sk-valid1234567890", {
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        fetch: fetcher as typeof fetch,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(calls).toEqual(["https://dashscope.aliyuncs.com/compatible-mode/v1/models"]);
+  });
+});

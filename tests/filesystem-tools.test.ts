@@ -1,0 +1,1449 @@
+import { promises as fs } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToolRegistry } from "../src/tools.js";
+import { lineDiff, registerFilesystemTools } from "../src/tools/filesystem.js";
+import { compileNameFilter, displayRel } from "../src/tools/filesystem.js";
+
+describe("filesystem tools (built-in, sandbox-enforced)", () => {
+  let root: string;
+  let tools: ToolRegistry;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "jupiter-fs-"));
+    tools = new ToolRegistry();
+    registerFilesystemTools(tools, { rootDir: root });
+    await fs.writeFile(join(root, "hello.txt"), "line 1\nline 2\nline 3\n");
+    await fs.mkdir(join(root, "src"), { recursive: true });
+    await fs.writeFile(join(root, "src", "index.ts"), "export const x = 1;\n");
+    await fs.writeFile(join(root, "src", "util.ts"), "export const y = 2;\n");
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  describe("read_file", () => {
+    it("reads the full contents", async () => {
+      const out = await tools.dispatch("read_file", JSON.stringify({ path: "hello.txt" }));
+      expect(out).toContain("line 1");
+      expect(out).toContain("line 3");
+    });
+
+    it("honors head=N to return only the first N lines", async () => {
+      const out = await tools.dispatch("read_file", JSON.stringify({ path: "hello.txt", head: 2 }));
+      // Head output now includes an "N of M lines" marker so the model
+      // knows it didn't get the whole file. The actual content still
+      // leads the string, un-escaped.
+      expect(out).toMatch(/^line 1\nline 2/);
+      expect(out).toMatch(/head 2 of 3 lines/);
+    });
+
+    it("honors tail=N", async () => {
+      const out = await tools.dispatch("read_file", JSON.stringify({ path: "hello.txt", tail: 2 }));
+      expect(out).toContain("line 2");
+      expect(out).toContain("line 3");
+      expect(out).not.toContain("line 1");
+      expect(out).toMatch(/tail 2 of 3 lines/);
+    });
+
+    it("range='A-B' returns the inclusive line range", async () => {
+      // Write a bigger file so the range slice is distinguishable from
+      // the head/tail paths and the auto-preview cutover.
+      await fs.writeFile(
+        join(root, "big.txt"),
+        Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n"),
+      );
+      const out = await tools.dispatch(
+        "read_file",
+        JSON.stringify({ path: "big.txt", range: "3-5" }),
+      );
+      expect(out).toMatch(/\[range 3-5 of 10 lines\]/);
+      expect(out).toContain("line 3");
+      expect(out).toContain("line 5");
+      expect(out).not.toContain("line 2");
+      expect(out).not.toContain("line 6");
+    });
+
+    it("range clamps out-of-range values to the file bounds", async () => {
+      const out = await tools.dispatch(
+        "read_file",
+        JSON.stringify({ path: "hello.txt", range: "2-99" }),
+      );
+      expect(out).toMatch(/\[range 2-3 of 3 lines\]/);
+      expect(out).toContain("line 2");
+      expect(out).toContain("line 3");
+    });
+
+    it("returns full content for many-line files when bytes fit under the threshold", async () => {
+      const bigLines = Array.from({ length: 1000 }, (_, i) => `line ${i + 1}`);
+      await fs.writeFile(join(root, "huge.txt"), bigLines.join("\n"));
+      const out = await tools.dispatch("read_file", JSON.stringify({ path: "huge.txt" }));
+      expect(out).toContain("line 1");
+      expect(out).toContain("line 500");
+      expect(out).toContain("line 1000");
+      expect(out).not.toMatch(/outline mode/);
+      expect(out).not.toMatch(/omitted/);
+    });
+
+    it("switches to outline mode when file size exceeds outlineThresholdBytes", async () => {
+      const reg = new ToolRegistry();
+      registerFilesystemTools(reg, { rootDir: root, outlineThresholdBytes: 200 });
+      const bigLines = Array.from({ length: 250 }, (_, i) => `line ${i + 1}`);
+      await fs.writeFile(join(root, "big.txt"), bigLines.join("\n"));
+      const out = await reg.dispatch("read_file", JSON.stringify({ path: "big.txt" }));
+      expect(out).toMatch(/large file:.*outline mode/);
+      expect(out).toMatch(/head \d+ lines for orientation/);
+      expect(out).toContain("line 1");
+      expect(out).toContain("line 80");
+      expect(out).not.toContain("line 200");
+      expect(out).toMatch(/search_content path:"big\.txt"/);
+      expect(out).toMatch(/read_file path:"big\.txt" range:"A-B"/);
+    });
+
+    it("outline mode surfaces TS exports as the symbol map", async () => {
+      const reg = new ToolRegistry();
+      registerFilesystemTools(reg, { rootDir: root, outlineThresholdBytes: 200 });
+      const filler = (n: number) => Array.from({ length: n }, () => "  // filler").join("\n");
+      const src = [
+        "export interface AppProps {}",
+        filler(40),
+        "export function AppInner() {}",
+        filler(40),
+        "export const handleSubmit = () => {};",
+      ].join("\n");
+      await fs.writeFile(join(root, "App.tsx"), src);
+      const out = await reg.dispatch("read_file", JSON.stringify({ path: "App.tsx" }));
+      expect(out).toMatch(/\[outline: 3 symbols\]/);
+      expect(out).toMatch(/export interface AppProps/);
+      expect(out).toMatch(/export function AppInner/);
+      expect(out).toMatch(/export const handleSubmit/);
+    });
+
+    it("outline mode surfaces protobuf messages, services, and rpcs", async () => {
+      const reg = new ToolRegistry();
+      registerFilesystemTools(reg, { rootDir: root, outlineThresholdBytes: 200 });
+      const src = [
+        'syntax = "proto3";',
+        "package demo;",
+        "",
+        "message User {",
+        "  string id = 1;",
+        "}",
+        "",
+        "message Account {",
+        "  string owner = 1;",
+        "}",
+        "",
+        "service AccountService {",
+        "  rpc GetAccount(GetReq) returns (Account);",
+        "  rpc ListAccounts(ListReq) returns (ListResp);",
+        "}",
+      ].join("\n");
+      await fs.writeFile(join(root, "demo.proto"), src);
+      const out = await reg.dispatch("read_file", JSON.stringify({ path: "demo.proto" }));
+      expect(out).toMatch(/large file:.*outline mode/);
+      expect(out).toMatch(/message User/);
+      expect(out).toMatch(/message Account/);
+      expect(out).toMatch(/service AccountService/);
+      expect(out).toMatch(/rpc GetAccount/);
+      expect(out).toMatch(/rpc ListAccounts/);
+    });
+
+    it("outline mode surfaces chapter markers in a Chinese novel .txt", async () => {
+      const reg = new ToolRegistry();
+      registerFilesystemTools(reg, { rootDir: root, outlineThresholdBytes: 200 });
+      const filler = Array.from({ length: 20 }, (_, i) => `这是第${i + 1}段普通正文内容。`).join(
+        "\n",
+      );
+      const src = [
+        "楔子",
+        filler,
+        "第一章 启程",
+        filler,
+        "第二章 风雪",
+        filler,
+        "卷二 江湖",
+        filler,
+        "Chapter 3 The Return",
+        filler,
+      ].join("\n");
+      await fs.writeFile(join(root, "novel.txt"), src);
+      const out = await reg.dispatch("read_file", JSON.stringify({ path: "novel.txt" }));
+      expect(out).toMatch(/large file:.*outline mode/);
+      expect(out).toMatch(/楔子/);
+      expect(out).toMatch(/第一章 启程/);
+      expect(out).toMatch(/第二章 风雪/);
+      expect(out).toMatch(/卷二 江湖/);
+      expect(out).toMatch(/Chapter 3 The Return/);
+    });
+
+    it("outline mode skips the outline section when no symbols match the file type", async () => {
+      const reg = new ToolRegistry();
+      registerFilesystemTools(reg, { rootDir: root, outlineThresholdBytes: 200 });
+      const src = Array.from({ length: 50 }, (_, i) => `prose line ${i + 1}`).join("\n");
+      await fs.writeFile(join(root, "plain.log"), src);
+      const out = await reg.dispatch("read_file", JSON.stringify({ path: "plain.log" }));
+      expect(out).toMatch(/large file:.*outline mode/);
+      expect(out).not.toMatch(/\[outline:/);
+      expect(out).toContain("prose line 1");
+      expect(out).toMatch(/search_content/);
+    });
+
+    it("returns full content for small files at or below the threshold", async () => {
+      const out = await tools.dispatch("read_file", JSON.stringify({ path: "hello.txt" }));
+      expect(out).toBe("line 1\nline 2\nline 3");
+    });
+
+    it("rejects paths outside the sandbox root", async () => {
+      const out = await tools.dispatch(
+        "read_file",
+        JSON.stringify({ path: "../../../etc/passwd" }),
+      );
+      expect(out).toMatch(/escapes sandbox/);
+    });
+
+    it("routes POSIX-absolute system paths through the approval gate (no escape without consent)", async () => {
+      // `/etc/passwd` is recognised as an absolute system path (#684); without
+      // a gate listener wired up, the call refuses rather than falling back to
+      // the old "remap into sandbox" behavior — i.e. no escape without consent.
+      const out = await tools.dispatch("read_file", JSON.stringify({ path: "/etc/passwd" }));
+      expect(out).toMatch(/no confirmation listener/i);
+    });
+
+    it("still treats `/<sandbox-relative>` as project-rooted (model convention preserved)", async () => {
+      const out = await tools.dispatch("read_file", JSON.stringify({ path: "/hello.txt" }));
+      expect(out).toContain("line 1");
+    });
+
+    it("triggers outline mode when file exceeds outlineThresholdBytes", async () => {
+      const tiny = new ToolRegistry();
+      registerFilesystemTools(tiny, { rootDir: root, outlineThresholdBytes: 10 });
+      const out = await tiny.dispatch("read_file", JSON.stringify({ path: "hello.txt" }));
+      expect(out).toMatch(/outline mode/);
+      expect(out).toMatch(/threshold 10 B/);
+    });
+
+    it("refuses binary files (NUL byte in first 8 KiB)", async () => {
+      const buf = Buffer.from([0x47, 0x49, 0x46, 0x38, 0x00, 0x01, 0x02, 0x03]);
+      await fs.writeFile(join(root, "fake.png"), buf);
+      const out = await tools.dispatch("read_file", JSON.stringify({ path: "fake.png" }));
+      expect(out).toMatch(/appears to be binary/);
+      expect(out).toMatch(/get_file_info/);
+    });
+
+    it("refuses to read a directory as a file", async () => {
+      const out = await tools.dispatch("read_file", JSON.stringify({ path: "src" }));
+      expect(out).toMatch(/not a file/);
+    });
+  });
+
+  describe("list_directory / directory_tree", () => {
+    it("list_directory shows entries with trailing slash for dirs", async () => {
+      const out = await tools.dispatch("list_directory", JSON.stringify({ path: "." }));
+      expect(out).toContain("hello.txt");
+      expect(out).toContain("src/");
+    });
+
+    it("directory_tree recurses", async () => {
+      const out = await tools.dispatch("directory_tree", JSON.stringify({ path: "." }));
+      expect(out).toContain("hello.txt");
+      expect(out).toContain("src/");
+      expect(out).toContain("index.ts");
+      expect(out).toContain("util.ts");
+    });
+
+    it("directory_tree respects maxDepth", async () => {
+      const out = await tools.dispatch(
+        "directory_tree",
+        JSON.stringify({ path: ".", maxDepth: 0 }),
+      );
+      // With depth 0 we list the top level only — no descent into src/.
+      expect(out).toContain("src/");
+      expect(out).not.toContain("index.ts");
+    });
+
+    it("directory_tree skips node_modules / .git / dist by default", async () => {
+      await fs.mkdir(join(root, "node_modules", "foo"), { recursive: true });
+      await fs.writeFile(join(root, "node_modules", "foo", "dep.js"), "// dep\n");
+      await fs.mkdir(join(root, ".git"), { recursive: true });
+      await fs.writeFile(join(root, ".git", "HEAD"), "ref\n");
+      await fs.mkdir(join(root, "dist"), { recursive: true });
+      await fs.writeFile(join(root, "dist", "out.js"), "// out\n");
+      const out = await tools.dispatch("directory_tree", JSON.stringify({ path: "." }));
+      // Skip markers show the dir exists but don't walk into it.
+      expect(out).toMatch(/node_modules\/\s+\(skipped/);
+      expect(out).toMatch(/\.git\/\s+\(skipped/);
+      expect(out).toMatch(/dist\/\s+\(skipped/);
+      expect(out).not.toContain("dep.js");
+      expect(out).not.toContain("HEAD");
+      expect(out).not.toContain("out.js");
+    });
+
+    it("directory_tree traverses deps when include_deps:true", async () => {
+      await fs.mkdir(join(root, "node_modules", "foo"), { recursive: true });
+      await fs.writeFile(join(root, "node_modules", "foo", "dep.js"), "// dep\n");
+      const out = await tools.dispatch(
+        "directory_tree",
+        JSON.stringify({ path: ".", include_deps: true, maxDepth: 3 }),
+      );
+      expect(out).toContain("dep.js");
+      expect(out).not.toMatch(/skipped/);
+    });
+
+    it("directory_tree default maxDepth is 2", async () => {
+      await fs.mkdir(join(root, "a", "b", "c"), { recursive: true });
+      await fs.writeFile(join(root, "a", "b", "c", "deep.txt"), "x\n");
+      await fs.writeFile(join(root, "a", "b", "shallow.txt"), "y\n");
+      const out = await tools.dispatch("directory_tree", JSON.stringify({ path: "." }));
+      // depth 2 shows a/, a/b/, a/b/shallow.txt — but NOT a/b/c's children.
+      expect(out).toContain("shallow.txt");
+      expect(out).toContain("c/");
+      expect(out).not.toContain("deep.txt");
+    });
+
+    it("directory_tree collapses directories with >50 entries", async () => {
+      await fs.mkdir(join(root, "huge"), { recursive: true });
+      for (let i = 0; i < 60; i++) {
+        await fs.writeFile(join(root, "huge", `f${String(i).padStart(3, "0")}.txt`), "x");
+      }
+      const out = await tools.dispatch(
+        "directory_tree",
+        JSON.stringify({ path: "huge", maxDepth: 1 }),
+      );
+      expect(out).toMatch(/\[… \d+ entries hidden/);
+      expect(out).toMatch(/list_directory/);
+    });
+  });
+
+  describe("search_files", () => {
+    it("finds matching filenames recursively", async () => {
+      const out = await tools.dispatch("search_files", JSON.stringify({ pattern: "index" }));
+      expect(out).toContain("index.ts");
+    });
+
+    it("is case-insensitive", async () => {
+      const out = await tools.dispatch("search_files", JSON.stringify({ pattern: "HELLO" }));
+      expect(out).toContain("hello.txt");
+    });
+
+    it("reports no-matches cleanly", async () => {
+      const out = await tools.dispatch("search_files", JSON.stringify({ pattern: "nothing123" }));
+      expect(out).toBe("(no matches)");
+    });
+
+    it("treats path: '/' as the sandbox root (model's POSIX intuition)", async () => {
+      // Common model failure mode: the LLM passes path: "/" intending
+      // "search the whole project". Without sandbox-root semantics
+      // path.resolve treats "/" as the actual filesystem root, the
+      // escape check rejects it, and the model sees a confusing error.
+      const out = await tools.dispatch(
+        "search_files",
+        JSON.stringify({ path: "/", pattern: "index" }),
+      );
+      expect(out).not.toMatch(/escapes sandbox/);
+      expect(out).toContain("index.ts");
+    });
+
+    it("treats path: '/src' as <root>/src", async () => {
+      const out = await tools.dispatch(
+        "search_files",
+        JSON.stringify({ path: "/src", pattern: "util" }),
+      );
+      expect(out).not.toMatch(/escapes sandbox/);
+      expect(out).toContain("util.ts");
+    });
+
+    it("returns slash-normalized paths (no backslashes)", async () => {
+      await fs.mkdir(join(root, "src", "cli", "ui"), { recursive: true });
+      await fs.writeFile(join(root, "src", "cli", "ui", "App.tsx"), "// app\n");
+      const out = await tools.dispatch("search_files", JSON.stringify({ pattern: "App" }));
+      expect(out).toContain("src/cli/ui/App.tsx");
+      expect(out).not.toMatch(/src[\\]cli/);
+    });
+
+    it("skips dependency/build/VCS dirs by default", async () => {
+      await fs.mkdir(join(root, "node_modules", "lib"), { recursive: true });
+      await fs.writeFile(join(root, "node_modules", "lib", "marker.ts"), "x");
+      await fs.mkdir(join(root, "dist"), { recursive: true });
+      await fs.writeFile(join(root, "dist", "marker.ts"), "x");
+      await fs.mkdir(join(root, "src"), { recursive: true });
+      await fs.writeFile(join(root, "src", "marker.ts"), "x");
+      const out = await tools.dispatch("search_files", JSON.stringify({ pattern: "marker" }));
+      expect(out).toContain("src/marker.ts");
+      expect(out).not.toContain("node_modules");
+      expect(out).not.toContain("dist/marker.ts");
+    });
+
+    it("walks dependency dirs when include_deps:true", async () => {
+      await fs.mkdir(join(root, "node_modules", "lib"), { recursive: true });
+      await fs.writeFile(join(root, "node_modules", "lib", "marker.ts"), "x");
+      const out = await tools.dispatch(
+        "search_files",
+        JSON.stringify({ pattern: "marker", include_deps: true }),
+      );
+      expect(out).toContain("node_modules/lib/marker.ts");
+    });
+
+    it("walks .jupiter/ by default so user skills stay reachable (#1357)", async () => {
+      await fs.mkdir(join(root, ".jupiter", "skills"), { recursive: true });
+      await fs.writeFile(join(root, ".jupiter", "skills", "my-skill.md"), "# my-skill\n");
+      const out = await tools.dispatch("search_files", JSON.stringify({ pattern: "my-skill" }));
+      expect(out).toContain(".jupiter/skills/my-skill.md");
+    });
+
+    it("honors AbortSignal during recursive search", async () => {
+      await fs.mkdir(join(root, "src", "nested"), { recursive: true });
+      await fs.writeFile(join(root, "src", "nested", "marker.ts"), "x");
+
+      const ctrl = new AbortController();
+      const originalReaddir = fs.readdir.bind(fs);
+      let readdirCalls = 0;
+      const spy = vi
+        .spyOn(fs, "readdir")
+        .mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+          const result = await originalReaddir(...args);
+          readdirCalls++;
+          if (readdirCalls === 2) ctrl.abort();
+          return result;
+        });
+
+      try {
+        const out = await tools.dispatch("search_files", JSON.stringify({ pattern: "marker" }), {
+          signal: ctrl.signal,
+        });
+        expect(out).toMatch(/aborted/i);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe("search_content", () => {
+    it("finds a literal substring inside a file's content", async () => {
+      // src/index.ts has `export const x = 1;`
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "export const x" }),
+      );
+      // Format: path:line: text (always slash-normalized)
+      expect(out).toMatch(/src\/index\.ts:1: export const x = 1;/);
+    });
+
+    it("matches across multiple files and reports each line", async () => {
+      // Both src/index.ts and src/util.ts have `export const`.
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "export const" }),
+      );
+      expect(out).toContain("index.ts");
+      expect(out).toContain("util.ts");
+    });
+
+    it("supports regex patterns (word-bounded match)", async () => {
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "\\bexport\\s+const\\s+y\\b" }),
+      );
+      expect(out).toContain("util.ts");
+      expect(out).not.toContain("index.ts");
+    });
+
+    it("is case-insensitive by default", async () => {
+      const out = await tools.dispatch("search_content", JSON.stringify({ pattern: "EXPORT" }));
+      expect(out).toContain("export");
+    });
+
+    it("respects case_sensitive when set", async () => {
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "EXPORT", case_sensitive: true }),
+      );
+      expect(out).toMatch(/no matches/);
+    });
+
+    it("filters by glob substring on the file name", async () => {
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "export const", glob: "util" }),
+      );
+      expect(out).toContain("util.ts");
+      expect(out).not.toContain("index.ts");
+    });
+
+    it("skips dependency dirs by default", async () => {
+      // Drop a node_modules-style file matching the pattern.
+      await fs.mkdir(join(root, "node_modules", "junk"), { recursive: true });
+      await fs.writeFile(
+        join(root, "node_modules", "junk", "vendor.ts"),
+        "export const NEEDLE = 1;\n",
+      );
+      const out = await tools.dispatch("search_content", JSON.stringify({ pattern: "NEEDLE" }));
+      expect(out).toMatch(/no matches/);
+    });
+
+    it("includes dependency dirs when include_deps:true", async () => {
+      await fs.mkdir(join(root, "node_modules", "junk"), { recursive: true });
+      await fs.writeFile(
+        join(root, "node_modules", "junk", "vendor.ts"),
+        "export const NEEDLE = 1;\n",
+      );
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "NEEDLE", include_deps: true }),
+      );
+      expect(out).toContain("vendor.ts");
+    });
+
+    it("skips binary files by extension", async () => {
+      // A .png with searchable text inside — extension wins.
+      await fs.writeFile(join(root, "logo.png"), "this is a PNG with NEEDLE inside\n");
+      const out = await tools.dispatch("search_content", JSON.stringify({ pattern: "NEEDLE" }));
+      expect(out).not.toContain("logo.png");
+    });
+
+    it("skips binary files by content (NUL byte sniff)", async () => {
+      // A .txt that's actually binary — content sniff catches it.
+      const buf = Buffer.concat([Buffer.from("NEEDLE\0"), Buffer.from([0, 1, 2, 3])]);
+      await fs.writeFile(join(root, "data.txt"), buf);
+      const out = await tools.dispatch("search_content", JSON.stringify({ pattern: "NEEDLE" }));
+      expect(out).not.toContain("data.txt");
+    });
+
+    it("returns a clean (no matches) message when nothing matches", async () => {
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "definitely_not_present_anywhere_zxq" }),
+      );
+      expect(out).toMatch(/no matches/);
+    });
+
+    it("returns slash-normalized path prefixes (no backslashes)", async () => {
+      await fs.mkdir(join(root, "src", "cli", "ui"), { recursive: true });
+      await fs.writeFile(join(root, "src", "cli", "ui", "App.tsx"), "UNIQUE_MARKER_42\n");
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "UNIQUE_MARKER_42" }),
+      );
+      expect(out).toMatch(/src\/cli\/ui\/App\.tsx:1:/);
+      expect(out).not.toMatch(/src[\\]cli/);
+    });
+
+    it("scans a 1.5 MiB single-line file fully without hanging (issue #1236)", async () => {
+      // Minified-bundle shape — long single line. We want the search to
+      // (a) cover the whole line, and (b) complete in reasonable time
+      // against a literal pattern. The pattern below is literal so V8's
+      // fast regex path handles 1.5 MiB in tens of ms. The walk-level
+      // deadline (WALK_DEADLINE_MS) is the backstop if a future change
+      // regresses to quadratic behaviour.
+      const longLine = "a".repeat(1_500_000);
+      await fs.writeFile(join(root, "huge.txt"), `${longLine}\n`);
+      const start = Date.now();
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "definitely_not_in_aaaa" }),
+      );
+      expect(Date.now() - start).toBeLessThan(2000);
+      expect(out).toMatch(/no matches/);
+    });
+
+    it("skips a single file with catastrophic regex and keeps walking (issue #1236)", async () => {
+      // (a+)+! on a long run of 'a' is the textbook ReDoS pattern. With the
+      // worker-isolated runner, the bad file is terminated and reported as
+      // a regex-timeout in the footer; the remaining file still produces
+      // its match.
+      const { RegexRunner, __setRegexRunnerForTesting } = await import(
+        "../src/tools/fs/regex-runner.js"
+      );
+      __setRegexRunnerForTesting(new RegexRunner({ defaultTimeoutMs: 300 }));
+      try {
+        await fs.writeFile(join(root, "evil.txt"), `${"a".repeat(40)}\n`);
+        await fs.writeFile(join(root, "good.txt"), "match here\n");
+        const out = await tools.dispatch("search_content", JSON.stringify({ pattern: "(a+)+!" }));
+        expect(out).toMatch(/regex timed out on 1 file/);
+        expect(out).toContain("evil.txt");
+      } finally {
+        __setRegexRunnerForTesting(null);
+      }
+    });
+
+    it("returns an aborted error when the signal fires before dispatch (issue #1236)", async () => {
+      const ctrl = new AbortController();
+      ctrl.abort();
+      const out = await tools.dispatch("search_content", JSON.stringify({ pattern: "anything" }), {
+        signal: ctrl.signal,
+      });
+      expect(out).toMatch(/aborted before dispatch/);
+      expect(JSON.parse(out)).toMatchObject({ rejectedReason: "aborted" });
+    });
+
+    it("honors AbortSignal during recursive content search", async () => {
+      await fs.mkdir(join(root, "src", "nested"), { recursive: true });
+      await fs.writeFile(join(root, "src", "nested", "deep.ts"), "export const z = 3;\n");
+
+      const ctrl = new AbortController();
+      const originalReaddir = fs.readdir.bind(fs);
+      let readdirCalls = 0;
+      const spy = vi
+        .spyOn(fs, "readdir")
+        .mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+          const result = await originalReaddir(...args);
+          readdirCalls++;
+          if (readdirCalls === 2) ctrl.abort();
+          return result;
+        });
+
+      try {
+        const out = await tools.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "export const" }),
+          { signal: ctrl.signal },
+        );
+        expect(out).toMatch(/aborted/i);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    describe("glob filter", () => {
+      beforeEach(async () => {
+        await fs.mkdir(join(root, "src", "ui"), { recursive: true });
+        await fs.writeFile(join(root, "src", "alpha.ts"), "TARGETSTRING\n");
+        await fs.writeFile(join(root, "src", "beta.tsx"), "TARGETSTRING\n");
+        await fs.writeFile(join(root, "src", "ui", "gamma.tsx"), "TARGETSTRING\n");
+        await fs.writeFile(join(root, "notes.md"), "TARGETSTRING\n");
+      });
+
+      it("real glob: '*.ts' matches only .ts (not .tsx)", async () => {
+        const out = await tools.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "TARGETSTRING", glob: "*.ts" }),
+        );
+        expect(out).toContain("src/alpha.ts:");
+        expect(out).not.toContain("beta.tsx");
+        expect(out).not.toContain("gamma.tsx");
+        expect(out).not.toContain("notes.md");
+      });
+
+      it("real glob: '**/*.tsx' matches across subdirs", async () => {
+        const out = await tools.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "TARGETSTRING", glob: "**/*.tsx" }),
+        );
+        expect(out).toContain("src/beta.tsx:");
+        expect(out).toContain("src/ui/gamma.tsx:");
+        expect(out).not.toContain("alpha.ts:");
+        expect(out).not.toContain("notes.md");
+      });
+
+      it("real glob: brace expansion '*.{ts,tsx}'", async () => {
+        const out = await tools.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "TARGETSTRING", glob: "*.{ts,tsx}" }),
+        );
+        expect(out).toContain("src/alpha.ts:");
+        expect(out).toContain("src/beta.tsx:");
+        expect(out).not.toContain("notes.md");
+      });
+
+      it("substring fallback: '.ts' still works (matches .ts and .tsx)", async () => {
+        const out = await tools.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "TARGETSTRING", glob: ".ts" }),
+        );
+        expect(out).toContain("src/alpha.ts:");
+        expect(out).toContain("src/beta.tsx:");
+        expect(out).not.toContain("notes.md");
+      });
+
+      it("substring fallback: 'beta' matches by basename substring", async () => {
+        const out = await tools.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "TARGETSTRING", glob: "beta" }),
+        );
+        expect(out).toContain("src/beta.tsx:");
+        expect(out).not.toContain("alpha.ts:");
+        expect(out).not.toContain("gamma.tsx:");
+      });
+    });
+
+    describe("per-file cap and histogram fallback", () => {
+      it("caps a single file's printed hits at 30 and footers the overflow", async () => {
+        const lines = Array.from({ length: 47 }, () => "TARGETSTRING here");
+        await fs.writeFile(join(root, "many.ts"), lines.join("\n"));
+        const out = await tools.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "TARGETSTRING", glob: "many.ts" }),
+        );
+        const hitLines = out.split("\n").filter((l) => /^many\.ts:\d+:/.test(l));
+        expect(hitLines).toHaveLength(30);
+        expect(out).toMatch(/\[many\.ts: 17 more matches in this file/);
+      });
+
+      it("does not emit the cap footer when hits fit under the cap", async () => {
+        const lines = Array.from({ length: 5 }, () => "TARGETSTRING here");
+        await fs.writeFile(join(root, "few.ts"), lines.join("\n"));
+        const out = await tools.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "TARGETSTRING", glob: "few.ts" }),
+        );
+        expect(out).not.toMatch(/more matches in this file/);
+      });
+
+      it("summary_only:true returns histogram with no line content", async () => {
+        await fs.writeFile(
+          join(root, "a.ts"),
+          ["MARK one", "noise", "MARK two", "MARK three"].join("\n"),
+        );
+        await fs.writeFile(join(root, "b.ts"), ["MARK only"].join("\n"));
+        const out = await tools.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "MARK", summary_only: true, glob: "*.ts" }),
+        );
+        expect(out).toContain("a.ts: 3 matches");
+        expect(out).toContain("b.ts: 1 match");
+        expect(out).not.toMatch(/MARK one/);
+        expect(out).not.toMatch(/MARK two/);
+      });
+
+      it("flips remaining files to summary mode once 80% of the byte budget is spent", async () => {
+        const tiny = new ToolRegistry();
+        registerFilesystemTools(tiny, { rootDir: root, maxListBytes: 4096 });
+        const dir = join(root, "histtest");
+        await fs.mkdir(dir, { recursive: true });
+        // Per-file output ≈ 8 hits × ~75 bytes ≈ 600 bytes. 5 files → 3000 bytes
+        // (~73%); 6 → ~88%, so the flip lands somewhere in the back half of
+        // the alphabetical walk.
+        const fileNames = "abcdefghij".split("");
+        const hitLine = `TARGET ${"y".repeat(50)}`;
+        for (const name of fileNames) {
+          const lines = Array.from({ length: 8 }, () => hitLine);
+          await fs.writeFile(join(dir, `${name}.ts`), lines.join("\n"));
+        }
+        const out = await tiny.dispatch(
+          "search_content",
+          JSON.stringify({ pattern: "TARGET", path: "histtest" }),
+        );
+        expect(out).toMatch(/switching to summary mode — byte budget at \d+%/);
+        const histogramLines = out
+          .split("\n")
+          .filter((l) => /^histtest\/[a-j]\.ts: \d+ match/.test(l));
+        expect(histogramLines.length).toBeGreaterThan(0);
+      });
+    });
+  });
+
+  describe("compileNameFilter", () => {
+    it("returns null for empty / undefined input", () => {
+      expect(compileNameFilter(null)).toBeNull();
+      expect(compileNameFilter(undefined)).toBeNull();
+      expect(compileNameFilter("")).toBeNull();
+    });
+
+    it("substring path for plain strings (case-insensitive)", () => {
+      const m = compileNameFilter(".TS")!;
+      expect(m("Foo.ts", "src/Foo.ts")).toBe(true);
+      expect(m("Foo.tsx", "src/Foo.tsx")).toBe(true);
+      expect(m("Foo.md", "src/Foo.md")).toBe(false);
+    });
+
+    it("real glob path for patterns with metachars; basename match", () => {
+      const m = compileNameFilter("*.ts")!;
+      expect(m("alpha.ts", "src/alpha.ts")).toBe(true);
+      expect(m("alpha.tsx", "src/alpha.tsx")).toBe(false);
+    });
+
+    it("rel-path match when pattern contains '/'", () => {
+      const m = compileNameFilter("src/**/*.tsx")!;
+      expect(m("App.tsx", "src/cli/App.tsx")).toBe(true);
+      expect(m("App.tsx", "tests/App.tsx")).toBe(false);
+    });
+  });
+
+  describe("get_file_info", () => {
+    it("returns type + size + mtime as JSON", async () => {
+      const out = await tools.dispatch("get_file_info", JSON.stringify({ path: "hello.txt" }));
+      const parsed = JSON.parse(out);
+      expect(parsed.type).toBe("file");
+      expect(parsed.size).toBeGreaterThan(0);
+      expect(parsed.mtime).toMatch(/\d{4}-\d{2}-\d{2}/);
+    });
+
+    it("reports directories", async () => {
+      const out = await tools.dispatch("get_file_info", JSON.stringify({ path: "src" }));
+      expect(JSON.parse(out).type).toBe("directory");
+    });
+  });
+
+  describe("write_file", () => {
+    it("creates a new file with contents", async () => {
+      const out = await tools.dispatch(
+        "write_file",
+        JSON.stringify({ path: "new.md", content: "hi" }),
+      );
+      expect(out).toMatch(/created new\.md \(2 chars\)/);
+      const disk = await fs.readFile(join(root, "new.md"), "utf8");
+      expect(disk).toBe("hi");
+    });
+
+    it("creates parent directories as needed", async () => {
+      await tools.dispatch("write_file", JSON.stringify({ path: "a/b/c/deep.txt", content: "x" }));
+      const disk = await fs.readFile(join(root, "a", "b", "c", "deep.txt"), "utf8");
+      expect(disk).toBe("x");
+    });
+
+    it("returns slash-normalized path in output", async () => {
+      await fs.mkdir(join(root, "src", "cli"), { recursive: true });
+      const out = await tools.dispatch(
+        "write_file",
+        JSON.stringify({ path: "src/cli/new.ts", content: "export {}" }),
+      );
+      expect(out).toContain("src/cli/new.ts");
+      expect(out).not.toMatch(/src[\\]cli/);
+    });
+
+    it("rejects writes outside the sandbox", async () => {
+      const out = await tools.dispatch(
+        "write_file",
+        JSON.stringify({ path: "../escape.txt", content: "bad" }),
+      );
+      expect(out).toMatch(/escapes sandbox/);
+    });
+  });
+
+  describe("edit_file (flat SEARCH/REPLACE — the anti-DSML shape)", () => {
+    it("replaces a unique search string", async () => {
+      await fs.writeFile(join(root, "a.txt"), "foo bar baz");
+      const out = await tools.dispatch(
+        "edit_file",
+        JSON.stringify({ path: "a.txt", search: "bar", replace: "QUX" }),
+      );
+      expect(out).toMatch(/edited/);
+      const disk = await fs.readFile(join(root, "a.txt"), "utf8");
+      expect(disk).toBe("foo QUX baz");
+    });
+
+    it("includes a git-style @@ -N,M +N,M @@ hunk header with the real starting line", async () => {
+      // File has 4 pre-existing lines; SEARCH starts at line 3.
+      // Expected hunk header: @@ -3,1 +3,2 @@ (1 old line → 2 new).
+      await fs.writeFile(join(root, "a.txt"), "alpha\nbeta\nTARGET\ntail\n");
+      const out = await tools.dispatch(
+        "edit_file",
+        JSON.stringify({ path: "a.txt", search: "TARGET", replace: "TARGET\nextra" }),
+      );
+      expect(out).toMatch(/@@ -3,1 \+3,2 @@/);
+    });
+
+    it("returns a proper LCS diff with context lines, not just - old / + new", async () => {
+      // The user-reported case: SEARCH is a single line, REPLACE keeps
+      // that line and adds three more below it. A naive dump-both-sides
+      // would show "- line\n+ line\n+ new1\n+ new2\n+ new3" (redundant
+      // `-` for the unchanged line). Proper LCS shows the first line
+      // as context (` `) and only the additions as `+`.
+      await fs.writeFile(
+        join(root, "a.txt"),
+        "const a = doc.getElementById('a');\nconst b = doc.getElementById('b');",
+      );
+      const search = "const a = doc.getElementById('a');";
+      const replace = [
+        "const a = doc.getElementById('a');",
+        "const b2 = doc.getElementById('b2');",
+        "const c = doc.getElementById('c');",
+      ].join("\n");
+      const out = await tools.dispatch(
+        "edit_file",
+        JSON.stringify({ path: "a.txt", search, replace }),
+      );
+      // The unchanged first line appears as context (space-prefixed),
+      // NOT as a `-` / `+` pair.
+      expect(out).toContain("  const a = doc.getElementById('a');");
+      // The new lines are `+` prefixed.
+      expect(out).toContain("+ const b2 = doc.getElementById('b2');");
+      expect(out).toContain("+ const c = doc.getElementById('c');");
+      // No line should appear as both `-` and `+` for the preserved
+      // one — that was the old broken behavior.
+      const minuses = out.split("\n").filter((l) => l.startsWith("- "));
+      expect(minuses.some((l) => l.includes("getElementById('a')"))).toBe(false);
+    });
+
+    it("refuses when the search text is not found", async () => {
+      await fs.writeFile(join(root, "a.txt"), "foo bar");
+      const out = await tools.dispatch(
+        "edit_file",
+        JSON.stringify({ path: "a.txt", search: "baz", replace: "x" }),
+      );
+      expect(out).toMatch(/not found/);
+    });
+
+    it("refuses when the search text appears multiple times", async () => {
+      await fs.writeFile(join(root, "a.txt"), "cat cat cat");
+      const out = await tools.dispatch(
+        "edit_file",
+        JSON.stringify({ path: "a.txt", search: "cat", replace: "dog" }),
+      );
+      expect(out).toMatch(/multiple times/);
+      // File unchanged.
+      const disk = await fs.readFile(join(root, "a.txt"), "utf8");
+      expect(disk).toBe("cat cat cat");
+    });
+
+    it("refuses an empty search", async () => {
+      await fs.writeFile(join(root, "a.txt"), "x");
+      const out = await tools.dispatch(
+        "edit_file",
+        JSON.stringify({ path: "a.txt", search: "", replace: "y" }),
+      );
+      expect(out).toMatch(/search cannot be empty/);
+    });
+
+    it("matches LF search against a CRLF file and preserves CRLF after write", async () => {
+      await fs.writeFile(join(root, "a.txt"), "hello world\r\ngoodbye world\r\n");
+      const out = await tools.dispatch(
+        "edit_file",
+        JSON.stringify({ path: "a.txt", search: "hello world", replace: "hello WORLD" }),
+      );
+      expect(out).toMatch(/edited/);
+      const disk = await fs.readFile(join(root, "a.txt"), "utf8");
+      expect(disk).toBe("hello WORLD\r\ngoodbye world\r\n");
+    });
+
+    it("matches LF multi-line search against a CRLF file and preserves CRLF", async () => {
+      await fs.writeFile(join(root, "a.txt"), "line one\r\nline two\r\nline three\r\n");
+      const out = await tools.dispatch(
+        "edit_file",
+        JSON.stringify({
+          path: "a.txt",
+          search: "line one\nline two",
+          replace: "line ONE\nline TWO",
+        }),
+      );
+      expect(out).toMatch(/edited/);
+      const disk = await fs.readFile(join(root, "a.txt"), "utf8");
+      expect(disk).toBe("line ONE\r\nline TWO\r\nline three\r\n");
+    });
+
+    it("refuses duplicate match in a CRLF file when search adapted to CRLF", async () => {
+      await fs.writeFile(join(root, "a.txt"), "dup\r\ndup\r\nunique\r\n");
+      const out = await tools.dispatch(
+        "edit_file",
+        JSON.stringify({ path: "a.txt", search: "dup", replace: "fixed" }),
+      );
+      expect(out).toMatch(/multiple times/);
+      const disk = await fs.readFile(join(root, "a.txt"), "utf8");
+      expect(disk).toBe("dup\r\ndup\r\nunique\r\n");
+    });
+  });
+
+  describe("create_directory + move_file", () => {
+    it("create_directory is idempotent (mkdir -p)", async () => {
+      const a = await tools.dispatch("create_directory", JSON.stringify({ path: "d/e/f" }));
+      expect(a).toMatch(/created/);
+      const b = await tools.dispatch("create_directory", JSON.stringify({ path: "d/e/f" }));
+      expect(b).toMatch(/created/);
+      const st = await fs.stat(join(root, "d", "e", "f"));
+      expect(st.isDirectory()).toBe(true);
+    });
+
+    it("move_file renames", async () => {
+      const out = await tools.dispatch(
+        "move_file",
+        JSON.stringify({ source: "hello.txt", destination: "bye.txt" }),
+      );
+      expect(out).toMatch(/moved/);
+      const disk = await fs.readFile(join(root, "bye.txt"), "utf8");
+      expect(disk).toContain("line 1");
+      await expect(fs.stat(join(root, "hello.txt"))).rejects.toThrow();
+    });
+
+    it("move_file into a new subdir creates the parent", async () => {
+      await tools.dispatch(
+        "move_file",
+        JSON.stringify({ source: "hello.txt", destination: "archive/old.txt" }),
+      );
+      const disk = await fs.readFile(join(root, "archive", "old.txt"), "utf8");
+      expect(disk).toContain("line 1");
+    });
+  });
+
+  describe("allowWriting=false (read-only mode)", () => {
+    it("skips registering write_file / edit_file / multi_edit / create_directory / move_file / delete_file / delete_directory / copy_file", async () => {
+      const ro = new ToolRegistry();
+      registerFilesystemTools(ro, { rootDir: root, allowWriting: false });
+      expect(ro.has("read_file")).toBe(true);
+      expect(ro.has("list_directory")).toBe(true);
+      expect(ro.has("glob")).toBe(true);
+      expect(ro.has("write_file")).toBe(false);
+      expect(ro.has("edit_file")).toBe(false);
+      expect(ro.has("multi_edit")).toBe(false);
+      expect(ro.has("create_directory")).toBe(false);
+      expect(ro.has("move_file")).toBe(false);
+      expect(ro.has("delete_file")).toBe(false);
+      expect(ro.has("delete_directory")).toBe(false);
+      expect(ro.has("copy_file")).toBe(false);
+    });
+  });
+
+  describe("delete_file / delete_directory / copy_file", () => {
+    it("delete_file removes a regular file", async () => {
+      const out = await tools.dispatch("delete_file", JSON.stringify({ path: "hello.txt" }));
+      expect(out).toMatch(/deleted/);
+      await expect(fs.stat(join(root, "hello.txt"))).rejects.toThrow();
+    });
+
+    it("delete_file refuses a directory and points at delete_directory", async () => {
+      const out = await tools.dispatch("delete_file", JSON.stringify({ path: "src" }));
+      expect(out).toMatch(/is a directory/);
+      expect(out).toMatch(/delete_directory/);
+      const st = await fs.stat(join(root, "src"));
+      expect(st.isDirectory()).toBe(true);
+    });
+
+    it("delete_file errors on a missing path", async () => {
+      const out = await tools.dispatch("delete_file", JSON.stringify({ path: "no-such-file.txt" }));
+      expect(out).toMatch(/error/i);
+    });
+
+    it("delete_directory removes recursively by default", async () => {
+      const out = await tools.dispatch("delete_directory", JSON.stringify({ path: "src" }));
+      expect(out).toMatch(/recursive/);
+      await expect(fs.stat(join(root, "src"))).rejects.toThrow();
+    });
+
+    it("delete_directory with recursive:false removes empty dirs but refuses non-empty", async () => {
+      await fs.mkdir(join(root, "empty"));
+      const okOut = await tools.dispatch(
+        "delete_directory",
+        JSON.stringify({ path: "empty", recursive: false }),
+      );
+      expect(okOut).toMatch(/deleted/);
+      const failOut = await tools.dispatch(
+        "delete_directory",
+        JSON.stringify({ path: "src", recursive: false }),
+      );
+      expect(failOut).toMatch(/error/i);
+      const st = await fs.stat(join(root, "src"));
+      expect(st.isDirectory()).toBe(true);
+    });
+
+    it("delete_directory refuses a regular file and points at delete_file", async () => {
+      const out = await tools.dispatch("delete_directory", JSON.stringify({ path: "hello.txt" }));
+      expect(out).toMatch(/is a file/);
+      expect(out).toMatch(/delete_file/);
+    });
+
+    it("copy_file copies a regular file", async () => {
+      const out = await tools.dispatch(
+        "copy_file",
+        JSON.stringify({ source: "hello.txt", destination: "copy.txt" }),
+      );
+      expect(out).toMatch(/copied/);
+      const original = await fs.readFile(join(root, "hello.txt"), "utf8");
+      const copy = await fs.readFile(join(root, "copy.txt"), "utf8");
+      expect(copy).toBe(original);
+    });
+
+    it("copy_file recursively copies a directory", async () => {
+      await tools.dispatch(
+        "copy_file",
+        JSON.stringify({ source: "src", destination: "src-backup" }),
+      );
+      const indexCopy = await fs.readFile(join(root, "src-backup", "index.ts"), "utf8");
+      expect(indexCopy).toContain("export const x = 1;");
+      const utilCopy = await fs.readFile(join(root, "src-backup", "util.ts"), "utf8");
+      expect(utilCopy).toContain("export const y = 2;");
+    });
+
+    it("copy_file creates parent directories of the destination", async () => {
+      await tools.dispatch(
+        "copy_file",
+        JSON.stringify({ source: "hello.txt", destination: "archive/copy.txt" }),
+      );
+      const copy = await fs.readFile(join(root, "archive", "copy.txt"), "utf8");
+      expect(copy).toContain("line 1");
+    });
+
+    it("copy_file refuses to overwrite an existing destination", async () => {
+      await fs.writeFile(join(root, "occupied.txt"), "preserve me");
+      const out = await tools.dispatch(
+        "copy_file",
+        JSON.stringify({ source: "hello.txt", destination: "occupied.txt" }),
+      );
+      expect(out).toMatch(/error/i);
+      const survived = await fs.readFile(join(root, "occupied.txt"), "utf8");
+      expect(survived).toBe("preserve me");
+    });
+
+    it("delete_file refuses paths outside the sandbox", async () => {
+      const out = await tools.dispatch("delete_file", JSON.stringify({ path: "../escape.txt" }));
+      expect(out).toMatch(/error/i);
+    });
+
+    it("copy_file refuses sources outside the sandbox", async () => {
+      const out = await tools.dispatch(
+        "copy_file",
+        JSON.stringify({ source: "../escape.txt", destination: "ok.txt" }),
+      );
+      expect(out).toMatch(/error/i);
+    });
+  });
+
+  describe("multi_edit (atomic batch SEARCH/REPLACE, single-file and cross-file)", () => {
+    it("applies multiple edits to one file in one call", async () => {
+      await fs.writeFile(join(root, "a.txt"), "alpha\nbeta\ngamma\n");
+      const out = await tools.dispatch(
+        "multi_edit",
+        JSON.stringify({
+          edits: [
+            { path: "a.txt", search: "alpha", replace: "ALPHA" },
+            { path: "a.txt", search: "gamma", replace: "GAMMA" },
+          ],
+        }),
+      );
+      expect(out).toMatch(/applied 2 edits across 1 file/);
+      const disk = await fs.readFile(join(root, "a.txt"), "utf8");
+      expect(disk).toBe("ALPHA\nbeta\nGAMMA\n");
+    });
+
+    it("applies edits sequentially per file — edit 2 can match text inserted by edit 1", async () => {
+      await fs.writeFile(join(root, "a.txt"), "x\n");
+      const out = await tools.dispatch(
+        "multi_edit",
+        JSON.stringify({
+          edits: [
+            { path: "a.txt", search: "x", replace: "x\nINSERTED" },
+            { path: "a.txt", search: "INSERTED", replace: "REPLACED" },
+          ],
+        }),
+      );
+      expect(out).toMatch(/applied 2 edits across 1 file/);
+      const disk = await fs.readFile(join(root, "a.txt"), "utf8");
+      expect(disk).toBe("x\nREPLACED\n");
+    });
+
+    it("applies edits across multiple files in one atomic call", async () => {
+      await fs.writeFile(join(root, "a.txt"), "alpha\n");
+      await fs.writeFile(join(root, "b.txt"), "bravo\n");
+      const out = await tools.dispatch(
+        "multi_edit",
+        JSON.stringify({
+          edits: [
+            { path: "a.txt", search: "alpha", replace: "ALPHA" },
+            { path: "b.txt", search: "bravo", replace: "BRAVO" },
+          ],
+        }),
+      );
+      expect(out).toMatch(/applied 2 edits across 2 files/);
+      expect(await fs.readFile(join(root, "a.txt"), "utf8")).toBe("ALPHA\n");
+      expect(await fs.readFile(join(root, "b.txt"), "utf8")).toBe("BRAVO\n");
+    });
+
+    it("is atomic across files: a single failure leaves ALL files untouched", async () => {
+      await fs.writeFile(join(root, "a.txt"), "alpha\n");
+      await fs.writeFile(join(root, "b.txt"), "bravo\n");
+      const out = await tools.dispatch(
+        "multi_edit",
+        JSON.stringify({
+          edits: [
+            { path: "a.txt", search: "alpha", replace: "ALPHA" },
+            { path: "b.txt", search: "MISSING", replace: "x" },
+          ],
+        }),
+      );
+      expect(out).toMatch(/edit #2/);
+      expect(out).toMatch(/no edits applied/);
+      expect(await fs.readFile(join(root, "a.txt"), "utf8")).toBe("alpha\n");
+      expect(await fs.readFile(join(root, "b.txt"), "utf8")).toBe("bravo\n");
+    });
+
+    it("refuses an empty edits array", async () => {
+      await fs.writeFile(join(root, "a.txt"), "x");
+      const out = await tools.dispatch("multi_edit", JSON.stringify({ edits: [] }));
+      expect(out).toMatch(/at least one entry/);
+    });
+
+    it("refuses a duplicate match (same rules as edit_file)", async () => {
+      await fs.writeFile(join(root, "a.txt"), "cat cat\n");
+      const out = await tools.dispatch(
+        "multi_edit",
+        JSON.stringify({
+          edits: [{ path: "a.txt", search: "cat", replace: "dog" }],
+        }),
+      );
+      expect(out).toMatch(/multiple times/);
+      const disk = await fs.readFile(join(root, "a.txt"), "utf8");
+      expect(disk).toBe("cat cat\n");
+    });
+
+    it("matches LF search against a CRLF file and preserves CRLF", async () => {
+      await fs.writeFile(join(root, "a.txt"), "one\r\ntwo\r\nthree\r\n");
+      const out = await tools.dispatch(
+        "multi_edit",
+        JSON.stringify({
+          edits: [
+            { path: "a.txt", search: "one", replace: "ONE" },
+            { path: "a.txt", search: "three", replace: "THREE" },
+          ],
+        }),
+      );
+      expect(out).toMatch(/applied 2 edits/);
+      const disk = await fs.readFile(join(root, "a.txt"), "utf8");
+      expect(disk).toBe("ONE\r\ntwo\r\nTHREE\r\n");
+    });
+
+    it("rolls back attempted files when a disk write fails mid-batch", async () => {
+      await fs.writeFile(join(root, "a.txt"), "alpha\n");
+      await fs.writeFile(join(root, "b.txt"), "bravo\n");
+
+      const originalWriteFile = fs.writeFile.bind(fs);
+      // First attempt to write b.txt fails; rollback retry passes through.
+      let bTxtFailed = false;
+      const spy = vi
+        .spyOn(fs, "writeFile")
+        .mockImplementation(
+          async (
+            path: string | URL | import("node:fs/promises").FileHandle,
+            data: any,
+            ...rest: any[]
+          ) => {
+            const resolved = typeof path === "string" ? path : path.toString();
+            if (resolved.endsWith("b.txt") && !bTxtFailed) {
+              bTxtFailed = true;
+              // Simulate partial write before failure (truncation from writeFile open).
+              await originalWriteFile(path, "PARTIAL", ...rest);
+              throw new Error("SIMULATED DISK FULL");
+            }
+            return originalWriteFile(path, data, ...rest);
+          },
+        );
+
+      try {
+        const out = await tools.dispatch(
+          "multi_edit",
+          JSON.stringify({
+            edits: [
+              { path: "a.txt", search: "alpha", replace: "ALPHA" },
+              { path: "b.txt", search: "bravo", replace: "BRAVO" },
+            ],
+          }),
+        );
+        expect(out).toMatch(/write failed/);
+        expect(out).toMatch(/rolled back/);
+      } finally {
+        spy.mockRestore();
+      }
+      // Both files must be restored to original content
+      expect(await fs.readFile(join(root, "a.txt"), "utf8")).toBe("alpha\n");
+      expect(await fs.readFile(join(root, "b.txt"), "utf8")).toBe("bravo\n");
+    });
+
+    it("refuses when an edit references a non-existent file (atomic — no other files written)", async () => {
+      await fs.writeFile(join(root, "a.txt"), "alpha\n");
+      const out = await tools.dispatch(
+        "multi_edit",
+        JSON.stringify({
+          edits: [
+            { path: "a.txt", search: "alpha", replace: "ALPHA" },
+            { path: "missing.txt", search: "anything", replace: "x" },
+          ],
+        }),
+      );
+      expect(out).toMatch(/cannot read/i);
+      expect(await fs.readFile(join(root, "a.txt"), "utf8")).toBe("alpha\n");
+    });
+  });
+
+  describe("glob — mtime-sorted file listing", () => {
+    it("returns matching files (default mtime desc)", async () => {
+      const fileA = join(root, "a.ts");
+      const fileB = join(root, "b.ts");
+      await fs.writeFile(fileA, "// a");
+      await fs.writeFile(fileB, "// b");
+      const past = new Date(Date.now() - 60_000);
+      await fs.utimes(fileA, past, past);
+      const out = await tools.dispatch("glob", JSON.stringify({ pattern: "*.ts" }));
+      const lines = out.split("\n").filter((l) => l.trim());
+      expect(lines).toContain("a.ts");
+      expect(lines).toContain("b.ts");
+      expect(lines.indexOf("b.ts")).toBeLessThan(lines.indexOf("a.ts"));
+    });
+
+    it("supports ** for recursive walks", async () => {
+      const out = await tools.dispatch("glob", JSON.stringify({ pattern: "src/**/*.ts" }));
+      expect(out).toContain("src/index.ts");
+      expect(out).toContain("src/util.ts");
+    });
+
+    it("name sort is alphabetical", async () => {
+      await fs.writeFile(join(root, "z.ts"), "z");
+      await fs.writeFile(join(root, "a.ts"), "a");
+      const out = await tools.dispatch(
+        "glob",
+        JSON.stringify({ pattern: "*.ts", sort_by: "name" }),
+      );
+      const lines = out.split("\n").filter((l) => l.trim());
+      expect(lines.indexOf("a.ts")).toBeLessThan(lines.indexOf("z.ts"));
+    });
+
+    it("skips node_modules / .git by default", async () => {
+      await fs.mkdir(join(root, "node_modules"), { recursive: true });
+      await fs.writeFile(join(root, "node_modules", "lib.ts"), "x");
+      const out = await tools.dispatch("glob", JSON.stringify({ pattern: "**/*.ts" }));
+      expect(out).not.toContain("node_modules/lib.ts");
+    });
+
+    it("returns (no matches) when nothing matches", async () => {
+      const out = await tools.dispatch("glob", JSON.stringify({ pattern: "**/*.nope-extension" }));
+      expect(out).toMatch(/no matches/);
+    });
+
+    it("respects `limit` and reports overflow", async () => {
+      for (let i = 0; i < 5; i++) {
+        await fs.writeFile(join(root, `f${i}.tmp`), String(i));
+      }
+      const out = await tools.dispatch("glob", JSON.stringify({ pattern: "*.tmp", limit: 2 }));
+      const lines = out.split("\n").filter((l) => l.trim());
+      expect(lines.length).toBe(3);
+      expect(lines[lines.length - 1]).toMatch(/3 more matches/);
+    });
+  });
+
+  describe("search_content — context lines (-A/-B/-C semantics)", () => {
+    it("returns just the hit when context is omitted (default 0)", async () => {
+      await fs.writeFile(
+        join(root, "ctx.txt"),
+        ["one", "two", "TARGET", "four", "five"].join("\n"),
+      );
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "TARGET", glob: "ctx.txt" }),
+      );
+      expect(out).toContain("ctx.txt:3: TARGET");
+      expect(out).not.toContain("ctx.txt:2");
+      expect(out).not.toContain("ctx.txt:4");
+    });
+
+    it("includes N lines before and after with `context:N`", async () => {
+      await fs.writeFile(
+        join(root, "ctx.txt"),
+        ["one", "two", "TARGET", "four", "five"].join("\n"),
+      );
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "TARGET", glob: "ctx.txt", context: 1 }),
+      );
+      expect(out).toContain("ctx.txt:2- two");
+      expect(out).toContain("ctx.txt:3: TARGET");
+      expect(out).toContain("ctx.txt:4- four");
+      expect(out).not.toContain("ctx.txt:1-");
+      expect(out).not.toContain("ctx.txt:5-");
+    });
+
+    it("merges overlapping windows for adjacent hits and uses -- between non-adjacent windows", async () => {
+      await fs.writeFile(
+        join(root, "ctx.txt"),
+        ["zero", "HIT", "two", "three", "four", "HIT", "six", "seven"].join("\n"),
+      );
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "HIT", glob: "ctx.txt", context: 1 }),
+      );
+      expect(out.match(/ctx\.txt:2: HIT/g)?.length).toBe(1);
+      expect(out.match(/ctx\.txt:6: HIT/g)?.length).toBe(1);
+      expect(out).toContain("--");
+    });
+
+    it("clamps `context` at 20", async () => {
+      await fs.writeFile(
+        join(root, "ctx.txt"),
+        Array.from({ length: 100 }, (_, i) => (i === 49 ? "TARGET" : `line ${i + 1}`)).join("\n"),
+      );
+      const out = await tools.dispatch(
+        "search_content",
+        JSON.stringify({ pattern: "TARGET", glob: "ctx.txt", context: 999 }),
+      );
+      expect(out).toContain("ctx.txt:50: TARGET");
+      expect(out).toContain("ctx.txt:30- line 30");
+      expect(out).toContain("ctx.txt:70- line 70");
+      expect(out).not.toMatch(/ctx\.txt:29-\s/);
+      expect(out).not.toMatch(/ctx\.txt:71-\s/);
+    });
+  });
+});
+
+describe("lineDiff — LCS line-level diff used by edit_file", () => {
+  it("pure insertion: common prefix as context, new lines as +", () => {
+    const d = lineDiff(["a"], ["a", "b", "c"]);
+    expect(d).toEqual([
+      { op: " ", line: "a" },
+      { op: "+", line: "b" },
+      { op: "+", line: "c" },
+    ]);
+  });
+
+  it("pure deletion: kept lines as context, dropped as -", () => {
+    const d = lineDiff(["a", "b", "c"], ["a"]);
+    expect(d).toEqual([
+      { op: " ", line: "a" },
+      { op: "-", line: "b" },
+      { op: "-", line: "c" },
+    ]);
+  });
+
+  it("substitution: line-in-line-out without touching neighbors", () => {
+    const d = lineDiff(["a", "old", "c"], ["a", "new", "c"]);
+    // "a" and "c" stay as context; "old" → "new" is a -/+ pair.
+    expect(d.map((o) => o.op).join("")).toBe(" -+ ");
+    expect(d.map((o) => o.line)).toEqual(["a", "old", "new", "c"]);
+  });
+
+  it("identical arrays produce pure context (no +/- ops)", () => {
+    const lines = ["a", "b", "c"];
+    const d = lineDiff(lines, lines);
+    expect(d.every((o) => o.op === " ")).toBe(true);
+  });
+
+  it("empty search → all replace lines are added", () => {
+    const d = lineDiff([], ["x", "y"]);
+    expect(d).toEqual([
+      { op: "+", line: "x" },
+      { op: "+", line: "y" },
+    ]);
+  });
+
+  it("handles the user's real case: one-line search → multi-line replace with the line preserved", () => {
+    const search = [
+      "const prestigePointsGainElement = doc.getElementById('prestige-points-gain');",
+    ];
+    const replace = [
+      "const prestigePointsGainElement = doc.getElementById('prestige-points-gain');",
+      "const bonusClickElement = doc.getElementById('bonus-click');",
+      "const bonusCpsElement = doc.getElementById('bonus-cps');",
+    ];
+    const d = lineDiff(search, replace);
+    // First line is context — not a -/+ redundant pair.
+    expect(d[0]!.op).toBe(" ");
+    expect(d[0]!.line).toContain("prestigePointsGainElement");
+    // The rest are pure additions.
+    expect(d.slice(1).every((o) => o.op === "+")).toBe(true);
+  });
+});
+
+describe("displayRel — slash-normalized relative paths", () => {
+  it("normalizes backslashes to forward slashes", () => {
+    const root = "C:\\root";
+    const full = "C:\\root\\src\\cli\\ui\\App.tsx";
+    const result = displayRel(root, full);
+    expect(result).not.toContain("\\");
+    expect(result).toContain("/");
+  });
+
+  it("returns forward-slash paths on POSIX systems", () => {
+    const root = "/tmp/test-root";
+    const full = "/tmp/test-root/src/foo.ts";
+    const result = displayRel(root, full);
+    expect(result).toBe("src/foo.ts");
+    expect(result).not.toContain("\\");
+  });
+});

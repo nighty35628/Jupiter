@@ -1,0 +1,210 @@
+import type { WriteStream } from "node:fs";
+import { stdin, stdout } from "node:process";
+import { createInterface } from "node:readline/promises";
+import {
+  bridgeEndpointEnv,
+  defaultConfigPath,
+  isPlausibleKey,
+  loadApiKey,
+  loadEndpoint,
+  loadMaxIterPerTurn,
+  loadToolRateLimit,
+  normalizeMcpConfig,
+  readConfig,
+  saveApiKey,
+} from "../../config.js";
+import { loadDotenv } from "../../env.js";
+import { t } from "../../i18n/index.js";
+import { CacheFirstLoop, DeepSeekClient, ImmutablePrefix } from "../../index.js";
+import { McpClient } from "../../mcp/client.js";
+import { preflightStdioSpec } from "../../mcp/preflight.js";
+import { bridgeMcpTools } from "../../mcp/registry.js";
+import { buildTransportFromSpec } from "../../mcp/transport-from-spec.js";
+import { appendUsage } from "../../telemetry/usage.js";
+import { ToolRegistry } from "../../tools.js";
+import { openTranscriptFile, recordFromLoopEvent, writeRecord } from "../../transcript/log.js";
+import { formatMcpLifecycleEvent } from "../ui/mcp-lifecycle.js";
+import { formatMcpSlowToast } from "../ui/mcp-toast.js";
+
+export interface RunOptions {
+  task: string;
+  model: string;
+  system: string;
+  budgetUsd?: number;
+  /** JSONL transcript path — lets `jupiter replay` / `diff` audit this run. */
+  transcript?: string;
+  /** Zero or more MCP server specs. Each: `"name=cmd args..."` or `"cmd args..."`. */
+  mcp?: string[];
+  /** Global prefix — only honored when a single anonymous server is given. */
+  mcpPrefix?: string;
+}
+
+async function ensureApiKey(): Promise<string> {
+  const existing = loadApiKey();
+  if (existing) return existing;
+
+  if (!stdin.isTTY) {
+    process.stderr.write(t("run.missingApiKey"));
+    process.exit(1);
+  }
+
+  process.stdout.write(
+    "DeepSeek API key not configured.\nGet one at https://platform.deepseek.com/api_keys\n",
+  );
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    while (true) {
+      const answer = (await rl.question("API key › ")).trim();
+      if (!answer) continue;
+      if (!isPlausibleKey(answer)) {
+        process.stdout.write("Key looks too short. Paste the full token (16+ chars, no spaces).\n");
+        continue;
+      }
+      saveApiKey(answer);
+      process.stdout.write(`Saved to ${defaultConfigPath()}\n\n`);
+      return answer;
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+export async function runCommand(opts: RunOptions): Promise<void> {
+  loadDotenv();
+  await ensureApiKey();
+  bridgeEndpointEnv();
+
+  // Optional MCP setup — mirrors chat's flow. Must happen before loop
+  // construction so the tools make it into the prefix.
+  const cfg = readConfig();
+  const normalizedSpecs = normalizeMcpConfig(
+    cfg,
+    opts.mcp && opts.mcp.length > 0 ? opts.mcp : undefined,
+  );
+  const clients: McpClient[] = [];
+  let tools: ToolRegistry | undefined;
+  let successCount = 0;
+  const workspaceDir = process.cwd();
+  if (normalizedSpecs.length > 0) {
+    tools = new ToolRegistry({ rateLimit: loadToolRateLimit() });
+    for (const spec of normalizedSpecs) {
+      let label = "anon";
+      let mcp: McpClient | undefined;
+      try {
+        label = spec.name ?? "anon";
+        if (spec.disabled) {
+          process.stderr.write(`${formatMcpLifecycleEvent({ state: "disabled", name: label })}\n`);
+          continue;
+        }
+        process.stderr.write(`${formatMcpLifecycleEvent({ state: "handshake", name: label })}\n`);
+        const t0 = Date.now();
+        const prefix = spec.name
+          ? `${spec.name}_`
+          : normalizedSpecs.length === 1 && opts.mcpPrefix
+            ? opts.mcpPrefix
+            : "";
+        if (spec.transport === "stdio") preflightStdioSpec(spec);
+        const transport = buildTransportFromSpec(spec, { cwd: workspaceDir });
+        mcp = new McpClient({ transport, workspaceDir, requestTimeoutMs: spec.requestTimeoutMs });
+        await mcp.initialize();
+        const bridge = await bridgeMcpTools(mcp, {
+          registry: tools,
+          namePrefix: prefix,
+          serverName: label,
+          onSlow: (info) =>
+            process.stderr.write(
+              `${formatMcpSlowToast({ name: info.serverName, p95Ms: info.p95Ms, sampleSize: info.sampleSize })}\n`,
+            ),
+        });
+        process.stderr.write(
+          `${formatMcpLifecycleEvent({
+            state: "connected",
+            name: label,
+            tools: bridge.registeredNames.length,
+            ms: Date.now() - t0,
+          })}\n`,
+        );
+        clients.push(mcp);
+        successCount++;
+      } catch (err) {
+        // Non-fatal — skip and continue, same as `jupiter chat`. A
+        // one-shot `run` invocation with a broken MCP server otherwise
+        // fails the whole run over a side-concern tool the task might
+        // not even touch.
+        await mcp?.close().catch(() => undefined);
+        process.stderr.write(
+          `${formatMcpLifecycleEvent({ state: "failed", name: label, reason: (err as Error).message })}\n  ${t("mcpLifecycle.failedSetupConfigHint")}\n`,
+        );
+      }
+    }
+    if (successCount === 0) tools = undefined;
+  }
+
+  const ep = loadEndpoint();
+  const client = new DeepSeekClient({ apiKey: ep.apiKey, baseUrl: ep.baseUrl });
+  const prefix = new ImmutablePrefix({
+    system: opts.system,
+    toolSpecs: tools?.specs(),
+  });
+  const loop = new CacheFirstLoop({
+    client,
+    prefix,
+    tools,
+    model: opts.model,
+    budgetUsd: opts.budgetUsd,
+    maxIterPerTurn: loadMaxIterPerTurn(),
+  });
+  const prefixHash = prefix.fingerprint;
+
+  let transcriptStream: WriteStream | null = null;
+  if (opts.transcript) {
+    transcriptStream = openTranscriptFile(opts.transcript, {
+      version: 1,
+      source: "jupiter run",
+      model: opts.model,
+      startedAt: new Date().toISOString(),
+    });
+    // Also persist the user turn itself (the loop's event stream starts with
+    // assistant output, not the prompt we're about to send).
+    writeRecord(transcriptStream, {
+      ts: new Date().toISOString(),
+      turn: 1,
+      role: "user",
+      content: opts.task,
+    });
+  }
+
+  try {
+    for await (const ev of loop.step(opts.task)) {
+      if (ev.role === "assistant_delta" && ev.content) process.stdout.write(ev.content);
+      if (ev.role === "tool") process.stdout.write(`\n[tool ${ev.toolName}] ${ev.content}\n`);
+      if (ev.role === "error") process.stderr.write(`\n[error] ${ev.error}\n`);
+      if (ev.role === "done") process.stdout.write("\n");
+      if (ev.role === "assistant_final" && ev.stats?.usage) {
+        // `jupiter run` is often used in CI / scripting — we want
+        // those turns to show up in `jupiter stats` too so the
+        // dashboard reflects all DeepSeek spend, not just TUI sessions.
+        appendUsage({ session: null, model: ev.stats.model, usage: ev.stats.usage });
+      }
+      // Persist every non-streaming event — deltas would flood the file and
+      // aren't useful for replay (replay renders final content, not keystrokes).
+      if (transcriptStream && ev.role !== "assistant_delta") {
+        writeRecord(transcriptStream, recordFromLoopEvent(ev, { model: opts.model, prefixHash }));
+      }
+    }
+  } finally {
+    transcriptStream?.end();
+  }
+
+  const s = loop.stats.summary();
+  process.stdout.write(
+    `\n— turns:${s.turns} cache:${(s.cacheHitRatio * 100).toFixed(1)}% ` +
+      `cost:$${s.totalCostUsd.toFixed(6)} save-vs-claude:${s.savingsVsClaudePct.toFixed(1)}%\n`,
+  );
+  if (opts.transcript) {
+    process.stdout.write(`\ntranscript: ${opts.transcript}\n`);
+    process.stdout.write(`  → npx jupiter replay ${opts.transcript}\n`);
+  }
+
+  for (const c of clients) await c.close();
+}

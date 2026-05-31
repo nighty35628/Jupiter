@@ -1,0 +1,94 @@
+import {
+  DEFAULT_MODEL,
+  type JupiterConfig,
+  type ReasoningEffort,
+  isReasoningEffort,
+  loadModel,
+  loadReasoningEffort,
+  normalizeMcpConfig,
+  readConfig,
+} from "../config.js";
+import { loadDotMcpJson } from "../mcp/dot-mcp-json.js";
+import { specToRaw } from "../mcp/spec.js";
+
+export interface ResolvedDefaults {
+  model: string;
+  reasoningEffort: ReasoningEffort;
+  mcp: string[];
+  session: string | undefined;
+}
+
+export interface RawCliFlags {
+  model?: string;
+  mcp?: string[];
+  /** Commander's `--no-session` surfaces as `false`; `--session X` as a string. */
+  session?: string | false;
+  /** `--effort low|medium|high|max`. */
+  effort?: string;
+  /** When true, ignore config entirely (power-user escape hatch). */
+  noConfig?: boolean;
+}
+
+export function resolveDefaults(flags: RawCliFlags): ResolvedDefaults {
+  const cfg: JupiterConfig = flags.noConfig ? {} : readConfig();
+  const model =
+    flags.model?.trim() || (flags.noConfig ? cfg.model?.trim() : loadModel()) || DEFAULT_MODEL;
+
+  const flagEffort = flags.effort?.toLowerCase();
+  const reasoningEffort: ReasoningEffort = isReasoningEffort(flagEffort)
+    ? flagEffort
+    : flags.noConfig
+      ? "high"
+      : loadReasoningEffort();
+
+  const merged = flags.noConfig ? cfg : mergeDotMcpJson(cfg, process.cwd());
+
+  const normalizedMcp = normalizeMcpConfig(
+    merged,
+    flags.mcp && flags.mcp.length > 0 ? flags.mcp : undefined,
+  );
+  const mcp = normalizedMcp.map(specToRaw);
+
+  const session = resolveSession(flags.session, cfg.session);
+
+  return { model, reasoningEffort, mcp, session };
+}
+
+function mergeDotMcpJson(cfg: JupiterConfig, projectRoot: string): JupiterConfig {
+  const project = loadDotMcpJson(projectRoot);
+  if (!project) return cfg;
+  return { ...cfg, mcpServers: { ...(cfg.mcpServers ?? {}), ...project } };
+}
+
+function resolveSession(
+  flag: string | false | undefined,
+  configSession: string | null | undefined,
+): string | undefined {
+  if (flag === false) return undefined;
+  if (typeof flag === "string" && flag.length > 0) return flag;
+  if (configSession === null) return undefined;
+  if (typeof configSession === "string" && configSession.length > 0) return configSession;
+  return "default";
+}
+
+export function resolveContinueFlag(
+  flag: boolean | undefined,
+  fallbackSession: string | undefined,
+  getLatestSession: () => { name: string } | undefined,
+  warn: (msg: string) => void = () => {},
+): { session: string | undefined; forceResume: boolean } {
+  if (!flag) return { session: fallbackSession, forceResume: false };
+  const latest = getLatestSession();
+  if (!latest) {
+    warn("▸ -c/--continue: no saved sessions yet — starting a fresh one.");
+    return { session: fallbackSession, forceResume: false };
+  }
+  return { session: latest.name, forceResume: true };
+}
+
+export function resolveBareCommandMode(
+  cfg: Pick<JupiterConfig, "setupCompleted">,
+): "setup" | "code" {
+  if (!cfg.setupCompleted) return "setup";
+  return "code";
+}

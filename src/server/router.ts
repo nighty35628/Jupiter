@@ -1,0 +1,131 @@
+import { handleAbort } from "./api/abort.js";
+import { handleBrowse } from "./api/browse.js";
+import { handleCheckpointCreate } from "./api/checkpoint-create.js";
+import { handleCheckpointDelete } from "./api/checkpoint-delete.js";
+import { handleCheckpointDiffs } from "./api/checkpoint-diffs.js";
+import { handleCheckpointRestore } from "./api/checkpoint-restore.js";
+import { handleCheckpoints } from "./api/checkpoints.js";
+import { handleEditMode } from "./api/edit-mode.js";
+import { handleFileRead } from "./api/file-read.js";
+import { handleFiles } from "./api/files.js";
+import { handleGitDiffs } from "./api/git-diffs.js";
+import { handleHealth } from "./api/health.js";
+import { handleHooks } from "./api/hooks.js";
+import { handleIndexConfig } from "./api/index-config.js";
+import { handleLoop } from "./api/loop.js";
+import { handleMcp } from "./api/mcp.js";
+import { handleMemory } from "./api/memory.js";
+import { handleMessages } from "./api/messages.js";
+import { handleModal } from "./api/modal.js";
+import { handleModels } from "./api/models.js";
+import { handleOverview } from "./api/overview.js";
+import { handlePermissions } from "./api/permissions.js";
+import { handlePlans } from "./api/plans.js";
+import { handleProjectTree } from "./api/project-tree.js";
+import { handleReviewDiffs } from "./api/review-diffs.js";
+import { handleSemantic } from "./api/semantic.js";
+import { handleSessions } from "./api/sessions.js";
+import { handleSettings } from "./api/settings.js";
+import { handleSkills } from "./api/skills.js";
+import { handleSlash } from "./api/slash.js";
+import { handleSubmit } from "./api/submit.js";
+import { handleTools } from "./api/tools.js";
+import { handleUsage } from "./api/usage.js";
+import type { DashboardContext } from "./context.js";
+
+export interface ApiResult {
+  status: number;
+  body: unknown;
+}
+
+export async function handleApi(
+  pathTail: string,
+  method: string,
+  body: string,
+  ctx: DashboardContext,
+  query: URLSearchParams = new URLSearchParams(),
+): Promise<ApiResult> {
+  // Strip a trailing slash so /api/usage and /api/usage/ both work.
+  const normalized = pathTail.replace(/\/+$/, "");
+  const [head, ...rest] = normalized.split("/");
+
+  try {
+    switch (head) {
+      case "overview":
+        return await handleOverview(method, rest, body, ctx);
+      case "usage":
+        return await handleUsage(method, rest, body, ctx);
+      case "tools":
+        return await handleTools(method, rest, body, ctx);
+      case "permissions":
+        return await handlePermissions(method, rest, body, ctx);
+      case "messages":
+        return await handleMessages(method, rest, body, ctx);
+      case "submit":
+        return await handleSubmit(method, rest, body, ctx);
+      case "abort":
+        return await handleAbort(method, rest, body, ctx);
+      case "health":
+        return await handleHealth(method, rest, body, ctx);
+      case "sessions":
+        return await handleSessions(method, rest, body, ctx);
+      case "plans":
+        return await handlePlans(method, rest, body, ctx);
+      case "modal":
+        return await handleModal(method, rest, body, ctx);
+      case "edit-mode":
+        return await handleEditMode(method, rest, body, ctx);
+      case "settings":
+        return await handleSettings(method, rest, body, ctx);
+      case "hooks":
+        return await handleHooks(method, rest, body, ctx);
+      case "memory":
+        return await handleMemory(method, rest, body, ctx, query);
+      case "skills":
+        return await handleSkills(method, rest, body, ctx);
+      case "mcp":
+        return await handleMcp(method, rest, body, ctx, query);
+      case "semantic":
+        return await handleSemantic(method, rest, body, ctx);
+      case "index-config":
+        return await handleIndexConfig(method, rest, body, ctx);
+      case "slash":
+        return await handleSlash(method, rest, body, ctx);
+      case "files":
+        return await handleFiles(method, rest, body, ctx);
+      case "browse":
+        return await handleBrowse(method, rest, body, ctx, query);
+      case "project-tree":
+        return await handleProjectTree(method, rest, body, ctx);
+      case "git-diffs":
+        return await handleGitDiffs(method, rest, body, ctx);
+      case "checkpoints":
+        return await handleCheckpoints(method, rest, body, ctx);
+      case "checkpoint-diffs":
+        return await handleCheckpointDiffs(method, rest, body, ctx, query);
+      case "checkpoint-restore":
+        return await handleCheckpointRestore(method, rest, body, ctx);
+      case "checkpoint-create":
+        return await handleCheckpointCreate(method, rest, body, ctx);
+      case "checkpoint-delete":
+        return await handleCheckpointDelete(method, rest, body, ctx);
+      case "review-diffs":
+        return await handleReviewDiffs(method, rest, body, ctx);
+      case "file":
+        return await handleFileRead(method, rest, body, ctx);
+      case "loop":
+        return await handleLoop(method, rest, body, ctx);
+      case "models":
+        return await handleModels(method, rest, body, ctx);
+      default:
+        return { status: 404, body: { error: `no such endpoint: /${head}` } };
+    }
+  } catch (err) {
+    // Any unexpected throw maps to 500. Endpoint code that wants a
+    // user-friendly 4xx must catch + return the envelope itself.
+    return {
+      status: 500,
+      body: { error: `handler crashed: ${(err as Error).message}` },
+    };
+  }
+}

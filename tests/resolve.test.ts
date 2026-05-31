@@ -1,0 +1,226 @@
+/** resolveDefaults — flags vs config precedence; silent failures here are user-visible "config does nothing" bugs. */
+
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveContinueFlag, resolveDefaults } from "../src/cli/resolve.js";
+import { writeConfig } from "../src/config.js";
+
+describe("resolveDefaults", () => {
+  let home: string;
+  const origHome = process.env.HOME;
+  const origUserProfile = process.env.USERPROFILE;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "jupiter-resolve-"));
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    if (origHome === undefined) {
+      // biome-ignore lint/performance/noDelete: process.env must lose the key, not hold "undefined"
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = origHome;
+    }
+    if (origUserProfile === undefined) {
+      // biome-ignore lint/performance/noDelete: same reason as HOME
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = origUserProfile;
+    }
+  });
+
+  it("empty flags + empty config → flash + high", () => {
+    const r = resolveDefaults({});
+    expect(r.model).toBe("deepseek-v4-flash");
+    expect(r.reasoningEffort).toBe("high");
+    expect(r.mcp).toEqual([]);
+    expect(r.session).toBe("default");
+  });
+
+  it("config.model overrides the default", () => {
+    writeConfig({ model: "deepseek-v4-pro" }, join(home, ".jupiter", "config.json"));
+    const r = resolveDefaults({});
+    expect(r.model).toBe("deepseek-v4-pro");
+  });
+
+  it("config.reasoningEffort persists across launches", () => {
+    writeConfig({ reasoningEffort: "max" }, join(home, ".jupiter", "config.json"));
+    expect(resolveDefaults({}).reasoningEffort).toBe("max");
+  });
+
+  it("--model wins over config.model", () => {
+    writeConfig({ model: "deepseek-v4-flash" }, join(home, ".jupiter", "config.json"));
+    const r = resolveDefaults({ model: "deepseek-v4-pro" });
+    expect(r.model).toBe("deepseek-v4-pro");
+  });
+
+  it("--effort wins over config.reasoningEffort", () => {
+    writeConfig({ reasoningEffort: "max" }, join(home, ".jupiter", "config.json"));
+    const r = resolveDefaults({ effort: "low" });
+    expect(r.reasoningEffort).toBe("low");
+  });
+
+  it("--effort accepts any of the four enum values", () => {
+    for (const e of ["low", "medium", "high", "max"] as const) {
+      expect(resolveDefaults({ effort: e }).reasoningEffort).toBe(e);
+    }
+  });
+
+  it("--effort with garbage value falls through to config / default", () => {
+    writeConfig({ reasoningEffort: "medium" }, join(home, ".jupiter", "config.json"));
+    expect(resolveDefaults({ effort: "absurd" }).reasoningEffort).toBe("medium");
+  });
+
+  it("--mcp overrides config.mcp wholesale (no merging)", () => {
+    writeConfig(
+      { mcp: ["fs=npx -y @modelcontextprotocol/server-filesystem /tmp/old"] },
+      join(home, ".jupiter", "config.json"),
+    );
+    const r = resolveDefaults({ mcp: ["new=cmd arg"] });
+    expect(r.mcp).toEqual(["new=cmd arg"]);
+  });
+
+  it("empty --mcp array falls through to config.mcp", () => {
+    writeConfig(
+      { mcp: ["fs=npx -y @modelcontextprotocol/server-filesystem /tmp/safe"] },
+      join(home, ".jupiter", "config.json"),
+    );
+    const r = resolveDefaults({ mcp: [] });
+    expect(r.mcp).toHaveLength(1);
+    expect(r.mcp[0]).toContain("filesystem");
+  });
+
+  it("--no-config ignores the config entirely", () => {
+    writeConfig(
+      { model: "deepseek-v4-pro", reasoningEffort: "max", mcp: ["x=cmd"] },
+      join(home, ".jupiter", "config.json"),
+    );
+    const r = resolveDefaults({ noConfig: true });
+    expect(r.model).toBe("deepseek-v4-flash");
+    expect(r.reasoningEffort).toBe("high");
+    expect(r.mcp).toEqual([]);
+  });
+
+  it("--no-session beats config.session", () => {
+    writeConfig({ session: "work" }, join(home, ".jupiter", "config.json"));
+    const r = resolveDefaults({ session: false });
+    expect(r.session).toBeUndefined();
+  });
+
+  it("config.session=null means ephemeral by default", () => {
+    writeConfig({ session: null }, join(home, ".jupiter", "config.json"));
+    const r = resolveDefaults({});
+    expect(r.session).toBeUndefined();
+  });
+
+  describe("Claude .mcp.json compatibility", () => {
+    let cwd: string;
+    const origCwd = process.cwd();
+
+    beforeEach(() => {
+      cwd = mkdtempSync(join(tmpdir(), "jupiter-cwd-"));
+      process.chdir(cwd);
+    });
+
+    afterEach(() => {
+      process.chdir(origCwd);
+      rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("merges project-level .mcp.json into resolved mcp specs", () => {
+      writeFileSync(
+        join(cwd, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            gh: { type: "http", url: "https://api.githubcopilot.com/mcp/" },
+          },
+        }),
+        "utf8",
+      );
+      const r = resolveDefaults({});
+      expect(r.mcp.some((s) => s.includes("gh="))).toBe(true);
+    });
+
+    it("project .mcp.json overrides user mcpServers on name collision", () => {
+      writeConfig(
+        {
+          mcpServers: { gh: { command: "user-level-cmd" } },
+        },
+        join(home, ".jupiter", "config.json"),
+      );
+      writeFileSync(
+        join(cwd, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: { gh: { type: "stdio", command: "project-level-cmd" } },
+        }),
+        "utf8",
+      );
+      const r = resolveDefaults({});
+      const ghEntry = r.mcp.find((s) => s.startsWith("gh="))!;
+      expect(ghEntry).toContain("project-level-cmd");
+      expect(ghEntry).not.toContain("user-level-cmd");
+    });
+
+    it("--no-config skips .mcp.json entirely", () => {
+      writeFileSync(
+        join(cwd, ".mcp.json"),
+        JSON.stringify({ mcpServers: { gh: { type: "stdio", command: "node" } } }),
+        "utf8",
+      );
+      const r = resolveDefaults({ noConfig: true });
+      expect(r.mcp).toEqual([]);
+    });
+  });
+});
+
+describe("resolveContinueFlag", () => {
+  it("flag unset → returns the fallback session and does NOT auto-resume", () => {
+    const result = resolveContinueFlag(false, "default", () => undefined);
+    expect(result).toEqual({ session: "default", forceResume: false });
+  });
+
+  it("flag undefined behaves the same as flag=false", () => {
+    const result = resolveContinueFlag(undefined, "default", () => undefined);
+    expect(result).toEqual({ session: "default", forceResume: false });
+  });
+
+  it("flag set + sessions exist → picks newest + forceResume:true", () => {
+    const result = resolveContinueFlag(true, "default", () => ({ name: "code-myproj" }));
+    expect(result).toEqual({ session: "code-myproj", forceResume: true });
+  });
+
+  it("flag set + no sessions → falls back to default + warns once", () => {
+    const warnings: string[] = [];
+    const result = resolveContinueFlag(
+      true,
+      "default",
+      () => undefined,
+      (msg) => warnings.push(msg),
+    );
+    expect(result).toEqual({ session: "default", forceResume: false });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("no saved sessions");
+  });
+
+  it("flag unset → no warning even when sessions are absent", () => {
+    const warnings: string[] = [];
+    resolveContinueFlag(
+      false,
+      "default",
+      () => undefined,
+      (msg) => warnings.push(msg),
+    );
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("preserves an undefined fallback (--no-session) when no resume target exists", () => {
+    const result = resolveContinueFlag(true, undefined, () => undefined);
+    expect(result.session).toBeUndefined();
+    expect(result.forceResume).toBe(false);
+  });
+});

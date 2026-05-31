@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 360" role="img" aria-label="Jupiter 四大支柱 — 缓存优先循环、R1 思维提取、工具调用修复、成本控制">
+  <title>Jupiter 四大支柱</title>
+  <defs>
+    <style>
+      .sans { font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; }
+      .ttl  { font-weight: 700; }
+      .num  { font-weight: 800; letter-spacing: 0.08em; }
+    </style>
+    <linearGradient id="ig" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#5eead4"/>
+      <stop offset="50%" stop-color="#93c5fd"/>
+      <stop offset="100%" stop-color="#c4b5fd"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(10, 10)">
+    <rect width="420" height="160" rx="12" ry="12" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="24" y="42" class="mono num" font-size="13" fill="url(#ig)">01 /</text>
+    <text x="24" y="74" class="sans ttl" font-size="20" fill="#e6edf3">缓存优先循环</text>
+    <text x="24" y="106" class="sans" font-size="13" fill="#8b949e">只追加历史，不就地修改。字节前缀</text>
+    <text x="24" y="124" class="sans" font-size="13" fill="#8b949e">跨过每一次工具调用都活着 ——</text>
+    <text x="24" y="142" class="sans" font-size="13" fill="#8b949e">命中率持续。</text>
+  </g>
+
+  <g transform="translate(450, 10)">
+    <rect width="420" height="160" rx="12" ry="12" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="24" y="42" class="mono num" font-size="13" fill="url(#ig)">02 /</text>
+    <text x="24" y="74" class="sans ttl" font-size="20" fill="#e6edf3">R1 思维提取</text>
+    <text x="24" y="106" class="sans" font-size="13" fill="#8b949e">把 reasoning_content 蒸馏成结构化</text>
+    <text x="24" y="124" class="sans" font-size="13" fill="#8b949e">plan state —— 子目标、假设、被否决</text>
+    <text x="24" y="142" class="sans" font-size="13" fill="#8b949e">的路径。留信号，去噪声。</text>
+  </g>
+
+  <g transform="translate(10, 190)">
+    <rect width="420" height="160" rx="12" ry="12" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="24" y="42" class="mono num" font-size="13" fill="url(#ig)">03 /</text>
+    <text x="24" y="74" class="sans ttl" font-size="20" fill="#e6edf3">工具调用修复</text>
+    <text x="24" y="106" class="sans" font-size="13" fill="#8b949e">Schema 扁平化 · JSON 修复 · &lt;think&gt;</text>
+    <text x="24" y="124" class="sans" font-size="13" fill="#8b949e">内 scavenge · 截断处理。四种策略</text>
+    <text x="24" y="142" class="sans" font-size="13" fill="#8b949e">对付 DeepSeek 专属怪癖。</text>
+  </g>
+
+  <g transform="translate(450, 190)">
+    <rect width="420" height="160" rx="12" ry="12" fill="#0a0c10" stroke="#1e2436"/>
+    <text x="24" y="42" class="mono num" font-size="13" fill="url(#ig)">04 /</text>
+    <text x="24" y="74" class="sans ttl" font-size="20" fill="#e6edf3">成本控制</text>
+    <text x="24" y="106" class="sans" font-size="13" fill="#8b949e">缓存安全 fold · 激进 fold 层 ·</text>
+    <text x="24" y="124" class="sans" font-size="13" fill="#8b949e">模型感知预算。管上下文规模</text>
+    <text x="24" y="142" class="sans" font-size="13" fill="#8b949e">不破坏前缀。</text>
+  </g>
+</svg>

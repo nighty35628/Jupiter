@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@tauri-apps/api/core": ["src/lib/tauri-bridge.ts"],
+      "@tauri-apps/api/event": ["src/lib/tauri-bridge.ts"],
+      "@tauri-apps/api/window": ["src/lib/tauri-bridge.ts"],
+      "@tauri-apps/api/webview": ["src/lib/tauri-bridge.ts"],
+      "@tauri-apps/plugin-dialog": ["src/lib/tauri-bridge.ts"],
+      "@tauri-apps/plugin-opener": ["src/lib/tauri-bridge.ts"],
+      "@tauri-apps/plugin-process": ["src/lib/tauri-bridge.ts"],
+      "@jupiter/core-utils/compaction": ["../packages/core-utils/src/compaction.ts"],
+      "@jupiter/core-utils/derive-prefix": ["../packages/core-utils/src/derive-prefix.ts"],
+      "@jupiter/core-utils": ["../packages/core-utils/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jupiter — DeepSeek-native AI coding agent for your terminal</title>
+    <meta
+      name="description"
+      content="Open-source AI coding agent for your terminal, engineered around DeepSeek's prefix-cache so token costs stay low across long sessions. MCP first-class · plan mode · cache-first loop · MIT licensed."
+    />
+    <meta
+      name="keywords"
+      content="DeepSeek, AI coding agent, terminal AI, prefix cache, MCP, Model Context Protocol, open source coding assistant, CLI agent, TUI, R1 reasoning, cache-first loop, Claude Code alternative, Cursor alternative, Aider alternative"
+    />
+    <meta name="author" content="esengine" />
+    <meta name="theme-color" content="#0c0b0a" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+
+    <link rel="canonical" href="https://esengine.github.io/DeepSeek-Jupiter/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://esengine.github.io/DeepSeek-Jupiter/" />
+    <link rel="alternate" hreflang="en" href="https://esengine.github.io/DeepSeek-Jupiter/" />
+    <link rel="alternate" hreflang="x-default" href="https://esengine.github.io/DeepSeek-Jupiter/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Jupiter" />
+    <meta property="og:title" content="Jupiter — DeepSeek-native AI coding agent" />
+    <meta
+      property="og:description"
+      content="Open-source AI coding agent for your terminal. Engineered around DeepSeek's prefix-cache. MCP first-class · plan mode · MIT."
+    />
+    <meta property="og:url" content="https://esengine.github.io/DeepSeek-Jupiter/" />
+    <meta
+      property="og:image"
+      content="https://raw.githubusercontent.com/esengine/jupiter/main/docs/assets/og-card.png"
+    />
+    <meta property="og:image:alt" content="Jupiter — local agent workbench" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:locale:alternate" content="en_US" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Jupiter — DeepSeek-native AI coding agent" />
+    <meta
+      name="twitter:description"
+      content="Open-source AI coding agent for your terminal. Engineered around DeepSeek's prefix-cache."
+    />
+    <meta
+      name="twitter:image"
+      content="https://raw.githubusercontent.com/esengine/jupiter/main/docs/assets/og-card.png"
+    />
+
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="stylesheet" href="src/fonts.css" />
+    <link rel="stylesheet" href="src/styles.css" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Jupiter",
+        "alternateName": ["DeepSeek-Jupiter", "jupiter"],
+        "description": "Open-source AI coding agent for your terminal, engineered around DeepSeek's prefix-cache so token costs stay low across long sessions.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux, Windows",
+        "softwareRequirements": "Node.js >= 22",
+        "url": "https://esengine.github.io/DeepSeek-Jupiter/",
+        "downloadUrl": "https://www.npmjs.com/package/jupiter",
+        "license": "https://opensource.org/licenses/MIT",
+        "codeRepository": "https://github.com/esengine/DeepSeek-Jupiter",
+        "programmingLanguage": "TypeScript",
+        "author": {
+          "@type": "Organization",
+          "name": "esengine",
+          "url": "https://github.com/esengine"
+        },
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Jupiter",
+        "url": "https://esengine.github.io/DeepSeek-Jupiter/",
+        "inLanguage": ["zh-CN", "en"],
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "https://github.com/esengine/DeepSeek-Jupiter/search?q={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="grid-bg"></div>
+    <div class="noise"></div>
+    <div id="root"></div>
+
+    <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.29.0/babel.min.js"></script>
+
+    <script type="text/babel" src="src/i18n.jsx"></script>
+    <script type="text/babel" src="src/icons.jsx"></script>
+    <script type="text/babel" src="src/nav.jsx"></script>
+    <script type="text/babel" src="src/hero.jsx"></script>
+    <script type="text/babel" src="src/install.jsx"></script>
+    <script type="text/babel" src="src/agents.jsx"></script>
+    <script type="text/babel" src="src/features.jsx"></script>
+    <script type="text/babel" src="src/config.jsx"></script>
+    <script type="text/babel" src="src/community.jsx"></script>
+    <script type="text/babel" src="src/roadmap.jsx"></script>
+    <script type="text/babel" src="src/faq.jsx"></script>
+    <script type="text/babel" src="src/footer.jsx"></script>
+    <script type="text/babel" src="src/app.jsx"></script>
+  </body>
+</html>

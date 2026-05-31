@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: build (${{ matrix.os }} · node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ["22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (biome)
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (tsup + dashboard)
+        run: npm run build
+
+      - name: Test (vitest + coverage)
+        run: npm run test:coverage
+
+      - name: Coverage job summary
+        if: always()
+        run: node scripts/coverage-summary.mjs
+
+      # Smoke-test the bench harnesses themselves. --dry skips all LLM
+      # calls, so this catches wiring regressions (task factories, CLI
+      # parsing, file IO, checker determinism) without needing a
+      # DEEPSEEK_API_KEY in CI. RUNNER_TEMP is set on every GH Actions
+      # runner (POSIX + Windows) — beats hardcoding /tmp.
+      - name: τ-bench harness dry-run
+        run: npx tsx benchmarks/tau-bench/runner.ts --dry --out "${{ runner.temp }}/tau-dry.json"
+
+      - name: Notify Discord on main failure
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_CI_WEBHOOK }}
+        run: |
+          test -n "$WEBHOOK_URL" || { echo "DISCORD_CI_WEBHOOK unset, skipping"; exit 0; }
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -sS -X POST -H "Content-Type: application/json" \
+            -d "{\"content\":\"❌ CI failed on \`${{ github.ref_name }}\` (${{ matrix.os }}) — ${{ github.actor }}\n${RUN_URL}\"}" \
+            "$WEBHOOK_URL"
