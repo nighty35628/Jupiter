@@ -31,6 +31,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "jupiter": "0.52.0"
+    "jupiter": "file:../.."
   }
 }
