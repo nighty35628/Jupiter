@@ -202,7 +202,7 @@ jobs:
           printf '  %s\n' "${files[@]}"
 
       - name: Verify app Node inherits TCC grants (macOS)
-        if: startsWith(matrix.target.os, 'macos-')
+        if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_CERT == 'true'
         working-directory: desktop
         shell: bash
         run: |

@@ -15,6 +15,12 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain('bundles: "--bundles nsis"');
   });
 
+  it("does not require macOS signing verification for unsigned builds", () => {
+    expect(releaseWorkflow).toContain(
+      "if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_CERT == 'true'",
+    );
+  });
+
   it("documents release triggering against the Jupiter remote", () => {
     expect(releaseWorkflow).toContain("git push jupiter desktop-vX.Y.Z");
     expect(releaseWorkflow).not.toContain("git push origin desktop-vX.Y.Z");

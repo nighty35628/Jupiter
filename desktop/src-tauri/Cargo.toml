@@ -1,6 +1,6 @@
 [package]
 name = "jupiter-desktop"
-version = "0.52.2"
+version = "0.52.3"
 edition = "2021"
 publish = false
 autobins = false
