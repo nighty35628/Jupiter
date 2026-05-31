@@ -9419,13 +9419,12 @@ html[data-platform="macos"] .app {
 
 .composer-wrap {
   padding: 8px 28px 16px;
-  background: linear-gradient(to bottom, transparent, var(--bg) 18%);
+  background: var(--bg);
   border-top-color: transparent;
 }
 
 .composer-wrap::before {
-  height: 18px;
-  inset: -18px 0 auto 0;
+  content: none;
 }
 
 .composer-inner {

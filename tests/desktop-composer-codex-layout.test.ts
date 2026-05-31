@@ -10,6 +10,12 @@ function cssRule(selector: string): string {
   return match?.groups?.body ?? "";
 }
 
+function lastCssRule(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [...css.matchAll(new RegExp(`${escaped}\\s*\\{(?<body>[^}]*)\\}`, "g"))];
+  return matches.at(-1)?.groups?.body ?? "";
+}
+
 describe("desktop composer Codex-style lower tools", () => {
   it("removes the hint row above the input and moves controls into the composer footer", () => {
     expect(composer).not.toContain('className="hint-row"');
@@ -32,5 +38,10 @@ describe("desktop composer Codex-style lower tools", () => {
     expect(css).toContain(".composer-plus-menu,\n.composer-mode-menu");
     expect(css).toContain("@container composer (max-width: 520px)");
     expect(css).toContain(".composer-foot .composer-busy-status { display: none; }");
+  });
+
+  it("does not fade transcript content behind the composer", () => {
+    expect(lastCssRule(".composer-wrap")).not.toContain("linear-gradient");
+    expect(lastCssRule(".composer-wrap::before")).toContain("content: none");
   });
 });
