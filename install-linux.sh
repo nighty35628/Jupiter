@@ -9,7 +9,7 @@ usage() {
 Install Jupiter Desktop on Linux from GitHub Releases.
 
 Usage:
-  ./install-linux.sh [--version desktop-v0.52.1] [--repo owner/repo]
+  ./install-linux.sh [--version desktop-vX.Y.Z] [--repo owner/repo]
 
 Environment:
   JUPITER_REPO      GitHub repo to download from. Default: nighty35628/Jupiter
