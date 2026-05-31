@@ -1450,6 +1450,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   margin: 2px 0 6px;
 }
 .workspace-group-head {
+  width: 100%;
   min-height: 34px;
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
@@ -1457,10 +1458,25 @@ html[data-platform="macos"] .titlebar .tb-left {
   gap: 7px;
   padding: 5px 8px;
   border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--fg-2);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
 }
 .workspace-group-head[data-active="true"] {
   background: transparent;
+}
+.workspace-group-head:hover,
+.workspace-group-head:focus-visible,
+.workspace-group-head[data-collapsed="true"] {
+  color: var(--fg);
+  background: color-mix(in oklch, var(--panel) 86%, transparent);
+}
+.workspace-group-head:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .workspace-group-head .ico {
   width: 22px;
@@ -4913,6 +4929,102 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   font-size: 14px;
   color: var(--muted);
   font-family: inherit;
+}
+
+/* subagent list */
+.subagent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.subagent-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.subagent-row:hover {
+  background: var(--panel-2);
+}
+
+.subagent-row:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.subagent-ico {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--subagent-accent, var(--accent));
+}
+
+.subagent-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.subagent-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.subagent-name {
+  color: var(--subagent-accent, var(--accent));
+  font-size: 14px;
+  font-weight: 520;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-role,
+.subagent-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.subagent-task {
+  color: var(--fg);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-top: 7px;
+  flex-shrink: 0;
+  background: var(--success);
+}
+
+.subagent-status[data-s="running"] {
+  background: var(--accent);
+}
+
+.subagent-status[data-s="failed"] {
+  background: var(--danger);
 }
 
 /* mcp list */
@@ -9454,6 +9566,7 @@ html[data-platform="macos"] .app {
 
 .legend,
 .ctx-row,
+.subagent-row,
 .mcp-row,
 .statusbar-pop {
   font-size: 13px;
@@ -9733,6 +9846,7 @@ html[data-platform="macos"] .app {
 
 .tree .node:hover,
 .tree-action:hover,
+.subagent-row:hover,
 .mcp-row:hover {
   background: color-mix(in oklch, var(--panel-2) 48%, transparent);
 }

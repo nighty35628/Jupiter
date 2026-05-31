@@ -144,6 +144,7 @@ import {
 import { SkillStore } from "../../skills.js";
 import { countTokensBounded } from "../../tokenizer.js";
 import type { ChoiceOption } from "../../tools/choice.js";
+import type { SubagentEvent, SubagentSink } from "../../tools/subagent.js";
 import type { ChatMessage } from "../../types.js";
 import { VERSION } from "../../version.js";
 import { type McpRuntime, createMcpRuntime } from "./mcp-runtime.js";
@@ -578,6 +579,27 @@ interface BtwResultEvent {
   answer: string;
 }
 
+type DesktopSubagentEvent = {
+  type: "$subagent_event";
+  kind: "start" | "progress" | "end" | "phase" | "stream-progress";
+  runId: string;
+  parentSession?: string;
+  sessionName?: string;
+  task: string;
+  skillName?: string;
+  model?: string;
+  iter?: number;
+  elapsedMs?: number;
+  summary?: string;
+  error?: string;
+  turns?: number;
+  costUsd?: number;
+  phase?: "exploring" | "summarising";
+  outputChars?: number;
+  reasoningChars?: number;
+  toolReadChars?: number;
+};
+
 /** Direct fd write — bypasses Node's stream layer (and its piped-output
  *  block buffering) so every JSON line reaches Rust the moment it's
  *  produced, not whenever the next 8 KB flushes. */
@@ -610,6 +632,7 @@ type EmittableEvent =
   | TabOpenedEvent
   | TabClosedEvent
   | McpSpecsEvent
+  | DesktopSubagentEvent
   | SkillsEvent
   | CtxBreakdownEvent
   | MemoryEvent
@@ -1079,6 +1102,8 @@ interface Tab {
   planTotalSteps: number;
   mcpRuntime: McpRuntime | null;
   mcpStatuses: Map<string, { kind: McpSpecStatus; reason?: string; toolCount?: number }>;
+  subagentSink: SubagentSink;
+  subagentParentSessions: Map<string, string>;
   /** True while a session switch is in progress — prevents stale events from the old turn. */
   switching: boolean;
   hooks: ResolvedHook[];
@@ -1120,6 +1145,39 @@ function mintSessionFor(rootDir: string): string {
     // session meta is for filtering only — failure shouldn't block chat
   }
   return name;
+}
+
+function emitDesktopSubagentEvent(tab: Tab, ev: SubagentEvent): void {
+  if (ev.kind === "inner") return;
+  const parentSession =
+    ev.kind === "start"
+      ? tab.currentSession
+      : (tab.subagentParentSessions.get(ev.runId) ?? tab.currentSession);
+  if (ev.kind === "start") tab.subagentParentSessions.set(ev.runId, parentSession);
+  emit(
+    {
+      type: "$subagent_event",
+      kind: ev.kind,
+      runId: ev.runId,
+      parentSession,
+      sessionName: ev.sessionName,
+      task: ev.task,
+      skillName: ev.skillName,
+      model: ev.model,
+      iter: ev.iter,
+      elapsedMs: ev.elapsedMs,
+      summary: ev.summary,
+      error: ev.error,
+      turns: ev.turns,
+      costUsd: ev.costUsd,
+      phase: ev.phase,
+      outputChars: ev.outputChars,
+      reasoningChars: ev.reasoningChars,
+      toolReadChars: ev.toolReadChars,
+    },
+    tab.id,
+  );
+  if (ev.kind === "end") tab.subagentParentSessions.delete(ev.runId);
 }
 
 function buildRuntimeFor(tab: Tab): RuntimeState {
@@ -1858,9 +1916,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       planTotalSteps: 0,
       mcpRuntime: null,
       mcpStatuses: new Map(),
+      subagentSink: { current: null },
+      subagentParentSessions: new Map(),
       switching: false,
       hooks: loadHooks({ projectRoot: dir }),
     };
+    tab.subagentSink.current = (ev) => emitDesktopSubagentEvent(tab, ev);
     tab.currentSession = mintSessionFor(dir);
     tabs.set(tab.id, tab);
     return tab;
@@ -1872,6 +1933,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       rootDir: tab.rootDir,
       onSkillInstalled: () => emitSkills(tab),
       onJobsChanged: () => emitJobs(),
+      subagentSink: tab.subagentSink,
     });
     tab.toolset = toolset;
     tab.system = codeSystemPrompt(tab.rootDir, {
@@ -2113,12 +2175,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.symbolIndex = null;
     tab.symbolBuilding = null;
     tab.recentMentions.length = 0;
+    tab.subagentParentSessions.clear();
     tab.hooks = loadHooks({ projectRoot: target });
     tab.currentSession = mintSessionFor(target);
     tab.toolset = await buildCodeToolset({
       rootDir: target,
       onSkillInstalled: () => emitSkills(tab),
       onJobsChanged: () => emitJobs(),
+      subagentSink: tab.subagentSink,
     });
     tab.system = codeSystemPrompt(target, {
       hasSemanticSearch: tab.toolset.semantic.enabled,

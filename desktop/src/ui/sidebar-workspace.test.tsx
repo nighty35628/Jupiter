@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 afterEach(() => {
   cleanup();
   globalThis.localStorage?.removeItem?.("jupiter.sidebar.pinnedSessions");
+  globalThis.localStorage?.removeItem?.("jupiter.sidebar.collapsedWorkspaces");
   vi.useRealTimers();
 });
 
@@ -186,5 +187,64 @@ describe("desktop Sidebar workspace grouping", () => {
       vi.advanceTimersByTime(15_000);
     });
     expect(screen.getByText(/1m ago|1 分钟前|1 分前|vor 1 Min/)).toBeTruthy();
+  });
+
+  it("collapses and expands one workspace group without loading a session", () => {
+    const onLoadSession = vi.fn();
+    render(
+      <Sidebar
+        sessions={[
+          {
+            name: "desktop-jupiter",
+            messageCount: 1,
+            mtime: new Date("2026-05-31T12:00:00Z").toISOString(),
+            summary: "Jupiter chat",
+            workspace: "/tmp/Jupiter",
+          },
+          {
+            name: "desktop-alpha",
+            messageCount: 1,
+            mtime: new Date("2026-05-30T12:00:00Z").toISOString(),
+            summary: "Alpha chat",
+            workspace: "/tmp/Alpha",
+          },
+        ]}
+        importSources={[]}
+        activeName="desktop-alpha"
+        workspaceDir="/tmp/Alpha"
+        recentWorkspaces={["/tmp/Alpha", "/tmp/Jupiter"]}
+        onNewChat={vi.fn()}
+        onLoadSession={onLoadSession}
+        onDeleteSession={vi.fn()}
+        onRenameSession={vi.fn()}
+        onRefreshImportSources={vi.fn()}
+        onImportDetectedSessions={vi.fn()}
+        onImportSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onOpenRules={vi.fn()}
+        onOpenCommands={vi.fn()}
+        onOpenAbout={vi.fn()}
+      />,
+    );
+
+    const jupiterGroup = screen
+      .getAllByRole("button", { name: /Jupiter/ })
+      .find((el) => el.classList.contains("workspace-group-head"));
+    expect(jupiterGroup).toBeTruthy();
+    if (!jupiterGroup) throw new Error("missing Jupiter workspace group");
+    expect(jupiterGroup.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Jupiter chat")).toBeTruthy();
+
+    fireEvent.click(jupiterGroup);
+
+    expect(jupiterGroup.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Jupiter chat")).toBeNull();
+    expect(screen.getByText("Alpha chat")).toBeTruthy();
+    expect(onLoadSession).not.toHaveBeenCalled();
+
+    fireEvent.click(jupiterGroup);
+
+    expect(jupiterGroup.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Jupiter chat")).toBeTruthy();
   });
 });

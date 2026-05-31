@@ -5,7 +5,7 @@ import type { SessionFile, Settings, UsageStats } from "../App";
 import { Markdown } from "../Markdown";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
-import type { McpSpecInfo, MemoryDetail, MemoryEntryInfo } from "../protocol";
+import type { McpSpecInfo, MemoryDetail, MemoryEntryInfo, SubagentRunInfo } from "../protocol";
 import { PanelErrorBoundary } from "./error-boundary";
 
 type Tab = "files" | "tools" | "memory" | "rules";
@@ -17,18 +17,22 @@ export function ContextPanel({
   usage,
   mcpSpecs,
   mcpBridged,
+  subagents,
   sessionFiles,
   memory,
   memoryDetail,
+  onOpenSubagent,
   onReadMemory,
 }: {
   settings: Settings | null;
   usage: UsageStats;
   mcpSpecs: McpSpecInfo[];
   mcpBridged: boolean;
+  subagents: SubagentRunInfo[];
   sessionFiles: SessionFile[];
   memory: MemoryEntryInfo[];
   memoryDetail: MemoryDetail | null;
+  onOpenSubagent: (sessionName: string) => void;
   onReadMemory: (path: string) => void;
 }) {
   useLang();
@@ -97,7 +101,12 @@ export function ContextPanel({
         <div className="ctx-body-tab">
           <PanelErrorBoundary key={tab} label={tab}>
             {tab === "files" && <CtxFiles files={sessionFiles} settings={settings} />}
-            {tab === "tools" && <CtxTools specs={mcpSpecs} bridged={mcpBridged} />}
+            {tab === "tools" && (
+              <>
+                <CtxSubagents runs={subagents} onOpen={onOpenSubagent} />
+                <CtxTools specs={mcpSpecs} bridged={mcpBridged} />
+              </>
+            )}
             {tab === "memory" && (
               <CtxMemory entries={memory} detail={memoryDetail} onRead={onReadMemory} />
             )}
@@ -235,6 +244,113 @@ function CtxFiles({ files, settings }: { files: SessionFile[]; settings: Setting
           )
         )}
       </div>
+    </div>
+  );
+}
+
+const SUBAGENT_NAMES = ["Nash", "Sagan", "Zeno", "Euclid", "Plato", "Ramanujan"];
+const SUBAGENT_COLORS = [
+  "var(--danger)",
+  "var(--accent)",
+  "var(--warning)",
+  "var(--success)",
+  "oklch(71% 0.17 306)",
+  "oklch(70% 0.18 24)",
+];
+
+function stableIndex(value: string, size: number): number {
+  let acc = 0;
+  for (let i = 0; i < value.length; i++) acc = (acc * 31 + value.charCodeAt(i)) >>> 0;
+  return size === 0 ? 0 : acc % size;
+}
+
+function formatElapsed(ms?: number): string | null {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return null;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.floor((ms % 60_000) / 1000);
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function subagentMeta(run: SubagentRunInfo): string {
+  const bits = [
+    run.status === "failed"
+      ? t("contextPanel.subagentFailed")
+      : run.status === "done"
+        ? t("contextPanel.subagentDone")
+        : run.phase === "summarising"
+          ? t("contextPanel.subagentSummarising")
+          : t("contextPanel.subagentRunning"),
+  ];
+  if (typeof run.iter === "number" && run.iter > 0) {
+    bits.push(t("contextPanel.subagentToolCalls", { count: run.iter }));
+  }
+  if (typeof run.turns === "number" && run.turns > 0) {
+    bits.push(t("contextPanel.subagentTurns", { count: run.turns }));
+  }
+  const elapsed = formatElapsed(run.elapsedMs);
+  if (elapsed) bits.push(elapsed);
+  return bits.join(" · ");
+}
+
+function CtxSubagents({
+  runs,
+  onOpen,
+}: {
+  runs: SubagentRunInfo[];
+  onOpen: (sessionName: string) => void;
+}) {
+  const visible = runs.slice().reverse();
+  return (
+    <div className="ctx-block">
+      <div className="h">
+        <span>{t("contextPanel.subagentsTitle")}</span>
+        <span className="right">
+          {visible.length === 0 ? "—" : t("contextPanel.subagentsCount", { count: visible.length })}
+        </span>
+      </div>
+      {visible.length === 0 ? (
+        <div className="ctx-empty">{t("contextPanel.subagentsEmpty")}</div>
+      ) : (
+        <div className="subagent-list">
+          {visible.map((run) => {
+            const name = SUBAGENT_NAMES[stableIndex(run.runId, SUBAGENT_NAMES.length)] ?? "Nash";
+            const accent =
+              SUBAGENT_COLORS[stableIndex(`${run.runId}:color`, SUBAGENT_COLORS.length)] ??
+              "var(--accent)";
+            const role = run.skillName?.trim() || t("contextPanel.subagentRoleFallback");
+            const disabled = !run.sessionName;
+            return (
+              <button
+                type="button"
+                className="subagent-row"
+                key={run.runId}
+                data-status={run.status}
+                disabled={disabled}
+                aria-label={t("contextPanel.subagentOpen", { task: run.task })}
+                title={disabled ? undefined : t("contextPanel.subagentOpen", { task: run.task })}
+                style={{ ["--subagent-accent" as string]: accent }}
+                onClick={() => {
+                  if (run.sessionName) onOpen(run.sessionName);
+                }}
+              >
+                <span className="subagent-ico" aria-hidden="true">
+                  <I.bot size={15} />
+                </span>
+                <span className="subagent-body">
+                  <span className="subagent-head">
+                    <span className="subagent-name">{name}</span>
+                    <span className="subagent-role">({role})</span>
+                  </span>
+                  <span className="subagent-task">{run.task}</span>
+                  <span className="subagent-meta">{subagentMeta(run)}</span>
+                </span>
+                <span className="subagent-status" data-s={run.status} />
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

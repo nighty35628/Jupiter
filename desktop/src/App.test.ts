@@ -70,6 +70,7 @@ function initialState(): Parameters<typeof reduce>[0] {
     mentionPreview: null,
     mcpSpecs: [],
     mcpBridged: false,
+    subagents: [],
     skills: [],
     skillRoots: [],
     sessionFiles: [],
@@ -211,6 +212,70 @@ describe("Desktop App reducer — usage", () => {
     expect(next.usage.cacheHitTokens).toBe(80);
     expect(next.usage.cacheMissTokens).toBe(20);
     expect(next.usage.liveLogTokens).toBe(42);
+  });
+});
+
+describe("Desktop App reducer — subagents", () => {
+  it("tracks a child session and keeps later updates attached to the same parent session", () => {
+    const state = { ...initialState(), currentSession: "desktop-parent" };
+    const started = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "$subagent_event",
+        kind: "start",
+        runId: "sub-1",
+        parentSession: "desktop-parent",
+        sessionName: "subagent-sub-1-20260531120000",
+        task: "Explore renderer",
+        skillName: "explorer",
+        model: "deepseek-v4-flash",
+        iter: 0,
+        elapsedMs: 0,
+      },
+    });
+    const done = reduce(started, {
+      t: "incoming",
+      event: {
+        type: "$subagent_event",
+        kind: "end",
+        runId: "sub-1",
+        parentSession: "desktop-parent",
+        sessionName: "subagent-sub-1-20260531120000",
+        task: "Explore renderer",
+        skillName: "explorer",
+        elapsedMs: 2000,
+        turns: 2,
+      },
+    });
+
+    expect(done.subagents).toHaveLength(1);
+    expect(done.subagents[0]).toMatchObject({
+      runId: "sub-1",
+      status: "done",
+      parentSession: "desktop-parent",
+      sessionName: "subagent-sub-1-20260531120000",
+      task: "Explore renderer",
+      skillName: "explorer",
+      turns: 2,
+      elapsedMs: 2000,
+    });
+  });
+
+  it("ignores subagent events from a different parent session", () => {
+    const state = { ...initialState(), currentSession: "desktop-current" };
+    const next = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "$subagent_event",
+        kind: "start",
+        runId: "sub-old",
+        parentSession: "desktop-old",
+        sessionName: "subagent-sub-old",
+        task: "old child",
+      },
+    });
+
+    expect(next.subagents).toEqual([]);
   });
 });
 

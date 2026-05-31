@@ -18,6 +18,8 @@ export interface SubagentEvent {
   kind: "start" | "progress" | "end" | "inner" | "phase" | "stream-progress";
   /** Stable per-spawn id; lets the UI key parallel runs apart instead of overwriting one shared row. */
   runId: string;
+  /** Session log name for the child loop, so desktop UIs can open the full transcript. */
+  sessionName?: string;
   task: string;
   skillName?: string;
   model?: string;
@@ -168,6 +170,7 @@ export async function spawnSubagent(opts: SpawnSubagentOptions): Promise<Subagen
   sink?.current?.({
     kind: "start",
     runId,
+    sessionName,
     task: taskPreview,
     skillName,
     model,
@@ -182,6 +185,7 @@ export async function spawnSubagent(opts: SpawnSubagentOptions): Promise<Subagen
       sink?.current?.({
         kind: "end",
         runId,
+        sessionName,
         task: taskPreview,
         skillName,
         model,
@@ -281,6 +285,7 @@ export async function spawnSubagent(opts: SpawnSubagentOptions): Promise<Subagen
     sink.current({
       kind: "stream-progress",
       runId,
+      sessionName,
       task: taskPreview,
       skillName,
       model,
@@ -293,7 +298,15 @@ export async function spawnSubagent(opts: SpawnSubagentOptions): Promise<Subagen
   };
   try {
     for await (const ev of childLoop.step(opts.task)) {
-      sink?.current?.({ kind: "inner", runId, task: taskPreview, skillName, model, inner: ev });
+      sink?.current?.({
+        kind: "inner",
+        runId,
+        sessionName,
+        task: taskPreview,
+        skillName,
+        model,
+        inner: ev,
+      });
 
       if (ev.role === "tool") {
         toolIter++;
@@ -303,6 +316,7 @@ export async function spawnSubagent(opts: SpawnSubagentOptions): Promise<Subagen
         sink?.current?.({
           kind: "progress",
           runId,
+          sessionName,
           task: taskPreview,
           skillName,
           model,
@@ -331,6 +345,7 @@ export async function spawnSubagent(opts: SpawnSubagentOptions): Promise<Subagen
         sink?.current?.({
           kind: "phase",
           runId,
+          sessionName,
           task: taskPreview,
           skillName,
           model,
@@ -391,6 +406,7 @@ export async function spawnSubagent(opts: SpawnSubagentOptions): Promise<Subagen
   sink?.current?.({
     kind: "end",
     runId,
+    sessionName,
     task: taskPreview,
     skillName,
     model,

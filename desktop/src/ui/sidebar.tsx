@@ -8,6 +8,7 @@ import { displayWorkspaceBasename, displayWorkspacePath } from "../workspace-dis
 
 const RENAME_MAX_CHARS = 200;
 const PIN_STORAGE_KEY = "jupiter.sidebar.pinnedSessions";
+const COLLAPSED_WORKSPACES_STORAGE_KEY = "jupiter.sidebar.collapsedWorkspaces";
 const SIDEBAR_CLOCK_INTERVAL_MS = 15_000;
 
 type SortMode = "recent" | "workspace" | "title";
@@ -44,7 +45,7 @@ type ImportSource = ExternalSessionSource;
 
 function loadPinnedSessions(): string[] {
   try {
-    const raw = JSON.parse(localStorage.getItem(PIN_STORAGE_KEY) ?? "[]");
+    const raw = JSON.parse(localStorage.getItem?.(PIN_STORAGE_KEY) ?? "[]");
     return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
   } catch {
     return [];
@@ -52,7 +53,28 @@ function loadPinnedSessions(): string[] {
 }
 
 function savePinnedSessions(items: string[]): void {
-  localStorage.setItem(PIN_STORAGE_KEY, JSON.stringify(items));
+  try {
+    localStorage.setItem?.(PIN_STORAGE_KEY, JSON.stringify(items));
+  } catch {
+    // Sidebar preferences are best-effort; interaction state still updates.
+  }
+}
+
+function loadCollapsedWorkspaces(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem?.(COLLAPSED_WORKSPACES_STORAGE_KEY) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCollapsedWorkspaces(items: string[]): void {
+  try {
+    localStorage.setItem?.(COLLAPSED_WORKSPACES_STORAGE_KEY, JSON.stringify(items));
+  } catch {
+    // Sidebar preferences are best-effort; interaction state still updates.
+  }
 }
 
 function prettyName(s: SessionInfo): string {
@@ -139,6 +161,9 @@ export function Sidebar({
   const [sortMode, setSortMode] = useState<SortMode>("workspace");
   const [workspaceGroupSort, setWorkspaceGroupSort] = useState<WorkspaceGroupSort>("title");
   const [pinned, setPinned] = useState<string[]>(() => loadPinnedSessions());
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<string[]>(() =>
+    loadCollapsedWorkspaces(),
+  );
   const [now, setNow] = useState(() => Date.now());
   const newMenuRef = useRef<HTMLDivElement>(null);
   const sidebarMenuRef = useRef<HTMLDivElement>(null);
@@ -158,6 +183,10 @@ export function Sidebar({
   }, [query, sessions, workspaceDir]);
 
   const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
+  const collapsedWorkspaceSet = useMemo(
+    () => new Set(collapsedWorkspaces),
+    [collapsedWorkspaces],
+  );
   const pinnedSessions = useMemo(() => {
     return matchingSessions
       .filter((s) => pinnedSet.has(s.name))
@@ -223,6 +252,14 @@ export function Sidebar({
     setPinned((prev) => {
       const next = prev.includes(name) ? prev.filter((x) => x !== name) : [name, ...prev];
       savePinnedSessions(next);
+      return next;
+    });
+  };
+
+  const toggleWorkspaceCollapsed = (key: string) => {
+    setCollapsedWorkspaces((prev) => {
+      const next = prev.includes(key) ? prev.filter((x) => x !== key) : [key, ...prev];
+      saveCollapsedWorkspaces(next);
       return next;
     });
   };
@@ -480,21 +517,35 @@ export function Sidebar({
   );
 
   const renderWorkspaceGroups = () =>
-    workspaceGroups.map((group) => (
-      <div className="workspace-group" key={group.key}>
-        <div className="workspace-group-head" data-active={group.active || undefined}>
+    workspaceGroups.map((group) => {
+      const collapsed =
+        query.trim().length === 0 && collapsedWorkspaceSet.has(group.key);
+      return (
+      <div className="workspace-group" key={group.key} data-collapsed={collapsed || undefined}>
+        <button
+          type="button"
+          className="workspace-group-head"
+          data-active={group.active || undefined}
+          data-collapsed={collapsed || undefined}
+          aria-expanded={!collapsed}
+          title={group.detail}
+          onClick={() => toggleWorkspaceCollapsed(group.key)}
+        >
           <span className="ico">
             <I.folder size={13} />
           </span>
           <span className="text">
             <span className="name">{group.label}</span>
           </span>
-        </div>
-        <div className="workspace-group-list">
+        </button>
+        {collapsed ? null : (
+          <div className="workspace-group-list">
           {group.sessions.map((s) => renderSessionItem(s, true))}
-        </div>
+          </div>
+        )}
       </div>
-    ));
+      );
+    });
 
   const projectSection = (
     <section className="side-section codex-section codex-project-section" key="projects">

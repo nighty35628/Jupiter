@@ -61,6 +61,8 @@ import type {
   SettingsPatch,
   SkillInfo,
   SkillRootInfo,
+  SubagentEvent,
+  SubagentRunInfo,
 } from "./protocol";
 import { type QQDesktopSettingsState } from "./qq-settings";
 import { Composer, type SlashCmd } from "./ui/composer";
@@ -102,10 +104,14 @@ import { WorkdirPop } from "./ui/workdir-pop";
 import { parseEditResult } from "./ui/cards";
 import { useAutoCollapse } from "./ui/useAutoCollapse";
 import { useResizable } from "./ui/useResizable";
-import { useAutoScroll } from "./ui/useAutoScroll";
 import { useDisableTextAssist } from "./ui/useDisableTextAssist";
 import { getThreadMaxWidth } from "./ui/thread-layout";
 import { elideTranscriptMessages } from "./ui/transcript-elision";
+import {
+  autoscrollVirtuosoOutput,
+  followVirtuosoHeightChange,
+  scrollVirtuosoToBottom,
+} from "./ui/virtuoso-scroll";
 import { displayWorkspaceBasename, displayWorkspacePath } from "./workspace-display";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -340,6 +346,7 @@ type State = {
   mentionPreview: MentionPreviewState | null;
   mcpSpecs: McpSpecInfo[];
   mcpBridged: boolean;
+  subagents: SubagentRunInfo[];
   skills: SkillInfo[];
   skillRoots: SkillRootInfo[];
   /** Files the agent has read or modified this session — paths as the tool args provided them. */
@@ -536,6 +543,7 @@ function reduceRaw(state: State, action: Action): State {
         activePlan: null,
         usage: zeroUsage(),
         sessionFiles: [],
+        subagents: [],
         activeSkill: null,
         queuedSends: [],
         retryNonce: 0,
@@ -787,6 +795,70 @@ export function applyIncoming(state: State, ev: IncomingEvent): State {
   return withElidedTranscript(applyIncomingRaw(state, ev));
 }
 
+export function reduceSubagentRuns(
+  prev: SubagentRunInfo[],
+  ev: SubagentEvent,
+  currentSession?: string,
+): SubagentRunInfo[] {
+  if (!currentSession && ev.parentSession) return prev;
+  if (currentSession && ev.parentSession && ev.parentSession !== currentSession) {
+    return prev;
+  }
+
+  const idx = prev.findIndex((run) => run.runId === ev.runId);
+  const current = idx >= 0 ? prev[idx] : undefined;
+  if (!current && ev.kind !== "start" && ev.kind !== "end") return prev;
+
+  const base: SubagentRunInfo =
+    current ?? {
+      runId: ev.runId,
+      parentSession: ev.parentSession,
+      sessionName: ev.sessionName,
+      task: ev.task,
+      skillName: ev.skillName,
+      model: ev.model,
+      status: ev.kind === "end" ? (ev.error ? "failed" : "done") : "running",
+      phase: "exploring",
+      iter: 0,
+      elapsedMs: 0,
+      outputChars: 0,
+      reasoningChars: 0,
+      toolReadChars: 0,
+    };
+
+  const next: SubagentRunInfo = {
+    ...base,
+    parentSession: ev.parentSession ?? base.parentSession,
+    sessionName: ev.sessionName ?? base.sessionName,
+    task: ev.task || base.task,
+    skillName: ev.skillName ?? base.skillName,
+    model: ev.model ?? base.model,
+    status:
+      ev.kind === "end"
+        ? ev.error
+          ? "failed"
+          : "done"
+        : ev.kind === "start"
+          ? "running"
+          : base.status,
+    phase: ev.phase ?? base.phase,
+    iter: ev.iter ?? base.iter,
+    elapsedMs: ev.elapsedMs ?? base.elapsedMs,
+    summary: ev.summary ?? base.summary,
+    error: ev.error ?? base.error,
+    turns: ev.turns ?? base.turns,
+    costUsd: ev.costUsd ?? base.costUsd,
+    outputChars: ev.outputChars ?? base.outputChars,
+    reasoningChars: ev.reasoningChars ?? base.reasoningChars,
+    toolReadChars: ev.toolReadChars ?? base.toolReadChars,
+  };
+
+  const out = [...prev];
+  if (idx >= 0) out[idx] = next;
+  else out.push(next);
+  return out;
+}
+
 function applyIncomingRaw(state: State, ev: IncomingEvent): State {
   switch (ev.type) {
     case "user.message": {
@@ -948,6 +1020,11 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         mcpSpecs: Array.isArray(ev.specs) ? ev.specs : [],
         mcpBridged: Boolean(ev.bridged),
       };
+    case "$subagent_event":
+      return {
+        ...state,
+        subagents: reduceSubagentRuns(state.subagents, ev, state.currentSession),
+      };
     case "$skills":
       return { ...state, skills: ev.items, skillRoots: ev.roots ?? [] };
     case "$ctx_breakdown": {
@@ -1011,6 +1088,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         activePlan: wsChanged ? null : state.activePlan,
         usage: wsChanged ? zeroUsage() : state.usage,
         sessionFiles: wsChanged ? [] : state.sessionFiles,
+        subagents: wsChanged ? [] : state.subagents,
         retryNonce: wsChanged ? 0 : state.retryNonce,
         settings: {
           reasoningEffort: ev.reasoningEffort,
@@ -1087,6 +1165,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           cacheMissTokens: ev.carryover.cacheMissTokens,
         },
         sessionFiles,
+        subagents: [],
         activeSkill: null,
         queuedSends: [],
         retryNonce: 0,
@@ -1411,6 +1490,7 @@ function TabRuntime({
     mentionPreview: null,
     mcpSpecs: [],
     mcpBridged: false,
+    subagents: [],
     skills: [],
     skillRoots: [],
     sessionFiles: [],
@@ -1432,7 +1512,6 @@ function TabRuntime({
   >(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
-  const threadInnerRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPageId>("general");
@@ -1914,26 +1993,49 @@ function TabRuntime({
     [sendRpc],
   );
 
-  // Read the latest session inside the stable restore callback below.
-  const currentSessionRef = useRef(state.currentSession);
-  currentSessionRef.current = state.currentSession;
   const messageItems = state.messages;
-
-  const restoreScrollTop = useCallback(() => {
-    const session = currentSessionRef.current;
-    if (!session) return null;
-    const raw = localStorage.getItem(`jupiter.scroll.${session}`);
-    const n = raw ? Number(raw) : Number.NaN;
-    return Number.isFinite(n) ? n : null;
-  }, []);
+  const transcriptBusyRef = useRef(state.busy);
+  transcriptBusyRef.current = state.busy;
 
   const [showJumpButton, setShowJumpButton] = useState(false);
-  const { scrollToBottom } = useAutoScroll(
-    threadRef,
-    threadInnerRef,
-    state.busy,
-    restoreScrollTop,
+  const scrollToBottom = useCallback(
+    (smooth = true) => {
+      const didScroll = scrollVirtuosoToBottom(
+        virtuosoRef,
+        messageItems.length,
+        smooth,
+      );
+      if (didScroll) setShowJumpButton(false);
+    },
+    [messageItems.length],
   );
+
+  const wasTranscriptBusyRef = useRef(state.busy);
+  useEffect(() => {
+    if (wasTranscriptBusyRef.current !== state.busy) {
+      const id = window.requestAnimationFrame(() => scrollToBottom(true));
+      wasTranscriptBusyRef.current = state.busy;
+      return () => window.cancelAnimationFrame(id);
+    }
+    wasTranscriptBusyRef.current = state.busy;
+  }, [state.busy, scrollToBottom]);
+
+  useEffect(() => {
+    if (!state.busy || messageItems.length === 0) return;
+    const id = window.requestAnimationFrame(() => {
+      autoscrollVirtuosoOutput(virtuosoRef);
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [
+    state.busy,
+    messageItems,
+    state.pendingCheckpoints.length,
+    state.pendingChoices.length,
+    state.pendingConfirms.length,
+    state.pendingPathAccess.length,
+    state.pendingPlans.length,
+    state.pendingRevisions.length,
+  ]);
 
   // Persist the transcript scroll offset per session so a restart reopens
   // the conversation where the user left it (#1244).
@@ -2393,6 +2495,12 @@ function TabRuntime({
                     totalCount={messageItems.length}
                     followOutput={"auto"}
                     atBottomStateChange={(atBottom) => setShowJumpButton(!atBottom)}
+                    totalListHeightChanged={() => {
+                      followVirtuosoHeightChange(
+                        virtuosoRef,
+                        transcriptBusyRef.current,
+                      );
+                    }}
                     components={{
                       Header: state.activePlan ? () => (
                         <div className="thread-inner">
@@ -2523,9 +2631,14 @@ function TabRuntime({
           usage={state.usage}
           mcpSpecs={state.mcpSpecs}
           mcpBridged={state.mcpBridged}
+          subagents={state.subagents}
           sessionFiles={state.sessionFiles}
           memory={state.memory}
           memoryDetail={state.memoryDetail}
+          onOpenSubagent={(name) => {
+            clearAbortDraft();
+            sendRpc({ cmd: "session_load", name });
+          }}
           onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
         />
 

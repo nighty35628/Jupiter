@@ -180,6 +180,49 @@ export type McpSpecsEvent = {
   bridged: boolean;
 };
 
+export type SubagentRunStatus = "running" | "done" | "failed";
+
+export type SubagentRunInfo = {
+  runId: string;
+  parentSession?: string;
+  sessionName?: string;
+  task: string;
+  skillName?: string;
+  model?: string;
+  status: SubagentRunStatus;
+  phase?: "exploring" | "summarising";
+  iter?: number;
+  elapsedMs?: number;
+  summary?: string;
+  error?: string;
+  turns?: number;
+  costUsd?: number;
+  outputChars?: number;
+  reasoningChars?: number;
+  toolReadChars?: number;
+};
+
+export type SubagentEvent = {
+  type: "$subagent_event";
+  kind: "start" | "progress" | "end" | "phase" | "stream-progress";
+  runId: string;
+  parentSession?: string;
+  sessionName?: string;
+  task: string;
+  skillName?: string;
+  model?: string;
+  iter?: number;
+  elapsedMs?: number;
+  summary?: string;
+  error?: string;
+  turns?: number;
+  costUsd?: number;
+  phase?: "exploring" | "summarising";
+  outputChars?: number;
+  reasoningChars?: number;
+  toolReadChars?: number;
+};
+
 export type SkillScope = "project" | "custom" | "global" | "builtin";
 
 export type SkillInfo = {
@@ -535,6 +578,7 @@ export type IncomingEvent = { tabId?: string } & (
   | TabOpenedEvent
   | TabClosedEvent
   | McpSpecsEvent
+  | SubagentEvent
   | SkillsEvent
   | CtxBreakdownEvent
   | MemoryEvent

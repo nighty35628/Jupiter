@@ -40,9 +40,11 @@ function renderPanel() {
       usage={usage}
       mcpSpecs={[]}
       mcpBridged={false}
+      subagents={[]}
       sessionFiles={[{ path: "src/new-file.ts", status: "m" }]}
       memory={[]}
       memoryDetail={null}
+      onOpenSubagent={() => {}}
       onReadMemory={() => {}}
     />,
   );
@@ -80,14 +82,58 @@ describe("ContextPanel files", () => {
         usage={{ ...usage, reservedTokens: 50, liveLogTokens: 100 }}
         mcpSpecs={[]}
         mcpBridged={false}
+        subagents={[]}
         sessionFiles={[]}
         memory={[]}
         memoryDetail={null}
+        onOpenSubagent={() => {}}
         onReadMemory={() => {}}
       />,
     );
 
     expect(screen.getByText("150 / 1,000,000")).toBeTruthy();
     expect(screen.getByText("100")).toBeTruthy();
+  });
+
+  it("shows subagents beside MCP tools and opens the child transcript", () => {
+    const onOpenSubagent = vi.fn();
+    render(
+      <ContextPanel
+        settings={settings}
+        usage={usage}
+        mcpSpecs={[]}
+        mcpBridged={false}
+        subagents={[
+          {
+            runId: "sub-1",
+            sessionName: "subagent-sub-1-20260531120000",
+            parentSession: "desktop-20260531115900-1",
+            task: "Explore the renderer",
+            skillName: "explorer",
+            status: "running",
+            iter: 2,
+            elapsedMs: 12_300,
+            outputChars: 40,
+            reasoningChars: 8,
+            toolReadChars: 1024,
+          },
+        ]}
+        sessionFiles={[]}
+        memory={[]}
+        memoryDetail={null}
+        onOpenSubagent={onOpenSubagent}
+        onReadMemory={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Tools"));
+
+    expect(screen.getByText("Subagents")).toBeTruthy();
+    expect(screen.getByText("(explorer)")).toBeTruthy();
+    expect(screen.getByText("Explore the renderer")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open subagent: Explore the renderer" }));
+
+    expect(onOpenSubagent).toHaveBeenCalledWith("subagent-sub-1-20260531120000");
   });
 });
