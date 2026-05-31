@@ -3,7 +3,7 @@ name: Release desktop
 # Tag namespace: `desktop-v<semver>` triggers desktop Tauri bundles.
 # Plain `v<semver>` tags are reserved for the npm CLI release (see
 # publish-npm.yml) — they intentionally do NOT trigger this workflow.
-# Bump the desktop with: `git tag desktop-vX.Y.Z && git push origin desktop-vX.Y.Z`.
+# Bump the desktop with: `git tag desktop-vX.Y.Z && git push jupiter desktop-vX.Y.Z`.
 on:
   push:
     tags: ["desktop-v*"]
@@ -24,12 +24,12 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          # macOS now ships two single-arch shards so Apple Silicon and Intel
-          # users get separate DMGs. `rust` and `tauri` stay aligned per shard.
-          - { os: ubuntu-22.04, label: "linux-x64", rust: "x86_64-unknown-linux-gnu", tauri: "x86_64-unknown-linux-gnu" }
-          - { os: macos-15-intel, label: "macos-x64", rust: "x86_64-apple-darwin", tauri: "x86_64-apple-darwin" }
-          - { os: macos-14, label: "macos-arm64", rust: "aarch64-apple-darwin", tauri: "aarch64-apple-darwin" }
-          - { os: windows-latest, label: "windows-x64", rust: "x86_64-pc-windows-msvc", tauri: "x86_64-pc-windows-msvc" }
+          # Release assets intentionally stay installer-focused:
+          # Linux gets a .deb, macOS gets per-arch DMGs, Windows gets NSIS.
+          - { os: ubuntu-22.04, label: "linux-x64", rust: "x86_64-unknown-linux-gnu", tauri: "x86_64-unknown-linux-gnu", bundles: "--bundles deb" }
+          - { os: macos-15-intel, label: "macos-x64", rust: "x86_64-apple-darwin", tauri: "x86_64-apple-darwin", bundles: "--bundles dmg" }
+          - { os: macos-14, label: "macos-arm64", rust: "aarch64-apple-darwin", tauri: "aarch64-apple-darwin", bundles: "--bundles dmg" }
+          - { os: windows-latest, label: "windows-x64", rust: "x86_64-pc-windows-msvc", tauri: "x86_64-pc-windows-msvc", bundles: "--bundles nsis" }
     runs-on: ${{ matrix.target.os }}
     # secrets.* isn't accessible from step-level if:, so expose presence as a
     # job-level env. Treat "true"/"false" strings as booleans downstream.
@@ -38,6 +38,8 @@ jobs:
       HAS_WIN_CERT: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Resolve tag
         id: tag
@@ -134,9 +136,9 @@ jobs:
           projectPath: desktop
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: Jupiter ${{ steps.tag.outputs.name }}
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target.tauri }}
+          args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}
 
       - name: Build Tauri bundle (Windows, signed)
         if: matrix.target.os == 'windows-latest' && env.HAS_WIN_CERT == 'true'
@@ -151,9 +153,9 @@ jobs:
           projectPath: desktop
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: Jupiter ${{ steps.tag.outputs.name }}
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target.tauri }}
+          args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}
 
       - name: Build Tauri bundle (macOS, signed + notarized)
         if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_CERT == 'true'
@@ -172,9 +174,32 @@ jobs:
           projectPath: desktop
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: Jupiter ${{ steps.tag.outputs.name }}
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target.tauri }}
+          args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}
+
+      - name: Verify requested installer exists
+        working-directory: desktop
+        shell: bash
+        env:
+          LABEL: ${{ matrix.target.label }}
+          TARGET: ${{ matrix.target.tauri }}
+        run: |
+          case "$LABEL" in
+            linux-*) pattern="src-tauri/target/$TARGET/release/bundle/deb/*.deb" ;;
+            macos-*) pattern="src-tauri/target/$TARGET/release/bundle/dmg/*.dmg" ;;
+            windows-*) pattern="src-tauri/target/$TARGET/release/bundle/nsis/*.exe" ;;
+            *) echo "unknown label: $LABEL" >&2; exit 1 ;;
+          esac
+          shopt -s nullglob
+          files=( $pattern )
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No installer matched $pattern" >&2
+            find src-tauri/target -maxdepth 8 -path '*/release/bundle/*' -type f || true
+            exit 1
+          fi
+          printf 'Installer assets for %s:\n' "$LABEL"
+          printf '  %s\n' "${files[@]}"
 
       - name: Verify app Node inherits TCC grants (macOS)
         if: startsWith(matrix.target.os, 'macos-')

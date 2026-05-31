@@ -1,14 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SessionFile, Settings, UsageStats } from "../App";
 import { Markdown } from "../Markdown";
+import type { FilePreview, FilePreviewTarget } from "../file-preview";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
 import type { McpSpecInfo, MemoryDetail, MemoryEntryInfo, SubagentRunInfo } from "../protocol";
 import { PanelErrorBoundary } from "./error-boundary";
+import { FileActionMenu } from "./file-action-menu";
 
-type Tab = "files" | "tools" | "memory" | "rules";
+export type ContextPanelMode = "info" | "preview";
 
 const CONTEXT_MAX_TOKENS = 1_000_000;
 
@@ -21,8 +23,15 @@ export function ContextPanel({
   sessionFiles,
   memory,
   memoryDetail,
+  selectedFilePreview,
+  filePreviewLoading = false,
+  filePreviewError = null,
+  filePreviewPath = null,
+  mode,
+  onModeChange,
   onOpenSubagent,
   onReadMemory,
+  onPreviewFile,
 }: {
   settings: Settings | null;
   usage: UsageStats;
@@ -32,11 +41,25 @@ export function ContextPanel({
   sessionFiles: SessionFile[];
   memory: MemoryEntryInfo[];
   memoryDetail: MemoryDetail | null;
+  selectedFilePreview?: FilePreview | null;
+  filePreviewLoading?: boolean;
+  filePreviewError?: string | null;
+  filePreviewPath?: string | null;
+  mode?: ContextPanelMode;
+  onModeChange?: (mode: ContextPanelMode) => void;
   onOpenSubagent: (sessionName: string) => void;
   onReadMemory: (path: string) => void;
+  onPreviewFile?: (target: FilePreviewTarget) => void;
 }) {
   useLang();
-  const [tab, setTab] = useState<Tab>("files");
+  const [localMode, setLocalMode] = useState<ContextPanelMode>("info");
+  const activeMode = mode ?? localMode;
+  const setPanelMode = onModeChange ?? setLocalMode;
+  const previewPath = selectedFilePreview?.path ?? filePreviewPath;
+  const previewAvailable = Boolean(previewPath || filePreviewLoading || filePreviewError);
+  useEffect(() => {
+    if (previewPath) setPanelMode("preview");
+  }, [previewPath, setPanelMode]);
   const reserved = usage.reservedTokens;
   const lastHit = usage.lastCallCacheHit ?? 0;
   const lastMiss = usage.lastCallCacheMiss ?? 0;
@@ -48,72 +71,74 @@ export function ContextPanel({
   const usedPct = Math.min(100, (used / CONTEXT_MAX_TOKENS) * 100);
   const cachedPct = Math.min(100, (cached / CONTEXT_MAX_TOKENS) * 100);
   const free = Math.max(0, CONTEXT_MAX_TOKENS - reserved - used - cached);
+  const showPreview = previewAvailable && activeMode === "preview";
   return (
-    <aside className="ctx">
-      <div className="ctx-tabs">
-        <div className="ctx-tab" data-active={tab === "files"} onClick={() => setTab("files")}>
-          {t("contextPanel.filesTab")}
-        </div>
-        <div className="ctx-tab" data-active={tab === "tools"} onClick={() => setTab("tools")}>
-          {t("contextPanel.toolsTab")}
-        </div>
-        <div className="ctx-tab" data-active={tab === "memory"} onClick={() => setTab("memory")}>
-          {t("contextPanel.memoryTab")}
-        </div>
-        <div className="ctx-tab" data-active={tab === "rules"} onClick={() => setTab("rules")}>
-          {t("contextPanel.rulesTab")}
-        </div>
-      </div>
-
-      <div className="ctx-body">
-        <div className="ctx-block ctx-body-tokens">
-          <div className="h">
-            <span>{t("contextPanel.contextTokens")}</span>
-            <span className="right">
-              {(reserved + used + cached).toLocaleString()} /{" "}
-              {CONTEXT_MAX_TOKENS.toLocaleString()}
-            </span>
-          </div>
-          <div className="meter">
-            <span className="rsvd" style={{ width: `${reservedPct}%` }} />
-            <span className="cached" style={{ width: `${cachedPct}%` }} />
-            <span className="used" style={{ width: `${usedPct}%` }} />
-          </div>
-          <div className="legend">
-            <span className="l">
-              <span className="sw r" />
-              {t("contextPanel.reservedKey")} <span className="v">{reserved.toLocaleString()}</span>
-            </span>
-            <span className="l">
-              <span className="sw c" />
-              {t("contextPanel.cacheKey")} <span className="v">{cached.toLocaleString()}</span>
-            </span>
-            <span className="l">
-              <span className="sw u" />
-              {t("contextPanel.usedKey")} <span className="v">{used.toLocaleString()}</span>
-            </span>
-            <span className="l">
-              {t("contextPanel.freeKey")} <span className="v">{free.toLocaleString()}</span>
-            </span>
-          </div>
-        </div>
-
-        <div className="ctx-body-tab">
-          <PanelErrorBoundary key={tab} label={tab}>
-            {tab === "files" && <CtxFiles files={sessionFiles} settings={settings} />}
-            {tab === "tools" && (
-              <>
-                <CtxSubagents runs={subagents} onOpen={onOpenSubagent} />
-                <CtxTools specs={mcpSpecs} bridged={mcpBridged} />
-              </>
-            )}
-            {tab === "memory" && (
-              <CtxMemory entries={memory} detail={memoryDetail} onRead={onReadMemory} />
-            )}
-            {tab === "rules" && <CtxRules settings={settings} />}
+    <aside className="ctx" data-mode={showPreview ? "preview" : "info"}>
+      {showPreview ? (
+        <div className="ctx-preview-shell">
+          <PanelErrorBoundary key="preview" label="preview">
+            <FilePreviewPane
+              preview={selectedFilePreview ?? null}
+              loading={Boolean(filePreviewLoading)}
+              error={filePreviewError ?? null}
+              fallbackPath={filePreviewPath}
+              workspaceDir={settings?.workspaceDir}
+              editor={settings?.editor}
+              onPreviewFile={onPreviewFile}
+              full
+            />
           </PanelErrorBoundary>
         </div>
-      </div>
+      ) : (
+        <div className="ctx-body">
+          <div className="ctx-block ctx-body-tokens">
+            <div className="h">
+              <span>{t("contextPanel.contextTokens")}</span>
+              <span className="right">
+                {(reserved + used + cached).toLocaleString()} /{" "}
+                {CONTEXT_MAX_TOKENS.toLocaleString()}
+              </span>
+            </div>
+            <div className="meter">
+              <span className="rsvd" style={{ width: `${reservedPct}%` }} />
+              <span className="cached" style={{ width: `${cachedPct}%` }} />
+              <span className="used" style={{ width: `${usedPct}%` }} />
+            </div>
+            <div className="legend">
+              <span className="l">
+                <span className="sw r" />
+                {t("contextPanel.reservedKey")}{" "}
+                <span className="v">{reserved.toLocaleString()}</span>
+              </span>
+              <span className="l">
+                <span className="sw c" />
+                {t("contextPanel.cacheKey")} <span className="v">{cached.toLocaleString()}</span>
+              </span>
+              <span className="l">
+                <span className="sw u" />
+                {t("contextPanel.usedKey")} <span className="v">{used.toLocaleString()}</span>
+              </span>
+              <span className="l">
+                {t("contextPanel.freeKey")} <span className="v">{free.toLocaleString()}</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="ctx-body-tab">
+            <PanelErrorBoundary key="info" label="info">
+              <CtxFiles
+                files={sessionFiles}
+                settings={settings}
+                activePath={previewPath}
+                onPreviewFile={onPreviewFile}
+              />
+              <CtxSubagents runs={subagents} onOpen={onOpenSubagent} />
+              <CtxTools specs={mcpSpecs} bridged={mcpBridged} />
+              <CtxMemory entries={memory} detail={memoryDetail} onRead={onReadMemory} />
+            </PanelErrorBoundary>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
@@ -172,78 +197,225 @@ function buildSessionTree(files: SessionFile[]): TreeNode[] {
   return out;
 }
 
-function CtxFiles({ files, settings }: { files: SessionFile[]; settings: Settings | null }) {
+function CtxFiles({
+  files,
+  settings,
+  activePath,
+  onPreviewFile,
+}: {
+  files: SessionFile[];
+  settings: Settings | null;
+  activePath?: string | null;
+  onPreviewFile?: (target: FilePreviewTarget) => void;
+}) {
   const tree = useMemo(() => buildSessionTree(files), [files]);
+  const [menu, setMenu] = useState<{ path: string; left: number; top: number } | null>(null);
+  const workspaceDir = settings?.workspaceDir;
+  const editor = settings?.editor;
+  const openMenuAt = (path: string, left: number, top: number) => {
+    setMenu({ path, left, top });
+  };
+  const openMenu = (path: string, element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    openMenuAt(path, rect.right - 4, rect.bottom + 4);
+  };
   return (
-    <div className="ctx-block">
-      <div className="h">
-        <span>{t("contextPanel.filesTitle")}</span>
-        <span className="right">
-          {files.length === 0 ? "—" : t("contextPanel.filesCount", { count: files.length })}
-        </span>
+    <>
+      <div className="ctx-block">
+        <div className="h">
+          <span>{t("contextPanel.filesTitle")}</span>
+          <span className="right">
+            {files.length === 0 ? "—" : t("contextPanel.filesCount", { count: files.length })}
+          </span>
+        </div>
+        <div className="tree">
+          {files.length === 0 ? (
+            <div className="ctx-empty">{t("contextPanel.noFilesMsg")}</div>
+          ) : (
+            tree.map((n) =>
+              n.kind === "dir" ? (
+                <div
+                  className="node"
+                  key={n.key}
+                  data-d={n.depth}
+                  data-kind="dir"
+                  style={{ paddingLeft: 4 + n.depth * 14 }}
+                >
+                  <span className="ico">
+                    <I.folder size={12} />
+                  </span>
+                  <span className="nm">{n.name}/</span>
+                </div>
+              ) : (
+                <div
+                  className="node"
+                  key={n.key}
+                  data-d={n.depth}
+                  data-kind="file"
+                  data-active={activePath === n.path}
+                  title={n.path}
+                  style={{ paddingLeft: 4 + n.depth * 14 }}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    openMenuAt(n.path, event.clientX, event.clientY);
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="node-main"
+                    onClick={() => onPreviewFile?.({ path: n.path })}
+                  >
+                    <span className="ico">
+                      <I.file size={12} />
+                    </span>
+                    <span className="node-text">
+                      <span className="nm">{n.name}</span>
+                      <span className="full-path">{n.path}</span>
+                    </span>
+                  </button>
+                  <span
+                    className="dot"
+                    data-s={n.status}
+                    title={
+                      n.status === "m"
+                        ? t("contextPanel.fileModified")
+                        : t("contextPanel.fileInContext")
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="tree-action"
+                    aria-label={t("contextPanel.openFile", { path: n.path })}
+                    title={t("contextPanel.openFile", { path: n.path })}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void openContextFile(n.path, settings);
+                    }}
+                  >
+                    <I.file size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    className="tree-action"
+                    aria-label={t("fileActions.menu", { path: n.path })}
+                    title={t("fileActions.menu", { path: n.path })}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openMenu(n.path, event.currentTarget);
+                    }}
+                  >
+                    <I.more size={12} />
+                  </button>
+                </div>
+              ),
+            )
+          )}
+        </div>
       </div>
-      <div className="tree">
-        {files.length === 0 ? (
-          <div className="ctx-empty">{t("contextPanel.noFilesMsg")}</div>
+      {menu ? (
+        <FileActionMenu
+          anchor={{ left: menu.left, top: menu.top }}
+          path={menu.path}
+          workspaceDir={workspaceDir}
+          editor={editor}
+          onPreviewFile={onPreviewFile}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return t("fileActions.bytes", { count: bytes });
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = units[0]!;
+  for (let i = 1; i < units.length && value >= 1024; i++) {
+    value /= 1024;
+    unit = units[i]!;
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
+}
+
+function FilePreviewPane({
+  preview,
+  loading,
+  error,
+  fallbackPath,
+  workspaceDir,
+  editor,
+  onPreviewFile,
+  full = false,
+}: {
+  preview: FilePreview | null;
+  loading: boolean;
+  error: string | null;
+  fallbackPath?: string | null;
+  workspaceDir?: string;
+  editor?: string;
+  onPreviewFile?: (target: FilePreviewTarget) => void;
+  full?: boolean;
+}) {
+  const [menuAnchor, setMenuAnchor] = useState<{ left: number; top: number } | null>(null);
+  const path = preview?.path ?? fallbackPath;
+  if (!path && !loading && !error) return null;
+  const meta = preview
+    ? [
+        formatBytes(preview.bytes),
+        preview.truncated ? t("fileActions.truncated") : null,
+        preview.ext ? `.${preview.ext}` : null,
+      ].filter(Boolean)
+    : [];
+  return (
+    <div className={`ctx-file-preview ${full ? "ctx-file-preview--full" : ""}`}>
+      <div className="file-preview-head">
+        <div className="file-preview-title">
+          <span className="k">{t("fileActions.previewTitle")}</span>
+          <span className="n">{preview?.name ?? path}</span>
+        </div>
+        {path ? (
+          <button
+            type="button"
+            className="tree-action"
+            aria-label={t("fileActions.menu", { path })}
+            title={t("fileActions.menu", { path })}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setMenuAnchor({ left: rect.right - 4, top: rect.bottom + 4 });
+            }}
+          >
+            <I.more size={12} />
+          </button>
+        ) : null}
+      </div>
+      {path ? <div className="file-preview-path">{path}</div> : null}
+      {meta.length > 0 ? <div className="file-preview-meta">{meta.join(" · ")}</div> : null}
+      <div className="file-preview-body">
+        {loading ? (
+          <div className="ctx-empty">{t("fileActions.previewLoading")}</div>
+        ) : error ? (
+          <div className="ctx-empty">{t("fileActions.previewError", { message: error })}</div>
+        ) : preview?.text !== undefined && preview.text !== null ? (
+          <pre className="file-preview-text">{preview.text}</pre>
         ) : (
-          tree.map((n) =>
-            n.kind === "dir" ? (
-              <div
-                className="node"
-                key={n.key}
-                data-d={n.depth}
-                data-kind="dir"
-                style={{ paddingLeft: 4 + n.depth * 14 }}
-              >
-                <span className="ico">
-                  <I.folder size={12} />
-                </span>
-                <span className="nm">{n.name}/</span>
-              </div>
-            ) : (
-              <div
-                className="node"
-                key={n.key}
-                data-d={n.depth}
-                data-kind="file"
-                title={n.path}
-                style={{ paddingLeft: 4 + n.depth * 14 }}
-              >
-                <span className="ico">
-                  <I.file size={12} />
-                </span>
-                <span className="node-text">
-                  <span className="nm">{n.name}</span>
-                  <span className="full-path">{n.path}</span>
-                </span>
-                <span
-                  className="dot"
-                  data-s={n.status}
-                  title={n.status === "m" ? t("contextPanel.fileModified") : t("contextPanel.fileInContext")}
-                />
-                <button
-                  type="button"
-                  className="tree-action"
-                  aria-label={t("contextPanel.openFile", { path: n.path })}
-                  title={t("contextPanel.openFile", { path: n.path })}
-                  onClick={() => void openContextFile(n.path, settings)}
-                >
-                  <I.file size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="tree-action"
-                  aria-label={t("contextPanel.copyPath", { path: n.path })}
-                  title={t("contextPanel.copyPath", { path: n.path })}
-                  onClick={() => void navigator.clipboard?.writeText(n.path)}
-                >
-                  <I.copy size={12} />
-                </button>
-              </div>
-            ),
-          )
+          <div className="ctx-empty">
+            <div>{t("fileActions.previewUnsupported")}</div>
+            <div>{t("fileActions.previewOpenHint")}</div>
+          </div>
         )}
       </div>
+      {menuAnchor && path ? (
+        <FileActionMenu
+          anchor={menuAnchor}
+          path={path}
+          workspaceDir={workspaceDir}
+          editor={editor}
+          onPreviewFile={onPreviewFile}
+          onClose={() => setMenuAnchor(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -423,7 +595,10 @@ function CtxMemory({
   onRead: (path: string) => void;
 }) {
   return (
-    <div className="ctx-block" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+    <div
+      className="ctx-block"
+      style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+    >
       <div className="h">
         <span>{t("contextPanel.memoryTitle")}</span>
         <span className="right">
@@ -433,7 +608,10 @@ function CtxMemory({
       {entries.length === 0 ? (
         <div className="ctx-empty">{t("contextPanel.noMemoriesMsg")}</div>
       ) : (
-        <div className="mem" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+        <div
+          className="mem"
+          style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+        >
           <div style={{ flexShrink: 0 }}>
             {entries.map((m) => (
               <button
@@ -444,7 +622,9 @@ function CtxMemory({
                 onClick={() => onRead(m.path)}
               >
                 <span className="scope" data-s={m.scope}>
-                  {m.scope === "project" ? t("contextPanel.scopeProject") : t("contextPanel.scopeGlobal")}
+                  {m.scope === "project"
+                    ? t("contextPanel.scopeProject")
+                    : t("contextPanel.scopeGlobal")}
                 </span>
                 <span className="txt">{m.description || m.name}</span>
               </button>
@@ -457,41 +637,6 @@ function CtxMemory({
           ) : null}
         </div>
       )}
-    </div>
-  );
-}
-
-function CtxRules({ settings }: { settings: Settings | null }) {
-  const editMode = settings?.editMode ?? "review";
-  const items: { p: string; allow: boolean; desc: string }[] =
-    editMode === "yolo"
-      ? [{ p: "*", allow: true, desc: t("contextPanel.ruleYolo") }]
-      : editMode === "auto"
-        ? [
-            { p: "read_file, list_directory, search_files, *", allow: true, desc: t("contextPanel.ruleReadOnly") },
-            { p: "run_command (allowlist)", allow: true, desc: t("contextPanel.ruleShellAllowlist") },
-            { p: "edit_file, write_file, run_command (other)", allow: false, desc: t("contextPanel.ruleWritesAsk") },
-          ]
-        : [
-            { p: "*", allow: false, desc: t("contextPanel.ruleReview") },
-          ];
-  return (
-    <div className="ctx-block">
-      <div className="h">
-        <span>{t("contextPanel.autoApproveTitle")}</span>
-        <span className="right">{editMode}</span>
-      </div>
-      {items.map((r) => (
-        <div className="rule" key={r.p}>
-          <div className="top">
-            <span className={`pat ${r.allow ? "" : "deny"}`}>{r.p}</span>
-            <span className={`sw ${r.allow ? "" : "deny"}`}>
-              {r.allow ? t("contextPanel.allow") : t("contextPanel.ask")}
-            </span>
-          </div>
-          <div className="desc">{r.desc}</div>
-        </div>
-      ))}
     </div>
   );
 }

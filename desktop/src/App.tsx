@@ -15,6 +15,7 @@ import {
   restoreAbortedDraft,
   type AbortDraftSource,
 } from "./abort-draft";
+import { readFilePreview, type FilePreview, type FilePreviewTarget } from "./file-preview";
 import { getLang, getLangLabel, getSupportedLangs, setLang, t, useLang } from "./i18n";
 import { I } from "./icons";
 import {
@@ -66,7 +67,7 @@ import type {
 } from "./protocol";
 import { type QQDesktopSettingsState } from "./qq-settings";
 import { Composer, type SlashCmd } from "./ui/composer";
-import { ContextPanel } from "./ui/context-panel";
+import { ContextPanel, type ContextPanelMode } from "./ui/context-panel";
 import { JobsPop } from "./ui/jobs-pop";
 import { useElapsed } from "./ui/live";
 import { AboutModal } from "./ui/about";
@@ -1504,6 +1505,13 @@ function TabRuntime({
   useLang();
   useDisableTextAssist();
   const [draft, setDraft] = useState("");
+  const [filePreview, setFilePreview] = useState<{
+    target: FilePreviewTarget | null;
+    preview: FilePreview | null;
+    loading: boolean;
+    error: string | null;
+  }>({ target: null, preview: null, loading: false, error: null });
+  const [contextPanelMode, setContextPanelMode] = useState<ContextPanelMode>("info");
   const [toast, setToast] = useState<{ msg: string; yolo?: boolean } | null>(null);
   const [splashOn, setSplashOn] = useState<boolean>(() => shouldShowSplash());
   const [wdOpen, setWdOpen] = useState(false);
@@ -1573,6 +1581,49 @@ function TabRuntime({
     (path: string) => sendRpc({ cmd: "mention_picked", path }),
     [sendRpc],
   );
+  const previewFile = useCallback(
+    (target: FilePreviewTarget) => {
+      const workspaceDir = state.settings?.workspaceDir;
+      const targetKey = `${target.path}:${target.line ?? ""}`;
+      if (ctxCollapsed) onToggleCtx();
+      setContextPanelMode("preview");
+      setFilePreview({ target, preview: null, loading: true, error: null });
+      void readFilePreview(target.path, workspaceDir).then(
+        (preview) => {
+          setFilePreview((current) => {
+            const currentKey = current.target
+              ? `${current.target.path}:${current.target.line ?? ""}`
+              : "";
+            if (currentKey !== targetKey) return current;
+            return { target, preview, loading: false, error: null };
+          });
+        },
+        (err) => {
+          setFilePreview((current) => {
+            const currentKey = current.target
+              ? `${current.target.path}:${current.target.line ?? ""}`
+              : "";
+            if (currentKey !== targetKey) return current;
+            return {
+              target,
+              preview: null,
+              loading: false,
+              error: err instanceof Error ? err.message : String(err),
+            };
+          });
+        },
+      );
+    },
+    [ctxCollapsed, onToggleCtx, state.settings?.workspaceDir],
+  );
+  useEffect(() => {
+    setFilePreview({ target: null, preview: null, loading: false, error: null });
+    setContextPanelMode("info");
+  }, [state.currentSession, state.settings?.workspaceDir]);
+  const showContextInfo = useCallback(() => {
+    setContextPanelMode("info");
+    if (ctxCollapsed) onToggleCtx();
+  }, [ctxCollapsed, onToggleCtx]);
   const saveSettings = useCallback(
     (patch: SettingsPatch) => sendRpc({ cmd: "settings_save", ...patch }),
     [sendRpc],
@@ -2371,7 +2422,11 @@ function TabRuntime({
 
   return (
     <WorkspaceProvider
-      value={{ dir: state.settings?.workspaceDir, editor: state.settings?.editor }}
+      value={{
+        dir: state.settings?.workspaceDir,
+        editor: state.settings?.editor,
+        onPreviewFile: previewFile,
+      }}
     >
       <div
         className="app"
@@ -2391,8 +2446,12 @@ function TabRuntime({
           model={state.settings?.model}
           sideOn={!sideCollapsed}
           ctxOn={!ctxCollapsed}
+          contextInfoOn={!ctxCollapsed && contextPanelMode === "info"}
+          bottomBarOn={settingsCardOpen}
           onToggleSide={onToggleSide}
           onToggleCtx={onToggleCtx}
+          onShowContextInfo={showContextInfo}
+          onToggleBottomBar={() => setSettingsCardOpen((open) => !open)}
           onOpenCommands={() => palette.setOpen(true)}
           onOpenSettings={() => openSettingsAt("general")}
           onCopy={conversationCopy}
@@ -2511,6 +2570,7 @@ function TabRuntime({
                           <ActivePlanTaskCard plan={state.activePlan!} />
                         </div>
                       ) : undefined,
+                      Footer: () => <div className="thread-bottom-spacer" aria-hidden="true" />,
                     }}
                     itemContent={(index) => {
                       const m = state.messages[index]!;
@@ -2635,11 +2695,18 @@ function TabRuntime({
           sessionFiles={state.sessionFiles}
           memory={state.memory}
           memoryDetail={state.memoryDetail}
+          selectedFilePreview={filePreview.preview}
+          filePreviewLoading={filePreview.loading}
+          filePreviewError={filePreview.error}
+          filePreviewPath={filePreview.target?.path ?? null}
+          mode={contextPanelMode}
+          onModeChange={setContextPanelMode}
           onOpenSubagent={(name) => {
             clearAbortDraft();
             sendRpc({ cmd: "session_load", name });
           }}
           onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
+          onPreviewFile={previewFile}
         />
 
         {settingsCardOpen ? (
@@ -2788,8 +2855,12 @@ function TitleBar({
   model,
   sideOn,
   ctxOn,
+  contextInfoOn,
+  bottomBarOn,
   onToggleSide,
   onToggleCtx,
+  onShowContextInfo,
+  onToggleBottomBar,
   onOpenCommands,
   onOpenSettings,
   onCopy,
@@ -2801,8 +2872,12 @@ function TitleBar({
   model?: string;
   sideOn: boolean;
   ctxOn: boolean;
+  contextInfoOn: boolean;
+  bottomBarOn: boolean;
   onToggleSide: () => void;
   onToggleCtx: () => void;
+  onShowContextInfo: () => void;
+  onToggleBottomBar: () => void;
   onOpenCommands: () => void;
   onOpenSettings: () => void;
   onCopy: () => void;
@@ -2852,46 +2927,6 @@ function TitleBar({
     <header className="titlebar">
       {/* left: sidebar toggle + brand */}
       <div className="tb-left">
-        {isMac ? (
-          <div className="mac-controls" aria-label={t("app.titlebar.windowControls")}>
-            <button
-              type="button"
-              className="mac-ctrl close"
-              title={t("app.titlebar.close")}
-              aria-label={t("app.titlebar.close")}
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                win.close();
-              }}
-            >
-              <WinClose />
-            </button>
-            <button
-              type="button"
-              className="mac-ctrl minimize"
-              title={t("app.titlebar.minimize")}
-              aria-label={t("app.titlebar.minimize")}
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                win.minimize();
-              }}
-            >
-              <WinMinimize />
-            </button>
-            <button
-              type="button"
-              className="mac-ctrl zoom"
-              title={isMaximized ? t("app.titlebar.restore") : t("app.titlebar.maximize")}
-              aria-label={isMaximized ? t("app.titlebar.restore") : t("app.titlebar.maximize")}
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                void toggleWindowExpanded(win, true, isMaximized);
-              }}
-            >
-              {isMaximized ? <WinRestore /> : <WinMaximize />}
-            </button>
-          </div>
-        ) : null}
         <button
           type="button"
           className="iconbtn"
@@ -2923,8 +2958,29 @@ function TitleBar({
         <button
           type="button"
           className="iconbtn"
+          data-on={contextInfoOn}
+          title={t("contextPanel.showInfo")}
+          aria-label={t("contextPanel.showInfo")}
+          onClick={onShowContextInfo}
+        >
+          <I.info size={14} />
+        </button>
+        <button
+          type="button"
+          className="iconbtn"
+          data-on={bottomBarOn}
+          title={t("contextPanel.toggleBottomBar")}
+          aria-label={t("contextPanel.toggleBottomBar")}
+          onClick={onToggleBottomBar}
+        >
+          <I.panel_b size={14} />
+        </button>
+        <button
+          type="button"
+          className="iconbtn"
           data-on={ctxOn}
-          title={t("app.titlebar.contextPanel")}
+          title={t("contextPanel.toggleRightSidebar")}
+          aria-label={t("contextPanel.toggleRightSidebar")}
           onClick={onToggleCtx}
         >
           <I.panel_r size={14} />

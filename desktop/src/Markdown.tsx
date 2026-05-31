@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Copy, ExternalLink, FileText } from "lucide-react";
+import { Check, ChevronDown, Copy, ExternalLink, FileText } from "lucide-react";
 import {
   Children,
   cloneElement,
@@ -17,7 +17,9 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { CodeView } from "./CodeView";
+import { type FilePreviewTarget, firstPreviewLine, resolveWorkspacePath } from "./file-preview";
 import { t, useLang } from "./i18n";
+import { FileActionMenu } from "./ui/file-action-menu";
 
 async function openWithEditor(
   editor: string | undefined,
@@ -31,24 +33,16 @@ async function openWithEditor(
   await openPath(abs);
 }
 
-type WorkspaceCtx = { dir?: string; editor?: string };
+type WorkspaceCtx = {
+  dir?: string;
+  editor?: string;
+  onPreviewFile?: (target: FilePreviewTarget) => void;
+};
 const WorkspaceContext = createContext<WorkspaceCtx>({});
 export const WorkspaceProvider = WorkspaceContext.Provider;
 
-function resolveAgainstWorkspace(rel: string, ws: string | undefined): string {
-  if (!ws) return rel;
-  const isWindows = ws.includes("\\");
-  if (/^[a-zA-Z]:[\\/]/.test(rel) || rel.startsWith("/")) {
-    return isWindows ? rel.replace(/\//g, "\\") : rel;
-  }
-  const sep = isWindows ? "\\" : "/";
-  const trimmed = ws.replace(/[\\/]$/, "");
-  const relative = rel.replace(/^\.[\\/]/, "").replace(/\//g, sep);
-  return `${trimmed}${sep}${relative}`;
-}
-
 const KNOWN_EXTS =
-  "ts|tsx|mts|cts|js|jsx|mjs|cjs|py|pyi|rs|go|json|jsonc|md|mdx|css|scss|less|html|htm|xml|svg|yaml|yml|toml|sh|bash|zsh|fish|sql|rb|java|kt|swift|c|cpp|cc|cxx|h|hpp|hxx|cs|php|lua|dart|ex|exs|erl|hs|clj|cljs|zig|vue|svelte|graphql|gql|proto";
+  "ts|tsx|mts|cts|js|jsx|mjs|cjs|py|pyi|rs|go|json|jsonc|md|mdx|txt|csv|pdf|doc|docx|xls|xlsx|ppt|pptx|css|scss|less|html|htm|xml|svg|yaml|yml|toml|sh|bash|zsh|fish|sql|rb|java|kt|swift|c|cpp|cc|cxx|h|hpp|hxx|cs|php|lua|dart|ex|exs|erl|hs|clj|cljs|zig|vue|svelte|graphql|gql|proto";
 const PATH_SEG = "[\\w.@()+~%#=-]+";
 const FILE_NAME_SOURCE = `${PATH_SEG}\\.(?:${KNOWN_EXTS})`;
 const FILE_REF_SOURCE = [
@@ -63,18 +57,12 @@ const LINE_REF_SOURCE = "(?::(\\d+(?::\\d+)?(?:-\\d+)?))?";
 // "invalid group specifier name" error. Capture the leading char as
 // group 1 instead and let splitFilePaths skip past it. Issue #1209.
 const FILE_PATH_RE = new RegExp(
-  `(^|[\\s\`'"(\\[])(${FILE_REF_SOURCE})${LINE_REF_SOURCE}(?=[\\s.,;!?\\]\\)'"\`]|$)`,
+  `(^|[\\s:\uFF1A\`'"(\\[])(${FILE_REF_SOURCE})${LINE_REF_SOURCE}(?=[\\s.,;!?\\]\\)'"\`]|$)`,
   "g",
 );
 const EXACT_FILE_REF_RE = new RegExp(`^(${FILE_REF_SOURCE})${LINE_REF_SOURCE}$`);
 
 type ParsedFileRef = { path: string; line?: string };
-
-function firstLine(line?: string): number | undefined {
-  if (!line) return undefined;
-  const parsed = Number.parseInt(line.split(/[:-]/)[0] ?? line, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
 
 function parseFileRef(value: string): ParsedFileRef | null {
   const trimmed = value.trim();
@@ -117,11 +105,16 @@ function FilePill({ path, line }: { path: string; line?: string }) {
   useLang();
   const ctx = useContext(WorkspaceContext);
   const [done, setDone] = useState<"open" | "copy" | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{ left: number; top: number } | null>(null);
   const display = line ? `${path}:${line}` : path;
-  const openInEditor = async () => {
+  const previewOrOpen = async () => {
+    if (ctx.onPreviewFile) {
+      ctx.onPreviewFile({ path, line });
+      return;
+    }
     try {
-      const abs = resolveAgainstWorkspace(path, ctx.dir);
-      await openWithEditor(ctx.editor, abs, firstLine(line));
+      const abs = resolveWorkspacePath(path, ctx.dir);
+      await openWithEditor(ctx.editor, abs, firstPreviewLine(line));
       setDone("open");
       setTimeout(() => setDone(null), 1200);
     } catch {
@@ -134,38 +127,55 @@ function FilePill({ path, line }: { path: string; line?: string }) {
       }
     }
   };
-  const copyOnly = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(display);
-      setDone("copy");
-      setTimeout(() => setDone(null), 1200);
-    } catch {
-      /* ignore */
-    }
+  const openMenuAt = (left: number, top: number) => {
+    setMenuAnchor({ left, top });
   };
   return (
     <span
       className={`file-pill ${done ? "done" : ""}`}
       role="button"
       tabIndex={0}
-      onClick={openInEditor}
+      aria-label={display}
+      onClick={previewOrOpen}
       onContextMenu={(e) => {
         e.preventDefault();
-        void copyOnly(e);
+        openMenuAt(e.clientX, e.clientY);
       }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          void openInEditor();
+          void previewOrOpen();
         }
       }}
       title={t("markdown.filePillTitle")}
     >
-      <FileText size={10} className="file-pill-icon" />
+      <FileText size={12} className="file-pill-icon" />
       <span className="file-pill-path">{path}</span>
       {line && <span className="file-pill-line">:{line}</span>}
-      {done && <Check size={10} className="file-pill-check" />}
+      {done && <Check size={12} className="file-pill-check" />}
+      <button
+        type="button"
+        className="file-pill-menu-btn"
+        aria-label={t("fileActions.menu", { path: display })}
+        onClick={(e) => {
+          e.stopPropagation();
+          const rect = e.currentTarget.getBoundingClientRect();
+          openMenuAt(rect.left, rect.bottom + 4);
+        }}
+      >
+        <ChevronDown size={12} />
+      </button>
+      {menuAnchor ? (
+        <FileActionMenu
+          anchor={menuAnchor}
+          path={path}
+          line={line}
+          workspaceDir={ctx.dir}
+          editor={ctx.editor}
+          onPreviewFile={ctx.onPreviewFile}
+          onClose={() => setMenuAnchor(null)}
+        />
+      ) : null}
     </span>
   );
 }
@@ -300,8 +310,12 @@ function SafeLink({ href, children }: { href?: string; children: ReactNode }) {
     try {
       const parsed = parseFileHref(href);
       const target = parsed ?? { path: decodeMaybeUri(stripFileScheme(href)) };
-      const abs = resolveAgainstWorkspace(target.path, ctx.dir);
-      await openWithEditor(ctx.editor, abs, firstLine(target.line));
+      if (ctx.onPreviewFile) {
+        ctx.onPreviewFile(target);
+        return;
+      }
+      const abs = resolveWorkspacePath(target.path, ctx.dir);
+      await openWithEditor(ctx.editor, abs, firstPreviewLine(target.line));
     } catch {
       try {
         await navigator.clipboard.writeText(href);

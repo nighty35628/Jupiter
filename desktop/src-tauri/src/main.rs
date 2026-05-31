@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
+use tauri_plugin_window_state::StateFlags;
 
 const TRAY_MENU_SHOW: &str = "show";
 const TRAY_MENU_QUIT: &str = "quit";
@@ -57,6 +58,17 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+fn persisted_window_state_flags() -> StateFlags {
+    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED
+}
+
+#[cfg(target_os = "macos")]
+fn enforce_macos_native_chrome(window: &tauri::WebviewWindow) {
+    let _ = window.set_fullscreen(false);
+    let _ = window.set_decorations(true);
+    let _ = window.set_title_bar_style(tauri::TitleBarStyle::Overlay);
 }
 
 fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
@@ -302,6 +314,264 @@ fn open_in_editor(command: String, path: String, line: Option<u32>) -> Result<()
     Ok(())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilePreview {
+    path: String,
+    abs_path: String,
+    name: String,
+    ext: Option<String>,
+    kind: String,
+    bytes: u64,
+    modified_ms: Option<u128>,
+    text: Option<String>,
+    truncated: bool,
+}
+
+fn resolve_preview_path(path: &str, workspace_dir: Option<&str>) -> Result<PathBuf, String> {
+    let raw = PathBuf::from(path);
+    if raw.is_absolute() {
+        return raw
+            .canonicalize()
+            .map_err(|e| format!("resolve failed: {e}"));
+    }
+    let Some(root) = workspace_dir.filter(|v| !v.trim().is_empty()) else {
+        return raw
+            .canonicalize()
+            .map_err(|e| format!("resolve failed: {e}"));
+    };
+    let root = PathBuf::from(root)
+        .canonicalize()
+        .map_err(|e| format!("workspace resolve failed: {e}"))?;
+    let candidate = root.join(path);
+    let abs = candidate
+        .canonicalize()
+        .map_err(|e| format!("resolve failed: {e}"))?;
+    if !abs.starts_with(&root) {
+        return Err("path is outside the workspace".into());
+    }
+    Ok(abs)
+}
+
+fn preview_kind(ext: Option<&str>) -> &'static str {
+    let Some(ext) = ext else {
+        return "binary";
+    };
+    match ext {
+        "bmp" | "gif" | "jpeg" | "jpg" | "png" | "svg" | "webp" => "image",
+        "doc" | "docx" | "pdf" | "ppt" | "pptx" | "xls" | "xlsx" => "document",
+        "bash" | "c" | "cc" | "cljs" | "clj" | "cpp" | "cs" | "css" | "csv" | "cts" | "cxx"
+        | "dart" | "dockerfile" | "erl" | "ex" | "exs" | "fish" | "go" | "graphql" | "h"
+        | "hpp" | "hs" | "htm" | "html" | "hxx" | "java" | "js" | "json" | "jsonc" | "jsx"
+        | "kt" | "less" | "lua" | "md" | "mdx" | "mjs" | "mts" | "php" | "proto" | "py" | "pyi"
+        | "rb" | "rs" | "scss" | "sh" | "sql" | "svelte" | "swift" | "toml" | "ts" | "tsx"
+        | "txt" | "vue" | "xml" | "yaml" | "yml" | "zig" | "zsh" => "text",
+        _ => "binary",
+    }
+}
+
+fn push_limited(out: &mut String, value: &str, limit: usize) -> bool {
+    if out.len() >= limit {
+        return true;
+    }
+    let remaining = limit - out.len();
+    if value.len() <= remaining {
+        out.push_str(value);
+        return false;
+    }
+    let mut end = 0;
+    for (idx, ch) in value.char_indices() {
+        let next = idx + ch.len_utf8();
+        if next > remaining {
+            break;
+        }
+        end = next;
+    }
+    if end > 0 {
+        out.push_str(&value[..end]);
+    }
+    true
+}
+
+fn decode_xml_entities(value: &str) -> String {
+    if !value.contains('&') {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        let entity_start = start + 1;
+        let Some(end_rel) = rest[entity_start..].find(';') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let entity_end = entity_start + end_rel;
+        let entity = &rest[entity_start..entity_end];
+        let decoded = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ if entity.starts_with("#x") => u32::from_str_radix(&entity[2..], 16)
+                .ok()
+                .and_then(char::from_u32),
+            _ if entity.starts_with('#') => {
+                entity[1..].parse::<u32>().ok().and_then(char::from_u32)
+            }
+            _ => None,
+        };
+        if let Some(ch) = decoded {
+            out.push(ch);
+        } else {
+            out.push('&');
+            out.push_str(entity);
+            out.push(';');
+        }
+        rest = &rest[(entity_end + 1)..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn push_docx_text_segment(out: &mut String, text: &str, limit: usize) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    push_limited(out, &decode_xml_entities(text), limit)
+}
+
+fn docx_xml_to_text(xml: &str, limit: usize) -> (String, bool) {
+    let mut out = String::new();
+    let mut text = String::new();
+    let mut tag = String::new();
+    let mut in_tag = false;
+    let mut capture_text = false;
+    let mut truncated = false;
+
+    for ch in xml.chars() {
+        if in_tag {
+            if ch == '>' {
+                in_tag = false;
+                let raw_tag = tag.trim();
+                let is_closing = raw_tag.starts_with('/');
+                let is_self_closing = raw_tag.ends_with('/');
+                let name = raw_tag
+                    .trim_start_matches('/')
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .trim_end_matches('/');
+                if name == "w:t" || name == "w:instrText" {
+                    capture_text = !is_closing && !is_self_closing;
+                } else if name == "w:tab" {
+                    truncated = push_limited(&mut out, "\t", limit);
+                } else if name == "w:br" || raw_tag.starts_with("/w:p") {
+                    if !out.ends_with('\n') {
+                        truncated = push_limited(&mut out, "\n", limit);
+                    }
+                }
+                tag.clear();
+                if truncated {
+                    break;
+                }
+            } else {
+                tag.push(ch);
+            }
+            continue;
+        }
+        if ch == '<' {
+            truncated = push_docx_text_segment(&mut out, &text, limit);
+            text.clear();
+            in_tag = true;
+            if truncated {
+                break;
+            }
+        } else if capture_text {
+            text.push(ch);
+        }
+    }
+    if !truncated {
+        truncated = push_docx_text_segment(&mut out, &text, limit);
+    }
+    (out.trim().to_string(), truncated)
+}
+
+fn read_docx_preview(path: &Path, limit: usize) -> Result<(String, bool), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("open failed: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("docx archive failed: {e}"))?;
+    let mut document = archive
+        .by_name("word/document.xml")
+        .map_err(|e| format!("docx document missing: {e}"))?;
+    let mut xml = String::new();
+    use std::io::Read;
+    document
+        .read_to_string(&mut xml)
+        .map_err(|e| format!("docx read failed: {e}"))?;
+    Ok(docx_xml_to_text(&xml, limit))
+}
+
+#[tauri::command]
+fn read_file_preview(path: String, workspace_dir: Option<String>) -> Result<FilePreview, String> {
+    use std::io::Read;
+    const MAX_TEXT_BYTES: usize = 256 * 1024;
+    let abs = resolve_preview_path(&path, workspace_dir.as_deref())?;
+    let metadata = std::fs::metadata(&abs).map_err(|e| format!("metadata failed: {e}"))?;
+    if !metadata.is_file() {
+        return Err("not a file".into());
+    }
+    let ext = abs
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let name = abs
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path.as_str())
+        .to_string();
+    let kind = preview_kind(ext.as_deref()).to_string();
+    let mut text = None;
+    let mut truncated = false;
+    if kind == "text" {
+        let mut file = std::fs::File::open(&abs).map_err(|e| format!("open failed: {e}"))?;
+        let mut bytes = Vec::new();
+        file.by_ref()
+            .take((MAX_TEXT_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("read failed: {e}"))?;
+        if bytes.len() > MAX_TEXT_BYTES {
+            bytes.truncate(MAX_TEXT_BYTES);
+            truncated = true;
+        }
+        text = Some(String::from_utf8_lossy(&bytes).into_owned());
+    } else if ext.as_deref() == Some("docx") {
+        if let Ok((docx_text, docx_truncated)) = read_docx_preview(&abs, MAX_TEXT_BYTES) {
+            if !docx_text.is_empty() {
+                text = Some(docx_text);
+                truncated = docx_truncated;
+            }
+        }
+    }
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis());
+    Ok(FilePreview {
+        path,
+        abs_path: abs.to_string_lossy().into_owned(),
+        name,
+        ext,
+        kind,
+        bytes: metadata.len(),
+        modified_ms,
+        text,
+        truncated,
+    })
+}
+
 #[tauri::command]
 fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, &content).map_err(|e| format!("write failed: {e}"))
@@ -366,7 +636,11 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(persisted_window_state_flags())
+                .build(),
+        )
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
@@ -386,6 +660,7 @@ fn main() {
             open_in_editor,
             list_workspace_tree,
             git_status,
+            read_file_preview,
             write_text_file,
             save_clipboard_image
         ])
@@ -393,6 +668,9 @@ fn main() {
             std::thread::spawn(|| purge_old_pasted_images(Duration::from_secs(24 * 60 * 60)));
             install_tray(app)?;
             if let Some(w) = app.get_webview_window("main") {
+                #[cfg(target_os = "macos")]
+                enforce_macos_native_chrome(&w);
+
                 // HiDPI fit: the JSON config asks for 1024x720 logical px.
                 // On Windows laptops at 200% scale (1920x1080 → 960x540
                 // effective logical px) that overflows the screen and the
@@ -442,8 +720,12 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_desktop_close_behavior, sanitize_image_extension, DesktopCloseBehavior};
+    use super::{
+        docx_xml_to_text, parse_desktop_close_behavior, persisted_window_state_flags,
+        sanitize_image_extension, DesktopCloseBehavior,
+    };
     use serde_json::json;
+    use tauri_plugin_window_state::StateFlags;
 
     #[test]
     fn accepts_alphanumeric_extensions() {
@@ -474,6 +756,26 @@ mod tests {
     }
 
     #[test]
+    fn docx_xml_to_text_extracts_paragraph_text() {
+        let xml = r#"<w:document><w:body><w:p><w:r><w:t>Hello &amp; hi</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Jupiter</w:t></w:r></w:p><w:p><w:r><w:t>Next</w:t></w:r></w:p></w:body></w:document>"#;
+
+        let (text, truncated) = docx_xml_to_text(xml, 1024);
+
+        assert_eq!(text, "Hello & hi\tJupiter\nNext");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn docx_xml_to_text_truncates_on_utf8_boundary() {
+        let xml = r#"<w:document><w:body><w:p><w:r><w:t>你好 Jupiter</w:t></w:r></w:p></w:body></w:document>"#;
+
+        let (text, truncated) = docx_xml_to_text(xml, 5);
+
+        assert_eq!(text, "你");
+        assert!(truncated);
+    }
+
+    #[test]
     fn desktop_close_behavior_defaults_to_quit() {
         assert_eq!(
             parse_desktop_close_behavior(&json!({})),
@@ -495,5 +797,12 @@ mod tests {
             parse_desktop_close_behavior(&json!({ "desktopCloseBehavior": "closeToQuit" })),
             DesktopCloseBehavior::CloseToQuit
         );
+    }
+
+    #[test]
+    fn window_state_does_not_restore_decorations() {
+        assert!(!persisted_window_state_flags().contains(StateFlags::DECORATIONS));
+        assert!(!persisted_window_state_flags().contains(StateFlags::FULLSCREEN));
+        assert!(!persisted_window_state_flags().contains(StateFlags::VISIBLE));
     }
 }
