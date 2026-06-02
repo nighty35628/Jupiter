@@ -20,6 +20,7 @@ import { registerFilesystemTools } from "../tools/filesystem.js";
 import { registerJavaSourceTool } from "../tools/java-source.js";
 import { JobRegistry } from "../tools/jobs.js";
 import { registerMemoryTools } from "../tools/memory.js";
+import { registerOpenUrlTool } from "../tools/open-url.js";
 import { registerPlanTool } from "../tools/plan.js";
 import { registerScaffoldTools } from "../tools/scaffold.js";
 import { registerShellTools } from "../tools/shell.js";
@@ -93,6 +94,7 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
   registerPlanTool(tools);
   registerChoiceTool(tools);
   registerTodoTool(tools);
+  registerOpenUrlTool(tools);
   registerScaffoldTools(tools, { projectRoot: opts.rootDir });
   if (searchEnabled()) {
     registerWebTools(tools);
