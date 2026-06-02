@@ -1886,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "jupiter-desktop"
-version = "0.52.3"
+version = "0.89.2"
 dependencies = [
  "anyhow",
  "parking_lot",

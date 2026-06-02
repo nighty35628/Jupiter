@@ -77,8 +77,16 @@ export function formatHits(query: string, hits: readonly SearchHit[]): string {
   const lines: string[] = [`query: ${query}`, `\nresults (${hits.length}):`];
   hits.forEach((h, i) => {
     const { entry, score } = h;
+    const rankNote =
+      h.lexicalScore && h.lexicalScore > 0 ? `, lexical +${h.lexicalScore.toFixed(3)}` : "";
+    const freshnessNote =
+      h.freshness?.status === "stale"
+        ? ", stale: file changed after indexing"
+        : h.freshness?.status === "missing"
+          ? ", stale: file missing from workspace"
+          : "";
     lines.push(
-      `\n${i + 1}. ${entry.path}:${entry.startLine}-${entry.endLine}  (score ${score.toFixed(3)})`,
+      `\n${i + 1}. ${entry.path}:${entry.startLine}-${entry.endLine}  (score ${score.toFixed(3)}${rankNote}${freshnessNote})`,
     );
     // Cap each snippet so a 60-line chunk doesn't dominate the
     // model's context. The full chunk is still discoverable via

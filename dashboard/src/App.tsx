@@ -2164,7 +2164,7 @@ function TabRuntime({
                   if (mode === "yolo") {
                     flashToast(t("app.yolo.toast"), { yolo: true, duration: 3000 });
                   } else {
-                    flashToast(t("app.toast.modeSwitched", { mode: mode.toUpperCase() }));
+                    flashToast(t("app.toast.modeSwitched", { mode: t(`editMode.${mode}` as any) }));
                   }
                 }}
                 workspaceDir={state.settings?.workspaceDir}

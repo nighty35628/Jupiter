@@ -96,6 +96,7 @@ export function SettingsModal({
   onCreateSkill,
   onSetSkillModel,
   onReadMemory,
+  onOpenAbout,
 }: {
   settings: SettingsType;
   balance: Balance | null;
@@ -138,6 +139,7 @@ export function SettingsModal({
   onCreateSkill: (name: string, scope: "project" | "global") => void;
   onSetSkillModel: (name: string, model: "flash" | "pro" | null) => void;
   onReadMemory: (path: string) => void;
+  onOpenAbout: () => void;
 }) {
   const [page, setPage] = useState<PageId>(initialPage ?? "general");
   const [qqConfigureOpen, setQQConfigureOpen] = useState(false);
@@ -194,6 +196,7 @@ export function SettingsModal({
                 settings={settings}
                 onSave={onSave}
                 onPickWorkspace={onPickWorkspace}
+                onOpenAbout={onOpenAbout}
               />
             )}
             {page === "models" && <PageModels settings={settings} onSave={onSave} />}
@@ -443,10 +446,12 @@ function PageGeneral({
   settings,
   onSave,
   onPickWorkspace,
+  onOpenAbout,
 }: {
   settings: SettingsType;
   onSave: (patch: SettingsPatch) => void;
   onPickWorkspace: () => void;
+  onOpenAbout: () => void;
 }) {
   const [editorDraft, setEditorDraft] = useState(settings.editor ?? "");
   const lang = useLang();
@@ -536,6 +541,20 @@ function PageGeneral({
               </button>
             ))}
           </div>
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="stitle">{t("settings.aboutSection")}</div>
+        <div className="setting-row">
+          <div className="l">
+            <div className="n">{t("settings.aboutTitle")}</div>
+            <div className="h">{t("settings.aboutHint")}</div>
+          </div>
+          <button type="button" className="btn" onClick={onOpenAbout}>
+            <I.help size={13} />
+            <span>{t("settings.aboutOpen")}</span>
+          </button>
         </div>
       </section>
 

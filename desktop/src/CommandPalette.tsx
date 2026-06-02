@@ -314,7 +314,7 @@ export function Toast({ message }: { message: { msg: string; yolo?: boolean } | 
   if (message.yolo) {
     return (
       <div className="toast toast-yolo">
-        <span className="toast-yolo-badge">YOLO</span>
+        <span className="toast-yolo-badge">{t("editMode.yolo")}</span>
         {message.msg}
       </div>
     );

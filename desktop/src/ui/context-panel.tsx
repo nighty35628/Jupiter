@@ -253,6 +253,7 @@ function CtxFiles({
                   data-d={n.depth}
                   data-kind="file"
                   data-active={activePath === n.path}
+                  data-jupiter-file-path={n.path}
                   title={n.path}
                   style={{ paddingLeft: 4 + n.depth * 14 }}
                   onContextMenu={(event) => {
@@ -390,7 +391,11 @@ function FilePreviewPane({
           </button>
         ) : null}
       </div>
-      {path ? <div className="file-preview-path">{path}</div> : null}
+      {path ? (
+        <div className="file-preview-path" data-jupiter-file-path={path}>
+          {path}
+        </div>
+      ) : null}
       {meta.length > 0 ? <div className="file-preview-meta">{meta.join(" · ")}</div> : null}
       <div className="file-preview-body">
         {loading ? (

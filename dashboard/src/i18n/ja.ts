@@ -95,7 +95,7 @@ export const ja = {
       newSession: "新しいセッションを作成しました",
     },
     yolo: {
-      toast: "YOLOモードが有効です",
+      toast: "フルコントロール権限に切り替えました",
     },
     cmd: {
       abort: "中断",
@@ -444,7 +444,7 @@ export const ja = {
     editGateTitle: "編集ゲート — TUIではShift+Tabで切替",
     editReviewTitle: "review — 編集と未許可シェルの両方が最初に確認",
     editAutoTitle: "auto — 編集は自動適用、シェルは確認あり",
-    editYoloTitle: "yolo — 編集とシェルの両方が自動実行、許可リストバイパス",
+    editYoloTitle: "フルコントロール — 編集とシェルの両方を自動実行",
     railSession: "セッション",
     railTurns: "ターン",
     railPromptTok: "プロンプトtok",
@@ -510,7 +510,7 @@ export const ja = {
     vsPrior: "{arrow} {pct}% vs prior",
     active: "active",
     allUp: "all up",
-    yoloWarning: "all prompts bypassed",
+    yoloWarning: "フルコントロール権限が有効です",
     checking: "checking",
     latest: "latest",
   },
@@ -646,9 +646,8 @@ export const ja = {
   permissions: {
     loading: "loading permissions…",
     failed: "permissions failed: {error}",
-    yoloTitle: "YOLO mode",
-    yoloDesc:
-      "Every shell command auto-runs, allowlist bypassed. Switch back with /mode review in the TUI.",
+    yoloTitle: "フルコントロール権限",
+    yoloDesc: "すべての shell コマンドを自動実行します。確認を戻すには「毎回確認」に切り替えます。",
     project: "project",
     builtin: "builtin",
     addPrefix: "add a prefix",
@@ -1116,7 +1115,7 @@ export const ja = {
     ruleShellAllowlist: "Shell allowlist",
     rulesTab: "Rules",
     ruleWritesAsk: "Writes ask",
-    ruleYolo: "YOLO",
+    ruleYolo: "フルコントロール",
     scopeGlobal: "Global",
     scopeProject: "Project",
     toolsTab: "Tools",
@@ -1327,7 +1326,7 @@ export const ja = {
     reviewHint: "both edits and non-allowlisted shell ask first",
     auto: "Auto",
     autoHint: "edits auto-apply, shell still asks",
-    yolo: "YOLO",
-    yoloHint: "edits AND shell auto-run, allowlist bypassed",
+    yolo: "フルコントロール",
+    yoloHint: "フルコントロール権限 · 編集とシェルを自動実行",
   },
 };

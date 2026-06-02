@@ -1,6 +1,6 @@
 {
   "name": "jupiter",
-  "version": "0.52.3",
+  "version": "0.89.2",
   "description": "Jupiter workbench: local AI coding desktop and CLI fork with MCP and skills configuration.",
   "type": "module",
   "bin": {

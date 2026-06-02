@@ -236,7 +236,33 @@ export async function querySemantic(
   if (store.empty) return null;
   const qvec = await embed(query, { ...resolved, signal: opts.signal });
   normalize(qvec);
-  return store.search(qvec, opts.topK ?? 8, opts.minScore ?? 0.3);
+  const hits = store.search(qvec, opts.topK ?? 8, opts.minScore ?? 0.3, { lexicalQuery: query });
+  return await annotateFreshness(root, hits);
+}
+
+async function annotateFreshness(root: string, hits: SearchHit[]): Promise<SearchHit[]> {
+  if (hits.length === 0) return hits;
+  await Promise.all(
+    hits.map(async (hit) => {
+      const abs = path.join(root, hit.entry.path);
+      try {
+        const stat = await fs.stat(abs);
+        if (stat.mtimeMs !== hit.entry.mtimeMs) {
+          hit.freshness = {
+            status: "stale",
+            indexedMtimeMs: hit.entry.mtimeMs,
+            currentMtimeMs: stat.mtimeMs,
+          };
+        }
+      } catch {
+        hit.freshness = {
+          status: "missing",
+          indexedMtimeMs: hit.entry.mtimeMs,
+        };
+      }
+    }),
+  );
+  return hits;
 }
 
 export async function indexExists(root: string): Promise<boolean> {

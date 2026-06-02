@@ -76,6 +76,12 @@ describe("codeSystemPrompt", () => {
     expect(CODE_SYSTEM_PROMPT).toMatch(/pass data paths as arguments/i);
   });
 
+  it("routes browser-opening requests through open_url instead of shell commands", () => {
+    expect(CODE_SYSTEM_PROMPT).toMatch(/open_url/);
+    expect(CODE_SYSTEM_PROMPT).toMatch(/open Chrome|open.*browser/i);
+    expect(CODE_SYSTEM_PROMPT).toMatch(/do not use.*run_command.*browser/i);
+  });
+
   describe("audit-mode rails (#610)", () => {
     it("warns against theorizing on auto-preview output instead of reading the dispatch site", () => {
       expect(CODE_SYSTEM_PROMPT).toMatch(/Auto-preview is for locating, not auditing/);

@@ -108,7 +108,7 @@ export const de: typeof en = {
     },
     yolo: {
       ...en.app.yolo,
-      toast: "YOLO-Modus aktiviert",
+      toast: "Auf volle Kontrolle gewechselt",
     },
     cmd: {
       ...en.app.cmd,
@@ -462,7 +462,7 @@ export const de: typeof en = {
     editGateTitle: "Edit-Gate — Shift+Tab schaltet in der TUI",
     editReviewTitle: "review — sowohl Edits als auch nicht-allowlistete Shell fragen zuerst",
     editAutoTitle: "auto — Edits auto-anwenden, Shell fragt weiterhin",
-    editYoloTitle: "yolo — Edits UND Shell auto-ausführen, Allowlist umgangen",
+    editYoloTitle: "Volle Kontrolle — Edits UND Shell automatisch ausführen",
     railSession: "Sitzung",
     railTurns: "Turns",
     railPromptTok: "Prompt-Tok",
@@ -669,9 +669,9 @@ export const de: typeof en = {
     ...en.permissions,
     loading: "lade Berechtigungen…",
     failed: "Berechtigungen fehlgeschlagen: {error}",
-    yoloTitle: "YOLO-Modus",
+    yoloTitle: "Berechtigung mit voller Kontrolle",
     yoloDesc:
-      "Jeder Shell-Befehl läuft automatisch, Allowlist umgangen. Zurück mit /mode review in der TUI.",
+      "Jeder Shell-Befehl läuft automatisch ohne Nachfrage. Zurück zu Erst fragen, um Prompts wieder zu aktivieren.",
     project: "Projekt",
     builtin: "Eingebaut",
     addPrefix: "Präfix hinzufügen",
@@ -1153,7 +1153,7 @@ export const de: typeof en = {
     ruleShellAllowlist: "Shell-Allowlist",
     rulesTab: "Regeln",
     ruleWritesAsk: "Schreiben fragen",
-    ruleYolo: "YOLO",
+    ruleYolo: "Volle Kontrolle",
     scopeGlobal: "Global",
     scopeProject: "Projekt",
     toolsTab: "Tools",
@@ -1378,7 +1378,7 @@ export const de: typeof en = {
     reviewHint: "sowohl Edits als auch nicht-allowlistete Shell fragen zuerst",
     auto: "Auto",
     autoHint: "Edits auto-anwenden, Shell fragt weiterhin",
-    yolo: "YOLO",
-    yoloHint: "Edits UND Shell auto-ausführen, Allowlist umgangen",
+    yolo: "Volle Kontrolle",
+    yoloHint: "Volle Kontrolle · Edits UND Shell automatisch ausführen",
   },
 };

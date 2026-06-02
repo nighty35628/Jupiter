@@ -23,6 +23,7 @@ import {
   installJupiterUpdate,
   type JupiterUpdate,
 } from "./update-policy";
+import { AppContextMenu } from "./ui/app-context-menu";
 import {
   buildSlashSettingsDescriptors,
   parseSlashSettingsCommand,
@@ -109,8 +110,9 @@ import { useDisableTextAssist } from "./ui/useDisableTextAssist";
 import { getThreadMaxWidth } from "./ui/thread-layout";
 import { elideTranscriptMessages } from "./ui/transcript-elision";
 import {
-  autoscrollVirtuosoOutput,
+  TRANSCRIPT_BOTTOM_THRESHOLD,
   followVirtuosoHeightChange,
+  isScrollElementNearBottom,
   scrollVirtuosoToBottom,
 } from "./ui/virtuoso-scroll";
 import { displayWorkspaceBasename, displayWorkspacePath } from "./workspace-display";
@@ -1521,6 +1523,13 @@ function TabRuntime({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const virtuosoScrollerRef = useRef<HTMLElement | null>(null);
+  const [virtuosoScroller, setVirtuosoScroller] = useState<HTMLElement | null>(null);
+  const setTranscriptScroller = useCallback((node: HTMLElement | Window | null) => {
+    const element = node instanceof HTMLElement ? node : null;
+    virtuosoScrollerRef.current = element;
+    setVirtuosoScroller((current) => (current === element ? current : element));
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPageId>("general");
   const [settingsCardOpen, setSettingsCardOpen] = useState(false);
@@ -1726,7 +1735,7 @@ function TabRuntime({
       if (mode === "yolo") {
         flashToast(t("app.yolo.toast"), { yolo: true, duration: 3000 });
       } else {
-        flashToast(t("app.toast.modeSwitched", { mode: mode.toUpperCase() }));
+        flashToast(t("app.toast.modeSwitched", { mode: t(`editMode.${mode}` as any) }));
       }
     },
     [applySettingsPatch, flashToast],
@@ -2045,36 +2054,129 @@ function TabRuntime({
   );
 
   const messageItems = state.messages;
-  const transcriptBusyRef = useRef(state.busy);
-  transcriptBusyRef.current = state.busy;
+  const transcriptFollowRef = useRef(true);
+  const followFrameIdsRef = useRef<number[]>([]);
 
   const [showJumpButton, setShowJumpButton] = useState(false);
-  const scrollToBottom = useCallback(
-    (smooth = true) => {
+  const cancelScheduledTranscriptFollow = useCallback(() => {
+    for (const id of followFrameIdsRef.current) window.cancelAnimationFrame(id);
+    followFrameIdsRef.current = [];
+  }, []);
+  const requestTranscriptFollow = useCallback(
+    (smooth = false, followUpFrames = 2) => {
+      if (!transcriptFollowRef.current) return false;
       const didScroll = scrollVirtuosoToBottom(
         virtuosoRef,
         messageItems.length,
         smooth,
       );
-      if (didScroll) setShowJumpButton(false);
+      if (!didScroll) return false;
+      setShowJumpButton(false);
+      cancelScheduledTranscriptFollow();
+
+      let remaining = followUpFrames;
+      const tick = () => {
+        if (!transcriptFollowRef.current) return;
+        scrollVirtuosoToBottom(virtuosoRef, messageItems.length, false);
+        if (remaining <= 0) return;
+        remaining -= 1;
+        followFrameIdsRef.current.push(window.requestAnimationFrame(tick));
+      };
+      followFrameIdsRef.current.push(window.requestAnimationFrame(tick));
+      return true;
     },
-    [messageItems.length],
+    [cancelScheduledTranscriptFollow, messageItems.length],
   );
+  useEffect(() => cancelScheduledTranscriptFollow, [cancelScheduledTranscriptFollow]);
+  useEffect(() => {
+    transcriptFollowRef.current = true;
+    setShowJumpButton(false);
+  }, [state.currentSession]);
+  const scrollToBottom = useCallback(
+    (smooth = true) => {
+      transcriptFollowRef.current = true;
+      requestTranscriptFollow(smooth, 3);
+    },
+    [requestTranscriptFollow],
+  );
+
+  const handleTranscriptBottomState = useCallback((atBottom: boolean) => {
+    if (atBottom) {
+      transcriptFollowRef.current = true;
+      setShowJumpButton(false);
+      return;
+    }
+    setShowJumpButton(!transcriptFollowRef.current);
+  }, []);
+
+  useEffect(() => {
+    const el = virtuosoScroller;
+    if (!el) return;
+
+    let pendingFrame = 0;
+    const updateAfterGesture = () => {
+      transcriptFollowRef.current = false;
+      if (pendingFrame) window.cancelAnimationFrame(pendingFrame);
+      pendingFrame = window.requestAnimationFrame(() => {
+        pendingFrame = 0;
+        const atBottom = isScrollElementNearBottom(el);
+        transcriptFollowRef.current = atBottom;
+        setShowJumpButton(!atBottom);
+      });
+    };
+
+    let dragging = false;
+    const onScrollDuringDrag = () => {
+      const atBottom = isScrollElementNearBottom(el);
+      transcriptFollowRef.current = atBottom;
+      setShowJumpButton(!atBottom);
+    };
+    const onPointerDown = () => {
+      updateAfterGesture();
+      if (dragging) return;
+      dragging = true;
+      el.addEventListener("scroll", onScrollDuringDrag, { passive: true });
+    };
+    const endDrag = () => {
+      if (!dragging) return;
+      dragging = false;
+      el.removeEventListener("scroll", onScrollDuringDrag);
+      updateAfterGesture();
+    };
+
+    el.addEventListener("wheel", updateAfterGesture, { passive: true });
+    el.addEventListener("touchmove", updateAfterGesture, { passive: true });
+    el.addEventListener("keydown", updateAfterGesture);
+    el.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+    return () => {
+      if (pendingFrame) window.cancelAnimationFrame(pendingFrame);
+      el.removeEventListener("wheel", updateAfterGesture);
+      el.removeEventListener("touchmove", updateAfterGesture);
+      el.removeEventListener("keydown", updateAfterGesture);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("scroll", onScrollDuringDrag);
+      window.removeEventListener("pointerup", endDrag);
+      window.removeEventListener("pointercancel", endDrag);
+    };
+  }, [virtuosoScroller]);
 
   const wasTranscriptBusyRef = useRef(state.busy);
   useEffect(() => {
     if (wasTranscriptBusyRef.current !== state.busy) {
-      const id = window.requestAnimationFrame(() => scrollToBottom(true));
+      transcriptFollowRef.current = true;
+      const id = window.requestAnimationFrame(() => requestTranscriptFollow(true, 3));
       wasTranscriptBusyRef.current = state.busy;
       return () => window.cancelAnimationFrame(id);
     }
     wasTranscriptBusyRef.current = state.busy;
-  }, [state.busy, scrollToBottom]);
+  }, [state.busy, requestTranscriptFollow]);
 
   useEffect(() => {
     if (!state.busy || messageItems.length === 0) return;
     const id = window.requestAnimationFrame(() => {
-      autoscrollVirtuosoOutput(virtuosoRef);
+      requestTranscriptFollow(false, 2);
     });
     return () => window.cancelAnimationFrame(id);
   }, [
@@ -2086,12 +2188,13 @@ function TabRuntime({
     state.pendingPathAccess.length,
     state.pendingPlans.length,
     state.pendingRevisions.length,
+    requestTranscriptFollow,
   ]);
 
   // Persist the transcript scroll offset per session so a restart reopens
   // the conversation where the user left it (#1244).
   useEffect(() => {
-    const el = threadRef.current;
+    const el = virtuosoScroller;
     const session = state.currentSession;
     if (!el || !session) return;
     const key = `jupiter.scroll.${session}`;
@@ -2109,7 +2212,7 @@ function TabRuntime({
       el.removeEventListener("scroll", onScroll);
       clearTimeout(timer);
     };
-  }, [state.currentSession]);
+  }, [state.currentSession, virtuosoScroller]);
 
   useEffect(() => {
     if (!active) return;
@@ -2255,7 +2358,7 @@ function TabRuntime({
       cmd,
       desc:
         action.type === "editMode"
-          ? t("app.cmd.setMode", { mode: action.editMode })
+          ? t("app.cmd.setMode", { mode: t(`editMode.${action.editMode}` as any) })
           : t("app.cmd.setEffort", { effort: action.reasoningEffort }),
       run: () => applySlashSettingsCommand(action),
     }),
@@ -2498,9 +2601,7 @@ function TabRuntime({
             sendRpc({ cmd: "session_import", source, path, ...(name ? { name } : {}) })
           }
           onOpenSettings={() => setSettingsCardOpen((open) => !open)}
-          onOpenRules={() => openSettingsAt("rules")}
           onOpenCommands={() => palette.setOpen(true)}
-          onOpenAbout={() => setAboutOpen(true)}
         />
 
         {!sideCollapsed ? (
@@ -2550,15 +2651,19 @@ function TabRuntime({
                 ) : (
                   <Virtuoso
                     ref={virtuosoRef}
+                    scrollerRef={setTranscriptScroller}
                     style={{ height: "100%" }}
                     totalCount={messageItems.length}
+                    atBottomThreshold={TRANSCRIPT_BOTTOM_THRESHOLD}
                     followOutput={"auto"}
-                    atBottomStateChange={(atBottom) => setShowJumpButton(!atBottom)}
+                    atBottomStateChange={handleTranscriptBottomState}
                     totalListHeightChanged={() => {
-                      followVirtuosoHeightChange(
+                      const didFollow = followVirtuosoHeightChange(
                         virtuosoRef,
-                        transcriptBusyRef.current,
+                        messageItems.length,
+                        transcriptFollowRef.current,
                       );
+                      if (didFollow) setShowJumpButton(false);
                     }}
                     components={{
                       Header: state.activePlan ? () => (
@@ -2800,6 +2905,10 @@ function TabRuntime({
             onCreateSkill={createSkill}
             onSetSkillModel={setSkillModel}
             onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
+            onOpenAbout={() => {
+              setSettingsOpen(false);
+              setAboutOpen(true);
+            }}
           />
         ) : null}
 
@@ -2812,6 +2921,12 @@ function TabRuntime({
         />
 
         <Toast message={toast} />
+
+        <AppContextMenu
+          workspaceDir={state.settings?.workspaceDir}
+          editor={state.settings?.editor}
+          onPreviewFile={previewFile}
+        />
 
         {splashOn ? <Splash onDone={() => setSplashOn(false)} /> : null}
       </div>

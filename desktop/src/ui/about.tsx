@@ -43,9 +43,18 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
   }, []);
 
   return (
-    <div className="about-mask" onClick={onClose}>
-      <div className="about-modal" onClick={(e) => e.stopPropagation()}>
-        <button type="button" className="about-close" onClick={onClose} aria-label={t("about.close")}>
+    <div className="about-mask" onClick={onClose} onKeyDown={(e) => e.stopPropagation()}>
+      <div
+        className="about-modal"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="about-close"
+          onClick={onClose}
+          aria-label={t("about.close")}
+        >
           <I.x size={14} />
         </button>
         <div className="about-brand">
@@ -56,6 +65,10 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
           <div className="about-row">
             <span className="about-label">{t("about.version")}</span>
             <code className="about-value">{__APP_VERSION__}</code>
+          </div>
+          <div className="about-row">
+            <span className="about-label">{t("about.developer")}</span>
+            <span className="about-value">{t("about.developerLine")}</span>
           </div>
         </div>
         <div className="about-actions">
@@ -75,9 +88,7 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function CheckStatus({
-  check,
-}: { check: CheckState }) {
+function CheckStatus({ check }: { check: CheckState }) {
   if (check.kind === "idle" || check.kind === "checking") return null;
   if (check.kind === "disabled") {
     return (

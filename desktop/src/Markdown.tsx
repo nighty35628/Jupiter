@@ -135,6 +135,8 @@ function FilePill({ path, line }: { path: string; line?: string }) {
       className={`file-pill ${done ? "done" : ""}`}
       role="button"
       tabIndex={0}
+      data-jupiter-file-path={path}
+      data-jupiter-file-line={line}
       aria-label={display}
       onClick={previewOrOpen}
       onContextMenu={(e) => {
@@ -296,6 +298,7 @@ function SafeLink({ href, children }: { href?: string; children: ReactNode }) {
   const [done, setDone] = useState(false);
   const scheme = href ? protocolScheme(href) : null;
   const isExternal = !!scheme && scheme !== "file";
+  const localFileTarget = !isExternal && href ? parseFileHref(href) : null;
   const onClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (!href) return;
@@ -308,8 +311,7 @@ function SafeLink({ href, children }: { href?: string; children: ReactNode }) {
       return;
     }
     try {
-      const parsed = parseFileHref(href);
-      const target = parsed ?? { path: decodeMaybeUri(stripFileScheme(href)) };
+      const target = localFileTarget ?? { path: decodeMaybeUri(stripFileScheme(href)) };
       if (ctx.onPreviewFile) {
         ctx.onPreviewFile(target);
         return;
@@ -331,6 +333,8 @@ function SafeLink({ href, children }: { href?: string; children: ReactNode }) {
       href={href ?? "#"}
       onClick={onClick}
       className={`md-link ${isExternal ? "external" : "local"} ${done ? "done" : ""}`}
+      data-jupiter-file-path={localFileTarget?.path}
+      data-jupiter-file-line={localFileTarget?.line}
       title={
         isExternal
           ? t("markdown.externalLinkTitle", { href: href ?? "" })

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   autoscrollVirtuosoOutput,
   followVirtuosoHeightChange,
+  isScrollElementNearBottom,
   scrollVirtuosoToBottom,
 } from "./virtuoso-scroll";
 
@@ -43,25 +44,40 @@ describe("desktop Virtuoso transcript scrolling", () => {
     expect(handle.autoscrollToBottom).toHaveBeenCalledTimes(1);
   });
 
-  it("follows list height changes during an active turn", () => {
+  it("follows list height changes by end-aligning the last message", () => {
     const handle = {
       scrollToIndex: vi.fn(),
       autoscrollToBottom: vi.fn(),
     };
 
-    expect(followVirtuosoHeightChange({ current: handle }, true)).toBe(true);
+    expect(followVirtuosoHeightChange({ current: handle }, 5, true)).toBe(true);
 
-    expect(handle.autoscrollToBottom).toHaveBeenCalledTimes(1);
+    expect(handle.scrollToIndex).toHaveBeenCalledWith({
+      index: 4,
+      align: "end",
+      behavior: "auto",
+    });
   });
 
-  it("does not follow list height changes after the turn settles", () => {
+  it("does not follow list height changes when transcript following is disabled", () => {
     const handle = {
       scrollToIndex: vi.fn(),
       autoscrollToBottom: vi.fn(),
     };
 
-    expect(followVirtuosoHeightChange({ current: handle }, false)).toBe(false);
+    expect(followVirtuosoHeightChange({ current: handle }, 5, false)).toBe(false);
 
-    expect(handle.autoscrollToBottom).not.toHaveBeenCalled();
+    expect(handle.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("detects whether the scroll container is close enough to the bottom", () => {
+    const element = {
+      scrollTop: 915,
+      clientHeight: 100,
+      scrollHeight: 1000,
+    };
+
+    expect(isScrollElementNearBottom(element)).toBe(true);
+    expect(isScrollElementNearBottom({ ...element, scrollTop: 700 })).toBe(false);
   });
 });

@@ -5790,7 +5790,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 
 /* ============================================================
-   MODE SWITCH — Review / Auto / YOLO
+   MODE SWITCH — Read only / Ask first / Auto / Full control
    ============================================================ */
 .mode-switch {
   display: inline-flex;
@@ -5836,7 +5836,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 [data-theme="light"] .ms-seg[data-on="true"][data-k="yolo"] { color: oklch(100% 0 0); }
 
-/* YOLO toast variant */
+/* Full-control toast variant */
 .toast-yolo {
   border-color: var(--tone-err);
   box-shadow: 0 0 0 1px oklch(68% 0.20 25 / 0.18), var(--shadow-lg);
