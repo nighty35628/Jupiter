@@ -2498,9 +2498,7 @@ function TabRuntime({
             sendRpc({ cmd: "session_import", source, path, ...(name ? { name } : {}) })
           }
           onOpenSettings={() => setSettingsCardOpen((open) => !open)}
-          onOpenRules={() => openSettingsAt("rules")}
           onOpenCommands={() => palette.setOpen(true)}
-          onOpenAbout={() => setAboutOpen(true)}
         />
 
         {!sideCollapsed ? (
@@ -2800,6 +2798,10 @@ function TabRuntime({
             onCreateSkill={createSkill}
             onSetSkillModel={setSkillModel}
             onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
+            onOpenAbout={() => {
+              setSettingsOpen(false);
+              setAboutOpen(true);
+            }}
           />
         ) : null}
 

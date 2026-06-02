@@ -1384,6 +1384,13 @@ html[data-platform="macos"] .titlebar .tb-left {
   gap: 1px;
   margin: 2px 0 6px;
 }
+.workspace-group-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 2px;
+}
 .workspace-group-head {
   width: 100%;
   min-height: 34px;
@@ -1436,6 +1443,37 @@ html[data-platform="macos"] .titlebar .tb-left {
 .workspace-group-head .name {
   font-size: 13px;
   font-weight: 650;
+}
+.workspace-pin-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms, background 120ms, color 120ms;
+}
+.workspace-pin-btn[data-pinned="true"] {
+  opacity: 1;
+  color: var(--accent);
+}
+.workspace-group-row:hover .workspace-pin-btn,
+.workspace-group-row:focus-within .workspace-pin-btn,
+.workspace-pin-btn:focus-visible {
+  opacity: 1;
+  background: var(--panel-2);
+}
+.workspace-pin-btn:hover {
+  color: var(--accent);
+}
+.workspace-pin-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .workspace-group-list {
   position: relative;
@@ -2115,9 +2153,14 @@ html[data-platform="macos"] .titlebar .tb-left {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 6px 8px;
+  border: 0;
   border-radius: 6px;
+  background: transparent;
   font-size: 14px;
+  font-family: inherit;
+  text-align: left;
   color: var(--fg-2);
   cursor: pointer;
 }

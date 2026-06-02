@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SessionInfo } from "../App";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
@@ -7,9 +7,12 @@ import type { ExternalSessionApp, ExternalSessionSource } from "../protocol";
 import { displayWorkspaceBasename, displayWorkspacePath } from "../workspace-display";
 
 const RENAME_MAX_CHARS = 200;
-const PIN_STORAGE_KEY = "jupiter.sidebar.pinnedSessions";
+const LEGACY_PIN_STORAGE_KEY = "jupiter.sidebar.pinnedSessions";
+const WORKSPACE_SESSION_PIN_STORAGE_KEY = "jupiter.sidebar.workspacePinnedSessions";
+const WORKSPACE_PIN_STORAGE_KEY = "jupiter.sidebar.pinnedWorkspaces";
 const COLLAPSED_WORKSPACES_STORAGE_KEY = "jupiter.sidebar.collapsedWorkspaces";
 const SIDEBAR_CLOCK_INTERVAL_MS = 15_000;
+const UNASSIGNED_WORKSPACE_KEY = "__unassigned__";
 
 type SortMode = "recent" | "workspace" | "title";
 type WorkspaceGroupSort = "title" | "recent";
@@ -42,19 +45,45 @@ type SidebarMenuPosition = {
 };
 
 type ImportSource = ExternalSessionSource;
+type WorkspaceSessionPins = Record<string, string[]>;
 
-function loadPinnedSessions(): string[] {
+function loadWorkspaceSessionPins(): WorkspaceSessionPins {
   try {
-    const raw = JSON.parse(localStorage.getItem?.(PIN_STORAGE_KEY) ?? "[]");
+    const raw = JSON.parse(localStorage.getItem?.(WORKSPACE_SESSION_PIN_STORAGE_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const result: WorkspaceSessionPins = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (!Array.isArray(value)) continue;
+      const items = value.filter((x): x is string => typeof x === "string");
+      if (items.length > 0) result[key] = items;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspaceSessionPins(items: WorkspaceSessionPins): void {
+  try {
+    localStorage.setItem?.(WORKSPACE_SESSION_PIN_STORAGE_KEY, JSON.stringify(items));
+    localStorage.removeItem?.(LEGACY_PIN_STORAGE_KEY);
+  } catch {
+    // Sidebar preferences are best-effort; interaction state still updates.
+  }
+}
+
+function loadPinnedWorkspaces(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem?.(WORKSPACE_PIN_STORAGE_KEY) ?? "[]");
     return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
   } catch {
     return [];
   }
 }
 
-function savePinnedSessions(items: string[]): void {
+function savePinnedWorkspaces(items: string[]): void {
   try {
-    localStorage.setItem?.(PIN_STORAGE_KEY, JSON.stringify(items));
+    localStorage.setItem?.(WORKSPACE_PIN_STORAGE_KEY, JSON.stringify(items));
   } catch {
     // Sidebar preferences are best-effort; interaction state still updates.
   }
@@ -107,9 +136,15 @@ function sessionWorkspacePath(session: SessionInfo): string | undefined {
   return session.workspace;
 }
 
+function sessionWorkspaceKey(session: SessionInfo): string {
+  return sessionWorkspacePath(session) || UNASSIGNED_WORKSPACE_KEY;
+}
+
 function sessionWorkspaceLabel(session: SessionInfo): string {
   const path = sessionWorkspacePath(session);
-  return path ? displayWorkspaceBasename(path, t("sidebarPanel.unassignedWorkspace")) : t("sidebarPanel.unassignedWorkspace");
+  return path
+    ? displayWorkspaceBasename(path, t("sidebarPanel.unassignedWorkspace"))
+    : t("sidebarPanel.unassignedWorkspace");
 }
 
 export function Sidebar({
@@ -126,9 +161,7 @@ export function Sidebar({
   onImportDetectedSessions,
   onImportSession,
   onOpenSettings,
-  onOpenRules,
   onOpenCommands,
-  onOpenAbout,
 }: {
   sessions: SessionInfo[];
   importSources: ExternalSessionApp[];
@@ -143,9 +176,7 @@ export function Sidebar({
   onImportDetectedSessions: (sources: ImportSource[]) => void;
   onImportSession: (payload: { source: ImportSource; path: string; name?: string }) => void;
   onOpenSettings: () => void;
-  onOpenRules: () => void;
   onOpenCommands: () => void;
-  onOpenAbout: () => void;
 }) {
   useLang();
   const [query, setQuery] = useState("");
@@ -160,7 +191,10 @@ export function Sidebar({
   const [editValue, setEditValue] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("workspace");
   const [workspaceGroupSort, setWorkspaceGroupSort] = useState<WorkspaceGroupSort>("title");
-  const [pinned, setPinned] = useState<string[]>(() => loadPinnedSessions());
+  const [workspaceSessionPins, setWorkspaceSessionPins] = useState<WorkspaceSessionPins>(() =>
+    loadWorkspaceSessionPins(),
+  );
+  const [pinnedWorkspaces, setPinnedWorkspaces] = useState<string[]>(() => loadPinnedWorkspaces());
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<string[]>(() =>
     loadCollapsedWorkspaces(),
   );
@@ -180,41 +214,28 @@ export function Sidebar({
           return title.includes(q) || s.name.toLowerCase().includes(q) || ws.includes(q);
         })
       : sessions;
-  }, [query, sessions, workspaceDir]);
+  }, [query, sessions]);
 
-  const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
-  const collapsedWorkspaceSet = useMemo(
-    () => new Set(collapsedWorkspaces),
-    [collapsedWorkspaces],
-  );
-  const pinnedSessions = useMemo(() => {
-    return matchingSessions
-      .filter((s) => pinnedSet.has(s.name))
-      .sort((a, b) => pinned.indexOf(a.name) - pinned.indexOf(b.name));
-  }, [matchingSessions, pinned, pinnedSet]);
-  const unpinnedSessions = useMemo(
-    () => matchingSessions.filter((s) => !pinnedSet.has(s.name)),
-    [matchingSessions, pinnedSet],
-  );
+  const collapsedWorkspaceSet = useMemo(() => new Set(collapsedWorkspaces), [collapsedWorkspaces]);
+  const pinnedWorkspaceSet = useMemo(() => new Set(pinnedWorkspaces), [pinnedWorkspaces]);
 
   const filtered = useMemo(() => {
-    const items = unpinnedSessions;
+    const items = matchingSessions;
     return [...items].sort((a, b) => {
       if (sortMode === "title") return prettyName(a).localeCompare(prettyName(b));
       if (sortMode === "workspace") {
-        const byWorkspace = sessionWorkspaceLabel(a)
-          .localeCompare(sessionWorkspaceLabel(b));
+        const byWorkspace = sessionWorkspaceLabel(a).localeCompare(sessionWorkspaceLabel(b));
         if (byWorkspace !== 0) return byWorkspace;
       }
       return Date.parse(b.mtime) - Date.parse(a.mtime);
     });
-  }, [sortMode, unpinnedSessions, workspaceDir]);
+  }, [sortMode, matchingSessions]);
 
   const workspaceGroups = useMemo(() => {
     const groups = new Map<string, WorkspaceGroup>();
-    for (const session of unpinnedSessions) {
+    for (const session of matchingSessions) {
       const path = sessionWorkspacePath(session);
-      const key = path || "__unassigned__";
+      const key = path || UNASSIGNED_WORKSPACE_KEY;
       const mtime = Date.parse(session.mtime);
       const latest = Number.isFinite(mtime) ? mtime : 0;
       let group = groups.get(key);
@@ -223,7 +244,9 @@ export function Sidebar({
           key,
           path,
           label: sessionWorkspaceLabel(session),
-          detail: path ? displayWorkspacePath(path, path) : t("sidebarPanel.unassignedWorkspaceDetail"),
+          detail: path
+            ? displayWorkspacePath(path, path)
+            : t("sidebarPanel.unassignedWorkspaceDetail"),
           active: Boolean(path && workspaceDir && path === workspaceDir),
           latest,
           sessions: [],
@@ -237,21 +260,49 @@ export function Sidebar({
       .map((group) => ({
         ...group,
         sessions: [...group.sessions].sort((a, b) => {
+          const pinned = workspaceSessionPins[group.key] ?? [];
+          const aPinned = pinned.indexOf(a.name);
+          const bPinned = pinned.indexOf(b.name);
+          if (aPinned >= 0 || bPinned >= 0) {
+            if (aPinned >= 0 && bPinned >= 0) return aPinned - bPinned;
+            return aPinned >= 0 ? -1 : 1;
+          }
           return Date.parse(b.mtime) - Date.parse(a.mtime);
         }),
       }))
       .sort((a, b) => {
+        const aPinned = pinnedWorkspaces.indexOf(a.key);
+        const bPinned = pinnedWorkspaces.indexOf(b.key);
+        if (aPinned >= 0 || bPinned >= 0) {
+          if (aPinned >= 0 && bPinned >= 0) return aPinned - bPinned;
+          return aPinned >= 0 ? -1 : 1;
+        }
         if (workspaceGroupSort === "recent") {
           return b.latest - a.latest || a.label.localeCompare(b.label);
         }
         return a.label.localeCompare(b.label) || b.latest - a.latest;
       });
-  }, [unpinnedSessions, workspaceDir, workspaceGroupSort]);
+  }, [matchingSessions, pinnedWorkspaces, workspaceDir, workspaceGroupSort, workspaceSessionPins]);
 
-  const togglePin = (name: string) => {
-    setPinned((prev) => {
-      const next = prev.includes(name) ? prev.filter((x) => x !== name) : [name, ...prev];
-      savePinnedSessions(next);
+  const toggleSessionPin = (session: SessionInfo) => {
+    const key = sessionWorkspaceKey(session);
+    setWorkspaceSessionPins((prev) => {
+      const current = prev[key] ?? [];
+      const nextForWorkspace = current.includes(session.name)
+        ? current.filter((x) => x !== session.name)
+        : [session.name, ...current];
+      const next = { ...prev };
+      if (nextForWorkspace.length > 0) next[key] = nextForWorkspace;
+      else delete next[key];
+      saveWorkspaceSessionPins(next);
+      return next;
+    });
+  };
+
+  const toggleWorkspacePin = (key: string) => {
+    setPinnedWorkspaces((prev) => {
+      const next = prev.includes(key) ? prev.filter((x) => x !== key) : [key, ...prev];
+      savePinnedWorkspaces(next);
       return next;
     });
   };
@@ -369,7 +420,7 @@ export function Sidebar({
 
   const renderSessionItem = (s: SessionInfo, grouped = false) => {
     const active = s.name === activeName;
-    const pinnedSession = pinned.includes(s.name);
+    const pinnedSession = (workspaceSessionPins[sessionWorkspaceKey(s)] ?? []).includes(s.name);
     const mtime = Date.parse(s.mtime);
     const updated = Number.isFinite(mtime) ? relative(now - mtime) : s.mtime;
     const editing = editingName === s.name;
@@ -446,10 +497,12 @@ export function Sidebar({
               className="pin-btn"
               data-pinned={pinnedSession || undefined}
               title={pinnedSession ? t("sidebarPanel.unpinSession") : t("sidebarPanel.pinSession")}
-              aria-label={pinnedSession ? t("sidebarPanel.unpinSession") : t("sidebarPanel.pinSession")}
+              aria-label={
+                pinnedSession ? t("sidebarPanel.unpinSession") : t("sidebarPanel.pinSession")
+              }
               onClick={(e) => {
                 e.stopPropagation();
-                togglePin(s.name);
+                toggleSessionPin(s);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") e.stopPropagation();
@@ -501,7 +554,11 @@ export function Sidebar({
   };
 
   const emptyState =
-    sessions.length === 0 ? t("sidebarPanel.noSessions") : matchingSessions.length === 0 ? t("sidebarPanel.noMatches") : "";
+    sessions.length === 0
+      ? t("sidebarPanel.noSessions")
+      : matchingSessions.length === 0
+        ? t("sidebarPanel.noMatches")
+        : "";
 
   const renderEmptyState = () => (
     <div
@@ -518,32 +575,51 @@ export function Sidebar({
 
   const renderWorkspaceGroups = () =>
     workspaceGroups.map((group) => {
-      const collapsed =
-        query.trim().length === 0 && collapsedWorkspaceSet.has(group.key);
+      const collapsed = query.trim().length === 0 && collapsedWorkspaceSet.has(group.key);
+      const workspacePinned = pinnedWorkspaceSet.has(group.key);
       return (
-      <div className="workspace-group" key={group.key} data-collapsed={collapsed || undefined}>
-        <button
-          type="button"
-          className="workspace-group-head"
-          data-active={group.active || undefined}
-          data-collapsed={collapsed || undefined}
-          aria-expanded={!collapsed}
-          title={group.detail}
-          onClick={() => toggleWorkspaceCollapsed(group.key)}
-        >
-          <span className="ico">
-            <I.folder size={13} />
-          </span>
-          <span className="text">
-            <span className="name">{group.label}</span>
-          </span>
-        </button>
-        {collapsed ? null : (
-          <div className="workspace-group-list">
-          {group.sessions.map((s) => renderSessionItem(s, true))}
+        <div className="workspace-group" key={group.key} data-collapsed={collapsed || undefined}>
+          <div className="workspace-group-row">
+            <button
+              type="button"
+              className="workspace-group-head"
+              data-active={group.active || undefined}
+              data-collapsed={collapsed || undefined}
+              aria-expanded={!collapsed}
+              title={group.detail}
+              onClick={() => toggleWorkspaceCollapsed(group.key)}
+            >
+              <span className="ico">
+                <I.folder size={13} />
+              </span>
+              <span className="text">
+                <span className="name">{group.label}</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              className="workspace-pin-btn"
+              data-pinned={workspacePinned || undefined}
+              title={
+                workspacePinned ? t("sidebarPanel.unpinWorkspace") : t("sidebarPanel.pinWorkspace")
+              }
+              aria-label={
+                workspacePinned ? t("sidebarPanel.unpinWorkspace") : t("sidebarPanel.pinWorkspace")
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleWorkspacePin(group.key);
+              }}
+            >
+              <I.pin size={12} />
+            </button>
           </div>
-        )}
-      </div>
+          {collapsed ? null : (
+            <div className="workspace-group-list">
+              {group.sessions.map((s) => renderSessionItem(s, true))}
+            </div>
+          )}
+        </div>
       );
     });
 
@@ -565,7 +641,9 @@ export function Sidebar({
           {sidebarMenuOpen ? (
             <div className="sidebar-options-menu" role="menu" style={sidebarMenuPos}>
               <button type="button" className="sidebar-menu-row" disabled>
-                <span className="menu-ico"><I.archive size={16} /></span>
+                <span className="menu-ico">
+                  <I.archive size={16} />
+                </span>
                 <span>{t("sidebarPanel.archiveAllChats")}</span>
               </button>
               <div className="sidebar-menu-divider" />
@@ -585,7 +663,9 @@ export function Sidebar({
                     setSortMenuOpen(false);
                   }}
                 >
-                  <span className="menu-ico"><I.folder size={16} /></span>
+                  <span className="menu-ico">
+                    <I.folder size={16} />
+                  </span>
                   <span>{t("sidebarPanel.organizeSidebar")}</span>
                   <span className="menu-grow" />
                   <I.chevR size={15} />
@@ -595,24 +675,36 @@ export function Sidebar({
                     <button
                       type="button"
                       className="sidebar-submenu-row"
-                      data-active={(sortMode === "workspace" && workspaceGroupSort === "title") || undefined}
+                      data-active={
+                        (sortMode === "workspace" && workspaceGroupSort === "title") || undefined
+                      }
                       onClick={() => chooseWorkspaceSort("title")}
                     >
-                      <span className="menu-ico"><I.folder size={16} /></span>
+                      <span className="menu-ico">
+                        <I.folder size={16} />
+                      </span>
                       <span>{t("sidebarPanel.byProject")}</span>
                       <span className="menu-grow" />
-                      {sortMode === "workspace" && workspaceGroupSort === "title" ? <I.check size={16} /> : null}
+                      {sortMode === "workspace" && workspaceGroupSort === "title" ? (
+                        <I.check size={16} />
+                      ) : null}
                     </button>
                     <button
                       type="button"
                       className="sidebar-submenu-row"
-                      data-active={(sortMode === "workspace" && workspaceGroupSort === "recent") || undefined}
+                      data-active={
+                        (sortMode === "workspace" && workspaceGroupSort === "recent") || undefined
+                      }
                       onClick={() => chooseWorkspaceSort("recent")}
                     >
-                      <span className="menu-ico"><I.folder size={16} /></span>
+                      <span className="menu-ico">
+                        <I.folder size={16} />
+                      </span>
                       <span>{t("sidebarPanel.recentProjects")}</span>
                       <span className="menu-grow" />
-                      {sortMode === "workspace" && workspaceGroupSort === "recent" ? <I.check size={16} /> : null}
+                      {sortMode === "workspace" && workspaceGroupSort === "recent" ? (
+                        <I.check size={16} />
+                      ) : null}
                     </button>
                     <button
                       type="button"
@@ -620,7 +712,9 @@ export function Sidebar({
                       data-active={sortMode === "recent" || undefined}
                       onClick={() => chooseSortMode("recent")}
                     >
-                      <span className="menu-ico"><I.history size={16} /></span>
+                      <span className="menu-ico">
+                        <I.history size={16} />
+                      </span>
                       <span>{t("sidebarPanel.chronological")}</span>
                       <span className="menu-grow" />
                       {sortMode === "recent" ? <I.check size={16} /> : null}
@@ -644,7 +738,9 @@ export function Sidebar({
                     setOrganizeMenuOpen(false);
                   }}
                 >
-                  <span className="menu-ico"><I.history size={16} /></span>
+                  <span className="menu-ico">
+                    <I.history size={16} />
+                  </span>
                   <span>{t("sidebarPanel.sortCondition")}</span>
                   <span className="menu-grow" />
                   <I.chevR size={15} />
@@ -660,9 +756,17 @@ export function Sidebar({
                         onClick={() => chooseSortMode(mode)}
                       >
                         <span className="menu-ico">
-                          {mode === "workspace" ? <I.folder size={16} /> : mode === "recent" ? <I.history size={16} /> : <I.list size={16} />}
+                          {mode === "workspace" ? (
+                            <I.folder size={16} />
+                          ) : mode === "recent" ? (
+                            <I.history size={16} />
+                          ) : (
+                            <I.list size={16} />
+                          )}
                         </span>
-                        <span>{t(`sidebarPanel.sort${mode[0]!.toUpperCase()}${mode.slice(1)}` as any)}</span>
+                        <span>
+                          {t(`sidebarPanel.sort${mode[0]!.toUpperCase()}${mode.slice(1)}` as any)}
+                        </span>
                         <span className="menu-grow" />
                         {sortMode === mode ? <I.check size={16} /> : null}
                       </button>
@@ -679,14 +783,18 @@ export function Sidebar({
           aria-label={t("sidebarPanel.browseWorkspace")}
           title={t("sidebarPanel.browseWorkspace")}
           onClick={async () => {
-            const picked = await openFileDialog({ directory: true, multiple: false }).catch(() => null);
+            const picked = await openFileDialog({ directory: true, multiple: false }).catch(
+              () => null,
+            );
             if (typeof picked === "string") onNewChat(picked);
           }}
         >
           <I.plus size={15} />
         </button>
       </div>
-      {sortMode === "workspace" ? renderWorkspaceGroups() : filtered.map((s) => renderSessionItem(s))}
+      {sortMode === "workspace"
+        ? renderWorkspaceGroups()
+        : filtered.map((s) => renderSessionItem(s))}
     </section>
   );
 
@@ -712,7 +820,9 @@ export function Sidebar({
                   }}
                   title={displayWorkspacePath(path, path)}
                 >
-                  <span className="ico"><I.folder size={12} /></span>
+                  <span className="ico">
+                    <I.folder size={12} />
+                  </span>
                   <span>
                     <span className="main">{displayWorkspaceBasename(path, path)}</span>
                     <span className="sub">{displayWorkspacePath(path, path)}</span>
@@ -723,12 +833,16 @@ export function Sidebar({
                 type="button"
                 className="new-chat-option"
                 onClick={async () => {
-                  const picked = await openFileDialog({ directory: true, multiple: false }).catch(() => null);
+                  const picked = await openFileDialog({ directory: true, multiple: false }).catch(
+                    () => null,
+                  );
                   if (typeof picked === "string") onNewChat(picked);
                   setNewMenuOpen(false);
                 }}
               >
-                <span className="ico"><I.plus size={12} /></span>
+                <span className="ico">
+                  <I.plus size={12} />
+                </span>
                 <span>{t("sidebarPanel.browseWorkspace")}</span>
               </button>
             </div>
@@ -768,40 +882,16 @@ export function Sidebar({
       </div>
 
       <div className="session-list codex-sidebar-list">
-        {emptyState ? (
-          renderEmptyState()
-        ) : (
-          <>
-            <section className="side-section codex-section">
-              <div className="codex-section-head">
-                <span className="codex-section-title">{t("sidebarPanel.pinned")}</span>
-              </div>
-              {pinnedSessions.map((s) => renderSessionItem(s))}
-            </section>
-            {projectSection}
-          </>
-        )}
+        {emptyState ? renderEmptyState() : projectSection}
       </div>
 
       <div className="side-foot">
-        <div className="row" onClick={onOpenRules}>
-          <span className="ico">
-            <I.shield size={13} />
-          </span>
-          <span>{t("sidebarPanel.approvalRules")}</span>
-        </div>
-        <div className="row" onClick={onOpenAbout}>
-          <span className="ico">
-            <I.help size={13} />
-          </span>
-          <span>{t("about.sidebarLabel")}</span>
-        </div>
-        <div className="row" onClick={onOpenSettings}>
+        <button type="button" className="row" onClick={onOpenSettings}>
           <span className="ico">
             <I.cog size={13} />
           </span>
           <span>{t("sidebarPanel.settings")}</span>
-        </div>
+        </button>
       </div>
 
       {pendingDelete ? (
@@ -985,7 +1075,12 @@ function SessionImportPopover({
     >
       <div className="head">
         <span>{t("sidebarPanel.importSessions")}</span>
-        <button type="button" className="close" onClick={onCancel} aria-label={t("sidebarPanel.cancel")}>
+        <button
+          type="button"
+          className="close"
+          onClick={onCancel}
+          aria-label={t("sidebarPanel.cancel")}
+        >
           <I.x size={12} />
         </button>
       </div>
@@ -1056,54 +1151,58 @@ function SessionImportPopover({
         </>
       ) : (
         <>
-      <div className="field">
-        <span className="label">{t("sidebarPanel.importSource")}</span>
-        <div className="seg">
-          <button type="button" data-on={source === "claude"} onClick={() => setSource("claude")}>
-            {t("sidebarPanel.importFromClaude")}
-          </button>
-          <button type="button" data-on={source === "codex"} onClick={() => setSource("codex")}>
-            {t("sidebarPanel.importFromCodex")}
-          </button>
-        </div>
-      </div>
-      <div className="field">
-        <span className="label">{t("sidebarPanel.importPath")}</span>
-        <div className="path-row">
-          <input
-            ref={firstInputRef}
-            value={path}
-            placeholder={t("sidebarPanel.importPath")}
-            onChange={(e) => setPath(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && path.trim()) submit();
-            }}
-          />
-          <button type="button" onClick={() => void browse()}>
-            {t("sidebarPanel.browse")}
-          </button>
-        </div>
-      </div>
-      <div className="field">
-        <span className="label">{t("sidebarPanel.importName")}</span>
-        <input
-          value={name}
-          placeholder={t("sidebarPanel.importNamePlaceholder")}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && path.trim()) submit();
-          }}
-        />
-      </div>
-      <div className="actions">
-        <button type="button" className="cancel" onClick={onCancel}>
-          {t("sidebarPanel.cancel")}
-        </button>
-        <button type="button" className="confirm" disabled={!path.trim()} onClick={submit}>
-          <I.upload size={11} />
-          {t("sidebarPanel.importConfirm")}
-        </button>
-      </div>
+          <div className="field">
+            <span className="label">{t("sidebarPanel.importSource")}</span>
+            <div className="seg">
+              <button
+                type="button"
+                data-on={source === "claude"}
+                onClick={() => setSource("claude")}
+              >
+                {t("sidebarPanel.importFromClaude")}
+              </button>
+              <button type="button" data-on={source === "codex"} onClick={() => setSource("codex")}>
+                {t("sidebarPanel.importFromCodex")}
+              </button>
+            </div>
+          </div>
+          <div className="field">
+            <span className="label">{t("sidebarPanel.importPath")}</span>
+            <div className="path-row">
+              <input
+                ref={firstInputRef}
+                value={path}
+                placeholder={t("sidebarPanel.importPath")}
+                onChange={(e) => setPath(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && path.trim()) submit();
+                }}
+              />
+              <button type="button" onClick={() => void browse()}>
+                {t("sidebarPanel.browse")}
+              </button>
+            </div>
+          </div>
+          <div className="field">
+            <span className="label">{t("sidebarPanel.importName")}</span>
+            <input
+              value={name}
+              placeholder={t("sidebarPanel.importNamePlaceholder")}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && path.trim()) submit();
+              }}
+            />
+          </div>
+          <div className="actions">
+            <button type="button" className="cancel" onClick={onCancel}>
+              {t("sidebarPanel.cancel")}
+            </button>
+            <button type="button" className="confirm" disabled={!path.trim()} onClick={submit}>
+              <I.upload size={11} />
+              {t("sidebarPanel.importConfirm")}
+            </button>
+          </div>
         </>
       )}
     </div>
