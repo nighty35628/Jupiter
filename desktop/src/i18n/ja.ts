@@ -123,7 +123,8 @@ export const ja = {
     themeDarkDesc: "デフォルト · 低照度",
     themeLightDesc: "高コントラスト · 昼間",
     themeStyle: "スタイル",
-    themeStyleHint: "選択したライト/ダークモードのビジュアルパレットを選択します。",
+    themeStyleHint:
+      "選択したライト/ダークモードのビジュアルパレットを選択します。",
     themeStyleGraphite: "グラファイト",
     themeStyleGraphiteDesc: "長時間作業向けのニュートラルな暗いグレー。",
     themeStyleSandstone: "Mist",
@@ -131,7 +132,8 @@ export const ja = {
     themeStylePorcelain: "ポーセリン",
     themeStylePorcelainDesc: "Codex風のクリーンな標準ライトパレット。",
     themeStyleMidnight: "Ink",
-    themeStyleMidnightDesc: "控えめなグリーンアクセントのほぼ黒い夜間パレット。",
+    themeStyleMidnightDesc:
+      "控えめなグリーンアクセントのほぼ黒い夜間パレット。",
     fontScale: "フォントスケール",
     fontScaleHint: "UI全体をスケーリング; 高DPI画面では大きめを選択。",
     fontScaleSmall: "小",
@@ -152,7 +154,8 @@ export const ja = {
     effortHighDesc: "高速、思考少なめ",
     effortMaxDesc: "深い推論、低速",
     editMode: "権限モード",
-    editModeHint: "Jupiter がツール実行、ファイル編集、コマンド実行をどう許可するかを制御します。",
+    editModeHint:
+      "Jupiter がツール実行、ファイル編集、コマンド実行をどう許可するかを制御します。",
     editModeReview: "毎回確認",
     editModeAuto: "自動承認",
     editModeYolo: "フルコントロール",
@@ -161,6 +164,11 @@ export const ja = {
       "コンテキスト圧縮、中断、レート制限の一時停止に関する静かなインライン通知を表示します。",
     shown: "表示",
     hidden: "非表示",
+    processCardsDefaultOpen: "プロセス詳細",
+    processCardsDefaultOpenHint:
+      "完了済みの思考、ツール、shell カードを既定で開くか閉じるかを制御します。",
+    expanded: "展開",
+    collapsed: "折りたたみ",
     desktopCloseBehavior: "ウィンドウを閉じる",
     desktopCloseBehaviorHint:
       "既定では閉じると終了します。トレイに隠すと実行中のセッションを維持します。",
@@ -174,19 +182,26 @@ export const ja = {
     budgetPlaceholder: "上限なし",
     webSearchEngine: "検索エンジン",
     webSearchEngineBing: "bing — デフォルト、プロキシなしで中国から利用可",
-    webSearchEngineBingIntl: "bing-intl — www.bing.com 経由の国際版インデックス",
-    webSearchEngineSearxng: "searxng — セルフホスト (/se searxng <url> でエンドポイント設定)",
-    webSearchEngineMetaso: "metaso — 100回/日無料 (中国対応、metaso.cnで無料キー取得)",
+    webSearchEngineBingIntl:
+      "bing-intl — www.bing.com 経由の国際版インデックス",
+    webSearchEngineSearxng:
+      "searxng — セルフホスト (/se searxng <url> でエンドポイント設定)",
+    webSearchEngineMetaso:
+      "metaso — 100回/日無料 (中国対応、metaso.cnで無料キー取得)",
     webSearchEngineBaidu:
       "baidu — Baidu AI Search、公式ドキュメントでは1500回/月無料 (BAIDU_API_KEY または QIANFAN_API_KEY を設定)",
     webSearchEngineTavily: "tavily — 1000回/月無料 (TAVILY_API_KEY を設定)",
-    webSearchEnginePerplexity: "perplexity — AIネイティブ (PERPLEXITY_API_KEY を設定)",
+    webSearchEnginePerplexity:
+      "perplexity — AIネイティブ (PERPLEXITY_API_KEY を設定)",
     webSearchEngineExa: "exa — AIネイティブ 1000回/月無料 (EXA_API_KEY を設定)",
-    webSearchEngineBrave: "brave — 独立インデックス、2000回/月無料 (BRAVE_SEARCH_API_KEY を設定)",
-    webSearchEngineOllama: "ollama — Ollama クラウド web 検索 (OLLAMA_API_KEY を設定)",
+    webSearchEngineBrave:
+      "brave — 独立インデックス、2000回/月無料 (BRAVE_SEARCH_API_KEY を設定)",
+    webSearchEngineOllama:
+      "ollama — Ollama クラウド web 検索 (OLLAMA_API_KEY を設定)",
     webSearchEngineNote: "次の web_search 呼び出しに適用されます",
     webSearchEndpoint: "SearXNG エンドポイント",
-    webSearchEndpointHint: "SearXNGインスタンスのベースURL。デフォルトは http://localhost:8080。",
+    webSearchEndpointHint:
+      "SearXNGインスタンスのベースURL。デフォルトは http://localhost:8080。",
     webSearchApiKeySignup: "(キーを取得)",
     webSearchApiKeyClear: "クリア",
     webSearchApiKey: {
@@ -199,7 +214,8 @@ export const ja = {
       ollama: "Ollama APIキー",
     },
     baseUrl: "DeepSeek ベースURL",
-    baseUrlHint: "プロキシ使用時のみ上書き。空欄 = 公式エンドポイント。再起動が必要です。",
+    baseUrlHint:
+      "プロキシ使用時のみ上書き。空欄 = 公式エンドポイント。再起動が必要です。",
     workspace: "ワークスペース",
     workspaceHint:
       "エージェントツールが操作するルートディレクトリ。切り替えは設定に保存され、ツールが再読み込みされます。",
@@ -230,8 +246,8 @@ export const ja = {
     pageMcpDesc: "DeepSeek API、Web検索、QQチャンネル、MCPツールサーバー",
     pageSkillsLabel: "スキル",
     pageSkillsDesc: "/ コマンド用の再利用可能なプロンプトセット",
-    pageMemoryLabel: "メモリ",
-    pageMemoryDesc: "CLAUDE.md / AGENTS.md インジェクション",
+    pageMemoryLabel: "ルールとメモリ",
+    pageMemoryDesc: "プロジェクトルール、グローバルノート、長期メモリ",
     pageAppearanceLabel: "外観",
     pageAppearanceDesc: "テーマ、配色、タイポグラフィ",
     pageBillingLabel: "アカウントと請求",
@@ -288,7 +304,8 @@ export const ja = {
     apiKeySet: "設定済み · {prefix}…",
     defaultModelCurrent: "デフォルトモデル · 現在 {model}",
     modelCustom: "カスタムモデルID",
-    modelCustomHint: "エンドポイントが提供するOpenAI互換ID (vLLM, Ollama, Together, …)。",
+    modelCustomHint:
+      "エンドポイントが提供するOpenAI互換ID (vLLM, Ollama, Together, …)。",
     modelCustomActive: "現在カスタムIDで実行中: {model}",
     contextTokensLabel: "コンテキストウィンドウサイズ",
     contextTokensHint:
@@ -301,7 +318,8 @@ export const ja = {
     mcpBridged: "· ブリッジ済み",
     mcpNotBridged:
       "· 現在のデスクトップセッションはブリッジされていません — jupiter code (TUI) を再起動すると有効になります",
-    mcpEmpty: "MCPサーバーがまだ設定されていません。以下に仕様を入力して追加してください。",
+    mcpEmpty:
+      "MCPサーバーがまだ設定されていません。以下に仕様を入力して追加してください。",
     mcpRemove: "削除",
     mcpReconnect: "再接続",
     mcpEnable: "有効化",
@@ -316,7 +334,8 @@ export const ja = {
     parseError: "パース失敗: {error}",
     mcpAddSection: "サーバーを追加",
     mcpSpecLabel: "仕様文字列",
-    mcpSpecFormat: "形式: <code>name=command args</code> または <code>name=https://host/sse</code>",
+    mcpSpecFormat:
+      "形式: <code>name=command args</code> または <code>name=https://host/sse</code>",
     mcpAdd: "追加",
     skillRoots: "スキルパス",
     skillPathAdd: "パスを追加",
@@ -331,10 +350,52 @@ export const ja = {
     subagentModelDefault: "デフォルト",
     subagentModelFlash: "flash",
     subagentModelPro: "pro",
-    subagentModelHint: "このスキルが分離サブエージェントを生成するときに使用するモデル",
+    subagentModelHint:
+      "このスキルが分離サブエージェントを生成するときに使用するモデル",
     memorySection: "長期メモリ",
     memoryDesc:
       "現在のバージョンはビルトインの CLAUDE.md / AGENTS.md インジェクションに依存しています。プロジェクトレベルのメモリはカーネルレベルで維持されます。",
+    memoryEffectHint:
+      "変更はすぐ保存されます。プロンプトへの注入は新しいチャットまたは /new 後に反映されます。",
+    memoryConfirmWrites: "モデルメモリ保存前に確認",
+    memoryRefresh: "メモリを更新",
+    memoryProjectRules: "プロジェクトルール",
+    memoryProjectRulesDesc:
+      "リポジトリ単位の JUPITER.md / AGENTS.md 系ファイル。プロジェクトにコミットできます。",
+    memoryGlobalRules: "グローバルルール",
+    memoryGlobalRulesDesc:
+      "~/.jupiter/JUPITER.md または Claude 移行ファイル由来の、このマシン内の横断メモ。",
+    memoryLongTerm: "長期メモリ",
+    memoryLongTermDesc:
+      "remember/forget で保存された構造化メモリ。非公開で、将来のセッション用に索引化されます。",
+    memoryEmptyGroup: "このグループには項目がありません。",
+    memoryDetailPlaceholder: "項目を選択して内容を確認します。",
+    memoryDeleteLabel: "{name} を削除",
+    memoryNewStructured: "新しい構造化メモリ",
+    memoryEditStructured: "構造化メモリを編集",
+    memoryStructuredHint:
+      "frontmatter 付きの非公開 Markdown メモリとして保存し、今後のセッションで使用します。",
+    memoryNew: "新規",
+    memoryNameLabel: "メモリ名",
+    memoryScopeLabel: "範囲",
+    memoryScopeProject: "プロジェクト",
+    memoryScopeGlobal: "グローバル",
+    memoryTypeLabel: "種類",
+    memoryTypeUser: "ユーザー",
+    memoryTypeFeedback: "フィードバック",
+    memoryTypeProject: "プロジェクト",
+    memoryTypeReference: "参照",
+    memoryPriorityLabel: "優先度",
+    memoryPriorityDefault: "デフォルト",
+    memoryPriority_low: "低",
+    memoryPriority_medium: "中",
+    memoryPriority_high: "高",
+    memoryExpiresLabel: "期限",
+    memoryExpiresNone: "なし",
+    memoryExpiresProjectEnd: "プロジェクト終了",
+    memoryDescriptionLabel: "説明",
+    memoryBodyLabel: "メモリ本文",
+    memorySave: "メモリを保存",
     appMode: "アプリケーションモード",
     ruleAutoApprovalSection: "コマンドの自動承認",
     ruleAutoApprovalHint:
@@ -354,7 +415,8 @@ export const ja = {
     shortcutSettings: "設定",
   },
   modal: {
-    planFeedbackPlaceholder: "任意のフィードバック — 変更が必要な場合はここに記入",
+    planFeedbackPlaceholder:
+      "任意のフィードバック — 変更が必要な場合はここに記入",
     choiceCustomPlaceholder: "または自分の回答を入力…",
   },
   plan: {
@@ -381,7 +443,8 @@ export const ja = {
     planHint: "読み取り専用 · すべての書き込みとコマンドをブロック",
     reviewHint: "慎重モード · ツール実行前に確認",
     autoHint: "信頼モード · 通常操作は自動承認、重要操作は確認",
-    yoloHint: "フルコントロール権限 · すべてのツールを自動実行。注意してください",
+    yoloHint:
+      "フルコントロール権限 · すべてのツールを自動実行。注意してください",
   },
   markdown: {
     filePillTitle: "クリックでプレビュー · 右クリックで操作",
@@ -445,7 +508,8 @@ export const ja = {
       copyLast: "最後の返信をコピー",
       switchModel: "モデル切替",
       searchEngine: "Web検索エンジンとAPIキーを設定",
-      skill: "ユーザースキルの一覧と管理（プロジェクト + カスタム + グローバル + 組み込み）",
+      skill:
+        "ユーザースキルの一覧と管理（プロジェクト + カスタム + グローバル + 組み込み）",
       setMode: "モードを {mode} に設定",
       setEffort: "推論努力を {effort} に設定",
       toggleTheme: "テーマ切替",
@@ -475,17 +539,21 @@ export const ja = {
       bannerBold: "自動承認",
       banner2: "されます（確認なし）。",
       switchBack: "毎回確認に切り替え",
-      toast: "フルコントロール権限に切り替えました。すべての操作を自動承認します",
+      toast:
+        "フルコントロール権限に切り替えました。すべての操作を自動承認します",
     },
-    btwUsage: "▸ /btw <question> — 会話コンテキストを汚さずに脇道の質問をします。",
+    btwUsage:
+      "▸ /btw <question> — 会話コンテキストを汚さずに脇道の質問をします。",
     errorLabel: "エラー",
     warningLabel: "警告",
     dismissError: "閉じる",
     jumpToBottom: "最下部にジャンプ",
+    resizeContextSidebar: "右サイドバーの幅を調整",
     splashSubtitle: "DeepSeek Agents",
     connecting: "Jupiterコアに接続中…",
     startupFailedTitle: "Jupiterを起動できませんでした",
-    startupFailedMessage: "デスクトップバックエンドがワークスペースを開く前に失敗しました。",
+    startupFailedMessage:
+      "デスクトップバックエンドがワークスペースを開く前に失敗しました。",
     startupFailedRetry: "再試行",
     startupFailedUnknown: "不明な起動エラー",
     langZH: "中国語",
@@ -536,6 +604,13 @@ export const ja = {
       workspace: "既定のワークスペース",
       notSelected: "未選択",
       choose: "選択…",
+      apiKeyLabel: "DeepSeek APIキー",
+      apiKeyPlaceholder: "DeepSeek APIキー（通常 sk- で始まります）",
+      apiKeyHintTitle: "APIキーを入力してください",
+      apiKeyHintBody:
+        "DeepSeek PlatformでAPIキーを作成し、ここに貼り付けます。Jupiterはこの端末にのみ保存します。",
+      openApiKeys: "DeepSeek Platformを開く",
+      openApiKeysAria: "DeepSeek APIキーのページを開く",
       saveAndStart: "保存して開始",
     },
     update: {
@@ -642,9 +717,97 @@ export const ja = {
     showInfo: "情報を表示",
     toggleBottomBar: "下部バーを切り替え",
     toggleRightSidebar: "右サイドバーを切り替え",
+    infoTitle: "情報",
+    closeTab: "閉じる",
+    addTab: "パネルを追加",
+    home: {
+      filesTitle: "ファイル",
+      filesDesc: "プロジェクトファイルを参照",
+      sidechatTitle: "サイドチャット",
+      sidechatDesc: "メイン文脈なしで質問",
+      browserTitle: "ブラウザー",
+      browserDesc: "Webサイトを開く",
+      reviewTitle: "レビュー",
+      reviewDesc: "コード変更を表示",
+      terminalTitle: "ターミナル",
+      terminalDesc: "対話型 shell を起動",
+    },
+    placeholder: {
+      sidechat:
+        "サイドチャットの入口は準備済みです。次のステップで機能を接続します。",
+      browser:
+        "ブラウザーの入口は準備済みです。次のステップで機能を接続します。",
+      review: "レビューの入口は準備済みです。次のステップで機能を接続します。",
+      terminal:
+        "ターミナルの入口は準備済みです。次のステップで機能を接続します。",
+    },
+    terminal: {
+      inputLabel: "ターミナルコマンド",
+      placeholder: "コマンドを実行…",
+      readyHint: "Enterで実行 · ↑/↓ 履歴 · cd と clear に対応",
+      noWorkspace: "ワークスペースが開かれていません。",
+      empty: "このワークスペースでコマンドを実行します。",
+      running: "実行中…",
+      exitCode: "終了 {code}",
+    },
+    sideChat: {
+      title: "一時サイドチャット",
+      desc: "空のコンテキストから質問します。回答は戻りますが、メインの会話コンテキストには入りません。",
+      inputLabel: "サイドチャットメッセージ",
+      placeholder: "使い捨てのサイド質問を入力…",
+      readyHint: "Enterで送信 · Shift Enterで改行",
+      busyHint: "一時的な回答を生成中です。",
+      sendLabel: "サイドチャットを送信",
+      queueLabel: "サイドチャットをキューに追加",
+      sendButton: "送信",
+      queueButton: "キュー",
+      empty: "一時的な回答はここに表示されます。",
+      pending: "考え中…",
+    },
+    browser: {
+      urlLabel: "Website URL",
+      placeholder: "URLを入力…",
+      open: "Webサイトを開く",
+      back: "戻る",
+      forward: "進む",
+      reload: "再読み込み",
+      openExternal: "既定のブラウザーで開く",
+      external: "開く",
+      previewTitle: "ブラウザープレビュー",
+      emptyTitle: "Webサイトを開く",
+      emptyBody: "上にURLを入力すると、サイドバー内で閲覧できます。",
+      invalidUrl: "有効な http または https のURLを入力してください。",
+      nativeError: "ネイティブブラウザー表示を作成できませんでした。",
+      nativeHint:
+        "ネイティブ webview を使用するため、iframe の埋め込み制限を受けません。",
+      embedHint:
+        "一部のサイトは埋め込み表示をブロックします。空白のままなら「開く」を使ってください。",
+    },
+    review: {
+      refresh: "変更を更新",
+      loading: "変更を読み込み中…",
+      noWorkspace: "ワークスペースが開かれていません。",
+      filesChanged: "{count} 件の変更",
+      changedFiles: "変更ファイル",
+      noChanges: "コード変更はありません。",
+      diffTitle: "Diff",
+      noDiff:
+        "追跡済みの diff はありません。未追跡ファイルはファイル一覧から開けます。",
+      status: {
+        modified: "M",
+        added: "A",
+        deleted: "D",
+        renamed: "R",
+        untracked: "U",
+      },
+    },
     contextTokens: "コンテキスト · トークン",
     cacheKey: "キャッシュ",
     freeKey: "空き",
+    projectFilesTitle: "プロジェクトファイル",
+    fileSearchPlaceholder: "プロジェクトファイルを検索…",
+    clearSearch: "検索をクリア",
+    searching: "検索中…",
     filesTitle: "コンテキスト内のファイル",
     filesCount: "{count} ファイル",
     fileModified: "変更あり",
@@ -677,6 +840,7 @@ export const ja = {
     scopeProject: "プロジェクト",
     scopeGlobal: "グローバル",
     noFilesMsg: "まだコンテキスト内にファイルはありません。",
+    noProjectFilesMsg: "一致するプロジェクトファイルはありません。",
     noMemoriesMsg: "まだメモリは保存されていません。",
   },
   fileActions: {
@@ -691,7 +855,8 @@ export const ja = {
     previewTitle: "プレビュー",
     previewLoading: "プレビューを読み込み中…",
     previewError: "このファイルをプレビューできません: {message}",
-    previewUnsupported: "このファイルタイプのインラインプレビューはありません。",
+    previewUnsupported:
+      "このファイルタイプのインラインプレビューはありません。",
     previewOpenHint: "メニューから既定のアプリまたは別のアプリで開けます。",
     bytes: "{count} バイト",
     truncated: "切り詰め済み",
@@ -730,7 +895,8 @@ export const ja = {
     noSessions: "セッションなし",
     noMatches: "一致なし",
     unassignedWorkspace: "未整理",
-    unassignedWorkspaceDetail: "旧セッション。開くと現在のワークスペースに保存されます",
+    unassignedWorkspaceDetail:
+      "旧セッション。開くと現在のワークスペースに保存されます",
     messageCount: "{count} メッセージ",
     deleteSession: "セッションを削除",
     pinSession: "ワークスペース内でピン留め",
@@ -745,7 +911,8 @@ export const ja = {
     importSessionCount: "{count} セッション · すべてインポート",
     importNotFound: "ローカルセッションが見つかりません",
     importPrivacyHint: "既存のアプリ設定は変更されません。",
-    importResult: "{imported} 件のセッションをインポート、{skipped} 件スキップ、{failed} 件失敗。",
+    importResult:
+      "{imported} 件のセッションをインポート、{skipped} 件スキップ、{failed} 件失敗。",
     continue: "続行",
     refresh: "更新",
     importSource: "ソース",

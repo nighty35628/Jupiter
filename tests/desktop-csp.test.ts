@@ -36,4 +36,11 @@ describe("desktop CSP (tauri.conf.json)", () => {
     expect(match).toBeTruthy();
     expect(match![1]).toContain("'self'");
   });
+
+  it("allows http and https pages to be embedded in the sidebar browser", () => {
+    const match = csp.match(/frame-src\s+([^;]+)/);
+    expect(match).toBeTruthy();
+    expect(match![1]).toContain("https:");
+    expect(match![1]).toContain("http:");
+  });
 });

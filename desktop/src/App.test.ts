@@ -34,7 +34,14 @@ vi.mock("./theme", () => ({
   themeForStyle: vi.fn(() => "dark"),
 }));
 
-import { readWindowExpanded, reduce, toggleWindowExpanded } from "./App";
+import {
+  chatMessageKey,
+  pathToFileUrl,
+  readWindowExpanded,
+  reduce,
+  shouldShowSettingsChangeToast,
+  toggleWindowExpanded,
+} from "./App";
 import { getThreadMaxWidth } from "./ui/thread-layout";
 
 function initialState(): Parameters<typeof reduce>[0] {
@@ -79,11 +86,14 @@ function initialState(): Parameters<typeof reduce>[0] {
     jobs: [],
     activeSkill: null,
     queuedSends: [],
+    sideChats: [],
     retryNonce: 0,
   };
 }
 
-function makeShellPrompt(command: string): import("@jupiter/core-utils").ApprovalPrompt {
+function makeShellPrompt(
+  command: string,
+): import("@jupiter/core-utils").ApprovalPrompt {
   return {
     id: 1,
     kind: "shell",
@@ -137,6 +147,63 @@ function makePathPrompt(
 }
 
 describe("Desktop App reducer — usage", () => {
+  it("uses stable transcript keys for virtualized message rendering", () => {
+    expect(
+      chatMessageKey(
+        { kind: "user", text: "hello", clientId: "c-1", turn: 7 },
+        0,
+      ),
+    ).toBe("user-c-1");
+    expect(
+      chatMessageKey(
+        { kind: "assistant", turn: 7, segments: [], pending: false },
+        1,
+      ),
+    ).toBe("assistant-7");
+  });
+
+  it("deduplicates local user message echoes by client id", () => {
+    const base = initialState();
+    const state = {
+      ...base,
+      busy: true,
+      messages: [
+        {
+          kind: "user" as const,
+          text: "make a ppt",
+          clientId: "c-local",
+          turn: 12,
+        },
+      ],
+    };
+
+    const next = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "user.message",
+        id: 99,
+        ts: "2026-06-03T00:00:00.000Z",
+        turn: 12,
+        text: "make a ppt",
+        clientId: "c-local",
+      },
+    });
+
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0]).toEqual({
+      kind: "user",
+      text: "make a ppt",
+      clientId: "c-local",
+      turn: 12,
+    });
+  });
+
+  it("encodes local html paths as file URLs for sidebar browser preview", () => {
+    expect(pathToFileUrl("/Users/me/My Site/index #1.html")).toBe(
+      "file:///Users/me/My%20Site/index%20%231.html",
+    );
+  });
+
   it("falls back prompt tokens to cache miss tokens when cache fields are absent", () => {
     const next = reduce(initialState(), {
       t: "incoming",
@@ -146,7 +213,11 @@ describe("Desktop App reducer — usage", () => {
         ts: "2026-05-27T00:00:00.000Z",
         turn: 1,
         content: "ok",
-        usage: { prompt_tokens: 1234, completion_tokens: 56, total_tokens: 1290 },
+        usage: {
+          prompt_tokens: 1234,
+          completion_tokens: 56,
+          total_tokens: 1290,
+        },
         costUsd: 0.001,
       },
     });
@@ -212,6 +283,75 @@ describe("Desktop App reducer — usage", () => {
     expect(next.usage.cacheHitTokens).toBe(80);
     expect(next.usage.cacheMissTokens).toBe(20);
     expect(next.usage.liveLogTokens).toBe(42);
+  });
+});
+
+describe("Desktop App reducer — side chat", () => {
+  it("renders sidebar btw answers without appending them to the main transcript", () => {
+    const pending = reduce(initialState(), {
+      t: "side_chat_sent",
+      id: "side-1",
+      question: "what is a closure?",
+    });
+
+    expect(pending.sideChats).toEqual([
+      {
+        id: "side-1",
+        question: "what is a closure?",
+        status: "pending",
+      },
+    ]);
+
+    const answered = reduce(pending, {
+      t: "incoming",
+      event: {
+        type: "$btw_result",
+        clientId: "side-1",
+        question: "what is a closure?",
+        answer: "A closure captures variables from its outer scope.",
+      },
+    });
+
+    expect(answered.messages).toHaveLength(0);
+    expect(answered.sideChats).toEqual([
+      {
+        id: "side-1",
+        question: "what is a closure?",
+        answer: "A closure captures variables from its outer scope.",
+        status: "done",
+      },
+    ]);
+  });
+
+  it("keeps normal /btw results in the main transcript", () => {
+    const next = reduce(initialState(), {
+      t: "incoming",
+      event: {
+        type: "$btw_result",
+        question: "quick aside",
+        answer: "short answer",
+      },
+    });
+
+    expect(next.sideChats).toEqual([]);
+    expect(next.messages).toEqual([
+      { kind: "status", text: "≫ btw\nshort answer" },
+    ]);
+  });
+
+  it("drops stale sidebar btw answers after their temporary chat is gone", () => {
+    const next = reduce(initialState(), {
+      t: "incoming",
+      event: {
+        type: "$btw_result",
+        clientId: "side-stale",
+        question: "stale",
+        answer: "late answer",
+      },
+    });
+
+    expect(next.sideChats).toEqual([]);
+    expect(next.messages).toEqual([]);
   });
 });
 
@@ -413,7 +553,12 @@ describe("Desktop App reducer — ApprovalPrompt integration", () => {
     const state = {
       ...initialState(),
       pendingConfirms: [
-        { id: 1, kind: "run_command" as const, command: "echo hi", prompt: shellPrompt },
+        {
+          id: 1,
+          kind: "run_command" as const,
+          command: "echo hi",
+          prompt: shellPrompt,
+        },
       ],
       pendingPathAccess: [
         {
@@ -462,13 +607,34 @@ describe("desktop thread layout", () => {
     const ctx = 320;
 
     expect(
-      getThreadMaxWidth({ viewportWidth: 1000, visibleSide: side, visibleCtx: ctx }),
+      getThreadMaxWidth({
+        viewportWidth: 1000,
+        visibleSide: side,
+        visibleCtx: ctx,
+      }),
     ).toBe(580);
     expect(
-      getThreadMaxWidth({ viewportWidth: 1400, visibleSide: side, visibleCtx: ctx }),
+      getThreadMaxWidth({
+        viewportWidth: 1400,
+        visibleSide: side,
+        visibleCtx: ctx,
+      }),
     ).toBe(756);
     expect(
-      getThreadMaxWidth({ viewportWidth: 1800, visibleSide: side, visibleCtx: ctx }),
+      getThreadMaxWidth({
+        viewportWidth: 1800,
+        visibleSide: side,
+        visibleCtx: ctx,
+      }),
     ).toBe(1120);
+  });
+});
+
+describe("settings change notifications", () => {
+  it("suppresses right-bottom toast for settings-only changes", () => {
+    expect(shouldShowSettingsChangeToast("model")).toBe(false);
+    expect(shouldShowSettingsChangeToast("reasoningEffort")).toBe(false);
+    expect(shouldShowSettingsChangeToast("editMode")).toBe(false);
+    expect(shouldShowSettingsChangeToast("language")).toBe(false);
   });
 });

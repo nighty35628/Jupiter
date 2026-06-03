@@ -14,7 +14,9 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import {
   collectMemoryEntriesForWorkspace,
+  deleteMemoryEntryForWorkspace,
   readMemoryEntryDetail,
+  saveStructuredMemoryForWorkspace,
 } from "../../desktop/memory-browser.js";
 import {
   PROJECT_MEMORY_FILE,
@@ -88,7 +90,10 @@ export async function handleMemory(
   if (method === "GET" && rest[0] === "entries") {
     if (!cwd) return { status: 200, body: { entries: [] } };
     try {
-      return { status: 200, body: { entries: collectMemoryEntriesForWorkspace(cwd) } };
+      return {
+        status: 200,
+        body: { entries: collectMemoryEntriesForWorkspace(cwd) },
+      };
     } catch (err) {
       return { status: 500, body: { error: (err as Error).message } };
     }
@@ -98,9 +103,43 @@ export async function handleMemory(
     const path = query.get("path");
     if (!path) return { status: 400, body: { error: "path query parameter required" } };
     try {
-      return { status: 200, body: { detail: readMemoryEntryDetail({ path }, cwd) } };
+      return {
+        status: 200,
+        body: { detail: readMemoryEntryDetail({ path }, cwd) },
+      };
     } catch (err) {
       return { status: 404, body: { error: (err as Error).message } };
+    }
+  }
+  if (method === "DELETE" && rest[0] === "entry") {
+    if (!cwd) return { status: 503, body: { error: "no active project" } };
+    const path = query.get("path");
+    if (!path) return { status: 400, body: { error: "path query parameter required" } };
+    try {
+      const deleted = deleteMemoryEntryForWorkspace({ path }, cwd);
+      ctx.audit?.({
+        ts: Date.now(),
+        action: "delete-memory",
+        payload: { path },
+      });
+      return { status: 200, body: { deleted } };
+    } catch (err) {
+      return { status: 404, body: { error: (err as Error).message } };
+    }
+  }
+  if (method === "POST" && rest[0] === "entry") {
+    if (!cwd) return { status: 503, body: { error: "no active project" } };
+    try {
+      const input = JSON.parse(body);
+      const detail = saveStructuredMemoryForWorkspace(input, cwd);
+      ctx.audit?.({
+        ts: Date.now(),
+        action: "save-memory",
+        payload: { path: detail.path, scope: detail.scope, name: detail.name },
+      });
+      return { status: 200, body: { detail } };
+    } catch (err) {
+      return { status: 400, body: { error: (err as Error).message } };
     }
   }
 
@@ -137,12 +176,20 @@ export async function handleMemory(
     if (scope === "project") {
       if (!cwd) return { status: 503, body: { error: "no active project" } };
       const path = findProjectMemoryPath(cwd);
-      if (!path) return { status: 404, body: { error: "project memory file not found" } };
+      if (!path)
+        return {
+          status: 404,
+          body: { error: "project memory file not found" },
+        };
       return { status: 200, body: { path, body: readFileSync(path, "utf8") } };
     }
     if ((scope === "global" || scope === "project-mem") && name && SAFE_NAME.test(name)) {
       const dir = scope === "global" ? globalDir : projectMemDir;
-      if (!dir) return { status: 503, body: { error: "no project root for project-mem" } };
+      if (!dir)
+        return {
+          status: 503,
+          body: { error: "no project root for project-mem" },
+        };
       const path = join(dir, `${name}.md`);
       if (!existsSync(path)) return { status: 404, body: { error: "not found" } };
       return { status: 200, body: { path, body: readFileSync(path, "utf8") } };
@@ -160,16 +207,28 @@ export async function handleMemory(
       const path = resolveProjectMemoryWritePath(cwd);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, contents, "utf8");
-      ctx.audit?.({ ts: Date.now(), action: "save-memory", payload: { scope, path } });
+      ctx.audit?.({
+        ts: Date.now(),
+        action: "save-memory",
+        payload: { scope, path },
+      });
       return { status: 200, body: { saved: true, path } };
     }
     if ((scope === "global" || scope === "project-mem") && name && SAFE_NAME.test(name)) {
       const dir = scope === "global" ? globalDir : projectMemDir;
-      if (!dir) return { status: 503, body: { error: "no project root for project-mem" } };
+      if (!dir)
+        return {
+          status: 503,
+          body: { error: "no project root for project-mem" },
+        };
       mkdirSync(dir, { recursive: true });
       const path = join(dir, `${name}.md`);
       writeFileSync(path, contents, "utf8");
-      ctx.audit?.({ ts: Date.now(), action: "save-memory", payload: { scope, name, path } });
+      ctx.audit?.({
+        ts: Date.now(),
+        action: "save-memory",
+        payload: { scope, name, path },
+      });
       return { status: 200, body: { saved: true, path } };
     }
     return { status: 400, body: { error: "bad scope or name" } };
@@ -178,11 +237,19 @@ export async function handleMemory(
   if (method === "DELETE") {
     if ((scope === "global" || scope === "project-mem") && name && SAFE_NAME.test(name)) {
       const dir = scope === "global" ? globalDir : projectMemDir;
-      if (!dir) return { status: 503, body: { error: "no project root for project-mem" } };
+      if (!dir)
+        return {
+          status: 503,
+          body: { error: "no project root for project-mem" },
+        };
       const path = join(dir, `${name}.md`);
       if (existsSync(path)) {
         unlinkSync(path);
-        ctx.audit?.({ ts: Date.now(), action: "delete-memory", payload: { scope, name, path } });
+        ctx.audit?.({
+          ts: Date.now(),
+          action: "delete-memory",
+          payload: { scope, name, path },
+        });
         return { status: 200, body: { deleted: true } };
       }
       return { status: 404, body: { error: "not found" } };
@@ -192,7 +259,11 @@ export async function handleMemory(
       const path = findProjectMemoryPath(cwd);
       if (path) {
         unlinkSync(path);
-        ctx.audit?.({ ts: Date.now(), action: "delete-memory", payload: { scope, path } });
+        ctx.audit?.({
+          ts: Date.now(),
+          action: "delete-memory",
+          payload: { scope, path },
+        });
         return { status: 200, body: { deleted: true } };
       }
       return { status: 404, body: { error: "not found" } };

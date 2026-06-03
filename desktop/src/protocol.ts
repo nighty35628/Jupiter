@@ -88,7 +88,10 @@ export type RevisionRequiredEvent = {
   summary?: string;
 };
 
-export type RevisionVerdict = { type: "accepted" } | { type: "rejected" } | { type: "cancelled" };
+export type RevisionVerdict =
+  | { type: "accepted" }
+  | { type: "rejected" }
+  | { type: "cancelled" };
 
 export type StepCompletedEvent = {
   type: "$step_completed";
@@ -161,7 +164,12 @@ export type TabClosedEvent = {
   type: "$tab_closed";
 };
 
-export type McpSpecStatus = "configured" | "handshake" | "connected" | "failed" | "disabled";
+export type McpSpecStatus =
+  | "configured"
+  | "handshake"
+  | "connected"
+  | "failed"
+  | "disabled";
 
 export type McpSpecInfo = {
   raw: string;
@@ -261,6 +269,19 @@ export type MemoryEntryInfo = {
   path: string;
   description: string;
   type?: string;
+  priority?: "low" | "medium" | "high";
+  expires?: "project_end";
+};
+
+export type MemoryWriteInput = {
+  path?: string;
+  name: string;
+  scope: "project" | "global";
+  type: "user" | "feedback" | "project" | "reference" | (string & {});
+  description: string;
+  body: string;
+  priority?: "low" | "medium" | "high";
+  expires?: "project_end";
 };
 
 export type MemoryEvent = {
@@ -280,7 +301,12 @@ export type MemoryDetailEvent = {
 
 export type RetryResultEvent = { type: "$retry_result"; text: string };
 
-export type BtwResultEvent = { type: "$btw_result"; question: string; answer: string };
+export type BtwResultEvent = {
+  type: "$btw_result";
+  question: string;
+  answer: string;
+  clientId?: string;
+};
 
 export type JobInfo = {
   id: number;
@@ -384,7 +410,10 @@ export type SettingsEvent = {
     brave?: string;
   };
   subagentModels?: Record<string, "flash" | "pro">;
+  contextTokens?: Record<string, number>;
   showSystemEvents?: boolean;
+  processCardsDefaultOpen?: boolean;
+  memoryConfirmWrites?: boolean;
   /** Desktop prompt-history entries seeded on tab load, most-recent-first (#2051). */
   promptHistory?: string[];
   version: string;
@@ -441,6 +470,8 @@ export type SettingsPatch = {
   /** Per-model context-window override (tokens). Keys are model ids; values are the prompt-side token cap. */
   contextTokens?: Record<string, number>;
   showSystemEvents?: boolean;
+  processCardsDefaultOpen?: boolean;
+  memoryConfirmWrites?: boolean;
   /** Persisted prompt-history entries to update on each send (#2051). */
   promptHistory?: string[];
 };
@@ -457,6 +488,7 @@ export type UserMessageEvent = {
   ts: string;
   turn: number;
   text: string;
+  clientId?: string;
 };
 
 export type ModelTurnStartedEvent = {
@@ -599,7 +631,7 @@ export type IncomingEvent = { tabId?: string } & (
 );
 
 export type OutgoingCommand = { tabId?: string } & (
-  | { cmd: "user_input"; text: string }
+  | { cmd: "user_input"; text: string; clientId?: string }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
@@ -610,10 +642,18 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "session_delete"; name: string }
   | { cmd: "session_load"; name: string }
   | { cmd: "session_rename"; name: string; title: string }
-  | { cmd: "session_import"; source: ExternalSessionSource; path: string; name?: string }
+  | {
+      cmd: "session_import";
+      source: ExternalSessionSource;
+      path: string;
+      name?: string;
+    }
   | { cmd: "session_import_scan" }
   | { cmd: "session_import_bulk"; sources: ExternalSessionSource[] }
   | { cmd: "memory_read"; path: string }
+  | { cmd: "memory_refresh" }
+  | { cmd: "memory_delete"; path: string }
+  | ({ cmd: "memory_save" } & MemoryWriteInput)
   | { cmd: "new_chat"; workspaceDir?: string }
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_get" }
@@ -645,5 +685,5 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "jobs_stop_all" }
   | { cmd: "compact_history" }
   | { cmd: "retry" }
-  | { cmd: "btw"; text: string }
+  | { cmd: "btw"; text: string; clientId?: string }
 );

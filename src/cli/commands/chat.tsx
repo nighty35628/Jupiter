@@ -5,6 +5,7 @@ import {
   bridgeEndpointEnv,
   loadApiKey,
   loadHistoryScrollMode,
+  loadMemoryConfirmWrites,
   loadToolRateLimit,
   normalizeMcpConfig,
   readConfig,
@@ -335,7 +336,7 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
   // skills.
   if (!opts.seedTools) {
     if (!tools) tools = new ToolRegistry({ rateLimit: loadToolRateLimit() });
-    registerMemoryTools(tools, {});
+    registerMemoryTools(tools, { confirmWrites: () => loadMemoryConfirmWrites() });
     // `ask_choice` — branching primitive, useful in chat too (stylistic
     // preferences, doc language, library picks). Independent of plan
     // mode, which chat doesn't have anyway.

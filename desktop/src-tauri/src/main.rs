@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod rpc;
+mod terminal;
 
 use rpc::{rpc_kill, rpc_send, rpc_spawn, RpcState};
 use serde::Serialize;
@@ -10,6 +11,7 @@ use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 use tauri_plugin_window_state::StateFlags;
+use terminal::{terminal_kill, terminal_resize, terminal_spawn, terminal_write, TerminalState};
 
 const TRAY_MENU_SHOW: &str = "show";
 const TRAY_MENU_QUIT: &str = "quit";
@@ -225,13 +227,24 @@ struct GitStatusEntry {
     kind: &'static str,
 }
 
+#[derive(Serialize)]
+struct TerminalCommandResult {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
 #[tauri::command]
 fn git_status(root: String) -> Result<Vec<GitStatusEntry>, String> {
-    use std::process::Command;
     let root_path = Path::new(&root);
     if !root_path.is_dir() {
         return Err(format!("not a directory: {root}"));
     }
+    git_status_entries(root_path)
+}
+
+fn git_status_entries(root_path: &Path) -> Result<Vec<GitStatusEntry>, String> {
+    use std::process::Command;
     let mut cmd = Command::new("git");
     cmd.arg("status")
         .arg("--porcelain")
@@ -271,6 +284,132 @@ fn git_status(root: String) -> Result<Vec<GitStatusEntry>, String> {
         out.push(GitStatusEntry { path, kind });
     }
     Ok(out)
+}
+
+#[tauri::command]
+fn git_diff(root: String) -> Result<String, String> {
+    let root_path = Path::new(&root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {root}"));
+    }
+    let status = git_status_entries(root_path)?;
+    let staged = git_diff_output(root_path, true)?;
+    let unstaged = git_diff_output(root_path, false)?;
+    let untracked = status
+        .iter()
+        .filter(|entry| entry.kind == "untracked")
+        .filter_map(|entry| git_untracked_diff_output(root_path, &entry.path).ok())
+        .filter(|chunk| !chunk.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok([staged, unstaged, untracked]
+        .into_iter()
+        .filter(|chunk| !chunk.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+fn git_diff_output(root_path: &Path, cached: bool) -> Result<String, String> {
+    use std::process::Command;
+    let mut cmd = Command::new("git");
+    cmd.arg("-c")
+        .arg("core.quotepath=false")
+        .arg("diff")
+        .arg("--no-ext-diff");
+    if cached {
+        cmd.arg("--cached");
+    }
+    cmd.arg("--").current_dir(root_path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(_) => return Ok(String::new()),
+    };
+    if !output.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn git_untracked_diff_output(root_path: &Path, path: &str) -> Result<String, String> {
+    use std::process::Command;
+    let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let mut cmd = Command::new("git");
+    cmd.arg("-c")
+        .arg("core.quotepath=false")
+        .arg("diff")
+        .arg("--no-ext-diff")
+        .arg("--no-index")
+        .arg("--")
+        .arg(null_path)
+        .arg(path)
+        .current_dir(root_path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(_) => return Ok(String::new()),
+    };
+    // `git diff --no-index` exits with 1 when differences are present.
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[tauri::command]
+fn run_terminal_command(root: String, command: String) -> Result<TerminalCommandResult, String> {
+    use std::process::{Command, Stdio};
+    let root_path = Path::new(&root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {root}"));
+    }
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err("command is empty".into());
+    }
+
+    #[cfg(windows)]
+    let mut cmd = {
+        let shell = std::env::var("ComSpec").unwrap_or_else(|_| "cmd".into());
+        let mut cmd = Command::new(shell);
+        cmd.arg("/C").arg(trimmed);
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd
+    };
+
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        let mut cmd = Command::new(shell);
+        cmd.arg("-lc").arg(trimmed);
+        cmd
+    };
+
+    let output = cmd
+        .current_dir(root_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("run command: {e}"))?;
+
+    Ok(TerminalCommandResult {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }
 
 #[tauri::command]
@@ -636,6 +775,9 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(persisted_window_state_flags())
@@ -653,13 +795,20 @@ fn main() {
             }
         })
         .manage(RpcState::default())
+        .manage(TerminalState::default())
         .invoke_handler(tauri::generate_handler![
             rpc_spawn,
             rpc_send,
             rpc_kill,
+            terminal_spawn,
+            terminal_write,
+            terminal_resize,
+            terminal_kill,
             open_in_editor,
             list_workspace_tree,
             git_status,
+            git_diff,
+            run_terminal_command,
             read_file_preview,
             write_text_file,
             save_clipboard_image

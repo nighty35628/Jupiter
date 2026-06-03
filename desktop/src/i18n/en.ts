@@ -123,7 +123,8 @@ export const en = {
     themeDarkDesc: "default · low-light",
     themeLightDesc: "high-contrast · daytime",
     themeStyle: "Style",
-    themeStyleHint: "Choose the visual palette for the selected light or dark mode.",
+    themeStyleHint:
+      "Choose the visual palette for the selected light or dark mode.",
     themeStyleGraphite: "Graphite",
     themeStyleGraphiteDesc: "Neutral dark gray for long work sessions.",
     themeStyleSandstone: "Mist",
@@ -131,7 +132,8 @@ export const en = {
     themeStylePorcelain: "Porcelain",
     themeStylePorcelainDesc: "Default Codex-like clean light palette.",
     themeStyleMidnight: "Ink",
-    themeStyleMidnightDesc: "Near-black night palette with muted green accents.",
+    themeStyleMidnightDesc:
+      "Near-black night palette with muted green accents.",
     fontScale: "Font scale",
     fontScaleHint: "Scales the whole UI; pick larger for high-DPI screens.",
     fontScaleSmall: "small",
@@ -152,7 +154,8 @@ export const en = {
     effortHighDesc: "faster, less thinking",
     effortMaxDesc: "deeper reasoning, slower",
     editMode: "Permission mode",
-    editModeHint: "Controls how Jupiter is allowed to run tools, edit files, and execute commands.",
+    editModeHint:
+      "Controls how Jupiter is allowed to run tools, edit files, and execute commands.",
     editModeReview: "Ask first",
     editModeAuto: "Auto approve",
     editModeYolo: "Full control",
@@ -161,31 +164,44 @@ export const en = {
       "Show quiet inline notices for context compaction, abort, and rate-limit pauses.",
     shown: "shown",
     hidden: "hidden",
+    processCardsDefaultOpen: "Process details",
+    processCardsDefaultOpenHint:
+      "Default state for completed thinking, tool, and shell cards in the conversation.",
+    expanded: "expanded",
+    collapsed: "collapsed",
     desktopCloseBehavior: "Window close",
-    desktopCloseBehaviorHint: "Close quits by default. Hide to tray keeps running sessions alive.",
+    desktopCloseBehaviorHint:
+      "Close quits by default. Hide to tray keeps running sessions alive.",
     closeToQuit: "quit",
     closeToTray: "hide to tray",
     editModeReviewDesc: "Ask before edits or commands",
     editModeAutoDesc: "Auto-approve routine edits; ask for sensitive commands",
-    editModeYoloDesc: "Full-control permission; run all tools automatically, use carefully",
+    editModeYoloDesc:
+      "Full-control permission; run all tools automatically, use carefully",
     budget: "Budget cap",
     budgetHint: "USD per session. Empty = no cap.",
     budgetPlaceholder: "no cap",
     webSearchEngine: "search engine",
     webSearchEngineBing: "bing — default, works from CN without proxy",
     webSearchEngineBingIntl: "bing-intl — international index via www.bing.com",
-    webSearchEngineSearxng: "searxng — self-hosted (set endpoint via /se searxng <url>)",
-    webSearchEngineMetaso: "metaso — 100/day free (CN-friendly, free key at metaso.cn)",
+    webSearchEngineSearxng:
+      "searxng — self-hosted (set endpoint via /se searxng <url>)",
+    webSearchEngineMetaso:
+      "metaso — 100/day free (CN-friendly, free key at metaso.cn)",
     webSearchEngineBaidu:
       "baidu — Baidu AI Search, 1500/mo free in Baidu docs (set BAIDU_API_KEY or QIANFAN_API_KEY)",
     webSearchEngineTavily: "tavily — 1000/mo free (set TAVILY_API_KEY)",
-    webSearchEnginePerplexity: "perplexity — AI-native (set PERPLEXITY_API_KEY)",
+    webSearchEnginePerplexity:
+      "perplexity — AI-native (set PERPLEXITY_API_KEY)",
     webSearchEngineExa: "exa — AI-native 1000/mo free (set EXA_API_KEY)",
-    webSearchEngineBrave: "brave — independent index, 2000/mo free (set BRAVE_SEARCH_API_KEY)",
-    webSearchEngineOllama: "ollama — Ollama cloud web search (set OLLAMA_API_KEY)",
+    webSearchEngineBrave:
+      "brave — independent index, 2000/mo free (set BRAVE_SEARCH_API_KEY)",
+    webSearchEngineOllama:
+      "ollama — Ollama cloud web search (set OLLAMA_API_KEY)",
     webSearchEngineNote: "applies to the next web_search call",
     webSearchEndpoint: "SearXNG endpoint",
-    webSearchEndpointHint: "Base URL of your SearXNG instance. Defaults to http://localhost:8080.",
+    webSearchEndpointHint:
+      "Base URL of your SearXNG instance. Defaults to http://localhost:8080.",
     webSearchApiKeySignup: "(get key)",
     webSearchApiKeyClear: "Clear",
     webSearchApiKey: {
@@ -198,7 +214,8 @@ export const en = {
       ollama: "Ollama API key",
     },
     baseUrl: "DeepSeek base URL",
-    baseUrlHint: "Override only if using a proxy. Empty = official endpoint. Restart required.",
+    baseUrlHint:
+      "Override only if using a proxy. Empty = official endpoint. Restart required.",
     workspace: "Workspace",
     workspaceHint:
       "Root dir agent tools operate inside. Switching saves to config and reloads tools.",
@@ -230,8 +247,8 @@ export const en = {
     pageMcpDesc: "DeepSeek API, web search, QQ channel, and MCP tool servers",
     pageSkillsLabel: "Skills",
     pageSkillsDesc: "Reusable prompt sets for / commands",
-    pageMemoryLabel: "Memory",
-    pageMemoryDesc: "CLAUDE.md / AGENTS.md injection",
+    pageMemoryLabel: "Rules and memory",
+    pageMemoryDesc: "Project rules, global notes, and long-term memory",
     pageAppearanceLabel: "Appearance",
     pageAppearanceDesc: "Theme, palette, and typography",
     pageBillingLabel: "Account & Billing",
@@ -290,7 +307,8 @@ export const en = {
     // model descriptions
     defaultModelCurrent: "Default model · currently {model}",
     modelCustom: "Custom model id",
-    modelCustomHint: "Any OpenAI-compatible id your endpoint serves (vLLM, Ollama, Together, …).",
+    modelCustomHint:
+      "Any OpenAI-compatible id your endpoint serves (vLLM, Ollama, Together, …).",
     modelCustomActive: "Currently running on a custom id: {model}",
     contextTokensLabel: "Context window size",
     contextTokensHint:
@@ -319,7 +337,8 @@ export const en = {
     parseError: "Parse failed: {error}",
     mcpAddSection: "Add server",
     mcpSpecLabel: "Spec string",
-    mcpSpecFormat: "Format: <code>name=command args</code> or <code>name=https://host/sse</code>",
+    mcpSpecFormat:
+      "Format: <code>name=command args</code> or <code>name=https://host/sse</code>",
     mcpAdd: "Add",
     // Skills
     skillRoots: "Skill roots",
@@ -335,11 +354,53 @@ export const en = {
     subagentModelDefault: "default",
     subagentModelFlash: "flash",
     subagentModelPro: "pro",
-    subagentModelHint: "Model used when this skill spawns its isolated subagent",
+    subagentModelHint:
+      "Model used when this skill spawns its isolated subagent",
     // Memory
-    memorySection: "Long-term memory",
+    memorySection: "Rules and memory",
     memoryDesc:
       "Current version relies on built-in CLAUDE.md / AGENTS.md injection. Project-level memory is maintained at the kernel level.",
+    memoryEffectHint:
+      "Changes are saved immediately. Prompt injection takes effect in new chats or after /new.",
+    memoryConfirmWrites: "Ask before saving model memory",
+    memoryRefresh: "Refresh memory",
+    memoryProjectRules: "Project rules",
+    memoryProjectRulesDesc:
+      "Repository-level JUPITER.md / AGENTS.md style files. These can be committed with the project.",
+    memoryGlobalRules: "Global rules",
+    memoryGlobalRulesDesc:
+      "Machine-local cross-project notes from ~/.jupiter/JUPITER.md or Claude migration files.",
+    memoryLongTerm: "Long-term memory",
+    memoryLongTermDesc:
+      "Structured memories saved by remember/forget. These are private and indexed for future sessions.",
+    memoryEmptyGroup: "No entries in this group.",
+    memoryDetailPlaceholder: "Select an entry to inspect its content.",
+    memoryDeleteLabel: "Delete {name}",
+    memoryNewStructured: "New structured memory",
+    memoryEditStructured: "Edit structured memory",
+    memoryStructuredHint:
+      "Saved as a private Markdown memory with frontmatter and included in future sessions.",
+    memoryNew: "New",
+    memoryNameLabel: "Memory name",
+    memoryScopeLabel: "Scope",
+    memoryScopeProject: "Project",
+    memoryScopeGlobal: "Global",
+    memoryTypeLabel: "Type",
+    memoryTypeUser: "User",
+    memoryTypeFeedback: "Feedback",
+    memoryTypeProject: "Project",
+    memoryTypeReference: "Reference",
+    memoryPriorityLabel: "Priority",
+    memoryPriorityDefault: "Default",
+    memoryPriority_low: "Low",
+    memoryPriority_medium: "Medium",
+    memoryPriority_high: "High",
+    memoryExpiresLabel: "Expiry",
+    memoryExpiresNone: "None",
+    memoryExpiresProjectEnd: "Project end",
+    memoryDescriptionLabel: "Description",
+    memoryBodyLabel: "Memory body",
+    memorySave: "Save memory",
     // Rules
     appMode: "Application mode",
     ruleAutoApprovalSection: "Auto-approve commands",
@@ -362,7 +423,8 @@ export const en = {
     shortcutSettings: "Settings",
   },
   modal: {
-    planFeedbackPlaceholder: "What problems does the plan have? What needs to be improved?",
+    planFeedbackPlaceholder:
+      "What problems does the plan have? What needs to be improved?",
     choiceCustomPlaceholder: "Where can the plan be further refined?",
   },
   plan: {
@@ -388,8 +450,10 @@ export const en = {
     yoloDesc: "full-control permission, all tools run automatically",
     planHint: "Read-only mode · all writes and commands are blocked",
     reviewHint: "Careful mode · ask before running tools",
-    autoHint: "Trusted mode · routine actions auto-approve, sensitive actions still ask",
-    yoloHint: "Full-control permission · all tools run automatically, use carefully",
+    autoHint:
+      "Trusted mode · routine actions auto-approve, sensitive actions still ask",
+    yoloHint:
+      "Full-control permission · all tools run automatically, use carefully",
   },
   markdown: {
     filePillTitle: "click to preview · right-click for actions",
@@ -419,7 +483,8 @@ export const en = {
     continue: "Continue",
     revise: "Revise…",
     stop: "Stop",
-    revisePlaceholder: "What needs to change before the next step? (leave blank to just continue)",
+    revisePlaceholder:
+      "What needs to change before the next step? (leave blank to just continue)",
     sendRevise: "Send revision",
   },
   revision: {
@@ -453,7 +518,8 @@ export const en = {
       copyLast: "Copy last reply",
       switchModel: "Switch model",
       searchEngine: "Configure web search engine + API keys",
-      skill: "List and manage user skills (project + custom + global + builtin)",
+      skill:
+        "List and manage user skills (project + custom + global + builtin)",
       setMode: "Set mode to {mode}",
       setEffort: "Set reasoning effort to {effort}",
       toggleTheme: "Toggle theme",
@@ -483,17 +549,21 @@ export const en = {
       bannerBold: "auto-approved",
       banner2: " without asking.",
       switchBack: "Switch to Ask first",
-      toast: "Switched to full-control permission; all operations will be auto-approved",
+      toast:
+        "Switched to full-control permission; all operations will be auto-approved",
     },
-    btwUsage: "▸ /btw <question> — ask a side question without polluting the conversation context.",
+    btwUsage:
+      "▸ /btw <question> — ask a side question without polluting the conversation context.",
     errorLabel: "Error",
     warningLabel: "Warning",
     dismissError: "Dismiss",
     jumpToBottom: "Jump to bottom",
+    resizeContextSidebar: "Resize right sidebar",
     splashSubtitle: "DeepSeek Agents",
     connecting: "Connecting to Jupiter core…",
     startupFailedTitle: "Jupiter could not start",
-    startupFailedMessage: "The desktop backend failed before opening a workspace.",
+    startupFailedMessage:
+      "The desktop backend failed before opening a workspace.",
     startupFailedRetry: "Retry",
     startupFailedUnknown: "Unknown startup error",
     langZH: "Chinese",
@@ -544,6 +614,13 @@ export const en = {
       workspace: "Default workspace",
       notSelected: "Not selected",
       choose: "Choose…",
+      apiKeyLabel: "DeepSeek API key",
+      apiKeyPlaceholder: "DeepSeek API Key, starts with sk-",
+      apiKeyHintTitle: "Get an API key",
+      apiKeyHintBody:
+        "Create a key in DeepSeek Platform, paste it here, and Jupiter will store it locally on this device.",
+      openApiKeys: "Open DeepSeek Platform",
+      openApiKeysAria: "Open DeepSeek API keys",
       saveAndStart: "Save & start",
     },
     update: {
@@ -650,9 +727,98 @@ export const en = {
     showInfo: "Show information",
     toggleBottomBar: "Toggle bottom bar",
     toggleRightSidebar: "Toggle right sidebar",
+    infoTitle: "Information",
+    closeTab: "Close",
+    addTab: "Add panel",
+    home: {
+      filesTitle: "Files",
+      filesDesc: "Browse project files",
+      sidechatTitle: "Side Chat",
+      sidechatDesc: "Ask without main context",
+      browserTitle: "Browser",
+      browserDesc: "Open website",
+      reviewTitle: "Review",
+      reviewDesc: "View code changes",
+      terminalTitle: "Terminal",
+      terminalDesc: "Start interactive shell",
+    },
+    placeholder: {
+      sidechat:
+        "Side Chat is reserved here; the interface is ready for the next step.",
+      browser:
+        "Browser is reserved here; the interface is ready for the next step.",
+      review:
+        "Review is reserved here; the interface is ready for the next step.",
+      terminal:
+        "Terminal is reserved here; the interface is ready for the next step.",
+    },
+    terminal: {
+      inputLabel: "Terminal command",
+      placeholder: "Run a command…",
+      readyHint: "Enter runs · ↑/↓ history · cd and clear are supported",
+      noWorkspace: "No workspace is open.",
+      empty: "Run a command from this workspace.",
+      running: "Running…",
+      exitCode: "exit {code}",
+    },
+    sideChat: {
+      title: "Temporary side chat",
+      desc: "Ask from a blank slate. The answer returns here and never joins the main context.",
+      inputLabel: "Side chat message",
+      placeholder: "Ask a throwaway side question…",
+      readyHint: "Enter sends · Shift Enter newline",
+      busyHint: "A temporary answer is still running.",
+      sendLabel: "Send side chat",
+      queueLabel: "Queue side chat",
+      sendButton: "Send",
+      queueButton: "Queue",
+      empty: "Temporary answers will appear here.",
+      pending: "Thinking…",
+    },
+    browser: {
+      urlLabel: "Website URL",
+      placeholder: "Enter a URL…",
+      open: "Open website",
+      back: "Back",
+      forward: "Forward",
+      reload: "Reload",
+      openExternal: "Open in default browser",
+      external: "Open",
+      previewTitle: "Browser preview",
+      emptyTitle: "Open a website",
+      emptyBody: "Enter a URL above to browse in the sidebar.",
+      invalidUrl: "Enter a valid http or https URL.",
+      nativeError: "Could not create the native browser view.",
+      nativeHint:
+        "Uses a native webview, so it is not limited by iframe embedding rules.",
+      embedHint:
+        "Some websites block embedded browsing. Use Open if the page stays blank.",
+    },
+    review: {
+      refresh: "Refresh changes",
+      loading: "Loading changes…",
+      noWorkspace: "No workspace is open.",
+      filesChanged: "{count} changed",
+      changedFiles: "Changed files",
+      noChanges: "No code changes.",
+      diffTitle: "Diff",
+      noDiff:
+        "No tracked diff. Untracked files may need to be opened from the file list.",
+      status: {
+        modified: "M",
+        added: "A",
+        deleted: "D",
+        renamed: "R",
+        untracked: "U",
+      },
+    },
     contextTokens: "Context · tokens",
     cacheKey: "cache",
     freeKey: "free",
+    projectFilesTitle: "Project files",
+    fileSearchPlaceholder: "Search project files…",
+    clearSearch: "Clear search",
+    searching: "Searching…",
     filesTitle: "Files in context",
     filesCount: "{count} files",
     fileModified: "modified",
@@ -685,6 +851,7 @@ export const en = {
     scopeProject: "project",
     scopeGlobal: "global",
     noFilesMsg: "No files in context yet.",
+    noProjectFilesMsg: "No matching project files.",
     noMemoriesMsg: "No memories saved yet.",
   },
   fileActions: {
@@ -700,7 +867,8 @@ export const en = {
     previewLoading: "Loading preview…",
     previewError: "Could not preview this file: {message}",
     previewUnsupported: "No inline preview for this file type.",
-    previewOpenHint: "Use the menu to open it with the default app or another application.",
+    previewOpenHint:
+      "Use the menu to open it with the default app or another application.",
     bytes: "{count} bytes",
     truncated: "truncated",
   },
@@ -738,7 +906,8 @@ export const en = {
     noSessions: "No sessions yet",
     noMatches: "No matches",
     unassignedWorkspace: "Unfiled",
-    unassignedWorkspaceDetail: "Legacy session; opening it files it under the current workspace",
+    unassignedWorkspaceDetail:
+      "Legacy session; opening it files it under the current workspace",
     messageCount: "{count} messages",
     deleteSession: "Delete session",
     pinSession: "Pin in workspace",
@@ -753,7 +922,8 @@ export const en = {
     importSessionCount: "{count} sessions · imports all",
     importNotFound: "No local sessions found",
     importPrivacyHint: "Your existing app settings are not changed.",
-    importResult: "Imported {imported} session(s), skipped {skipped}, failed {failed}.",
+    importResult:
+      "Imported {imported} session(s), skipped {skipped}, failed {failed}.",
     continue: "Continue",
     refresh: "Refresh",
     importSource: "Source",

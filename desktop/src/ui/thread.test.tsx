@@ -11,9 +11,15 @@ vi.mock("./cards", () => ({
   ReasoningCard: () => null,
 }));
 
-import { ConfirmApprovalCard, PathAccessApprovalCard } from "./thread";
+import {
+  ChoiceApprovalCard,
+  ConfirmApprovalCard,
+  PathAccessApprovalCard,
+} from "./thread";
 
-function makeShellPrompt(command: string): import("@jupiter/core-utils").ApprovalPrompt {
+function makeShellPrompt(
+  command: string,
+): import("@jupiter/core-utils").ApprovalPrompt {
   return {
     id: 1,
     kind: "shell",
@@ -54,7 +60,11 @@ function makePathPrompt(
         label: intent === "write" ? "Allow write" : "Allow read",
         kind: "allow_once",
       },
-      { id: "always_allow", label: "Always allow — /workspace", kind: "allow_always" },
+      {
+        id: "always_allow",
+        label: "Always allow — /workspace",
+        kind: "allow_always",
+      },
       {
         id: "deny",
         label: "Deny",
@@ -68,6 +78,66 @@ function makePathPrompt(
 
 afterEach(cleanup);
 
+describe("ChoiceApprovalCard", () => {
+  it("renders choice options and resolves the picked option", () => {
+    const onPick = vi.fn();
+    const onCancel = vi.fn();
+
+    const { container } = render(
+      <ChoiceApprovalCard
+        c={{
+          id: 10,
+          question: "你想用哪种方式做 PPT?",
+          options: [
+            {
+              id: "html",
+              title: "HTML 网页幻灯片",
+              summary: "浏览器直接打开",
+            },
+            {
+              id: "pptx",
+              title: "生成 .pptx 文件",
+              summary: "可以用 Office 编辑",
+            },
+          ],
+          allowCustom: false,
+        }}
+        onPick={onPick}
+        onCancel={onCancel}
+      />,
+    );
+
+    expect(container.querySelector(".choice-approval")).toBeTruthy();
+    expect(screen.getByText("你想用哪种方式做 PPT?")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /HTML 网页幻灯片/ }));
+    expect(onPick).toHaveBeenCalledWith("html");
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps cancel as a separate action", () => {
+    const onPick = vi.fn();
+    const onCancel = vi.fn();
+
+    render(
+      <ChoiceApprovalCard
+        c={{
+          id: 11,
+          question: "Choose a path",
+          options: [{ id: "one", title: "Option one" }],
+          allowCustom: false,
+        }}
+        onPick={onPick}
+        onCancel={onCancel}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Cancel|取消/ }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onPick).not.toHaveBeenCalled();
+  });
+});
+
 describe("ConfirmApprovalCard — ApprovalPrompt rendering", () => {
   it("renders title, subtitle, and action buttons from prompt", () => {
     const { container } = render(
@@ -78,10 +148,14 @@ describe("ConfirmApprovalCard — ApprovalPrompt rendering", () => {
         onDeny={() => {}}
       />,
     );
-    expect(container.querySelector(".ap-title")?.textContent).toBe("Run command");
+    expect(container.querySelector(".ap-title")?.textContent).toBe(
+      "Run command",
+    );
     expect(container.querySelector(".ap-sub")?.textContent).toBe("git status");
     expect(screen.getByRole("button", { name: "Run once" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Always allow — git" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Always allow — git" }),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
   });
 
@@ -96,16 +170,20 @@ describe("ConfirmApprovalCard — ApprovalPrompt rendering", () => {
       />,
     );
 
-    expect(container.querySelector(".ap-preview")?.classList.contains("ap-preview--long")).toBe(
-      true,
-    );
+    expect(
+      container
+        .querySelector(".ap-preview")
+        ?.classList.contains("ap-preview--long"),
+    ).toBe(true);
     expect(
       container
         .querySelector(".ap-foot")
         ?.contains(screen.getByRole("button", { name: "Run once" })),
     ).toBe(true);
     expect(
-      container.querySelector(".ap-foot")?.contains(screen.getByRole("button", { name: "Deny" })),
+      container
+        .querySelector(".ap-foot")
+        ?.contains(screen.getByRole("button", { name: "Deny" })),
     ).toBe(true);
   });
 
@@ -163,7 +241,9 @@ describe("PathAccessApprovalCard — ApprovalPrompt rendering", () => {
         onDeny={() => {}}
       />,
     );
-    expect(container.querySelector(".ap-title")?.textContent).toBe("Access path — read");
+    expect(container.querySelector(".ap-title")?.textContent).toBe(
+      "Access path — read",
+    );
     expect(container.querySelector(".ap-sub")?.textContent).toBe("/etc/passwd");
     expect(screen.getByRole("button", { name: "Allow read" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();

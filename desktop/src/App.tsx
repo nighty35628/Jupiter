@@ -1,22 +1,42 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import {
+  open as openDialog,
+  save as saveDialog,
+} from "@tauri-apps/plugin-dialog";
 import {
   isPermissionGranted as isNotificationPermissionGranted,
   requestPermission as requestNotificationPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { CommandPalette, Toast, buildCommands, useCommandPalette } from "./CommandPalette";
+import {
+  CommandPalette,
+  Toast,
+  buildCommands,
+  useCommandPalette,
+} from "./CommandPalette";
 import { WorkspaceProvider } from "./Markdown";
 import {
   nextAbortDraftCandidate,
   restoreAbortedDraft,
   type AbortDraftSource,
 } from "./abort-draft";
-import { readFilePreview, type FilePreview, type FilePreviewTarget } from "./file-preview";
-import { getLang, getLangLabel, getSupportedLangs, setLang, t, useLang } from "./i18n";
+import {
+  readFilePreview,
+  resolveWorkspacePath,
+  type FilePreview,
+  type FilePreviewTarget,
+} from "./file-preview";
+import {
+  getLang,
+  getLangLabel,
+  getSupportedLangs,
+  setLang,
+  t,
+  useLang,
+} from "./i18n";
 import { I } from "./icons";
 import {
   checkJupiterUpdate,
@@ -68,7 +88,17 @@ import type {
 } from "./protocol";
 import { type QQDesktopSettingsState } from "./qq-settings";
 import { Composer, type SlashCmd } from "./ui/composer";
-import { ContextPanel, type ContextPanelMode } from "./ui/context-panel";
+import {
+  ContextInfoPopover,
+  ContextPanel,
+  type BrowserOpenRequest,
+  type ContextPanelMode,
+} from "./ui/context-panel";
+import {
+  nextContextInfoToggle,
+  nextContextSidebarToggle,
+  nextSideChatSend,
+} from "./ui/context-chrome";
 import { JobsPop } from "./ui/jobs-pop";
 import { useElapsed } from "./ui/live";
 import { AboutModal } from "./ui/about";
@@ -115,17 +145,33 @@ import {
   isScrollElementNearBottom,
   scrollVirtuosoToBottom,
 } from "./ui/virtuoso-scroll";
-import { displayWorkspaceBasename, displayWorkspacePath } from "./workspace-display";
+import {
+  displayWorkspaceBasename,
+  displayWorkspacePath,
+} from "./workspace-display";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 const RIGHT_SIDEBAR_COLLAPSE_WIDTH = 1120;
 const LEFT_SIDEBAR_COLLAPSE_WIDTH = 760;
+const DEEPSEEK_API_KEYS_URL = "https://platform.deepseek.com/api_keys";
 
 const RESPONSIVE_STAGE = {
   WIDE: "wide",
   COMPACT: "compact",
   NARROW: "narrow",
 } as const;
+
+export type SettingsToastKind =
+  | "model"
+  | "reasoningEffort"
+  | "editMode"
+  | "language";
+
+export function shouldShowSettingsChangeToast(
+  _kind: SettingsToastKind,
+): boolean {
+  return false;
+}
 
 type ResponsiveStage = (typeof RESPONSIVE_STAGE)[keyof typeof RESPONSIVE_STAGE];
 
@@ -155,7 +201,13 @@ export type SkillOrigin = {
 };
 
 export type ChatMessage =
-  | { kind: "user"; text: string; clientId: string; turn: number; skill?: SkillOrigin }
+  | {
+      kind: "user";
+      text: string;
+      clientId: string;
+      turn: number;
+      skill?: SkillOrigin;
+    }
   | {
       kind: "assistant";
       turn: number;
@@ -165,6 +217,13 @@ export type ChatMessage =
   | { kind: "status"; text: string }
   | { kind: "warning"; id: string; text: string; severity: "low" | "high" }
   | { kind: "error"; message: string; id: string; recoverable?: boolean };
+
+export type SideChatEntry = {
+  id: string;
+  question: string;
+  answer?: string;
+  status: "pending" | "done";
+};
 
 export type PendingConfirm = {
   id: number;
@@ -243,13 +302,23 @@ export type UsageStats = {
   liveLogTokens: number;
 };
 
-type WindowControls = Pick<ReturnType<typeof getCurrentWindow>, "isFullscreen" | "isMaximized" | "setFullscreen" | "toggleMaximize">;
+type WindowControls = Pick<
+  ReturnType<typeof getCurrentWindow>,
+  "isFullscreen" | "isMaximized" | "setFullscreen" | "toggleMaximize"
+>;
 
-export function readWindowExpanded(win: WindowControls, isMac: boolean): Promise<boolean> {
+export function readWindowExpanded(
+  win: WindowControls,
+  isMac: boolean,
+): Promise<boolean> {
   return isMac ? win.isFullscreen() : win.isMaximized();
 }
 
-export function toggleWindowExpanded(win: WindowControls, isMac: boolean, expanded: boolean): Promise<void> {
+export function toggleWindowExpanded(
+  win: WindowControls,
+  isMac: boolean,
+  expanded: boolean,
+): Promise<void> {
   if (isMac) return win.setFullscreen(!expanded);
   return win.toggleMaximize();
 }
@@ -299,6 +368,8 @@ export type Settings = {
   /** Per-model context-window override (tokens). */
   contextTokens?: Record<string, number>;
   showSystemEvents?: boolean;
+  processCardsDefaultOpen?: boolean;
+  memoryConfirmWrites?: boolean;
   promptHistory?: string[];
   version: string;
 };
@@ -324,6 +395,18 @@ type MentionPreviewState = {
   head: string;
   totalLines: number;
 };
+
+export function pathToFileUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const absolute = /^[a-zA-Z]:\//.test(normalized)
+    ? `/${normalized}`
+    : normalized;
+  const encoded = absolute
+    .split("/")
+    .map((part, index) => (index === 0 ? part : encodeURIComponent(part)))
+    .join("/");
+  return `file://${encoded}`;
+}
 
 type State = {
   ready: boolean;
@@ -361,6 +444,8 @@ type State = {
   activeSkill: SkillOrigin | null;
   /** Messages typed while busy=true — auto-sent FIFO once the current turn completes. Cleared on `clear`, `rpc_exit`, `session_loaded`. */
   queuedSends: string[];
+  /** Temporary blank-slate side questions shown only in the right sidebar. */
+  sideChats: SideChatEntry[];
   /** Populated by $retry_result — component useEffect reads and sets composer draft. */
   retryText?: string;
   retryNonce: number;
@@ -398,6 +483,7 @@ type Action =
   | { t: "enqueue_send"; text: string }
   | { t: "dequeue_send"; index: number }
   | { t: "shift_queued_send" }
+  | { t: "side_chat_sent"; id: string; question: string }
   | { t: "settings_patch"; patch: SettingsPatch }
   | { t: "push_status"; text: string };
 
@@ -435,10 +521,30 @@ function fallbackSkillDesc(skill: SkillInfo): string {
 
 function nextMessageTurn(messages: ChatMessage[]): number {
   const lastTurn = messages.reduce((max, m) => {
-    if (m.kind === "user" || m.kind === "assistant") return Math.max(max, m.turn);
+    if (m.kind === "user" || m.kind === "assistant")
+      return Math.max(max, m.turn);
     return max;
   }, 0);
   return lastTurn + 1;
+}
+
+export function chatMessageKey(
+  message: ChatMessage | undefined,
+  index: number,
+): string {
+  if (!message) return `missing-${index}`;
+  switch (message.kind) {
+    case "user":
+      return `user-${message.clientId || message.turn}`;
+    case "assistant":
+      return `assistant-${message.turn}`;
+    case "warning":
+      return `warning-${message.id}`;
+    case "error":
+      return `error-${message.id}`;
+    case "status":
+      return `status-${index}-${message.text.slice(0, 80)}`;
+  }
 }
 
 let _errSeq = 0;
@@ -459,7 +565,12 @@ function reduceRaw(state: State, action: Action): State {
         busy: true,
         messages: [
           ...state.messages,
-          { kind: "user", text: action.text, clientId: action.clientId, turn: nextMessageTurn(state.messages) },
+          {
+            kind: "user",
+            text: action.text,
+            clientId: action.clientId,
+            turn: nextMessageTurn(state.messages),
+          },
         ],
       };
     }
@@ -488,6 +599,7 @@ function reduceRaw(state: State, action: Action): State {
         busy: false,
         activeSkill: null,
         queuedSends: [],
+        sideChats: [],
         messages: [
           ...state.messages,
           {
@@ -501,7 +613,13 @@ function reduceRaw(state: State, action: Action): State {
       return applyIncoming(state, action.event);
     case "settings_patch":
       return state.settings
-        ? { ...state, settings: { ...state.settings, ...sanitizeSettingsPatch(action.patch) } }
+        ? {
+            ...state,
+            settings: {
+              ...state.settings,
+              ...sanitizeSettingsPatch(action.patch),
+            },
+          }
         : state;
     case "batch_delta": {
       const collapsed: DeltaBatchItem[] = [];
@@ -549,17 +667,22 @@ function reduceRaw(state: State, action: Action): State {
         subagents: [],
         activeSkill: null,
         queuedSends: [],
+        sideChats: [],
         retryNonce: 0,
       };
     case "resolve_confirm":
       return {
         ...state,
-        pendingConfirms: state.pendingConfirms.filter((c) => c.id !== action.id),
+        pendingConfirms: state.pendingConfirms.filter(
+          (c) => c.id !== action.id,
+        ),
       };
     case "resolve_path_access":
       return {
         ...state,
-        pendingPathAccess: state.pendingPathAccess.filter((p) => p.id !== action.id),
+        pendingPathAccess: state.pendingPathAccess.filter(
+          (p) => p.id !== action.id,
+        ),
       };
     case "resolve_choice":
       return {
@@ -570,7 +693,8 @@ function reduceRaw(state: State, action: Action): State {
       const removed = state.pendingPlans.find((p) => p.id === action.id);
       let activePlan = state.activePlan;
       if (removed && action.verdict.type === "approve") {
-        const pendingSteps = (removed as PendingPlan & { steps?: PlanStep[] }).steps;
+        const pendingSteps = (removed as PendingPlan & { steps?: PlanStep[] })
+          .steps;
         activePlan = {
           plan: removed.plan,
           summary: removed.summary,
@@ -588,7 +712,9 @@ function reduceRaw(state: State, action: Action): State {
     case "resolve_checkpoint":
       return {
         ...state,
-        pendingCheckpoints: state.pendingCheckpoints.filter((c) => c.id !== action.id),
+        pendingCheckpoints: state.pendingCheckpoints.filter(
+          (c) => c.id !== action.id,
+        ),
       };
     case "resolve_revision": {
       const removed = state.pendingRevisions.find((r) => r.id === action.id);
@@ -603,7 +729,9 @@ function reduceRaw(state: State, action: Action): State {
       }
       return {
         ...state,
-        pendingRevisions: state.pendingRevisions.filter((r) => r.id !== action.id),
+        pendingRevisions: state.pendingRevisions.filter(
+          (r) => r.id !== action.id,
+        ),
         activePlan,
       };
     }
@@ -629,8 +757,19 @@ function reduceRaw(state: State, action: Action): State {
       };
     case "shift_queued_send":
       return { ...state, queuedSends: state.queuedSends.slice(1) };
+    case "side_chat_sent":
+      return {
+        ...state,
+        sideChats: [
+          ...state.sideChats,
+          { id: action.id, question: action.question, status: "pending" },
+        ],
+      };
     case "push_status":
-      return { ...state, messages: [...state.messages, { kind: "status", text: action.text }] };
+      return {
+        ...state,
+        messages: [...state.messages, { kind: "status", text: action.text }],
+      };
   }
 }
 
@@ -643,7 +782,11 @@ const READING_TOOLS = new Set(["read_file"]);
 const MODIFYING_TOOLS = new Set(["edit_file", "write_file"]);
 
 type FileStat = { filename: string; added: number; removed: number };
-type FileStats = { entries: FileStat[]; totalAdded: number; totalRemoved: number };
+type FileStats = {
+  entries: FileStat[];
+  totalAdded: number;
+  totalRemoved: number;
+};
 
 function countFileStats(segments: AssistantSegment[]): FileStats | null {
   const entries: FileStat[] = [];
@@ -698,9 +841,12 @@ function DiffStats({ stats }: { stats: FileStats }) {
           <I.diff size={11} />
         </span>
         <span>
-          {total} {total === 1 ? "file" : "files"} changed · +{stats.totalAdded} / −{stats.totalRemoved} {stats.totalRemoved === 1 ? "line" : "lines"}
+          {total} {total === 1 ? "file" : "files"} changed · +{stats.totalAdded}{" "}
+          / −{stats.totalRemoved} {stats.totalRemoved === 1 ? "line" : "lines"}
         </span>
-        <span className="chev">{open ? <I.chev size={10} /> : <I.chevR size={10} />}</span>
+        <span className="chev">
+          {open ? <I.chev size={10} /> : <I.chevR size={10} />}
+        </span>
       </button>
       {open ? (
         <div className="diff-stats-body">
@@ -709,7 +855,9 @@ function DiffStats({ stats }: { stats: FileStats }) {
               <span className="fn">{e.filename}</span>
               <span className="counts">
                 <span className="add">+{e.added}</span>
-                {e.removed > 0 ? <span className="rm"> / −{e.removed}</span> : null}
+                {e.removed > 0 ? (
+                  <span className="rm"> / −{e.removed}</span>
+                ) : null}
               </span>
             </div>
           ))}
@@ -745,7 +893,10 @@ function extractToolFiles(name: string, args: string): SessionFile[] {
   return [];
 }
 
-function mergeSessionFiles(existing: SessionFile[], adds: SessionFile[]): SessionFile[] {
+function mergeSessionFiles(
+  existing: SessionFile[],
+  adds: SessionFile[],
+): SessionFile[] {
   if (adds.length === 0) return existing;
   const next = [...existing];
   const indexByPath = new Map<string, number>();
@@ -804,7 +955,11 @@ export function reduceSubagentRuns(
   currentSession?: string,
 ): SubagentRunInfo[] {
   if (!currentSession && ev.parentSession) return prev;
-  if (currentSession && ev.parentSession && ev.parentSession !== currentSession) {
+  if (
+    currentSession &&
+    ev.parentSession &&
+    ev.parentSession !== currentSession
+  ) {
     return prev;
   }
 
@@ -812,22 +967,21 @@ export function reduceSubagentRuns(
   const current = idx >= 0 ? prev[idx] : undefined;
   if (!current && ev.kind !== "start" && ev.kind !== "end") return prev;
 
-  const base: SubagentRunInfo =
-    current ?? {
-      runId: ev.runId,
-      parentSession: ev.parentSession,
-      sessionName: ev.sessionName,
-      task: ev.task,
-      skillName: ev.skillName,
-      model: ev.model,
-      status: ev.kind === "end" ? (ev.error ? "failed" : "done") : "running",
-      phase: "exploring",
-      iter: 0,
-      elapsedMs: 0,
-      outputChars: 0,
-      reasoningChars: 0,
-      toolReadChars: 0,
-    };
+  const base: SubagentRunInfo = current ?? {
+    runId: ev.runId,
+    parentSession: ev.parentSession,
+    sessionName: ev.sessionName,
+    task: ev.task,
+    skillName: ev.skillName,
+    model: ev.model,
+    status: ev.kind === "end" ? (ev.error ? "failed" : "done") : "running",
+    phase: "exploring",
+    iter: 0,
+    elapsedMs: 0,
+    outputChars: 0,
+    reasoningChars: 0,
+    toolReadChars: 0,
+  };
 
   const next: SubagentRunInfo = {
     ...base,
@@ -865,6 +1019,23 @@ export function reduceSubagentRuns(
 function applyIncomingRaw(state: State, ev: IncomingEvent): State {
   switch (ev.type) {
     case "user.message": {
+      if (ev.clientId) {
+        const existingIndex = state.messages.findIndex(
+          (m) => m.kind === "user" && m.clientId === ev.clientId,
+        );
+        if (existingIndex >= 0) {
+          const messages = [...state.messages];
+          const existing = messages[existingIndex]!;
+          if (existing.kind === "user") {
+            messages[existingIndex] = {
+              ...existing,
+              text: ev.text,
+              turn: ev.turn > 0 ? ev.turn : existing.turn,
+            };
+          }
+          return { ...state, busy: true, messages };
+        }
+      }
       return {
         ...state,
         busy: true,
@@ -873,7 +1044,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           {
             kind: "user",
             text: ev.text,
-            clientId: `remote-${ev.id}`,
+            clientId: ev.clientId ?? `remote-${ev.id}`,
             turn: ev.turn > 0 ? ev.turn : nextMessageTurn(state.messages),
           },
         ],
@@ -940,12 +1111,19 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         ],
       };
     case "$plan_required": {
-      const steps = Array.isArray(ev.steps) ? (ev.steps as PlanStep[]) : undefined;
+      const steps = Array.isArray(ev.steps)
+        ? (ev.steps as PlanStep[])
+        : undefined;
       return {
         ...state,
         pendingPlans: [
           ...state.pendingPlans,
-          { id: ev.id, plan: ev.plan, summary: ev.summary, ...(steps ? { steps } : {}) },
+          {
+            id: ev.id,
+            plan: ev.plan,
+            summary: ev.summary,
+            ...(steps ? { steps } : {}),
+          },
         ],
       };
     }
@@ -987,7 +1165,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         activePlan: {
           ...state.activePlan,
           completedStepIds: [...stepIds],
-          stepResults: { ...state.activePlan.stepResults, [ev.stepId]: ev.result },
+          stepResults: {
+            ...state.activePlan.stepResults,
+            [ev.stepId]: ev.result,
+          },
         },
       };
     }
@@ -1026,12 +1207,19 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "$subagent_event":
       return {
         ...state,
-        subagents: reduceSubagentRuns(state.subagents, ev, state.currentSession),
+        subagents: reduceSubagentRuns(
+          state.subagents,
+          ev,
+          state.currentSession,
+        ),
       };
     case "$skills":
       return { ...state, skills: ev.items, skillRoots: ev.roots ?? [] };
     case "$ctx_breakdown": {
-      const next: UsageStats = { ...state.usage, reservedTokens: ev.reservedTokens };
+      const next: UsageStats = {
+        ...state.usage,
+        reservedTokens: ev.reservedTokens,
+      };
       if (typeof ev.logTokens === "number") {
         next.liveLogTokens = ev.logTokens;
       }
@@ -1042,7 +1230,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         ...state,
         memory: ev.entries,
         memoryDetail:
-          state.memoryDetail && ev.entries.some((entry) => entry.path === state.memoryDetail?.path)
+          state.memoryDetail &&
+          ev.entries.some((entry) => entry.path === state.memoryDetail?.path)
             ? state.memoryDetail
             : null,
       };
@@ -1108,7 +1297,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           webSearchEndpoint: ev.webSearchEndpoint,
           webSearchApiKeys: ev.webSearchApiKeys,
           subagentModels: ev.subagentModels,
+          contextTokens: ev.contextTokens,
           showSystemEvents: ev.showSystemEvents,
+          processCardsDefaultOpen: ev.processCardsDefaultOpen,
+          memoryConfirmWrites: ev.memoryConfirmWrites,
           promptHistory: ev.promptHistory,
           version: ev.version,
         },
@@ -1118,7 +1310,12 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       const sessionName = ev.name;
       const loaded: ChatMessage[] = ev.messages.map((m, i) => {
         if (m.kind === "user") {
-          return { kind: "user", text: m.text, clientId: `c-loaded-${i}`, turn: i + 1 };
+          return {
+            kind: "user",
+            text: m.text,
+            clientId: `c-loaded-${i}`,
+            turn: i + 1,
+          };
         }
         const segments: AssistantSegment[] = m.segments.map((s) => {
           if (s.kind === "tool") {
@@ -1144,7 +1341,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           if (s.kind !== "tool") continue;
           // For replayed sessions we don't have tool.result ok-status here, but
           // segments only survive into history if the call completed. Trust it.
-          sessionFiles = mergeSessionFiles(sessionFiles, extractToolFiles(s.name, s.args));
+          sessionFiles = mergeSessionFiles(
+            sessionFiles,
+            extractToolFiles(s.name, s.args),
+          );
         }
       }
       return {
@@ -1162,7 +1362,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         usage: {
           ...zeroUsage(),
           totalCostUsd: ev.carryover.totalCostUsd,
-          totalPromptTokens: ev.carryover.cacheHitTokens + ev.carryover.cacheMissTokens,
+          totalPromptTokens:
+            ev.carryover.cacheHitTokens + ev.carryover.cacheMissTokens,
           totalCompletionTokens: ev.carryover.totalCompletionTokens ?? 0,
           cacheHitTokens: ev.carryover.cacheHitTokens,
           cacheMissTokens: ev.carryover.cacheMissTokens,
@@ -1171,6 +1372,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         subagents: [],
         activeSkill: null,
         queuedSends: [],
+        sideChats: [],
         retryNonce: 0,
       };
     }
@@ -1178,7 +1380,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       // The sidecar successfully ran loadSessionMessages but the jsonl is
       // empty / all-malformed. Without this, the click looks like a no-op
       // because the chat just re-renders empty. Issue #1179.
-      const sizeNote = ev.sizeBytes === 0 ? "0 bytes" : `${ev.sizeBytes} bytes, no valid entries`;
+      const sizeNote =
+        ev.sizeBytes === 0
+          ? "0 bytes"
+          : `${ev.sizeBytes} bytes, no valid entries`;
       return {
         ...state,
         messages: [
@@ -1215,12 +1420,19 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         activeSkill: null,
         messages: [
           ...settled,
-          { kind: "error", message: ev.message, id: nextErrorId(), recoverable },
+          {
+            kind: "error",
+            message: ev.message,
+            id: nextErrorId(),
+            recoverable,
+          },
         ],
       };
     }
     case "model.turn.started":
-      if (state.messages.some((m) => m.kind === "assistant" && m.turn === ev.turn)) {
+      if (
+        state.messages.some((m) => m.kind === "assistant" && m.turn === ev.turn)
+      ) {
         return { ...state, model: ev.model };
       }
       return {
@@ -1237,8 +1449,16 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         const m = state.messages[i]!;
         if (m.kind !== "assistant" || m.turn !== ev.turn) continue;
         let updated = m;
-        if (ev.channel === "content") updated = { ...m, segments: appendTextSegment(m.segments, "text", ev.text) };
-        else if (ev.channel === "reasoning") updated = { ...m, segments: appendTextSegment(m.segments, "reasoning", ev.text) };
+        if (ev.channel === "content")
+          updated = {
+            ...m,
+            segments: appendTextSegment(m.segments, "text", ev.text),
+          };
+        else if (ev.channel === "reasoning")
+          updated = {
+            ...m,
+            segments: appendTextSegment(m.segments, "reasoning", ev.text),
+          };
         const next = [...state.messages];
         next[i] = updated;
         return { ...state, messages: next };
@@ -1251,12 +1471,14 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         u?.prompt_tokens ??
         (u?.prompt_cache_hit_tokens ?? 0) + (u?.prompt_cache_miss_tokens ?? 0);
       const callHit = u?.prompt_cache_hit_tokens ?? 0;
-      const callMiss = u?.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - callHit);
+      const callMiss =
+        u?.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - callHit);
       const hasCall = promptTokens > 0 || callHit > 0 || callMiss > 0;
       const usage: UsageStats = {
         totalCostUsd: state.usage.totalCostUsd + (ev.costUsd ?? 0),
         totalPromptTokens: state.usage.totalPromptTokens + promptTokens,
-        totalCompletionTokens: state.usage.totalCompletionTokens + (u?.completion_tokens ?? 0),
+        totalCompletionTokens:
+          state.usage.totalCompletionTokens + (u?.completion_tokens ?? 0),
         cacheHitTokens: state.usage.cacheHitTokens + callHit,
         cacheMissTokens: state.usage.cacheMissTokens + callMiss,
         lastCallCacheHit: hasCall ? callHit : state.usage.lastCallCacheHit,
@@ -1283,29 +1505,63 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       for (let i = state.messages.length - 1; i >= 0; i--) {
         const m = state.messages[i]!;
         if (m.kind !== "assistant" || m.turn !== ev.turn) continue;
-        if (m.segments.some((s) => s.kind === "tool" && s.callId === ev.callId)) return state;
+        if (m.segments.some((s) => s.kind === "tool" && s.callId === ev.callId))
+          return state;
         const next = [...state.messages];
-        next[i] = { ...m, segments: [...m.segments, { kind: "tool" as const, callId: ev.callId, name: ev.name, args: "", startedAt: Date.now() }] };
+        next[i] = {
+          ...m,
+          segments: [
+            ...m.segments,
+            {
+              kind: "tool" as const,
+              callId: ev.callId,
+              name: ev.name,
+              args: "",
+              startedAt: Date.now(),
+            },
+          ],
+        };
         return { ...state, messages: next };
       }
       return state;
     }
     case "tool.intent": {
       const adds = extractToolFiles(ev.name, ev.args);
-      let nextState = { ...state, sessionFiles: mergeSessionFiles(state.sessionFiles, adds) };
+      let nextState = {
+        ...state,
+        sessionFiles: mergeSessionFiles(state.sessionFiles, adds),
+      };
       for (let i = state.messages.length - 1; i >= 0; i--) {
         const m = state.messages[i]!;
         if (m.kind !== "assistant" || m.turn !== ev.turn) continue;
-        const idx = m.segments.findIndex((s) => s.kind === "tool" && s.callId === ev.callId);
+        const idx = m.segments.findIndex(
+          (s) => s.kind === "tool" && s.callId === ev.callId,
+        );
         if (idx >= 0) {
           const segs = [...m.segments];
-          if (segs[idx]?.kind === "tool") segs[idx] = { ...(segs[idx] as AssistantSegment & { kind: "tool" }), args: ev.args };
+          if (segs[idx]?.kind === "tool")
+            segs[idx] = {
+              ...(segs[idx] as AssistantSegment & { kind: "tool" }),
+              args: ev.args,
+            };
           const msgs = [...nextState.messages];
           msgs[i] = { ...m, segments: segs };
           nextState = { ...nextState, messages: msgs };
         } else {
           const msgs = [...nextState.messages];
-          msgs[i] = { ...m, segments: [...m.segments, { kind: "tool" as const, callId: ev.callId, name: ev.name, args: ev.args, startedAt: Date.now() }] };
+          msgs[i] = {
+            ...m,
+            segments: [
+              ...m.segments,
+              {
+                kind: "tool" as const,
+                callId: ev.callId,
+                name: ev.name,
+                args: ev.args,
+                startedAt: Date.now(),
+              },
+            ],
+          };
           nextState = { ...nextState, messages: msgs };
         }
         break;
@@ -1320,7 +1576,12 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         const segs = m.segments.map((s) => {
           if (s.kind === "tool" && s.callId === ev.callId) {
             mutated = true;
-            return { ...s, result: ev.output, ok: ev.ok, durationMs: Date.now() - s.startedAt };
+            return {
+              ...s,
+              result: ev.output,
+              ok: ev.ok,
+              durationMs: Date.now() - s.startedAt,
+            };
           }
           return s;
         });
@@ -1334,6 +1595,21 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "$retry_result":
       return { ...state, retryText: ev.text, retryNonce: state.retryNonce + 1 };
     case "$btw_result":
+      if (ev.clientId) {
+        const idx = state.sideChats.findIndex(
+          (item) => item.id === ev.clientId,
+        );
+        if (idx >= 0) {
+          const sideChats = [...state.sideChats];
+          sideChats[idx] = {
+            ...sideChats[idx],
+            answer: ev.answer,
+            status: "done",
+          };
+          return { ...state, sideChats };
+        }
+        return state;
+      }
       return {
         ...state,
         busy: false,
@@ -1364,7 +1640,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
   }
 }
 
-function formatConversationMarkdown(messages: ChatMessage[], userLabel: string): string {
+function formatConversationMarkdown(
+  messages: ChatMessage[],
+  userLabel: string,
+): string {
   return messages
     .map((m) => {
       if (m.kind === "user") return `### ${userLabel}\n\n${m.text}`;
@@ -1393,7 +1672,12 @@ function formatConversationMarkdown(messages: ChatMessage[], userLabel: string):
 }
 
 function sanitizeFilename(name: string): string {
-  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/^\.+/, "").slice(0, 200) || "session";
+  return (
+    name
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+      .replace(/^\.+/, "")
+      .slice(0, 200) || "session"
+  );
 }
 
 function defaultExportFilename(session: string): string {
@@ -1502,6 +1786,7 @@ function TabRuntime({
     jobs: [],
     activeSkill: null,
     queuedSends: [],
+    sideChats: [],
     retryNonce: 0,
   });
   useLang();
@@ -1513,23 +1798,37 @@ function TabRuntime({
     loading: boolean;
     error: string | null;
   }>({ target: null, preview: null, loading: false, error: null });
-  const [contextPanelMode, setContextPanelMode] = useState<ContextPanelMode>("info");
-  const [toast, setToast] = useState<{ msg: string; yolo?: boolean } | null>(null);
+  const [contextPanelMode, setContextPanelMode] =
+    useState<ContextPanelMode>("home");
+  const [browserRequest, setBrowserRequest] =
+    useState<BrowserOpenRequest | null>(null);
+  const [contextInfoOpen, setContextInfoOpen] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; yolo?: boolean } | null>(
+    null,
+  );
   const [splashOn, setSplashOn] = useState<boolean>(() => shouldShowSplash());
   const [wdOpen, setWdOpen] = useState(false);
   const [wdAnchor, setWdAnchor] = useState<
     { top?: number; bottom?: number; left: number } | undefined
   >(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const browserRequestIdRef = useRef(0);
   const threadRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const virtuosoScrollerRef = useRef<HTMLElement | null>(null);
-  const [virtuosoScroller, setVirtuosoScroller] = useState<HTMLElement | null>(null);
-  const setTranscriptScroller = useCallback((node: HTMLElement | Window | null) => {
-    const element = node instanceof HTMLElement ? node : null;
-    virtuosoScrollerRef.current = element;
-    setVirtuosoScroller((current) => (current === element ? current : element));
-  }, []);
+  const [virtuosoScroller, setVirtuosoScroller] = useState<HTMLElement | null>(
+    null,
+  );
+  const setTranscriptScroller = useCallback(
+    (node: HTMLElement | Window | null) => {
+      const element = node instanceof HTMLElement ? node : null;
+      virtuosoScrollerRef.current = element;
+      setVirtuosoScroller((current) =>
+        current === element ? current : element,
+      );
+    },
+    [],
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPageId>("general");
   const [settingsCardOpen, setSettingsCardOpen] = useState(false);
@@ -1547,15 +1846,20 @@ function TabRuntime({
   const busyStartedAtRef = useRef<number | null>(null);
   const abortDraftRef = useRef<string | null>(null);
   const clearAbortDraft = useCallback(() => {
-    abortDraftRef.current = nextAbortDraftCandidate(abortDraftRef.current, { type: "clear" });
-  }, []);
-  const recordAbortDraft = useCallback((source: AbortDraftSource, text: string) => {
     abortDraftRef.current = nextAbortDraftCandidate(abortDraftRef.current, {
-      type: "record",
-      source,
-      text,
+      type: "clear",
     });
   }, []);
+  const recordAbortDraft = useCallback(
+    (source: AbortDraftSource, text: string) => {
+      abortDraftRef.current = nextAbortDraftCandidate(abortDraftRef.current, {
+        type: "record",
+        source,
+        text,
+      });
+    },
+    [],
+  );
   const openSettingsAt = useCallback((page: SettingsPageId = "general") => {
     setSettingsPage(page);
     setSettingsCardOpen(false);
@@ -1579,11 +1883,13 @@ function TabRuntime({
   );
 
   const queryMentions = useCallback(
-    (query: string, nonce: number) => sendRpc({ cmd: "mention_query", query, nonce }),
+    (query: string, nonce: number) =>
+      sendRpc({ cmd: "mention_query", query, nonce }),
     [sendRpc],
   );
   const previewMention = useCallback(
-    (path: string, nonce: number) => sendRpc({ cmd: "mention_preview", path, nonce }),
+    (path: string, nonce: number) =>
+      sendRpc({ cmd: "mention_preview", path, nonce }),
     [sendRpc],
   );
   const markMentionPicked = useCallback(
@@ -1625,14 +1931,54 @@ function TabRuntime({
     },
     [ctxCollapsed, onToggleCtx, state.settings?.workspaceDir],
   );
+  const openBrowserUrl = useCallback(
+    (url: string) => {
+      if (ctxCollapsed) onToggleCtx();
+      setContextInfoOpen(false);
+      setContextPanelMode("browser");
+      browserRequestIdRef.current += 1;
+      setBrowserRequest({ id: browserRequestIdRef.current, url });
+    },
+    [ctxCollapsed, onToggleCtx],
+  );
+  const openHtmlFileInBrowser = useCallback(
+    (target: FilePreviewTarget) => {
+      const absPath = resolveWorkspacePath(
+        target.path,
+        state.settings?.workspaceDir,
+      );
+      openBrowserUrl(pathToFileUrl(absPath));
+    },
+    [openBrowserUrl, state.settings?.workspaceDir],
+  );
   useEffect(() => {
-    setFilePreview({ target: null, preview: null, loading: false, error: null });
-    setContextPanelMode("info");
+    setFilePreview({
+      target: null,
+      preview: null,
+      loading: false,
+      error: null,
+    });
+    setContextPanelMode("home");
+    setContextInfoOpen(false);
+    setBrowserRequest(null);
   }, [state.currentSession, state.settings?.workspaceDir]);
   const showContextInfo = useCallback(() => {
-    setContextPanelMode("info");
-    if (ctxCollapsed) onToggleCtx();
-  }, [ctxCollapsed, onToggleCtx]);
+    const next = nextContextInfoToggle({
+      infoOpen: contextInfoOpen,
+      sidebarCollapsed: ctxCollapsed,
+    });
+    if (next.collapseSidebar) onToggleCtx();
+    setContextInfoOpen(next.infoOpen);
+  }, [contextInfoOpen, ctxCollapsed, onToggleCtx]);
+  const toggleContextPanel = useCallback(() => {
+    const next = nextContextSidebarToggle({
+      infoOpen: contextInfoOpen,
+      sidebarCollapsed: ctxCollapsed,
+    });
+    if (next.panelMode) setContextPanelMode(next.panelMode);
+    setContextInfoOpen(next.infoOpen);
+    onToggleCtx();
+  }, [contextInfoOpen, ctxCollapsed, onToggleCtx]);
   const saveSettings = useCallback(
     (patch: SettingsPatch) => sendRpc({ cmd: "settings_save", ...patch }),
     [sendRpc],
@@ -1644,9 +1990,18 @@ function TabRuntime({
     },
     [saveSettings],
   );
-  const loadQQSettings = useCallback(() => sendRpc({ cmd: "qq_status_get" }), [sendRpc]);
-  const connectQQ = useCallback(() => sendRpc({ cmd: "qq_connect" }), [sendRpc]);
-  const disconnectQQ = useCallback(() => sendRpc({ cmd: "qq_disconnect" }), [sendRpc]);
+  const loadQQSettings = useCallback(
+    () => sendRpc({ cmd: "qq_status_get" }),
+    [sendRpc],
+  );
+  const connectQQ = useCallback(
+    () => sendRpc({ cmd: "qq_connect" }),
+    [sendRpc],
+  );
+  const disconnectQQ = useCallback(
+    () => sendRpc({ cmd: "qq_disconnect" }),
+    [sendRpc],
+  );
   const saveQQConfig = useCallback(
     (patch: { appId?: string; appSecret?: string; sandbox: boolean }) =>
       sendRpc({ cmd: "qq_config_save", ...patch }),
@@ -1672,7 +2027,10 @@ function TabRuntime({
     (name: string) => sendRpc({ cmd: "mcp_specs_disable", name }),
     [sendRpc],
   );
-  const reconnectMcpSpecs = useCallback(() => sendRpc({ cmd: "mcp_specs_reconnect" }), [sendRpc]);
+  const reconnectMcpSpecs = useCallback(
+    () => sendRpc({ cmd: "mcp_specs_reconnect" }),
+    [sendRpc],
+  );
   const addSkillPath = useCallback(
     (path: string) => sendRpc({ cmd: "skill_path_add", path }),
     [sendRpc],
@@ -1682,7 +2040,8 @@ function TabRuntime({
     [sendRpc],
   );
   const createSkill = useCallback(
-    (name: string, scope: "project" | "global") => sendRpc({ cmd: "skill_create", name, scope }),
+    (name: string, scope: "project" | "global") =>
+      sendRpc({ cmd: "skill_create", name, scope }),
     [sendRpc],
   );
   const setSkillModel = useCallback(
@@ -1724,7 +2083,9 @@ function TabRuntime({
   const applyReasoningEffort = useCallback(
     (reasoningEffort: Settings["reasoningEffort"]) => {
       applySettingsPatch({ reasoningEffort });
-      flashToast(t("app.toast.effortSwitched", { effort: reasoningEffort }));
+      if (shouldShowSettingsChangeToast("reasoningEffort")) {
+        flashToast(t("app.toast.effortSwitched", { effort: reasoningEffort }));
+      }
     },
     [applySettingsPatch, flashToast],
   );
@@ -1732,10 +2093,12 @@ function TabRuntime({
   const applyEditMode = useCallback(
     (mode: Settings["editMode"]) => {
       applySettingsPatch({ editMode: mode });
-      if (mode === "yolo") {
+      if (mode === "yolo" && shouldShowSettingsChangeToast("editMode")) {
         flashToast(t("app.yolo.toast"), { yolo: true, duration: 3000 });
-      } else {
-        flashToast(t("app.toast.modeSwitched", { mode: t(`editMode.${mode}` as any) }));
+      } else if (shouldShowSettingsChangeToast("editMode")) {
+        flashToast(
+          t("app.toast.modeSwitched", { mode: t(`editMode.${mode}` as any) }),
+        );
       }
     },
     [applySettingsPatch, flashToast],
@@ -1868,8 +2231,17 @@ function TabRuntime({
           const clientId = `skill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const trimmedArgs = args?.trim() ?? "";
           recordAbortDraft("skill_run", text);
-          dispatch({ t: "start_skill", skill: { name: skill.name, runAs: skill.runAs }, args: trimmedArgs, clientId });
-          sendRpc({ cmd: "skill_run", name: skill.name, args: trimmedArgs || undefined });
+          dispatch({
+            t: "start_skill",
+            skill: { name: skill.name, runAs: skill.runAs },
+            args: trimmedArgs,
+            clientId,
+          });
+          sendRpc({
+            cmd: "skill_run",
+            name: skill.name,
+            args: trimmedArgs || undefined,
+          });
           if (!override) setDraft("");
           return;
         }
@@ -1877,7 +2249,7 @@ function TabRuntime({
       const clientId = `c-${Date.now()}`;
       recordAbortDraft("user_input", text);
       dispatch({ t: "send_user", text, clientId });
-      sendRpc({ cmd: "user_input", text });
+      sendRpc({ cmd: "user_input", text, clientId });
       if (!override) setDraft("");
     },
     [
@@ -1933,21 +2305,54 @@ function TabRuntime({
     dispatch({ t: "shift_queued_send" });
     send(next);
   }, [state.busy, state.ready, state.queuedSends, send]);
+  const sendSideChat = useCallback(
+    (text: string) => {
+      const next = nextSideChatSend({ text, ready: state.ready });
+      if (!next) return;
+      const id = `side-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      dispatch({ t: "side_chat_sent", id, question: next.question });
+      sendRpc({ cmd: "btw", text: next.question, clientId: id });
+    },
+    [sendRpc, state.ready],
+  );
 
   useEffect(() => {
     const currentSnapshot: ApprovalSnapshot = {
-      confirms: state.pendingConfirms.map((c) => ({ id: c.id, command: c.command })),
-      pathAccess: state.pendingPathAccess.map((p) => ({ id: p.id, path: p.path, intent: p.intent })),
-      choices: state.pendingChoices.map((c) => ({ id: c.id, question: c.question })),
-      plans: state.pendingPlans.map((p) => ({ id: p.id, summary: p.summary, plan: p.plan })),
-      checkpoints: state.pendingCheckpoints.map((c) => ({ id: c.id, title: c.title, result: c.result })),
-      revisions: state.pendingRevisions.map((r) => ({ id: r.id, summary: r.summary, reason: r.reason })),
+      confirms: state.pendingConfirms.map((c) => ({
+        id: c.id,
+        command: c.command,
+      })),
+      pathAccess: state.pendingPathAccess.map((p) => ({
+        id: p.id,
+        path: p.path,
+        intent: p.intent,
+      })),
+      choices: state.pendingChoices.map((c) => ({
+        id: c.id,
+        question: c.question,
+      })),
+      plans: state.pendingPlans.map((p) => ({
+        id: p.id,
+        summary: p.summary,
+        plan: p.plan,
+      })),
+      checkpoints: state.pendingCheckpoints.map((c) => ({
+        id: c.id,
+        title: c.title,
+        result: c.result,
+      })),
+      revisions: state.pendingRevisions.map((r) => ({
+        id: r.id,
+        summary: r.summary,
+        reason: r.reason,
+      })),
     };
     const previousSnapshot = previousApprovalSnapshotRef.current;
     const wasBusy = wasBusyRef.current;
-    const busyDurationMs = wasBusy && !state.busy && busyStartedAtRef.current
-      ? Date.now() - busyStartedAtRef.current
-      : 0;
+    const busyDurationMs =
+      wasBusy && !state.busy && busyStartedAtRef.current
+        ? Date.now() - busyStartedAtRef.current
+        : 0;
 
     if (state.busy && busyStartedAtRef.current === null) {
       busyStartedAtRef.current = Date.now();
@@ -2014,7 +2419,8 @@ function TabRuntime({
     [resolveConfirm],
   );
   const onAlwaysAllowConfirm = useCallback(
-    (id: number, prefix: string) => resolveConfirm(id, { type: "always_allow", prefix }),
+    (id: number, prefix: string) =>
+      resolveConfirm(id, { type: "always_allow", prefix }),
     [resolveConfirm],
   );
   const resolvePathAccess = useCallback(
@@ -2063,7 +2469,7 @@ function TabRuntime({
     followFrameIdsRef.current = [];
   }, []);
   const requestTranscriptFollow = useCallback(
-    (smooth = false, followUpFrames = 2) => {
+    (smooth = false, followUpFrames = 8) => {
       if (!transcriptFollowRef.current) return false;
       const didScroll = scrollVirtuosoToBottom(
         virtuosoRef,
@@ -2087,7 +2493,10 @@ function TabRuntime({
     },
     [cancelScheduledTranscriptFollow, messageItems.length],
   );
-  useEffect(() => cancelScheduledTranscriptFollow, [cancelScheduledTranscriptFollow]);
+  useEffect(
+    () => cancelScheduledTranscriptFollow,
+    [cancelScheduledTranscriptFollow],
+  );
   useEffect(() => {
     transcriptFollowRef.current = true;
     setShowJumpButton(false);
@@ -2166,7 +2575,9 @@ function TabRuntime({
   useEffect(() => {
     if (wasTranscriptBusyRef.current !== state.busy) {
       transcriptFollowRef.current = true;
-      const id = window.requestAnimationFrame(() => requestTranscriptFollow(true, 3));
+      const id = window.requestAnimationFrame(() =>
+        requestTranscriptFollow(true, 8),
+      );
       wasTranscriptBusyRef.current = state.busy;
       return () => window.cancelAnimationFrame(id);
     }
@@ -2176,7 +2587,7 @@ function TabRuntime({
   useEffect(() => {
     if (!state.busy || messageItems.length === 0) return;
     const id = window.requestAnimationFrame(() => {
-      requestTranscriptFollow(false, 2);
+      requestTranscriptFollow(false, 8);
     });
     return () => window.cancelAnimationFrame(id);
   }, [
@@ -2188,6 +2599,27 @@ function TabRuntime({
     state.pendingPathAccess.length,
     state.pendingPlans.length,
     state.pendingRevisions.length,
+    requestTranscriptFollow,
+  ]);
+
+  useEffect(() => {
+    if (!transcriptFollowRef.current || messageItems.length === 0) return;
+    const id = window.requestAnimationFrame(() =>
+      requestTranscriptFollow(false, 6),
+    );
+    return () => window.cancelAnimationFrame(id);
+  }, [
+    ctxCollapsed,
+    ctxWidth,
+    sideCollapsed,
+    sideWidth,
+    state.pendingCheckpoints.length,
+    state.pendingChoices.length,
+    state.pendingConfirms.length,
+    state.pendingPathAccess.length,
+    state.pendingPlans.length,
+    state.pendingRevisions.length,
+    messageItems.length,
     requestTranscriptFollow,
   ]);
 
@@ -2262,9 +2694,11 @@ function TabRuntime({
         setJobsOpen((v) => !v);
       } else if (e.key === "Escape" && state.busy) {
         const target = e.target as HTMLElement | null;
-        if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
+        if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA")
+          return;
         // A modal is open — let its own Esc handler close it (#1670).
-        if (settingsOpen || settingsCardOpen || aboutOpen || jobsOpen || wdOpen) return;
+        if (settingsOpen || settingsCardOpen || aboutOpen || jobsOpen || wdOpen)
+          return;
         e.preventDefault();
         abort();
       } else if (e.key === "Enter" && !mod && !e.shiftKey && !e.altKey) {
@@ -2275,11 +2709,14 @@ function TabRuntime({
         const target = e.target as HTMLElement | null;
         if (
           target?.isContentEditable ||
-          target?.closest('input, textarea, button, select, a, [role="button"], [role="link"]')
+          target?.closest(
+            'input, textarea, button, select, a, [role="button"], [role="link"]',
+          )
         ) {
           return;
         }
-        if (settingsOpen || settingsCardOpen || aboutOpen || jobsOpen || wdOpen) return;
+        if (settingsOpen || settingsCardOpen || aboutOpen || jobsOpen || wdOpen)
+          return;
         // Enter grants the pending authorization prompt (run once), matching the
         // TUI where Enter confirms the highlighted choice (#1962).
         const confirm = state.pendingConfirms.at(-1);
@@ -2327,7 +2764,9 @@ function TabRuntime({
     about: () => setAboutOpen(true),
     abort,
     copyLast: () => {
-      const last = [...state.messages].reverse().find((m) => m.kind === "assistant");
+      const last = [...state.messages]
+        .reverse()
+        .find((m) => m.kind === "assistant");
       if (!last || last.kind !== "assistant") return;
       const text = last.segments
         .filter((s): s is { kind: "text"; text: string } => s.kind === "text")
@@ -2358,7 +2797,9 @@ function TabRuntime({
       cmd,
       desc:
         action.type === "editMode"
-          ? t("app.cmd.setMode", { mode: t(`editMode.${action.editMode}` as any) })
+          ? t("app.cmd.setMode", {
+              mode: t(`editMode.${action.editMode}` as any),
+            })
           : t("app.cmd.setEffort", { effort: action.reasoningEffort }),
       run: () => applySlashSettingsCommand(action),
     }),
@@ -2374,16 +2815,24 @@ function TabRuntime({
       },
     },
     { cmd: "/new", desc: t("app.cmd.newSession"), run: () => newChat() },
-    { cmd: "/clear", desc: t("app.cmd.clearChat"), run: () => clearConversation() },
+    {
+      cmd: "/clear",
+      desc: t("app.cmd.clearChat"),
+      run: () => clearConversation(),
+    },
     { cmd: "/abort", desc: t("app.cmd.abort"), run: () => abort() },
     {
       cmd: "/copy",
       desc: t("app.cmd.copyLast"),
       run: () => {
-        const last = [...state.messages].reverse().find((m) => m.kind === "assistant");
+        const last = [...state.messages]
+          .reverse()
+          .find((m) => m.kind === "assistant");
         if (last?.kind === "assistant") {
           const text = last.segments
-            .filter((s): s is { kind: "text"; text: string } => s.kind === "text")
+            .filter(
+              (s): s is { kind: "text"; text: string } => s.kind === "text",
+            )
             .map((s) => s.text)
             .join("\n\n");
           if (text) {
@@ -2393,14 +2842,26 @@ function TabRuntime({
         }
       },
     },
-    { cmd: "/model", desc: t("app.cmd.switchModel"), run: () => openSettingsAt("models") },
+    {
+      cmd: "/model",
+      desc: t("app.cmd.switchModel"),
+      run: () => openSettingsAt("models"),
+    },
     {
       cmd: "/search-engine",
       desc: t("app.cmd.searchEngine"),
       run: () => openSettingsAt("mcp"),
     },
-    { cmd: "/skill", desc: t("app.cmd.skill"), run: () => openSettingsAt("skills") },
-    { cmd: "/skills", desc: t("app.cmd.skill"), run: () => openSettingsAt("skills") },
+    {
+      cmd: "/skill",
+      desc: t("app.cmd.skill"),
+      run: () => openSettingsAt("skills"),
+    },
+    {
+      cmd: "/skills",
+      desc: t("app.cmd.skill"),
+      run: () => openSettingsAt("skills"),
+    },
     ...slashSettingCommands,
     { cmd: "/theme", desc: t("app.cmd.toggleTheme"), run: onToggleTheme },
     {
@@ -2413,10 +2874,13 @@ function TabRuntime({
       desc: t("app.cmd.toggleLang"),
       run: () => {
         const langs = getSupportedLangs();
-        const next = langs[(langs.indexOf(getLang()) + 1) % langs.length] ?? "en";
+        const next =
+          langs[(langs.indexOf(getLang()) + 1) % langs.length] ?? "en";
         setLang(next);
         const langName = getLangLabel(next);
-        flashToast(t("app.toast.langSwitched", { lang: langName }));
+        if (shouldShowSettingsChangeToast("language")) {
+          flashToast(t("app.toast.langSwitched", { lang: langName }));
+        }
       },
     },
     {
@@ -2472,10 +2936,13 @@ function TabRuntime({
     const firstUser = state.messages.find((m) => m.kind === "user");
     if (firstUser && firstUser.kind === "user") {
       const cleaned = firstUser.text.replace(/\s+/g, " ").trim();
-      if (cleaned) return cleaned.length > 60 ? `${cleaned.slice(0, 60)}…` : cleaned;
+      if (cleaned)
+        return cleaned.length > 60 ? `${cleaned.slice(0, 60)}…` : cleaned;
     }
     if (state.currentSession) {
-      const m = state.currentSession.match(/^desktop-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/);
+      const m = state.currentSession.match(
+        /^desktop-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/,
+      );
       if (m)
         return t("app.session.format", {
           month: m[2],
@@ -2529,6 +2996,8 @@ function TabRuntime({
         dir: state.settings?.workspaceDir,
         editor: state.settings?.editor,
         onPreviewFile: previewFile,
+        onOpenBrowserUrl: openBrowserUrl,
+        onOpenHtmlFile: openHtmlFileInBrowser,
       }}
     >
       <div
@@ -2549,10 +3018,10 @@ function TabRuntime({
           model={state.settings?.model}
           sideOn={!sideCollapsed}
           ctxOn={!ctxCollapsed}
-          contextInfoOn={!ctxCollapsed && contextPanelMode === "info"}
+          contextInfoOn={contextInfoOpen}
           bottomBarOn={settingsCardOpen}
           onToggleSide={onToggleSide}
-          onToggleCtx={onToggleCtx}
+          onToggleCtx={toggleContextPanel}
           onShowContextInfo={showContextInfo}
           onToggleBottomBar={() => setSettingsCardOpen((open) => !open)}
           onOpenCommands={() => palette.setOpen(true)}
@@ -2592,13 +3061,20 @@ function TabRuntime({
             sendRpc({ cmd: "session_load", name });
           }}
           onDeleteSession={(name) => sendRpc({ cmd: "session_delete", name })}
-          onRenameSession={(name, title) => sendRpc({ cmd: "session_rename", name, title })}
+          onRenameSession={(name, title) =>
+            sendRpc({ cmd: "session_rename", name, title })
+          }
           onRefreshImportSources={() => sendRpc({ cmd: "session_import_scan" })}
           onImportDetectedSessions={(sources: ExternalSessionSource[]) =>
             sendRpc({ cmd: "session_import_bulk", sources })
           }
           onImportSession={({ source, path, name }) =>
-            sendRpc({ cmd: "session_import", source, path, ...(name ? { name } : {}) })
+            sendRpc({
+              cmd: "session_import",
+              source,
+              path,
+              ...(name ? { name } : {}),
+            })
           }
           onOpenSettings={() => setSettingsCardOpen((open) => !open)}
           onOpenCommands={() => palette.setOpen(true)}
@@ -2639,8 +3115,13 @@ function TabRuntime({
                         const trimmed = text.trim();
                         if (trimmed.startsWith("/")) {
                           const cmd = trimmed.split(/\s+/)[0] ?? "";
-                          const match = slashCommands.find((s) => s.cmd === cmd);
-                          if (match) { match.run(); return; }
+                          const match = slashCommands.find(
+                            (s) => s.cmd === cmd,
+                          );
+                          if (match) {
+                            match.run();
+                            return;
+                          }
                         }
                         send(text);
                       }}
@@ -2654,28 +3135,44 @@ function TabRuntime({
                     scrollerRef={setTranscriptScroller}
                     style={{ height: "100%" }}
                     totalCount={messageItems.length}
+                    computeItemKey={(index) =>
+                      chatMessageKey(messageItems[index], index)
+                    }
                     atBottomThreshold={TRANSCRIPT_BOTTOM_THRESHOLD}
                     followOutput={"auto"}
                     atBottomStateChange={handleTranscriptBottomState}
                     totalListHeightChanged={() => {
-                      const didFollow = followVirtuosoHeightChange(
-                        virtuosoRef,
-                        messageItems.length,
-                        transcriptFollowRef.current,
-                      );
+                      const didFollow = transcriptFollowRef.current
+                        ? requestTranscriptFollow(false, 8)
+                        : followVirtuosoHeightChange(
+                            virtuosoRef,
+                            messageItems.length,
+                            transcriptFollowRef.current,
+                          );
                       if (didFollow) setShowJumpButton(false);
                     }}
                     components={{
-                      Header: state.activePlan ? () => (
-                        <div className="thread-inner">
-                          <PlanBanner
-                            plan={state.activePlan!}
-                            onDismiss={state.busy ? undefined : () => dispatch({ t: "dismiss_plan" })}
-                          />
-                          <ActivePlanTaskCard plan={state.activePlan!} />
-                        </div>
-                      ) : undefined,
-                      Footer: () => <div className="thread-bottom-spacer" aria-hidden="true" />,
+                      Header: state.activePlan
+                        ? () => (
+                            <div className="thread-inner">
+                              <PlanBanner
+                                plan={state.activePlan!}
+                                onDismiss={
+                                  state.busy
+                                    ? undefined
+                                    : () => dispatch({ t: "dismiss_plan" })
+                                }
+                              />
+                              <ActivePlanTaskCard plan={state.activePlan!} />
+                            </div>
+                          )
+                        : undefined,
+                      Footer: () => (
+                        <div
+                          className="thread-bottom-spacer"
+                          aria-hidden="true"
+                        />
+                      ),
                     }}
                     itemContent={(index) => {
                       const m = state.messages[index]!;
@@ -2683,12 +3180,18 @@ function TabRuntime({
                         return (
                           <div className="thread-inner" data-turn={m.turn}>
                             <TurnDivider label={`turn ${m.turn}`} />
-                            <UserMsg text={m.text} skill={m.skill} onEdit={onEditUserMsg} />
+                            <UserMsg
+                              text={m.text}
+                              skill={m.skill}
+                              onEdit={onEditUserMsg}
+                            />
                           </div>
                         );
                       }
                       if (m.kind === "assistant") {
-                        const stats = !m.pending ? countFileStats(m.segments) : null;
+                        const stats = !m.pending
+                          ? countFileStats(m.segments)
+                          : null;
                         return (
                           <div className="thread-inner">
                             <AssistantMsg
@@ -2699,6 +3202,9 @@ function TabRuntime({
                               onRejectConfirm={onRejectConfirm}
                               onAlwaysAllowConfirm={onAlwaysAllowConfirm}
                               pendingConfirms={state.pendingConfirms}
+                              processCardsDefaultOpen={
+                                state.settings?.processCardsDefaultOpen ?? false
+                              }
                             />
                             {stats ? <DiffStats stats={stats} /> : null}
                           </div>
@@ -2720,15 +3226,97 @@ function TabRuntime({
                 ) : null}
               </div>
 
-              {state.pendingPlans.length > 0 || state.pendingCheckpoints.length > 0 || state.pendingRevisions.length > 0 || state.pendingConfirms.length > 0 || state.pendingPathAccess.length > 0 || state.pendingChoices.length > 0 || !state.ready ? (
+              {state.pendingPlans.length > 0 ||
+              state.pendingCheckpoints.length > 0 ||
+              state.pendingRevisions.length > 0 ||
+              state.pendingConfirms.length > 0 ||
+              state.pendingPathAccess.length > 0 ||
+              state.pendingChoices.length > 0 ||
+              !state.ready ? (
                 <div className="pending-approvals">
-                  {state.pendingPlans.map((p) => (<PlanApprovalCard key={`pp-${p.id}`} p={p} onApprove={() => resolvePlan(p.id, { type: "approve" })} onRefine={() => resolvePlan(p.id, { type: "refine" })} onCancel={() => resolvePlan(p.id, { type: "cancel" })} />))}
-                  {state.pendingCheckpoints.map((c) => (<CheckpointApprovalCard key={`cp-${c.id}`} c={c} onContinue={() => resolveCheckpoint(c.id, { type: "continue" })} onRevise={() => resolveCheckpoint(c.id, { type: "revise" })} onStop={() => resolveCheckpoint(c.id, { type: "stop" })} />))}
-                  {state.pendingRevisions.map((r) => (<RevisionApprovalCard key={`rv-${r.id}`} r={r} onAccept={() => resolveRevision(r.id, { type: "accepted" })} onReject={() => resolveRevision(r.id, { type: "rejected" })} />))}
-                  {state.pendingConfirms.map((c) => (<ConfirmApprovalCard key={`cc-${c.id}`} prompt={c.prompt} onAllow={() => resolveConfirm(c.id, { type: "run_once" })} onAlwaysAllow={(prefix) => resolveConfirm(c.id, { type: "always_allow", prefix })} onDeny={() => resolveConfirm(c.id, { type: "deny" })} />))}
-                  {state.pendingPathAccess.map((p) => (<PathAccessApprovalCard key={`pa-${p.id}`} prompt={p.prompt} onAllow={() => resolvePathAccess(p.id, { type: "run_once" })} onAlwaysAllow={(prefix) => resolvePathAccess(p.id, { type: "always_allow", prefix })} onDeny={() => resolvePathAccess(p.id, { type: "deny" })} />))}
-                  {state.pendingChoices.map((c) => (<ChoiceApprovalCard key={`ch-${c.id}`} c={c} onPick={(optionId) => resolveChoice(c.id, { type: "pick", optionId })} onCancel={() => resolveChoice(c.id, { type: "cancel" })} />))}
-                  {!state.ready ? (<div style={{ padding: 12, color: "var(--muted)", fontFamily: "Geist Mono, monospace", fontSize: 11 }}>{t("app.connecting")}</div>) : null}
+                  {state.pendingPlans.map((p) => (
+                    <PlanApprovalCard
+                      key={`pp-${p.id}`}
+                      p={p}
+                      onApprove={() => resolvePlan(p.id, { type: "approve" })}
+                      onRefine={() => resolvePlan(p.id, { type: "refine" })}
+                      onCancel={() => resolvePlan(p.id, { type: "cancel" })}
+                    />
+                  ))}
+                  {state.pendingCheckpoints.map((c) => (
+                    <CheckpointApprovalCard
+                      key={`cp-${c.id}`}
+                      c={c}
+                      onContinue={() =>
+                        resolveCheckpoint(c.id, { type: "continue" })
+                      }
+                      onRevise={() =>
+                        resolveCheckpoint(c.id, { type: "revise" })
+                      }
+                      onStop={() => resolveCheckpoint(c.id, { type: "stop" })}
+                    />
+                  ))}
+                  {state.pendingRevisions.map((r) => (
+                    <RevisionApprovalCard
+                      key={`rv-${r.id}`}
+                      r={r}
+                      onAccept={() =>
+                        resolveRevision(r.id, { type: "accepted" })
+                      }
+                      onReject={() =>
+                        resolveRevision(r.id, { type: "rejected" })
+                      }
+                    />
+                  ))}
+                  {state.pendingConfirms.map((c) => (
+                    <ConfirmApprovalCard
+                      key={`cc-${c.id}`}
+                      prompt={c.prompt}
+                      onAllow={() => resolveConfirm(c.id, { type: "run_once" })}
+                      onAlwaysAllow={(prefix) =>
+                        resolveConfirm(c.id, { type: "always_allow", prefix })
+                      }
+                      onDeny={() => resolveConfirm(c.id, { type: "deny" })}
+                    />
+                  ))}
+                  {state.pendingPathAccess.map((p) => (
+                    <PathAccessApprovalCard
+                      key={`pa-${p.id}`}
+                      prompt={p.prompt}
+                      onAllow={() =>
+                        resolvePathAccess(p.id, { type: "run_once" })
+                      }
+                      onAlwaysAllow={(prefix) =>
+                        resolvePathAccess(p.id, {
+                          type: "always_allow",
+                          prefix,
+                        })
+                      }
+                      onDeny={() => resolvePathAccess(p.id, { type: "deny" })}
+                    />
+                  ))}
+                  {state.pendingChoices.map((c) => (
+                    <ChoiceApprovalCard
+                      key={`ch-${c.id}`}
+                      c={c}
+                      onPick={(optionId) =>
+                        resolveChoice(c.id, { type: "pick", optionId })
+                      }
+                      onCancel={() => resolveChoice(c.id, { type: "cancel" })}
+                    />
+                  ))}
+                  {!state.ready ? (
+                    <div
+                      style={{
+                        padding: 12,
+                        color: "var(--muted)",
+                        fontFamily: "Geist Mono, monospace",
+                        fontSize: 11,
+                      }}
+                    >
+                      {t("app.connecting")}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -2752,7 +3340,9 @@ function TabRuntime({
                 reasoningEffort={state.settings?.reasoningEffort ?? "high"}
                 onModelChange={(model) => {
                   applySettingsPatch({ model });
-                  flashToast(t("app.toast.modelSwitched", { model }));
+                  if (shouldShowSettingsChangeToast("model")) {
+                    flashToast(t("app.toast.modelSwitched", { model }));
+                  }
                 }}
                 onEffortChange={applyReasoningEffort}
                 editMode={state.settings?.editMode ?? "review"}
@@ -2768,7 +3358,9 @@ function TabRuntime({
                   dispatch({ t: "enqueue_send", text });
                   setDraft("");
                 }}
-                onDequeueSend={(index) => dispatch({ t: "dequeue_send", index })}
+                onDequeueSend={(index) =>
+                  dispatch({ t: "dequeue_send", index })
+                }
                 initialHistory={state.settings?.promptHistory}
                 onHistoryPush={(entry) => {
                   // Use saveSettings (RPC only, no local state patch) so the
@@ -2788,6 +3380,10 @@ function TabRuntime({
             className="resize-handle"
             data-side="right"
             data-dragging={undefined}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t("app.resizeContextSidebar")}
+            title={t("app.resizeContextSidebar")}
             onMouseDown={onCtxResizeDown}
           />
         ) : null}
@@ -2806,6 +3402,40 @@ function TabRuntime({
           filePreviewPath={filePreview.target?.path ?? null}
           mode={contextPanelMode}
           onModeChange={setContextPanelMode}
+          onCloseSidebar={() => {
+            if (!ctxCollapsed) onToggleCtx();
+          }}
+          onMentionQuery={queryMentions}
+          onMentionPicked={markMentionPicked}
+          mentionResults={state.mentionResults}
+          sideChats={state.sideChats}
+          sideChatBusy={state.sideChats.some(
+            (entry) => entry.status === "pending",
+          )}
+          sideChatDisabled={!state.ready}
+          onSideChatSend={sendSideChat}
+          browserRequest={browserRequest}
+          visible={!ctxCollapsed}
+          onOpenSubagent={(name) => {
+            clearAbortDraft();
+            sendRpc({ cmd: "session_load", name });
+          }}
+          onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
+          onPreviewFile={previewFile}
+        />
+        <ContextInfoPopover
+          open={contextInfoOpen}
+          settings={state.settings}
+          usage={state.usage}
+          mcpSpecs={state.mcpSpecs}
+          mcpBridged={state.mcpBridged}
+          subagents={state.subagents}
+          sessionFiles={state.sessionFiles}
+          memory={state.memory}
+          memoryDetail={state.memoryDetail}
+          activePath={
+            filePreview.preview?.path ?? filePreview.target?.path ?? null
+          }
           onOpenSubagent={(name) => {
             clearAbortDraft();
             sendRpc({ cmd: "session_load", name });
@@ -2853,7 +3483,9 @@ function TabRuntime({
           }}
           onBrowse={pickWorkspace}
           onRemoveRecent={(path) => {
-            const nextRecent = (state.settings?.recentWorkspaces ?? []).filter((p) => p !== path);
+            const nextRecent = (state.settings?.recentWorkspaces ?? []).filter(
+              (p) => p !== path,
+            );
             applySettingsPatch({ recentWorkspaces: nextRecent });
           }}
         />
@@ -2892,7 +3524,9 @@ function TabRuntime({
             onDisconnectQQ={disconnectQQ}
             onSaveQQConfig={saveQQConfig}
             onOpenQQApplyLink={() =>
-              openUrl("https://q.qq.com/qqbot/openclaw/login.html").catch(() => undefined)
+              openUrl("https://q.qq.com/qqbot/openclaw/login.html").catch(
+                () => undefined,
+              )
             }
             onPickWorkspace={pickWorkspace}
             onAddMcpSpec={addMcpSpec}
@@ -2905,6 +3539,9 @@ function TabRuntime({
             onCreateSkill={createSkill}
             onSetSkillModel={setSkillModel}
             onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
+            onRefreshMemory={() => sendRpc({ cmd: "memory_refresh" })}
+            onDeleteMemory={(path) => sendRpc({ cmd: "memory_delete", path })}
+            onSaveMemory={(input) => sendRpc({ cmd: "memory_save", ...input })}
             onOpenAbout={() => {
               setSettingsOpen(false);
               setAboutOpen(true);
@@ -2944,23 +3581,63 @@ function WinMinimize() {
 function WinMaximize() {
   return (
     <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
-      <rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1" />
+      <rect
+        x="0.5"
+        y="0.5"
+        width="9"
+        height="9"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
     </svg>
   );
 }
 function WinRestore() {
   return (
     <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
-      <rect x="2.5" y="0.5" width="7" height="7" fill="none" stroke="currentColor" strokeWidth="1" />
-      <rect x="0.5" y="2.5" width="7" height="7" fill="var(--bg-2, #eee)" stroke="currentColor" strokeWidth="1" />
+      <rect
+        x="2.5"
+        y="0.5"
+        width="7"
+        height="7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <rect
+        x="0.5"
+        y="2.5"
+        width="7"
+        height="7"
+        fill="var(--bg-2, #eee)"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
     </svg>
   );
 }
 function WinClose() {
   return (
     <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
-      <line x1="0.5" y1="0.5" x2="9.5" y2="9.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-      <line x1="9.5" y1="0.5" x2="0.5" y2="9.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <line
+        x1="0.5"
+        y1="0.5"
+        x2="9.5"
+        y2="9.5"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+      <line
+        x1="9.5"
+        y1="0.5"
+        x2="0.5"
+        y2="9.5"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -3013,13 +3690,21 @@ function TitleBar({
     };
     void syncWindowState();
     let unlisten: (() => void) | undefined;
-    win.listen("tauri://resize", async () => {
-      await syncWindowState();
-    }).then((fn) => { unlisten = fn; });
+    win
+      .listen("tauri://resize", async () => {
+        await syncWindowState();
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
     let fullscreenUnlisten: (() => void) | undefined;
-    win.listen("tauri://fullscreen", async () => {
-      await syncWindowState();
-    }).then((fn) => { fullscreenUnlisten = fn; });
+    win
+      .listen("tauri://fullscreen", async () => {
+        await syncWindowState();
+      })
+      .then((fn) => {
+        fullscreenUnlisten = fn;
+      });
     return () => {
       unlisten?.();
       fullscreenUnlisten?.();
@@ -3029,7 +3714,10 @@ function TitleBar({
   useEffect(() => {
     if (!menuOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (moreWrapRef.current && !moreWrapRef.current.contains(e.target as Node))
+      if (
+        moreWrapRef.current &&
+        !moreWrapRef.current.contains(e.target as Node)
+      )
         setMenuOpen(false);
     };
     window.addEventListener("mousedown", onDown);
@@ -3113,36 +3801,86 @@ function TitleBar({
           {menuOpen ? (
             <div
               className="popup"
-              style={{ top: "calc(100% + 6px)", right: 0, left: "auto", bottom: "auto", width: 220 }}
+              style={{
+                top: "calc(100% + 6px)",
+                right: 0,
+                left: "auto",
+                bottom: "auto",
+                width: 220,
+              }}
             >
               <div className="popup-list">
-                <div className="popup-item" onClick={() => { onOpenCommands(); setMenuOpen(false); }}>
-                  <span className="ico"><I.search size={12} /></span>
-                  <div className="nm"><span>{t("app.titlebar.commandPalette")}</span></div>
+                <div
+                  className="popup-item"
+                  onClick={() => {
+                    onOpenCommands();
+                    setMenuOpen(false);
+                  }}
+                >
+                  <span className="ico">
+                    <I.search size={12} />
+                  </span>
+                  <div className="nm">
+                    <span>{t("app.titlebar.commandPalette")}</span>
+                  </div>
                 </div>
                 <div
                   className="popup-item"
-                  onClick={() => { if (hasMessages) onCopy(); setMenuOpen(false); }}
+                  onClick={() => {
+                    if (hasMessages) onCopy();
+                    setMenuOpen(false);
+                  }}
                   style={{ opacity: hasMessages ? 1 : 0.5 }}
                 >
-                  <span className="ico"><I.copy size={12} /></span>
-                  <div className="nm"><span>{t("app.titlebar.copyMd")}</span></div>
+                  <span className="ico">
+                    <I.copy size={12} />
+                  </span>
+                  <div className="nm">
+                    <span>{t("app.titlebar.copyMd")}</span>
+                  </div>
                 </div>
                 <div
                   className="popup-item"
-                  onClick={() => { if (hasMessages) onExport(); setMenuOpen(false); }}
+                  onClick={() => {
+                    if (hasMessages) onExport();
+                    setMenuOpen(false);
+                  }}
                   style={{ opacity: hasMessages ? 1 : 0.5 }}
                 >
-                  <span className="ico"><I.download size={12} /></span>
-                  <div className="nm"><span>{t("app.titlebar.exportMd")}</span></div>
+                  <span className="ico">
+                    <I.download size={12} />
+                  </span>
+                  <div className="nm">
+                    <span>{t("app.titlebar.exportMd")}</span>
+                  </div>
                 </div>
-                <div className="popup-item" onClick={() => { onClear(); setMenuOpen(false); }}>
-                  <span className="ico"><I.x size={12} /></span>
-                  <div className="nm"><span>{t("app.titlebar.clearChat")}</span></div>
+                <div
+                  className="popup-item"
+                  onClick={() => {
+                    onClear();
+                    setMenuOpen(false);
+                  }}
+                >
+                  <span className="ico">
+                    <I.x size={12} />
+                  </span>
+                  <div className="nm">
+                    <span>{t("app.titlebar.clearChat")}</span>
+                  </div>
                 </div>
-                <div className="popup-item" onClick={() => { onOpenSettings(); setMenuOpen(false); }}>
-                  <span className="ico"><I.cog size={12} /></span>
-                  <div className="nm"><span>{t("app.titlebar.settings")}</span></div>
+                <div
+                  className="popup-item"
+                  onClick={() => {
+                    onOpenSettings();
+                    setMenuOpen(false);
+                  }}
+                >
+                  <span className="ico">
+                    <I.cog size={12} />
+                  </span>
+                  <div className="nm">
+                    <span>{t("app.titlebar.settings")}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -3156,15 +3894,25 @@ function TitleBar({
               type="button"
               className="win-ctrl"
               title={t("app.titlebar.minimize")}
-              onMouseDown={(e) => { e.stopPropagation(); win.minimize(); }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                win.minimize();
+              }}
             >
               <WinMinimize />
             </button>
             <button
               type="button"
               className="win-ctrl"
-              title={isMaximized ? t("app.titlebar.restore") : t("app.titlebar.maximize")}
-              onMouseDown={(e) => { e.stopPropagation(); void toggleWindowExpanded(win, false, isMaximized); }}
+              title={
+                isMaximized
+                  ? t("app.titlebar.restore")
+                  : t("app.titlebar.maximize")
+              }
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                void toggleWindowExpanded(win, false, isMaximized);
+              }}
             >
               {isMaximized ? <WinRestore /> : <WinMaximize />}
             </button>
@@ -3172,7 +3920,10 @@ function TitleBar({
               type="button"
               className="win-ctrl close"
               title={t("app.titlebar.close")}
-              onMouseDown={(e) => { e.stopPropagation(); win.close(); }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                win.close();
+              }}
             >
               <WinClose />
             </button>
@@ -3228,7 +3979,11 @@ function TabBar({
           </div>
         );
       })}
-      <div className="tab newtab" title={t("app.tab.newTabTitle")} onClick={onNew}>
+      <div
+        className="tab newtab"
+        title={t("app.tab.newTabTitle")}
+        onClick={onNew}
+      >
         <I.plus size={12} />
         <span className="newtab-label">{t("app.tab.newTab")}</span>
       </div>
@@ -3258,7 +4013,10 @@ function MainHead({
   useEffect(() => {
     if (!exportMenuOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+      if (
+        exportMenuRef.current &&
+        !exportMenuRef.current.contains(e.target as Node)
+      ) {
         setExportMenuOpen(false);
       }
     };
@@ -3293,7 +4051,13 @@ function MainHead({
         {exportMenuOpen ? (
           <div
             className="popup"
-            style={{ top: "calc(100% + 6px)", right: 0, left: "auto", bottom: "auto", width: 230 }}
+            style={{
+              top: "calc(100% + 6px)",
+              right: 0,
+              left: "auto",
+              bottom: "auto",
+              width: 230,
+            }}
           >
             <div className="popup-list">
               <div
@@ -3303,8 +4067,12 @@ function MainHead({
                   setExportMenuOpen(false);
                 }}
               >
-                <span className="ico"><I.copy size={12} /></span>
-                <div className="nm"><span>{t("app.header.copyMd")}</span></div>
+                <span className="ico">
+                  <I.copy size={12} />
+                </span>
+                <div className="nm">
+                  <span>{t("app.header.copyMd")}</span>
+                </div>
               </div>
               <div
                 className="popup-item"
@@ -3313,8 +4081,12 @@ function MainHead({
                   setExportMenuOpen(false);
                 }}
               >
-                <span className="ico"><I.download size={12} /></span>
-                <div className="nm"><span>{t("app.header.exportMd")}</span></div>
+                <span className="ico">
+                  <I.download size={12} />
+                </span>
+                <div className="nm">
+                  <span>{t("app.header.exportMd")}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -3356,7 +4128,9 @@ function EmptyState({
     recentSuggestions.length > 0
       ? [
           ...recentSuggestions,
-          ...fallbackSuggestions.filter((item) => !recentSuggestions.includes(item)),
+          ...fallbackSuggestions.filter(
+            (item) => !recentSuggestions.includes(item),
+          ),
         ].slice(0, 4)
       : fallbackSuggestions;
   const wsLabel = workspaceDir ? displayWorkspaceBasename(workspaceDir) : null;
@@ -3390,7 +4164,7 @@ function EmptyState({
   );
 }
 
-function NeedsSetupView({
+export function NeedsSetupView({
   workspaceDir,
   onPickWorkspace,
   onSubmit,
@@ -3413,8 +4187,17 @@ function NeedsSetupView({
         gap: 18,
       }}
     >
-      <div style={{ fontSize: 18, fontWeight: 600 }}>{t("app.setup.welcome")}</div>
-      <div style={{ fontSize: 12.5, color: "var(--muted)", maxWidth: 400, textAlign: "center" }}>
+      <div style={{ fontSize: 18, fontWeight: 600 }}>
+        {t("app.setup.welcome")}
+      </div>
+      <div
+        style={{
+          fontSize: 12.5,
+          color: "var(--muted)",
+          maxWidth: 400,
+          textAlign: "center",
+        }}
+      >
         {t("app.setup.description")}
       </div>
       <div
@@ -3428,7 +4211,9 @@ function NeedsSetupView({
         <div className="setting-row" style={{ borderBottom: "none" }}>
           <div className="l">
             <div className="n">{t("app.setup.workspace")}</div>
-            <div className="h">{displayWorkspacePath(workspaceDir, t("app.setup.notSelected"))}</div>
+            <div className="h">
+              {displayWorkspacePath(workspaceDir, t("app.setup.notSelected"))}
+            </div>
           </div>
           <button type="button" className="btn" onClick={onPickWorkspace}>
             {t("app.setup.choose")}
@@ -3439,9 +4224,46 @@ function NeedsSetupView({
           type="password"
           value={key}
           onChange={(e) => setKey(e.target.value)}
-          placeholder="sk-…"
+          aria-label={t("app.setup.apiKeyLabel")}
+          placeholder={t("app.setup.apiKeyPlaceholder")}
           style={{ width: "100%" }}
         />
+        <div
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: 12,
+            background: "var(--panel)",
+            color: "var(--muted)",
+            padding: "11px 12px",
+            display: "flex",
+            gap: 10,
+            alignItems: "flex-start",
+          }}
+        >
+          <I.info size={15} style={{ marginTop: 1, flex: "0 0 auto" }} />
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div
+              style={{ fontSize: 12.5, fontWeight: 650, color: "var(--fg)" }}
+            >
+              {t("app.setup.apiKeyHintTitle")}
+            </div>
+            <div style={{ fontSize: 12, lineHeight: 1.5, marginTop: 3 }}>
+              {t("app.setup.apiKeyHintBody")}
+            </div>
+            <button
+              type="button"
+              className="btn ghost"
+              style={{ marginTop: 7, padding: "4px 0", height: "auto" }}
+              onClick={() =>
+                openUrl(DEEPSEEK_API_KEYS_URL).catch(() => undefined)
+              }
+              aria-label={t("app.setup.openApiKeysAria")}
+            >
+              <I.link size={13} />
+              {t("app.setup.openApiKeys")}
+            </button>
+          </div>
+        </div>
         <button
           type="button"
           className="btn primary"
@@ -3499,7 +4321,10 @@ function UpdateOverlay({
         </span>
         <div className="body">
           <div className="t">
-            {t("app.update.available", { current: currentVersion, latest: version })}
+            {t("app.update.available", {
+              current: currentVersion,
+              latest: version,
+            })}
           </div>
           <div className="s">{statusText}</div>
           {status === "installing" && ratio !== null ? (
@@ -3509,10 +4334,18 @@ function UpdateOverlay({
           ) : null}
         </div>
         <div className="prog">
-          <button type="button" onClick={onInstall} disabled={status === "installing"}>
+          <button
+            type="button"
+            onClick={onInstall}
+            disabled={status === "installing"}
+          >
             {t("app.update.install")}
           </button>
-          <button type="button" onClick={onDismiss} disabled={status === "installing"}>
+          <button
+            type="button"
+            onClick={onDismiss}
+            disabled={status === "installing"}
+          >
             {t("app.update.later")}
           </button>
         </div>
@@ -3533,7 +4366,8 @@ type TabMeta = { id: string; workspaceDir?: string; busy?: boolean };
 export function App() {
   const [tabs, setTabs] = useState<TabMeta[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>("");
-  const [startupFailure, setStartupFailure] = useState<StartupFailureState | null>(null);
+  const [startupFailure, setStartupFailure] =
+    useState<StartupFailureState | null>(null);
   const [startupRetryNonce, setStartupRetryNonce] = useState(0);
   const dispatchersRef = useRef<Map<string, TabDispatcher>>(new Map());
   const pendingEventsRef = useRef<Map<string, TabAction[]>>(new Map());
@@ -3545,8 +4379,12 @@ export function App() {
     tabsRef.current = tabs;
   }, [tabs]);
 
-  const [pendingUpdate, setPendingUpdate] = useState<JupiterUpdate | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<"idle" | "installing" | "error">("idle");
+  const [pendingUpdate, setPendingUpdate] = useState<JupiterUpdate | null>(
+    null,
+  );
+  const [updateStatus, setUpdateStatus] = useState<
+    "idle" | "installing" | "error"
+  >("idle");
   const [updateProgress, setUpdateProgress] = useState<{
     downloaded: number;
     total: number | null;
@@ -3565,7 +4403,9 @@ export function App() {
     const style = localStorage.getItem("jupiter.themeStyle");
     if (isThemeStyle(style)) return style;
     const storedTheme = localStorage.getItem("jupiter.theme");
-    return defaultStyleForTheme(isTheme(storedTheme) ? storedTheme : THEME.LIGHT);
+    return defaultStyleForTheme(
+      isTheme(storedTheme) ? storedTheme : THEME.LIGHT,
+    );
   });
   const [fontScale, setFontScale] = useState<FontScale>(() => {
     const v = localStorage.getItem("jupiter.fontScale");
@@ -3591,12 +4431,22 @@ export function App() {
     releaseCollapsed: releaseCtxCollapsed,
   } = useAutoCollapse("jupiter.ctxCollapsed");
 
-  const { width: sideWidth, onMouseDown: onSideResizeDown } = useResizable("side", sideCollapsed);
-  const { width: ctxWidth, onMouseDown: onCtxResizeDown } = useResizable("ctx", ctxCollapsed);
+  const { width: sideWidth, onMouseDown: onSideResizeDown } = useResizable(
+    "side",
+    sideCollapsed,
+  );
+  const { width: ctxWidth, onMouseDown: onCtxResizeDown } = useResizable(
+    "ctx",
+    ctxCollapsed,
+  );
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const visibleSide = sideCollapsed ? 0 : sideWidth;
   const visibleCtx = ctxCollapsed ? 0 : ctxWidth;
-  const threadMaxWidth = getThreadMaxWidth({ viewportWidth, visibleSide, visibleCtx });
+  const threadMaxWidth = getThreadMaxWidth({
+    viewportWidth,
+    visibleSide,
+    visibleCtx,
+  });
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -3608,8 +4458,12 @@ export function App() {
   // Sync --composer-max-width to .app (separate from inline style to avoid React override)
   const composerRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (!composerRef.current) composerRef.current = document.querySelector(".app");
-    composerRef.current?.style.setProperty("--composer-max-width", `${threadMaxWidth}px`);
+    if (!composerRef.current)
+      composerRef.current = document.querySelector(".app");
+    composerRef.current?.style.setProperty(
+      "--composer-max-width",
+      `${threadMaxWidth}px`,
+    );
   }, [threadMaxWidth]);
 
   useEffect(() => {
@@ -3631,7 +4485,8 @@ export function App() {
       } else if (next === RESPONSIVE_STAGE.COMPACT) {
         // Only force ctx collapse when entering compact from wider — coming
         // from narrow, the user may have manually opened ctx and we keep that.
-        if (prev === null || prev === RESPONSIVE_STAGE.WIDE) requireCtxCollapsed();
+        if (prev === null || prev === RESPONSIVE_STAGE.WIDE)
+          requireCtxCollapsed();
         releaseSideCollapsed();
       } else {
         requireCtxCollapsed();
@@ -3650,11 +4505,19 @@ export function App() {
       if (raf) window.cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
     };
-  }, [requireCtxCollapsed, releaseCtxCollapsed, requireSideCollapsed, releaseSideCollapsed]);
+  }, [
+    requireCtxCollapsed,
+    releaseCtxCollapsed,
+    requireSideCollapsed,
+    releaseSideCollapsed,
+  ]);
 
   useEffect(() => {
     // Chromium webview supports `zoom`; scales every px-based size without touching CSS rules.
-    document.documentElement.style.setProperty("zoom", String(FONT_SCALE_ZOOM[fontScale]));
+    document.documentElement.style.setProperty(
+      "zoom",
+      String(FONT_SCALE_ZOOM[fontScale]),
+    );
     localStorage.setItem("jupiter.fontScale", fontScale);
   }, [fontScale]);
 
@@ -3663,7 +4526,7 @@ export function App() {
     const stack =
       fontFamily === FONT_FAMILY.CUSTOM && custom
         ? custom
-        : FONT_FAMILY_STACK[fontFamily] ?? FONT_FAMILY_STACK.sans;
+        : (FONT_FAMILY_STACK[fontFamily] ?? FONT_FAMILY_STACK.sans);
     document.documentElement.style.setProperty("--font-sans", stack);
     localStorage.setItem("jupiter.fontFamily", fontFamily);
     localStorage.setItem("jupiter.customFontFamily", customFontFamily);
@@ -3689,18 +4552,21 @@ export function App() {
     }
   }, []);
 
-  const registerDispatch = useCallback((tabId: string, d: TabDispatcher | null) => {
-    if (d) {
-      dispatchersRef.current.set(tabId, d);
-      const buf = pendingEventsRef.current.get(tabId);
-      if (buf && buf.length > 0) {
-        for (const action of buf) d(action);
-        pendingEventsRef.current.delete(tabId);
+  const registerDispatch = useCallback(
+    (tabId: string, d: TabDispatcher | null) => {
+      if (d) {
+        dispatchersRef.current.set(tabId, d);
+        const buf = pendingEventsRef.current.get(tabId);
+        if (buf && buf.length > 0) {
+          for (const action of buf) d(action);
+          pendingEventsRef.current.delete(tabId);
+        }
+      } else {
+        dispatchersRef.current.delete(tabId);
       }
-    } else {
-      dispatchersRef.current.delete(tabId);
-    }
-  }, []);
+    },
+    [],
+  );
 
   const retryStartup = useCallback(() => {
     setStartupRetryNonce((n) => n + 1);
@@ -3728,13 +4594,18 @@ export function App() {
     try {
       await installJupiterUpdate(pendingUpdate, (evt) => {
         if (evt.event === "Started") {
-          setUpdateProgress({ downloaded: 0, total: evt.data.contentLength ?? null });
+          setUpdateProgress({
+            downloaded: 0,
+            total: evt.data.contentLength ?? null,
+          });
         } else if (evt.event === "Progress") {
           setUpdateProgress((p) =>
             p ? { ...p, downloaded: p.downloaded + evt.data.chunkLength } : p,
           );
         } else if (evt.event === "Finished") {
-          setUpdateProgress((p) => (p ? { ...p, downloaded: p.total ?? p.downloaded } : p));
+          setUpdateProgress((p) =>
+            p ? { ...p, downloaded: p.total ?? p.downloaded } : p,
+          );
         }
       });
     } catch (err) {
@@ -3805,7 +4676,11 @@ export function App() {
             if (ev.type === "model.delta" && tabId) {
               if (ev.channel === "content" || ev.channel === "reasoning") {
                 const bucket = pendingDeltasRef.current.get(tabId) ?? [];
-                bucket.push({ turn: ev.turn, channel: ev.channel, text: ev.text });
+                bucket.push({
+                  turn: ev.turn,
+                  channel: ev.channel,
+                  text: ev.text,
+                });
                 pendingDeltasRef.current.set(tabId, bucket);
                 scheduleFlush();
                 return;
@@ -3814,7 +4689,9 @@ export function App() {
 
             if (ev.type === "$settings" && tabId) {
               setTabs((prev) =>
-                prev.map((t) => (t.id === tabId ? { ...t, workspaceDir: ev.workspaceDir } : t)),
+                prev.map((t) =>
+                  t.id === tabId ? { ...t, workspaceDir: ev.workspaceDir } : t,
+                ),
               );
             }
 
@@ -3831,7 +4708,11 @@ export function App() {
               if (ev.type === "$mention_results") {
                 deliverToTab(target, {
                   t: "mention_results",
-                  results: { nonce: ev.nonce, query: ev.query, results: ev.results },
+                  results: {
+                    nonce: ev.nonce,
+                    query: ev.query,
+                    results: ev.results,
+                  },
                 });
                 return;
               }
@@ -3854,7 +4735,10 @@ export function App() {
           }
         }),
         listen<{ data: string }>("rpc:stderr", (e) => {
-          startupStderrRef.current = [...startupStderrRef.current, e.payload.data].slice(-12);
+          startupStderrRef.current = [
+            ...startupStderrRef.current,
+            e.payload.data,
+          ].slice(-12);
           setStartupFailure((prev) =>
             prev
               ? coerceStartupFailure(
@@ -3866,7 +4750,8 @@ export function App() {
           console.warn("[jupiter stderr]", e.payload.data);
         }),
         listen<{ code: number | null }>("rpc:exit", (e) => {
-          for (const tabId of dispatchersRef.current.keys()) flushTabDeltas(tabId);
+          for (const tabId of dispatchersRef.current.keys())
+            flushTabDeltas(tabId);
           if (dispatchersRef.current.size === 0) {
             setStartupFailure(
               coerceStartupFailure(
@@ -3897,7 +4782,9 @@ export function App() {
         }
       } catch (err) {
         if (!cancelled) {
-          setStartupFailure(coerceStartupFailure(err, startupStderrRef.current));
+          setStartupFailure(
+            coerceStartupFailure(err, startupStderrRef.current),
+          );
           console.error("rpc_spawn failed", err);
         }
       }
@@ -3918,17 +4805,17 @@ export function App() {
   }, [activeTabId]);
 
   const openTab = useCallback(() => {
-    invoke("rpc_send", { line: JSON.stringify({ cmd: "tab_open" }) }).catch((err) =>
-      console.error("tab_open failed", err),
+    invoke("rpc_send", { line: JSON.stringify({ cmd: "tab_open" }) }).catch(
+      (err) => console.error("tab_open failed", err),
     );
   }, []);
 
   const closeTab = useCallback(
     (id: string) => {
       if (tabs.length <= 1) return;
-      invoke("rpc_send", { line: JSON.stringify({ cmd: "tab_close", tabId: id }) }).catch((err) =>
-        console.error("tab_close failed", err),
-      );
+      invoke("rpc_send", {
+        line: JSON.stringify({ cmd: "tab_close", tabId: id }),
+      }).catch((err) => console.error("tab_close failed", err));
     },
     [tabs.length],
   );
@@ -3939,14 +4826,21 @@ export function App() {
       if (mod && (e.key === "t" || e.key === "T")) {
         e.preventDefault();
         openTab();
-      } else if (mod && (e.key === "w" || e.key === "W") && activeTabId && tabs.length > 1) {
+      } else if (
+        mod &&
+        (e.key === "w" || e.key === "W") &&
+        activeTabId &&
+        tabs.length > 1
+      ) {
         e.preventDefault();
         closeTab(activeTabId);
       } else if (mod && e.key === "Tab") {
         if (tabs.length <= 1) return;
         e.preventDefault();
         const idx = tabs.findIndex((t) => t.id === activeTabId);
-        const next = e.shiftKey ? (idx - 1 + tabs.length) % tabs.length : (idx + 1) % tabs.length;
+        const next = e.shiftKey
+          ? (idx - 1 + tabs.length) % tabs.length
+          : (idx + 1) % tabs.length;
         const target = tabs[next];
         if (target) setActiveTabId(target.id);
       } else if (mod && (e.key === "b" || e.key === "B")) {
@@ -3981,13 +4875,17 @@ export function App() {
     setCurrency((c) => {
       const next = c === "CNY" ? "USD" : "CNY";
       localStorage.setItem("jupiter.currency", next);
-      window.dispatchEvent(new CustomEvent("jupiter:currency", { detail: next }));
+      window.dispatchEvent(
+        new CustomEvent("jupiter:currency", { detail: next }),
+      );
       return next;
     });
   }, []);
 
   if (startupFailure && tabs.length === 0) {
-    return <StartupFailure details={startupFailure.details} onRetry={retryStartup} />;
+    return (
+      <StartupFailure details={startupFailure.details} onRetry={retryStartup} />
+    );
   }
 
   return (

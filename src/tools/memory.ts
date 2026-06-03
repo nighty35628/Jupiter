@@ -1,6 +1,7 @@
 /** Writes are eager but the prefix is NOT re-loaded mid-session — keeps prompt-cache stable. */
 
 import { loadMemoryTypeRegistry } from "../config.js";
+import { pauseGate } from "../core/pause-gate.js";
 import {
   type MemoryExpires,
   type MemoryPriority,
@@ -16,6 +17,12 @@ export interface MemoryToolsOptions {
   projectRoot?: string;
   /** Override `~/.jupiter` (tests). */
   homeDir?: string;
+  /** When true, remember/forget ask the user before mutating disk. */
+  confirmWrites?: boolean | (() => boolean);
+}
+
+function shouldConfirmWrites(value: MemoryToolsOptions["confirmWrites"]): boolean {
+  return typeof value === "function" ? value() : value === true;
 }
 
 export function registerMemoryTools(
@@ -80,15 +87,18 @@ export function registerMemoryTools(
       },
       required: ["type", "scope", "name", "description", "content"],
     },
-    fn: async (args: {
-      type: MemoryType;
-      scope: MemoryScope;
-      name: string;
-      description: string;
-      content: string;
-      priority?: MemoryPriority;
-      expires?: MemoryExpires;
-    }) => {
+    fn: async (
+      args: {
+        type: MemoryType;
+        scope: MemoryScope;
+        name: string;
+        description: string;
+        content: string;
+        priority?: MemoryPriority;
+        expires?: MemoryExpires;
+      },
+      ctx,
+    ) => {
       if (args.scope === "project" && !hasProject) {
         return JSON.stringify({
           error:
@@ -96,6 +106,22 @@ export function registerMemoryTools(
         });
       }
       try {
+        if (shouldConfirmWrites(opts.confirmWrites)) {
+          const verdict = await (ctx?.confirmationGate ?? pauseGate).ask({
+            kind: "choice",
+            payload: {
+              question: `Save memory ${args.scope}/${args.name}?`,
+              options: [
+                { id: "save", title: "Save memory", summary: args.description },
+                { id: "cancel", title: "Cancel" },
+              ],
+              allowCustom: false,
+            },
+          });
+          if (verdict.type !== "pick" || verdict.optionId !== "save") {
+            return "memory save cancelled by user.";
+          }
+        }
         const path = store.write({
           name: args.name,
           type: args.type,
@@ -136,13 +162,29 @@ export function registerMemoryTools(
       },
       required: ["name", "scope"],
     },
-    fn: async (args: { name: string; scope: MemoryScope }) => {
+    fn: async (args: { name: string; scope: MemoryScope }, ctx) => {
       if (args.scope === "project" && !hasProject) {
         return JSON.stringify({
           error: "scope='project' is unavailable in this session (no sandbox root).",
         });
       }
       try {
+        if (shouldConfirmWrites(opts.confirmWrites)) {
+          const verdict = await (ctx?.confirmationGate ?? pauseGate).ask({
+            kind: "choice",
+            payload: {
+              question: `Delete memory ${args.scope}/${args.name}?`,
+              options: [
+                { id: "delete", title: "Delete memory" },
+                { id: "cancel", title: "Cancel" },
+              ],
+              allowCustom: false,
+            },
+          });
+          if (verdict.type !== "pick" || verdict.optionId !== "delete") {
+            return "memory delete cancelled by user.";
+          }
+        }
         const existed = store.delete(args.scope, args.name);
         return existed
           ? `forgot (${args.scope}/${sanitizeMemoryName(args.name)}). Re-load on next /new or launch.`

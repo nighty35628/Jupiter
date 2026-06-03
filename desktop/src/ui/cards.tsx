@@ -30,7 +30,11 @@ export function Card({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className={compact ? "card is-compact" : "card"} data-tone={tone} data-open={open}>
+    <div
+      className={compact ? "card is-compact" : "card"}
+      data-tone={tone}
+      data-open={open}
+    >
       <button
         type="button"
         className="card-head"
@@ -69,30 +73,77 @@ export type PlanItem = {
   note?: string;
 };
 
-function derivePlanBadge(items: PlanItem[]): { state: "running" | "done" | "failed" | "waiting" | "blocked"; label: string } {
-  if (items.some((x) => x.status === "failed")) return { state: "failed", label: t("planBadge.failed") };
-  if (items.some((x) => x.status === "blocked")) return { state: "blocked", label: t("planBadge.blocked") };
-  if (items.some((x) => x.status === "active")) return { state: "running", label: t("planBadge.running") };
-  if (items.length > 0 && items.every((x) => x.status === "done")) return { state: "done", label: t("planBadge.done") };
+function derivePlanBadge(items: PlanItem[]): {
+  state: "running" | "done" | "failed" | "waiting" | "blocked";
+  label: string;
+} {
+  if (items.some((x) => x.status === "failed"))
+    return { state: "failed", label: t("planBadge.failed") };
+  if (items.some((x) => x.status === "blocked"))
+    return { state: "blocked", label: t("planBadge.blocked") };
+  if (items.some((x) => x.status === "active"))
+    return { state: "running", label: t("planBadge.running") };
+  if (items.length > 0 && items.every((x) => x.status === "done"))
+    return { state: "done", label: t("planBadge.done") };
   return { state: "waiting", label: t("planBadge.pending") };
 }
 
-function StatusIcon({ state, label }: { state: "running" | "done" | "failed" | "waiting" | "blocked"; label: string }) {
+function StatusIcon({
+  state,
+  label,
+}: {
+  state: "running" | "done" | "failed" | "waiting" | "blocked";
+  label: string;
+}) {
   switch (state) {
     case "running":
-      return <span className="spin-meta" role="img" aria-label={label} title={label} />;
+      return (
+        <span
+          className="spin-meta"
+          role="img"
+          aria-label={label}
+          title={label}
+        />
+      );
     case "done":
-      return <I.check size={10} style={{ color: "var(--success)" }} aria-label={label} />;
+      return (
+        <I.check
+          size={10}
+          style={{ color: "var(--success)" }}
+          aria-label={label}
+        />
+      );
     case "failed":
-      return <I.x size={10} style={{ color: "var(--danger)" }} aria-label={label} />;
+      return (
+        <I.x size={10} style={{ color: "var(--danger)" }} aria-label={label} />
+      );
     case "waiting":
-      return <span className="status-dot warn" role="img" aria-label={label} title={label} />;
+      return (
+        <span
+          className="status-dot warn"
+          role="img"
+          aria-label={label}
+          title={label}
+        />
+      );
     case "blocked":
-      return <I.slash size={10} style={{ color: "var(--warning)" }} aria-label={label} />;
+      return (
+        <I.slash
+          size={10}
+          style={{ color: "var(--warning)" }}
+          aria-label={label}
+        />
+      );
   }
 }
 
-export function PlanCardView({ items, title }: { items: PlanItem[]; title?: string }) {
+export function PlanCardView({
+  items,
+  title,
+}: {
+  items: PlanItem[];
+  title?: string;
+}) {
   useLang();
   const resolvedTitle = title ?? t("cards.planDefaultTitle");
   const done = items.filter((x) => x.status === "done").length;
@@ -113,10 +164,15 @@ export function PlanCardView({ items, title }: { items: PlanItem[]; title?: stri
         </>
       }
     >
-      <ul className="plan-list" style={{ listStyle: "none", margin: 0, padding: "8px 12px 12px" }}>
+      <ul
+        className="plan-list"
+        style={{ listStyle: "none", margin: 0, padding: "8px 12px 12px" }}
+      >
         {items.map((it) => (
           <li key={it.id} className="plan-item" data-status={it.status}>
-            <span className="ck">{it.status === "done" ? <I.check size={12} /> : null}</span>
+            <span className="ck">
+              {it.status === "done" ? <I.check size={12} /> : null}
+            </span>
             <div>
               <div className="text">{it.text}</div>
               {it.tool || it.note ? (
@@ -126,7 +182,9 @@ export function PlanCardView({ items, title }: { items: PlanItem[]; title?: stri
                 </div>
               ) : null}
             </div>
-            <span className="stat">{it.status === "active" ? <span className="spin" /> : null}</span>
+            <span className="stat">
+              {it.status === "active" ? <span className="spin" /> : null}
+            </span>
           </li>
         ))}
       </ul>
@@ -142,12 +200,14 @@ export function ReasoningCard({
   tokens,
   elapsed,
   model,
+  defaultOpen,
 }: {
   text: string;
   streaming: boolean;
   tokens?: number;
   elapsed?: string;
   model?: string;
+  defaultOpen?: boolean;
 }) {
   useLang();
   return (
@@ -172,7 +232,7 @@ export function ReasoningCard({
           )}
         </>
       }
-      defaultOpen={streaming}
+      defaultOpen={streaming || (defaultOpen ?? false)}
       compact
     >
       <div className="reason">
@@ -197,7 +257,8 @@ export function ReasoningCard({
             ) : null}
             {tokens !== undefined ? (
               <span>
-                <span className="k">{t("statusbar.tokens")}</span> {tokens.toLocaleString()}
+                <span className="k">{t("statusbar.tokens")}</span>{" "}
+                {tokens.toLocaleString()}
               </span>
             ) : null}
           </div>
@@ -229,7 +290,8 @@ export function ShellCard({
   defaultOpen?: boolean;
 }) {
   useLang();
-  const tone: Tone = state === "failed" ? "danger" : state === "done" ? "success" : "warning";
+  const tone: Tone =
+    state === "failed" ? "danger" : state === "done" ? "success" : "warning";
   return (
     <Card
       tone={tone}
@@ -269,7 +331,11 @@ export function ShellCard({
                     <span className="ok">{ln}</span>
                   </div>
                 );
-              if (ln.startsWith(" ✗") || ln.startsWith("✗") || /error/i.test(ln))
+              if (
+                ln.startsWith(" ✗") ||
+                ln.startsWith("✗") ||
+                /error/i.test(ln)
+              )
                 return (
                   <div key={i}>
                     <span className="err">{ln}</span>
@@ -286,7 +352,11 @@ export function ShellCard({
             </div>
             <div className="actions">
               {onAlwaysAllow ? (
-                <button type="button" className="btn ghost" onClick={onAlwaysAllow}>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={onAlwaysAllow}
+                >
                   {t("cards.shellAlwaysAllow")}
                 </button>
               ) : null}
@@ -317,7 +387,11 @@ export function CompactionCard({ summary }: { summary: string }) {
       icon={<I.archive size={12} />}
       kind="compaction"
       name={t("cards.compactionName")}
-      meta={<span>{t("cards.compactionMeta", { chars: charCount.toLocaleString() })}</span>}
+      meta={
+        <span>
+          {t("cards.compactionMeta", { chars: charCount.toLocaleString() })}
+        </span>
+      }
       defaultOpen={false}
       compact
     >
@@ -376,13 +450,17 @@ export function ToolCard({
           <div className="row">
             <span className="k">args</span>
             <span className="v">
-              <span className="str">{args.length > 600 ? `${args.slice(0, 600)}…` : args}</span>
+              <span className="str">
+                {args.length > 600 ? `${args.slice(0, 600)}…` : args}
+              </span>
             </span>
           </div>
         ) : null}
         {result !== undefined ? (
           <div className="row">
-            <span className="k">{ok === false ? t("cards.error") : t("cards.result")}</span>
+            <span className="k">
+              {ok === false ? t("cards.error") : t("cards.result")}
+            </span>
             <span className="v">
               <span className={ok === false ? "num" : "str"}>
                 {result.length > 1200 ? `${result.slice(0, 1200)}…` : result}
@@ -403,7 +481,9 @@ export type DiffLine =
   | { t: "add"; r: number; s: string }
   | { t: "rm"; l: number; s: string };
 
-export function parseEditResult(text: string): { filename: string; lines: DiffLine[] }[] {
+export function parseEditResult(
+  text: string,
+): { filename: string; lines: DiffLine[] }[] {
   const files: { filename: string; lines: DiffLine[] }[] = [];
   const lines = text.split("\n");
 
@@ -457,7 +537,12 @@ export function parseEditResult(text: string): { filename: string; lines: DiffLi
       currentLines.push({ t: "rm", l: leftLine, s: line.slice(1) });
       leftLine++;
     } else if (line.startsWith(" ")) {
-      currentLines.push({ t: "ctx", l: leftLine, r: rightLine, s: line.slice(1) });
+      currentLines.push({
+        t: "ctx",
+        l: leftLine,
+        r: rightLine,
+        s: line.slice(1),
+      });
       leftLine++;
       rightLine++;
     }
@@ -551,7 +636,15 @@ export function DiffCard({
 
 // ---- Error ----
 
-export function ErrorCard({ message, hint, code }: { message: string; hint?: ReactNode; code?: string }) {
+export function ErrorCard({
+  message,
+  hint,
+  code,
+}: {
+  message: string;
+  hint?: ReactNode;
+  code?: string;
+}) {
   useLang();
   return (
     <Card
@@ -573,7 +666,13 @@ export function ErrorCard({ message, hint, code }: { message: string; hint?: Rea
 
 export type SearchHit = { url: string; title: string; snippet: string };
 
-export function WebSearchCard({ query, results }: { query: string; results: SearchHit[] }) {
+export function WebSearchCard({
+  query,
+  results,
+}: {
+  query: string;
+  results: SearchHit[];
+}) {
   useLang();
   return (
     <Card
@@ -584,7 +683,9 @@ export function WebSearchCard({ query, results }: { query: string; results: Sear
       meta={
         <>
           <span>"{query}"</span>
-          <span className="pill-tag ok">{results.length} {t("cards.hits")}</span>
+          <span className="pill-tag ok">
+            {results.length} {t("cards.hits")}
+          </span>
         </>
       }
     >
@@ -679,7 +780,11 @@ export function MemoryCard({ rows }: { rows: MemRow[] }) {
       icon={<I.bookmark size={12} />}
       kind="memory"
       name={t("cards.memoryName")}
-      meta={<span>+ {rows.length} {t("cards.memoryCountSuffix")}</span>}
+      meta={
+        <span>
+          + {rows.length} {t("cards.memoryCountSuffix")}
+        </span>
+      }
     >
       <div className="mem">
         {rows.map((m, i) => (
@@ -810,7 +915,11 @@ export function Checkpoint({
 
 // ---- Plain text block (assistant content via markdown) ----
 
-export const AssistantText = memo(function AssistantText({ text }: { text: string }) {
+export const AssistantText = memo(function AssistantText({
+  text,
+}: {
+  text: string;
+}) {
   return (
     <div className="msg-text">
       <Markdown source={text} />

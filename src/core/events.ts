@@ -14,6 +14,7 @@ export interface EventBase {
 export interface UserMessageEvent extends EventBase {
   type: "user.message";
   text: string;
+  clientId?: string;
   attachments?: ReadonlyArray<{ kind: "file" | "url"; ref: string }>;
 }
 

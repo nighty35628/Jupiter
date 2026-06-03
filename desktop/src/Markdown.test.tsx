@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), convertFileSrc: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openPath: vi.fn(),
   openUrl: vi.fn(),
@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 
 import { Markdown, WorkspaceProvider } from "./Markdown";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 beforeAll(() => {
   Object.defineProperty(navigator, "clipboard", {
@@ -46,6 +47,35 @@ describe("Markdown", () => {
     fireEvent.click(screen.getByRole("button", { name: "docs/spec.docx" }));
 
     expect(onPreviewFile).toHaveBeenCalledWith({ path: "docs/spec.docx", line: undefined });
+  });
+
+  it("opens external links through the workspace browser callback", () => {
+    const onOpenBrowserUrl = vi.fn();
+    render(
+      <WorkspaceProvider value={{ onOpenBrowserUrl }}>
+        <Markdown source="[OpenAI](https://openai.com/docs)" />
+      </WorkspaceProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: /OpenAI/ }));
+
+    expect(onOpenBrowserUrl).toHaveBeenCalledWith("https://openai.com/docs");
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
+  it("opens html file pills through the workspace browser callback", () => {
+    const onOpenHtmlFile = vi.fn();
+    const onPreviewFile = vi.fn();
+    render(
+      <WorkspaceProvider value={{ dir: "/repo", onOpenHtmlFile, onPreviewFile }}>
+        <Markdown source="打开 reports/index.html" />
+      </WorkspaceProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "reports/index.html" }));
+
+    expect(onOpenHtmlFile).toHaveBeenCalledWith({ path: "reports/index.html", line: undefined });
+    expect(onPreviewFile).not.toHaveBeenCalled();
   });
 
   it("opens a file actions menu from a file pill", () => {

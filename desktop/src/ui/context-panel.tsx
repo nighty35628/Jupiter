@@ -1,20 +1,146 @@
 import { invoke } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
-import { useEffect, useMemo, useState } from "react";
-import type { SessionFile, Settings, UsageStats } from "../App";
+import { listen } from "@tauri-apps/api/event";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
+import type { ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { SessionFile, Settings, SideChatEntry, UsageStats } from "../App";
 import { Markdown } from "../Markdown";
 import type { FilePreview, FilePreviewTarget } from "../file-preview";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
-import type { McpSpecInfo, MemoryDetail, MemoryEntryInfo, SubagentRunInfo } from "../protocol";
+import type {
+  McpSpecInfo,
+  MemoryDetail,
+  MemoryEntryInfo,
+  SubagentRunInfo,
+} from "../protocol";
 import { PanelErrorBoundary } from "./error-boundary";
 import { FileActionMenu } from "./file-action-menu";
+import { NativeBrowserWebview } from "./native-browser-webview";
 
-export type ContextPanelMode = "info" | "preview";
+export type ContextPanelMode =
+  | "home"
+  | "files"
+  | "sidechat"
+  | "browser"
+  | "review"
+  | "terminal"
+  | "preview";
+export type BrowserOpenRequest = { id: number; url: string };
 
 const CONTEXT_MAX_TOKENS = 1_000_000;
+const SIDEBAR_TERMINAL_ID = "sidebar";
+let browserLabelSequence = 0;
 
-export function ContextPanel({
+function nextBrowserLabel(): string {
+  browserLabelSequence += 1;
+  const alphabet = "abcdefghijklmnopqrstuvwxyz";
+  let n = browserLabelSequence;
+  let suffix = "";
+  do {
+    suffix = alphabet[(n - 1) % alphabet.length] + suffix;
+    n = Math.floor((n - 1) / alphabet.length);
+  } while (n > 0);
+  return `jupiter-sidebar-browser-${suffix}`;
+}
+
+export function normalizeBrowserUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  try {
+    const url = new URL(withScheme);
+    if (
+      url.protocol !== "http:" &&
+      url.protocol !== "https:" &&
+      url.protocol !== "asset:" &&
+      url.protocol !== "file:"
+    ) {
+      return null;
+    }
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+function fileUrlToPath(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "file:") return null;
+    const path = decodeURIComponent(parsed.pathname);
+    if (/^\/[a-zA-Z]:\//.test(path)) return path.slice(1);
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+function ContextTokenPanel({ usage }: { usage: UsageStats }) {
+  const reserved = usage.reservedTokens;
+  const lastHit = usage.lastCallCacheHit ?? 0;
+  const lastMiss = usage.lastCallCacheMiss ?? 0;
+  const observedLog = Math.max(0, lastHit + lastMiss - reserved);
+  const logTokens = Math.max(usage.liveLogTokens, observedLog);
+  const cached = Math.min(logTokens, Math.max(0, lastHit - reserved));
+  const used = Math.max(0, logTokens - cached);
+  const reservedPct = Math.min(100, (reserved / CONTEXT_MAX_TOKENS) * 100);
+  const usedPct = Math.min(100, (used / CONTEXT_MAX_TOKENS) * 100);
+  const cachedPct = Math.min(100, (cached / CONTEXT_MAX_TOKENS) * 100);
+  const free = Math.max(0, CONTEXT_MAX_TOKENS - reserved - used - cached);
+  return (
+    <div className="ctx-block ctx-body-tokens">
+      <div className="h">
+        <span>{t("contextPanel.contextTokens")}</span>
+        <span className="right">
+          {(reserved + used + cached).toLocaleString()} /{" "}
+          {CONTEXT_MAX_TOKENS.toLocaleString()}
+        </span>
+      </div>
+      <div className="meter">
+        <span className="rsvd" style={{ width: `${reservedPct}%` }} />
+        <span className="cached" style={{ width: `${cachedPct}%` }} />
+        <span className="used" style={{ width: `${usedPct}%` }} />
+      </div>
+      <div className="legend">
+        <span className="l">
+          <span className="sw r" />
+          {t("contextPanel.reservedKey")}{" "}
+          <span className="v">{reserved.toLocaleString()}</span>
+        </span>
+        <span className="l">
+          <span className="sw c" />
+          {t("contextPanel.cacheKey")}{" "}
+          <span className="v">{cached.toLocaleString()}</span>
+        </span>
+        <span className="l">
+          <span className="sw u" />
+          {t("contextPanel.usedKey")}{" "}
+          <span className="v">{used.toLocaleString()}</span>
+        </span>
+        <span className="l">
+          {t("contextPanel.freeKey")}{" "}
+          <span className="v">{free.toLocaleString()}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export function ContextInfoPopover({
+  open,
   settings,
   usage,
   mcpSpecs,
@@ -23,15 +149,85 @@ export function ContextPanel({
   sessionFiles,
   memory,
   memoryDetail,
+  activePath,
+  onOpenSubagent,
+  onReadMemory,
+  onPreviewFile,
+}: {
+  open: boolean;
+  settings: Settings | null;
+  usage: UsageStats;
+  mcpSpecs: McpSpecInfo[];
+  mcpBridged: boolean;
+  subagents: SubagentRunInfo[];
+  sessionFiles: SessionFile[];
+  memory: MemoryEntryInfo[];
+  memoryDetail: MemoryDetail | null;
+  activePath?: string | null;
+  onOpenSubagent: (sessionName: string) => void;
+  onReadMemory: (path: string) => void;
+  onPreviewFile?: (target: FilePreviewTarget) => void;
+}) {
+  useLang();
+  return (
+    <div
+      className="context-info-popover"
+      data-open={open}
+      aria-hidden={!open}
+      role="dialog"
+      aria-label={t("contextPanel.infoTitle")}
+    >
+      <PanelErrorBoundary key="context-info-popover" label="context-info">
+        <div className="context-info-card">
+          <div className="context-info-head">
+            <span>{t("contextPanel.infoTitle")}</span>
+            <span className="context-info-gear" aria-hidden="true">
+              <I.cog size={18} />
+            </span>
+          </div>
+          <ContextTokenPanel usage={usage} />
+          <div className="context-info-scroll">
+            <CtxFiles
+              files={sessionFiles}
+              settings={settings}
+              activePath={activePath}
+              onPreviewFile={onPreviewFile}
+              compact
+            />
+            <CtxSubagents runs={subagents} onOpen={onOpenSubagent} />
+            <CtxTools specs={mcpSpecs} bridged={mcpBridged} />
+            <CtxMemory
+              entries={memory}
+              detail={memoryDetail}
+              onRead={onReadMemory}
+            />
+          </div>
+        </div>
+      </PanelErrorBoundary>
+    </div>
+  );
+}
+
+export function ContextPanel({
+  settings,
+  sessionFiles,
   selectedFilePreview,
   filePreviewLoading = false,
   filePreviewError = null,
   filePreviewPath = null,
   mode,
   onModeChange,
-  onOpenSubagent,
-  onReadMemory,
+  onCloseSidebar,
+  onMentionQuery,
+  onMentionPicked,
+  mentionResults,
+  sideChats = [],
+  sideChatBusy = false,
+  sideChatDisabled = false,
+  onSideChatSend,
+  browserRequest,
   onPreviewFile,
+  visible = true,
 }: {
   settings: Settings | null;
   usage: UsageStats;
@@ -47,35 +243,49 @@ export function ContextPanel({
   filePreviewPath?: string | null;
   mode?: ContextPanelMode;
   onModeChange?: (mode: ContextPanelMode) => void;
+  onCloseSidebar?: () => void;
+  onMentionQuery?: (q: string, nonce: number) => void;
+  onMentionPicked?: (path: string) => void;
+  mentionResults?: { nonce: number; query: string; results: string[] } | null;
+  sideChats?: SideChatEntry[];
+  sideChatBusy?: boolean;
+  sideChatDisabled?: boolean;
+  onSideChatSend?: (text: string) => void;
+  browserRequest?: BrowserOpenRequest | null;
+  visible?: boolean;
   onOpenSubagent: (sessionName: string) => void;
   onReadMemory: (path: string) => void;
   onPreviewFile?: (target: FilePreviewTarget) => void;
 }) {
   useLang();
-  const [localMode, setLocalMode] = useState<ContextPanelMode>("info");
+  const [localMode, setLocalMode] = useState<ContextPanelMode>("home");
   const activeMode = mode ?? localMode;
   const setPanelMode = onModeChange ?? setLocalMode;
   const previewPath = selectedFilePreview?.path ?? filePreviewPath;
-  const previewAvailable = Boolean(previewPath || filePreviewLoading || filePreviewError);
+  const previewAvailable = Boolean(
+    previewPath || filePreviewLoading || filePreviewError,
+  );
   useEffect(() => {
     if (previewPath) setPanelMode("preview");
   }, [previewPath, setPanelMode]);
-  const reserved = usage.reservedTokens;
-  const lastHit = usage.lastCallCacheHit ?? 0;
-  const lastMiss = usage.lastCallCacheMiss ?? 0;
-  const observedLog = Math.max(0, lastHit + lastMiss - reserved);
-  const logTokens = Math.max(usage.liveLogTokens, observedLog);
-  const cached = Math.min(logTokens, Math.max(0, lastHit - reserved));
-  const used = Math.max(0, logTokens - cached);
-  const reservedPct = Math.min(100, (reserved / CONTEXT_MAX_TOKENS) * 100);
-  const usedPct = Math.min(100, (used / CONTEXT_MAX_TOKENS) * 100);
-  const cachedPct = Math.min(100, (cached / CONTEXT_MAX_TOKENS) * 100);
-  const free = Math.max(0, CONTEXT_MAX_TOKENS - reserved - used - cached);
   const showPreview = previewAvailable && activeMode === "preview";
+  const closeTab = () => {
+    if (activeMode === "home") {
+      onCloseSidebar?.();
+      return;
+    }
+    setPanelMode("home");
+  };
   return (
-    <aside className="ctx" data-mode={showPreview ? "preview" : "info"}>
+    <aside className="ctx" data-mode={showPreview ? "preview" : activeMode}>
       {showPreview ? (
-        <div className="ctx-preview-shell">
+        <div className="ctx-mode-shell">
+          <CtxTabBar
+            icon={<I.file size={14} />}
+            title={t("fileActions.previewTitle")}
+            onClose={closeTab}
+            onSelectMode={setPanelMode}
+          />
           <PanelErrorBoundary key="preview" label="preview">
             <FilePreviewPane
               preview={selectedFilePreview ?? null}
@@ -90,64 +300,1095 @@ export function ContextPanel({
           </PanelErrorBoundary>
         </div>
       ) : (
-        <div className="ctx-body">
-          <div className="ctx-block ctx-body-tokens">
-            <div className="h">
-              <span>{t("contextPanel.contextTokens")}</span>
-              <span className="right">
-                {(reserved + used + cached).toLocaleString()} /{" "}
-                {CONTEXT_MAX_TOKENS.toLocaleString()}
-              </span>
+        <PanelErrorBoundary key={activeMode} label={activeMode}>
+          {activeMode === "home" ? (
+            <div className="ctx-home-shell">
+              <CtxHome onSelect={setPanelMode} />
             </div>
-            <div className="meter">
-              <span className="rsvd" style={{ width: `${reservedPct}%` }} />
-              <span className="cached" style={{ width: `${cachedPct}%` }} />
-              <span className="used" style={{ width: `${usedPct}%` }} />
-            </div>
-            <div className="legend">
-              <span className="l">
-                <span className="sw r" />
-                {t("contextPanel.reservedKey")}{" "}
-                <span className="v">{reserved.toLocaleString()}</span>
-              </span>
-              <span className="l">
-                <span className="sw c" />
-                {t("contextPanel.cacheKey")} <span className="v">{cached.toLocaleString()}</span>
-              </span>
-              <span className="l">
-                <span className="sw u" />
-                {t("contextPanel.usedKey")} <span className="v">{used.toLocaleString()}</span>
-              </span>
-              <span className="l">
-                {t("contextPanel.freeKey")} <span className="v">{free.toLocaleString()}</span>
-              </span>
-            </div>
-          </div>
-
-          <div className="ctx-body-tab">
-            <PanelErrorBoundary key="info" label="info">
+          ) : activeMode === "files" ? (
+            <div className="ctx-mode-shell">
+              <CtxTabBar
+                icon={<I.folder size={14} />}
+                title={t("contextPanel.home.filesTitle")}
+                onClose={closeTab}
+                onSelectMode={setPanelMode}
+              />
               <CtxFiles
                 files={sessionFiles}
                 settings={settings}
                 activePath={previewPath}
                 onPreviewFile={onPreviewFile}
+                onMentionQuery={onMentionQuery}
+                onMentionPicked={onMentionPicked}
+                mentionResults={mentionResults}
               />
-              <CtxSubagents runs={subagents} onOpen={onOpenSubagent} />
-              <CtxTools specs={mcpSpecs} bridged={mcpBridged} />
-              <CtxMemory entries={memory} detail={memoryDetail} onRead={onReadMemory} />
-            </PanelErrorBoundary>
-          </div>
-        </div>
+            </div>
+          ) : activeMode === "sidechat" ? (
+            <div className="ctx-mode-shell">
+              <CtxTabBar
+                icon={<I.search size={14} />}
+                title={t("contextPanel.home.sidechatTitle")}
+                onClose={closeTab}
+                onSelectMode={setPanelMode}
+              />
+              <CtxSideChat
+                entries={sideChats}
+                busy={sideChatBusy}
+                disabled={sideChatDisabled}
+                onSend={onSideChatSend}
+              />
+            </div>
+          ) : activeMode === "browser" ? (
+            <div className="ctx-mode-shell">
+              <CtxTabBar
+                icon={<I.globe size={14} />}
+                title={t("contextPanel.home.browserTitle")}
+                onClose={closeTab}
+                onSelectMode={setPanelMode}
+              />
+              <CtxBrowser request={browserRequest} visible={visible} />
+            </div>
+          ) : activeMode === "review" ? (
+            <div className="ctx-mode-shell">
+              <CtxTabBar
+                icon={<I.diff size={14} />}
+                title={t("contextPanel.home.reviewTitle")}
+                onClose={closeTab}
+                onSelectMode={setPanelMode}
+              />
+              <CtxReview settings={settings} onPreviewFile={onPreviewFile} />
+            </div>
+          ) : activeMode === "terminal" ? (
+            <div className="ctx-mode-shell">
+              <CtxTabBar
+                icon={<I.terminal size={14} />}
+                title={t("contextPanel.home.terminalTitle")}
+                onClose={closeTab}
+                onSelectMode={setPanelMode}
+              />
+              <CtxTerminal settings={settings} />
+            </div>
+          ) : (
+            <CtxPlaceholder
+              mode={activeMode}
+              onClose={closeTab}
+              onSelectMode={setPanelMode}
+            />
+          )}
+        </PanelErrorBoundary>
       )}
     </aside>
   );
 }
 
+function CtxBrowser({
+  request,
+  visible = true,
+}: {
+  request?: BrowserOpenRequest | null;
+  visible?: boolean;
+}) {
+  const [draft, setDraft] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [error, setError] = useState<string | null>(null);
+  const [nativeError, setNativeError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const nativeRef = useRef<NativeBrowserWebview | null>(null);
+  if (!nativeRef.current) {
+    nativeRef.current = new NativeBrowserWebview(nextBrowserLabel());
+  }
+  const currentUrl = historyIndex >= 0 ? history[historyIndex] : null;
+  const lastRequestIdRef = useRef<number | null>(null);
+  const open = useCallback(
+    (value: string) => {
+      const url = normalizeBrowserUrl(value);
+      if (!url) {
+        setError(t("contextPanel.browser.invalidUrl"));
+        return;
+      }
+      const nextHistory = [...history.slice(0, historyIndex + 1), url];
+      setHistory(nextHistory);
+      setHistoryIndex(nextHistory.length - 1);
+      setReloadKey((key) => key + 1);
+      setError(null);
+      setNativeError(null);
+      setDraft(url);
+    },
+    [history, historyIndex],
+  );
+  useEffect(() => {
+    if (currentUrl) setDraft(currentUrl);
+  }, [currentUrl]);
+  useEffect(() => {
+    if (!request || lastRequestIdRef.current === request.id) return;
+    lastRequestIdRef.current = request.id;
+    open(request.url);
+  }, [open, request]);
+  useEffect(
+    () => () => {
+      void nativeRef.current?.close();
+    },
+    [],
+  );
+  const browserBounds = useCallback(() => {
+    if (!visible) return null;
+    const host = hostRef.current;
+    if (!host) return null;
+    const rect = host.getBoundingClientRect();
+    if (rect.width < 4 || rect.height < 4) return null;
+    return {
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+  }, [visible]);
+  const syncNativeBrowser = useCallback(
+    (forceReload = false) => {
+      const native = nativeRef.current;
+      if (!native) return;
+      if (!visible) {
+        void native.hide();
+        return;
+      }
+      if (!currentUrl) {
+        void native.close();
+        return;
+      }
+      const bounds = browserBounds();
+      if (!bounds) {
+        void native.hide();
+        return;
+      }
+      void native.open(currentUrl, bounds, { forceReload }).then(
+        () => setNativeError(null),
+        (reason) => {
+          const message =
+            reason instanceof Error ? reason.message : String(reason);
+          setNativeError(
+            `${t("contextPanel.browser.nativeError")}: ${message}`,
+          );
+        },
+      );
+    },
+    [browserBounds, currentUrl, visible],
+  );
+  useLayoutEffect(() => {
+    syncNativeBrowser(Boolean(currentUrl));
+  }, [currentUrl, reloadKey, syncNativeBrowser, visible]);
+  useEffect(() => {
+    if (visible) return;
+    void nativeRef.current?.hide();
+  }, [visible]);
+  useEffect(() => {
+    if (!currentUrl || !visible) return;
+    const sync = () => syncNativeBrowser(false);
+    const frame = window.requestAnimationFrame(sync);
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => sync());
+    if (hostRef.current && resizeObserver)
+      resizeObserver.observe(hostRef.current);
+    window.addEventListener("resize", sync);
+    window.addEventListener("scroll", sync, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", sync);
+      window.removeEventListener("scroll", sync, true);
+    };
+  }, [currentUrl, syncNativeBrowser, visible]);
+  const canGoBack = historyIndex > 0;
+  const canGoForward = historyIndex >= 0 && historyIndex < history.length - 1;
+  const openCurrentExternal = () => {
+    if (!currentUrl) return;
+    const filePath = fileUrlToPath(currentUrl);
+    if (filePath) {
+      openPath(filePath).catch(() => undefined);
+      return;
+    }
+    openUrl(currentUrl).catch(() => undefined);
+  };
+  return (
+    <div className="ctx-browser">
+      <form
+        className="ctx-browser-bar"
+        onSubmit={(event) => {
+          event.preventDefault();
+          open(draft);
+        }}
+      >
+        <div className="ctx-browser-nav">
+          <button
+            type="button"
+            className="ctx-browser-iconbtn"
+            aria-label={t("contextPanel.browser.back")}
+            title={t("contextPanel.browser.back")}
+            disabled={!canGoBack}
+            onClick={() => {
+              setHistoryIndex((idx) => Math.max(0, idx - 1));
+              setError(null);
+            }}
+          >
+            <I.chevR size={15} style={{ transform: "rotate(180deg)" }} />
+          </button>
+          <button
+            type="button"
+            className="ctx-browser-iconbtn"
+            aria-label={t("contextPanel.browser.forward")}
+            title={t("contextPanel.browser.forward")}
+            disabled={!canGoForward}
+            onClick={() => {
+              setHistoryIndex((idx) => Math.min(history.length - 1, idx + 1));
+              setError(null);
+            }}
+          >
+            <I.chevR size={15} />
+          </button>
+          <button
+            type="button"
+            className="ctx-browser-iconbtn"
+            aria-label={t("contextPanel.browser.reload")}
+            title={t("contextPanel.browser.reload")}
+            disabled={!currentUrl}
+            onClick={() => setReloadKey((key) => key + 1)}
+          >
+            <I.refresh size={14} />
+          </button>
+        </div>
+        <input
+          className="ctx-browser-input"
+          value={draft}
+          aria-label={t("contextPanel.browser.urlLabel")}
+          placeholder={t("contextPanel.browser.placeholder")}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <button
+          type="submit"
+          className="ctx-browser-go"
+          aria-label={t("contextPanel.browser.open")}
+          title={t("contextPanel.browser.open")}
+        >
+          <I.send size={14} />
+        </button>
+      </form>
+      {error ? <div className="ctx-browser-error">{error}</div> : null}
+      {nativeError ? (
+        <div className="ctx-browser-error">{nativeError}</div>
+      ) : null}
+      <div className="ctx-browser-frame-wrap">
+        {currentUrl ? (
+          <>
+            <div className="ctx-browser-status">
+              <span>{currentUrl}</span>
+              <button
+                type="button"
+                className="ctx-browser-external"
+                aria-label={t("contextPanel.browser.openExternal")}
+                title={t("contextPanel.browser.openExternal")}
+                onClick={openCurrentExternal}
+              >
+                <I.link size={13} />
+                <span>{t("contextPanel.browser.external")}</span>
+              </button>
+            </div>
+            <div
+              ref={hostRef}
+              className="ctx-browser-native-host"
+              title={t("contextPanel.browser.previewTitle")}
+              aria-label={t("contextPanel.browser.previewTitle")}
+            />
+          </>
+        ) : (
+          <div className="ctx-browser-empty">
+            <I.globe size={30} />
+            <div className="ctx-browser-empty-title">
+              {t("contextPanel.browser.emptyTitle")}
+            </div>
+            <div className="ctx-browser-empty-body">
+              {t("contextPanel.browser.emptyBody")}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="ctx-browser-hint">
+        {t("contextPanel.browser.nativeHint")}
+      </div>
+    </div>
+  );
+}
+
+type GitStatusEntry = {
+  path: string;
+  kind: "modified" | "added" | "deleted" | "renamed" | "untracked" | string;
+};
+
+type TerminalOutputEvent = { id: string; data: string };
+type TerminalExitEvent = { id: string; code: number | null };
+
+type ReviewState =
+  | { status: "loading"; entries: GitStatusEntry[]; diff: string; error: null }
+  | { status: "ready"; entries: GitStatusEntry[]; diff: string; error: null }
+  | { status: "error"; entries: GitStatusEntry[]; diff: string; error: string };
+
+type ReviewDiffLine = {
+  text: string;
+  kind: "add" | "del" | "hunk" | "ctx" | "meta";
+};
+
+type ReviewFile = {
+  path: string;
+  kind: GitStatusEntry["kind"];
+  additions: number;
+  deletions: number;
+  lines: ReviewDiffLine[];
+};
+
+function diffStats(diff: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) additions += 1;
+    else if (line.startsWith("-")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function diffLineKind(line: string): ReviewDiffLine["kind"] {
+  if (line.startsWith("+") && !line.startsWith("+++")) return "add";
+  if (line.startsWith("-") && !line.startsWith("---")) return "del";
+  if (line.startsWith("@@")) return "hunk";
+  if (
+    line.startsWith("diff --git") ||
+    line.startsWith("index ") ||
+    line.startsWith("new file mode ") ||
+    line.startsWith("deleted file mode ") ||
+    line.startsWith("old mode ") ||
+    line.startsWith("new mode ") ||
+    line.startsWith("similarity index ") ||
+    line.startsWith("rename from ") ||
+    line.startsWith("rename to ") ||
+    line.startsWith("+++") ||
+    line.startsWith("---")
+  ) {
+    return "meta";
+  }
+  return "ctx";
+}
+
+function diffFilePathFromLine(line: string): string | null {
+  const diffMatch =
+    /^diff --git (?:"?a\/(.+?)"?|"?(.+?)"?) (?:"?b\/(.+?)"?|"?(.+?)"?)$/.exec(
+      line,
+    );
+  if (diffMatch) {
+    return diffMatch[3] ?? diffMatch[4] ?? diffMatch[1] ?? diffMatch[2] ?? null;
+  }
+  if (line.startsWith("+++ ")) {
+    const value = line.slice(4).trim();
+    if (value === "/dev/null") return null;
+    return value.replace(/^"?b\//, "").replace(/"$/, "");
+  }
+  return null;
+}
+
+function buildReviewFiles(
+  entries: GitStatusEntry[],
+  diff: string,
+): ReviewFile[] {
+  const order: string[] = [];
+  const byPath = new Map<string, ReviewFile>();
+  const ensureFile = (path: string, kind = "modified") => {
+    const existing = byPath.get(path);
+    if (existing) return existing;
+    const file: ReviewFile = {
+      path,
+      kind,
+      additions: 0,
+      deletions: 0,
+      lines: [],
+    };
+    byPath.set(path, file);
+    order.push(path);
+    return file;
+  };
+
+  for (const entry of entries) {
+    ensureFile(entry.path, entry.kind);
+  }
+
+  let current: ReviewFile | null = null;
+  for (const line of diff.split("\n")) {
+    const path = diffFilePathFromLine(line);
+    if (path) {
+      current = ensureFile(path, byPath.get(path)?.kind ?? "modified");
+    }
+    if (!current) continue;
+    const kind = diffLineKind(line);
+    if (kind === "add") current.additions += 1;
+    if (kind === "del") current.deletions += 1;
+    if (kind !== "meta") {
+      current.lines.push({ text: line || " ", kind });
+    }
+  }
+
+  return order.map((path) => byPath.get(path)).filter(Boolean) as ReviewFile[];
+}
+
+function statusLabel(kind: string): string {
+  if (kind === "added") return t("contextPanel.review.status.added");
+  if (kind === "deleted") return t("contextPanel.review.status.deleted");
+  if (kind === "renamed") return t("contextPanel.review.status.renamed");
+  if (kind === "untracked") return t("contextPanel.review.status.untracked");
+  return t("contextPanel.review.status.modified");
+}
+
+function CtxReview({
+  settings,
+  onPreviewFile,
+}: {
+  settings: Settings | null;
+  onPreviewFile?: (target: FilePreviewTarget) => void;
+}) {
+  const workspaceDir = settings?.workspaceDir;
+  const loadSeqRef = useRef(0);
+  const userPickedReviewFileRef = useRef(false);
+  const [expandedPath, setExpandedPath] = useState<string | null>(null);
+  const [state, setState] = useState<ReviewState>({
+    status: "loading",
+    entries: [],
+    diff: "",
+    error: null,
+  });
+  const load = useCallback(() => {
+    if (!workspaceDir) {
+      setState({
+        status: "error",
+        entries: [],
+        diff: "",
+        error: t("contextPanel.review.noWorkspace"),
+      });
+      return;
+    }
+    const seq = loadSeqRef.current + 1;
+    loadSeqRef.current = seq;
+    setState((current) => ({
+      status: "loading",
+      entries: current.entries,
+      diff: current.diff,
+      error: null,
+    }));
+    void Promise.all([
+      invoke<GitStatusEntry[]>("git_status", { root: workspaceDir }),
+      invoke<string>("git_diff", { root: workspaceDir }),
+    ]).then(
+      ([entries, diff]) => {
+        if (loadSeqRef.current !== seq) return;
+        setState({ status: "ready", entries, diff, error: null });
+      },
+      (reason) => {
+        if (loadSeqRef.current !== seq) return;
+        setState({
+          status: "error",
+          entries: [],
+          diff: "",
+          error: reason instanceof Error ? reason.message : String(reason),
+        });
+      },
+    );
+  }, [workspaceDir]);
+  useEffect(() => {
+    load();
+    const id = window.setInterval(load, 1800);
+    return () => window.clearInterval(id);
+  }, [load]);
+  const stats = useMemo(() => diffStats(state.diff), [state.diff]);
+  const reviewFiles = useMemo(
+    () => buildReviewFiles(state.entries, state.diff),
+    [state.diff, state.entries],
+  );
+  const reviewFileKey = reviewFiles
+    .map((file) => `${file.kind}:${file.path}`)
+    .join("\n");
+  useEffect(() => {
+    setExpandedPath((current) => {
+      if (current && reviewFiles.some((file) => file.path === current)) {
+        return current;
+      }
+      if (current === null && userPickedReviewFileRef.current) {
+        return null;
+      }
+      return (
+        reviewFiles.find((file) => file.lines.length > 0)?.path ??
+        reviewFiles[0]?.path ??
+        null
+      );
+    });
+  }, [reviewFileKey, reviewFiles]);
+  return (
+    <div className="ctx-review">
+      <div className="ctx-review-toolbar">
+        <div className="ctx-review-summary">
+          <span className="ctx-review-count">
+            {t("contextPanel.review.filesChanged", {
+              count: reviewFiles.length,
+            })}
+          </span>
+          <span className="ctx-review-stat add">+{stats.additions}</span>
+          <span className="ctx-review-stat del">-{stats.deletions}</span>
+        </div>
+      </div>
+      {state.error ? (
+        <div className="ctx-browser-error">{state.error}</div>
+      ) : null}
+      <div className="ctx-review-changes">
+        <div className="h">
+          <span>{t("contextPanel.review.changedFiles")}</span>
+          <span className="right">
+            {state.status === "loading" ? t("contextPanel.review.loading") : ""}
+          </span>
+        </div>
+        <div className="ctx-review-file-list">
+          {reviewFiles.length === 0 ? (
+            <div className="ctx-empty">
+              {state.status === "loading"
+                ? t("contextPanel.review.loading")
+                : t("contextPanel.review.noChanges")}
+            </div>
+          ) : (
+            reviewFiles.map((file) => {
+              const expanded = expandedPath === file.path;
+              return (
+                <section
+                  key={`${file.kind}:${file.path}`}
+                  className="ctx-review-file-card"
+                  data-expanded={expanded}
+                >
+                  <button
+                    type="button"
+                    className="ctx-review-file-head"
+                    aria-expanded={expanded}
+                    aria-label={`${file.path} ${statusLabel(file.kind)} +${file.additions} -${file.deletions}`}
+                    onClick={() => {
+                      userPickedReviewFileRef.current = true;
+                      setExpandedPath((current) =>
+                        current === file.path ? null : file.path,
+                      );
+                    }}
+                    onDoubleClick={() => onPreviewFile?.({ path: file.path })}
+                  >
+                    <span
+                      className="ctx-review-file-kind"
+                      data-kind={file.kind}
+                    >
+                      {statusLabel(file.kind)}
+                    </span>
+                    <span className="ctx-review-file-path" title={file.path}>
+                      {file.path}
+                    </span>
+                    <span className="ctx-review-file-stats">
+                      <span className="add">+{file.additions}</span>
+                      <span className="del">-{file.deletions}</span>
+                    </span>
+                    <I.chev
+                      size={13}
+                      className="ctx-review-file-chev"
+                      aria-hidden="true"
+                    />
+                  </button>
+                  {expanded ? (
+                    <div className="ctx-review-file-diff">
+                      {file.lines.length > 0 ? (
+                        <pre className="ctx-review-diff-body">
+                          {file.lines.map((line, index) => (
+                            <span
+                              key={`${index}:${line.text}`}
+                              data-kind={line.kind}
+                            >
+                              {line.text}
+                            </span>
+                          ))}
+                        </pre>
+                      ) : (
+                        <div className="ctx-empty">
+                          {t("contextPanel.review.noDiff")}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </section>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CtxSideChat({
+  entries,
+  busy,
+  disabled,
+  onSend,
+}: {
+  entries: SideChatEntry[];
+  busy: boolean;
+  disabled: boolean;
+  onSend?: (text: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const trimmed = text.trim();
+  const canSend = Boolean(trimmed) && !disabled && Boolean(onSend);
+  const submit = () => {
+    if (!canSend) return;
+    onSend?.(trimmed);
+    setText("");
+  };
+  return (
+    <div className="ctx-sidechat">
+      <div className="ctx-sidechat-intro">
+        <span className="ctx-sidechat-icon">
+          <I.search size={18} />
+        </span>
+        <div>
+          <div className="ctx-sidechat-title">
+            {t("contextPanel.sideChat.title")}
+          </div>
+          <div className="ctx-sidechat-desc">
+            {t("contextPanel.sideChat.desc")}
+          </div>
+        </div>
+      </div>
+      <div className="ctx-sidechat-thread" aria-live="polite">
+        {entries.length === 0 ? (
+          <div className="ctx-sidechat-empty">
+            {t("contextPanel.sideChat.empty")}
+          </div>
+        ) : (
+          entries.map((entry) => (
+            <div
+              className="ctx-sidechat-turn"
+              key={entry.id}
+              data-status={entry.status}
+            >
+              <div className="ctx-sidechat-question">{entry.question}</div>
+              <div className="ctx-sidechat-answer">
+                {entry.status === "pending"
+                  ? t("contextPanel.sideChat.pending")
+                  : entry.answer}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="ctx-sidechat-compose">
+        <textarea
+          value={text}
+          aria-label={t("contextPanel.sideChat.inputLabel")}
+          placeholder={t("contextPanel.sideChat.placeholder")}
+          disabled={disabled}
+          rows={6}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey) return;
+            event.preventDefault();
+            submit();
+          }}
+        />
+        <div className="ctx-sidechat-foot">
+          <span>
+            {busy
+              ? t("contextPanel.sideChat.busyHint")
+              : t("contextPanel.sideChat.readyHint")}
+          </span>
+          <button
+            type="button"
+            className="ctx-sidechat-send"
+            disabled={!canSend}
+            aria-label={t("contextPanel.sideChat.sendLabel")}
+            title={t("contextPanel.sideChat.sendLabel")}
+            onClick={submit}
+          >
+            <I.send size={14} />
+            <span>{t("contextPanel.sideChat.sendButton")}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CtxTerminal({ settings }: { settings: Settings | null }) {
+  const workspaceDir = settings?.workspaceDir ?? "";
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const fitAndResize = useCallback(() => {
+    const terminal = terminalRef.current;
+    const fit = fitRef.current;
+    if (!terminal || !fit) return;
+    try {
+      fit.fit();
+      void invoke("terminal_resize", {
+        id: SIDEBAR_TERMINAL_ID,
+        cols: terminal.cols || 80,
+        rows: terminal.rows || 24,
+      }).catch(() => {});
+    } catch {
+      /* xterm can throw while hidden or before layout settles */
+    }
+  }, []);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    if (!workspaceDir) {
+      setError(t("contextPanel.terminal.noWorkspace"));
+      return;
+    }
+    setError(null);
+
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: true,
+      fontFamily:
+        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+      fontSize: 12,
+      lineHeight: 1.25,
+      scrollback: 5000,
+      theme: {
+        background: "transparent",
+        foreground: "var(--fg)",
+        cursor: "var(--fg)",
+        selectionBackground:
+          "color-mix(in oklch, var(--accent) 24%, transparent)",
+      },
+    });
+    const fit = new FitAddon();
+    terminal.loadAddon(fit);
+    terminal.open(host);
+    terminalRef.current = terminal;
+    fitRef.current = fit;
+    fit.fit();
+    terminal.focus();
+
+    const dataDisposable = terminal.onData((data) => {
+      void invoke("terminal_write", { id: SIDEBAR_TERMINAL_ID, data });
+    });
+    let stopped = false;
+    let unlistenOutput: (() => void) | null = null;
+    let unlistenExit: (() => void) | null = null;
+    const resize = () => fitAndResize();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => resize());
+    observer?.observe(host);
+    window.setTimeout(resize, 0);
+    void (async () => {
+      const output = await listen<TerminalOutputEvent>(
+        "terminal:output",
+        (event) => {
+          if (event.payload.id !== SIDEBAR_TERMINAL_ID) return;
+          terminal.write(event.payload.data);
+        },
+      );
+      const exit = await listen<TerminalExitEvent>("terminal:exit", (event) => {
+        if (event.payload.id !== SIDEBAR_TERMINAL_ID) return;
+        const code = event.payload.code;
+        terminal.write(
+          `\r\n[${t("contextPanel.terminal.exitCode", { code: code ?? "?" })}]\r\n`,
+        );
+      });
+      if (stopped) {
+        output();
+        exit();
+        return;
+      }
+      unlistenOutput = output;
+      unlistenExit = exit;
+      try {
+        await invoke("terminal_spawn", {
+          id: SIDEBAR_TERMINAL_ID,
+          root: workspaceDir,
+          cols: terminal.cols || 80,
+          rows: terminal.rows || 24,
+        });
+      } catch (reason) {
+        const message =
+          reason instanceof Error ? reason.message : String(reason);
+        setError(message);
+        terminal.write(`\r\n${message}\r\n`);
+      }
+    })();
+
+    return () => {
+      stopped = true;
+      observer?.disconnect();
+      dataDisposable.dispose();
+      unlistenOutput?.();
+      unlistenExit?.();
+      void invoke("terminal_kill", { id: SIDEBAR_TERMINAL_ID });
+      terminal.dispose();
+      terminalRef.current = null;
+      fitRef.current = null;
+    };
+  }, [fitAndResize, workspaceDir]);
+
+  return (
+    <div className="ctx-terminal">
+      <div className="ctx-terminal-cwd" title={workspaceDir || undefined}>
+        <span>$</span>
+        <span>{workspaceDir || t("contextPanel.terminal.noWorkspace")}</span>
+      </div>
+      {error ? <div className="ctx-browser-error">{error}</div> : null}
+      <div
+        className="ctx-terminal-screen"
+        ref={hostRef}
+        role="application"
+        aria-label={t("contextPanel.terminal.inputLabel")}
+        onClick={() => terminalRef.current?.focus()}
+      />
+    </div>
+  );
+}
+
+function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
+  const cards: Array<{
+    mode: ContextPanelMode;
+    icon: ReactNode;
+    title: string;
+    desc: string;
+    shortcut?: string;
+  }> = [
+    {
+      mode: "files",
+      icon: <I.folder size={34} />,
+      title: t("contextPanel.home.filesTitle"),
+      desc: t("contextPanel.home.filesDesc"),
+      shortcut: "⌘P",
+    },
+    {
+      mode: "sidechat",
+      icon: <I.search size={34} />,
+      title: t("contextPanel.home.sidechatTitle"),
+      desc: t("contextPanel.home.sidechatDesc"),
+    },
+    {
+      mode: "browser",
+      icon: <I.globe size={34} />,
+      title: t("contextPanel.home.browserTitle"),
+      desc: t("contextPanel.home.browserDesc"),
+      shortcut: "⌘T",
+    },
+    {
+      mode: "review",
+      icon: <I.diff size={34} />,
+      title: t("contextPanel.home.reviewTitle"),
+      desc: t("contextPanel.home.reviewDesc"),
+      shortcut: "^⇧G",
+    },
+    {
+      mode: "terminal",
+      icon: <I.terminal size={34} />,
+      title: t("contextPanel.home.terminalTitle"),
+      desc: t("contextPanel.home.terminalDesc"),
+      shortcut: "^`",
+    },
+  ];
+  return (
+    <div className="ctx-home">
+      {cards.map((card) => (
+        <button
+          type="button"
+          key={card.mode}
+          className="ctx-home-card"
+          onClick={() => onSelect(card.mode)}
+        >
+          <span className="ctx-home-icon">{card.icon}</span>
+          <span className="ctx-home-title">{card.title}</span>
+          <span className="ctx-home-desc">{card.desc}</span>
+          {card.shortcut ? <kbd>{card.shortcut}</kbd> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CtxTabBar({
+  icon,
+  title,
+  onClose,
+  onSelectMode,
+}: {
+  icon: ReactNode;
+  title: string;
+  onClose: () => void;
+  onSelectMode?: (mode: ContextPanelMode) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const addItems: Array<{
+    mode: ContextPanelMode;
+    icon: ReactNode;
+    title: string;
+  }> = [
+    {
+      mode: "files",
+      icon: <I.folder size={13} />,
+      title: t("contextPanel.home.filesTitle"),
+    },
+    {
+      mode: "sidechat",
+      icon: <I.search size={13} />,
+      title: t("contextPanel.home.sidechatTitle"),
+    },
+    {
+      mode: "browser",
+      icon: <I.globe size={13} />,
+      title: t("contextPanel.home.browserTitle"),
+    },
+    {
+      mode: "review",
+      icon: <I.diff size={13} />,
+      title: t("contextPanel.home.reviewTitle"),
+    },
+    {
+      mode: "terminal",
+      icon: <I.terminal size={13} />,
+      title: t("contextPanel.home.terminalTitle"),
+    },
+  ];
+  return (
+    <div className="ctx-tabs">
+      <div className="ctx-tab" data-active="true">
+        <span className="ctx-tab-icon">{icon}</span>
+        <span className="ctx-tab-title">{title}</span>
+        <button
+          type="button"
+          className="ctx-tab-close"
+          aria-label={t("contextPanel.closeTab")}
+          title={t("contextPanel.closeTab")}
+          onClick={onClose}
+        >
+          <I.x size={12} />
+        </button>
+      </div>
+      {onSelectMode ? (
+        <div className="ctx-tab-add-wrap">
+          <button
+            type="button"
+            className="ctx-tab-add"
+            aria-label={t("contextPanel.addTab")}
+            title={t("contextPanel.addTab")}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <I.plus size={14} />
+          </button>
+          {menuOpen ? (
+            <div className="ctx-tab-menu" role="menu">
+              {addItems.map((item) => (
+                <button
+                  key={item.mode}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onSelectMode(item.mode);
+                    setMenuOpen(false);
+                  }}
+                >
+                  <span>{item.icon}</span>
+                  {item.title}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CtxPlaceholder({
+  mode,
+  onClose,
+  onSelectMode,
+}: {
+  mode: ContextPanelMode;
+  onClose: () => void;
+  onSelectMode: (mode: ContextPanelMode) => void;
+}) {
+  const meta =
+    mode === "sidechat"
+      ? {
+          icon: <I.search size={18} />,
+          title: t("contextPanel.home.sidechatTitle"),
+          body: t("contextPanel.placeholder.sidechat"),
+        }
+      : mode === "browser"
+        ? {
+            icon: <I.globe size={18} />,
+            title: t("contextPanel.home.browserTitle"),
+            body: t("contextPanel.placeholder.browser"),
+          }
+        : mode === "review"
+          ? {
+              icon: <I.diff size={18} />,
+              title: t("contextPanel.home.reviewTitle"),
+              body: t("contextPanel.placeholder.review"),
+            }
+          : {
+              icon: <I.terminal size={18} />,
+              title: t("contextPanel.home.terminalTitle"),
+              body: t("contextPanel.placeholder.terminal"),
+            };
+  return (
+    <div className="ctx-mode-shell">
+      <CtxTabBar
+        icon={meta.icon}
+        title={meta.title}
+        onClose={onClose}
+        onSelectMode={onSelectMode}
+      />
+      <div className="ctx-placeholder">
+        <div className="ctx-placeholder-icon">{meta.icon}</div>
+        <div className="ctx-placeholder-title">{meta.title}</div>
+        <div className="ctx-placeholder-body">{meta.body}</div>
+      </div>
+    </div>
+  );
+}
+
 type TreeNode =
   | { kind: "dir"; depth: number; name: string; key: string }
-  | { kind: "file"; depth: number; name: string; path: string; key: string; status: "c" | "m" };
+  | {
+      kind: "file";
+      depth: number;
+      name: string;
+      path: string;
+      key: string;
+      status: "c" | "m";
+    };
 
-async function openContextFile(path: string, settings: Settings | null): Promise<void> {
+type FileSearchItem = {
+  raw: string;
+  path: string;
+  line?: string;
+  name: string;
+  desc?: string;
+  kind: "dir" | "file";
+};
+
+async function openContextFile(
+  path: string,
+  settings: Settings | null,
+): Promise<void> {
   const workspaceDir = settings?.workspaceDir;
   const isWindows = workspaceDir?.includes("\\") ?? false;
   const sep = isWindows ? "\\" : "/";
@@ -197,21 +1438,72 @@ function buildSessionTree(files: SessionFile[]): TreeNode[] {
   return out;
 }
 
+function parseFileSearchResult(raw: string): FileSearchItem {
+  const normalized = raw.replace(/\\/g, "/");
+  const kind = normalized.endsWith("/") ? "dir" : "file";
+  const withoutSlash = normalized.replace(/\/+$/, "");
+  const symbol = kind === "file" ? /^(.*):(\d+)$/.exec(withoutSlash) : null;
+  const path = symbol?.[1] ?? normalized;
+  const line = symbol?.[2];
+  const displayPath = path.replace(/\/+$/, "");
+  const slash = displayPath.lastIndexOf("/");
+  const base = slash >= 0 ? displayPath.slice(slash + 1) : displayPath;
+  const parent = slash >= 0 ? `${displayPath.slice(0, slash)}/` : "";
+  return {
+    raw,
+    path,
+    line,
+    name: kind === "dir" ? `${base}/` : line ? `${base}:${line}` : base,
+    desc: parent || undefined,
+    kind,
+  };
+}
+
 function CtxFiles({
   files,
   settings,
   activePath,
   onPreviewFile,
+  onMentionQuery,
+  onMentionPicked,
+  mentionResults,
+  compact = false,
 }: {
   files: SessionFile[];
   settings: Settings | null;
   activePath?: string | null;
   onPreviewFile?: (target: FilePreviewTarget) => void;
+  onMentionQuery?: (q: string, nonce: number) => void;
+  onMentionPicked?: (path: string) => void;
+  mentionResults?: { nonce: number; query: string; results: string[] } | null;
+  compact?: boolean;
 }) {
   const tree = useMemo(() => buildSessionTree(files), [files]);
-  const [menu, setMenu] = useState<{ path: string; left: number; top: number } | null>(null);
+  const [query, setQuery] = useState("");
+  const [nonce, setNonce] = useState(0);
+  const nonceRef = useRef(0);
+  const [menu, setMenu] = useState<{
+    path: string;
+    left: number;
+    top: number;
+  } | null>(null);
   const workspaceDir = settings?.workspaceDir;
   const editor = settings?.editor;
+  const canSearchProject = Boolean(onMentionQuery);
+  useEffect(() => {
+    if (!canSearchProject) return;
+    const nextNonce = ++nonceRef.current;
+    setNonce(nextNonce);
+    const timer = window.setTimeout(
+      () => onMentionQuery?.(query, nextNonce),
+      90,
+    );
+    return () => window.clearTimeout(timer);
+  }, [canSearchProject, onMentionQuery, query]);
+  const results = useMemo<FileSearchItem[]>(() => {
+    if (!mentionResults || mentionResults.nonce !== nonce) return [];
+    return mentionResults.results.map(parseFileSearchResult);
+  }, [mentionResults, nonce]);
   const openMenuAt = (path: string, left: number, top: number) => {
     setMenu({ path, left, top });
   };
@@ -219,98 +1511,224 @@ function CtxFiles({
     const rect = element.getBoundingClientRect();
     openMenuAt(path, rect.right - 4, rect.bottom + 4);
   };
+  const pickSearchItem = (item: FileSearchItem) => {
+    if (item.kind === "dir") {
+      setQuery(item.path);
+      return;
+    }
+    onMentionPicked?.(item.path);
+    onPreviewFile?.({ path: item.path, line: item.line });
+  };
+  const renderFileNode = (n: Extract<TreeNode, { kind: "file" }>) => (
+    <div
+      className="node"
+      key={n.key}
+      data-d={n.depth}
+      data-kind="file"
+      data-active={activePath === n.path}
+      data-jupiter-file-path={n.path}
+      title={n.path}
+      style={{ paddingLeft: 4 + n.depth * 14 }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        openMenuAt(n.path, event.clientX, event.clientY);
+      }}
+    >
+      <button
+        type="button"
+        className="node-main"
+        onClick={() => onPreviewFile?.({ path: n.path })}
+      >
+        <span className="ico">
+          <I.file size={12} />
+        </span>
+        <span className="node-text">
+          <span className="nm">{n.name}</span>
+          <span className="full-path">{n.path}</span>
+        </span>
+      </button>
+      <span
+        className="dot"
+        data-s={n.status}
+        title={
+          n.status === "m"
+            ? t("contextPanel.fileModified")
+            : t("contextPanel.fileInContext")
+        }
+      />
+      <button
+        type="button"
+        className="tree-action"
+        aria-label={t("contextPanel.openFile", { path: n.path })}
+        title={t("contextPanel.openFile", { path: n.path })}
+        onClick={(event) => {
+          event.stopPropagation();
+          void openContextFile(n.path, settings);
+        }}
+      >
+        <I.file size={12} />
+      </button>
+      <button
+        type="button"
+        className="tree-action"
+        aria-label={t("fileActions.menu", { path: n.path })}
+        title={t("fileActions.menu", { path: n.path })}
+        onClick={(event) => {
+          event.stopPropagation();
+          openMenu(n.path, event.currentTarget);
+        }}
+      >
+        <I.more size={12} />
+      </button>
+    </div>
+  );
   return (
     <>
-      <div className="ctx-block">
-        <div className="h">
-          <span>{t("contextPanel.filesTitle")}</span>
-          <span className="right">
-            {files.length === 0 ? "—" : t("contextPanel.filesCount", { count: files.length })}
-          </span>
-        </div>
-        <div className="tree">
-          {files.length === 0 ? (
-            <div className="ctx-empty">{t("contextPanel.noFilesMsg")}</div>
-          ) : (
-            tree.map((n) =>
-              n.kind === "dir" ? (
-                <div
-                  className="node"
-                  key={n.key}
-                  data-d={n.depth}
-                  data-kind="dir"
-                  style={{ paddingLeft: 4 + n.depth * 14 }}
+      <div className={compact ? "ctx-block" : "ctx-files-panel"}>
+        {canSearchProject ? (
+          <>
+            <div className="ctx-file-search">
+              <I.search size={14} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t("contextPanel.fileSearchPlaceholder")}
+                aria-label={t("contextPanel.fileSearchPlaceholder")}
+              />
+              {query ? (
+                <button
+                  type="button"
+                  className="ctx-file-search-clear"
+                  aria-label={t("contextPanel.clearSearch")}
+                  title={t("contextPanel.clearSearch")}
+                  onClick={() => setQuery("")}
                 >
-                  <span className="ico">
-                    <I.folder size={12} />
-                  </span>
-                  <span className="nm">{n.name}/</span>
-                </div>
-              ) : (
-                <div
-                  className="node"
-                  key={n.key}
-                  data-d={n.depth}
-                  data-kind="file"
-                  data-active={activePath === n.path}
-                  data-jupiter-file-path={n.path}
-                  title={n.path}
-                  style={{ paddingLeft: 4 + n.depth * 14 }}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    openMenuAt(n.path, event.clientX, event.clientY);
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="node-main"
-                    onClick={() => onPreviewFile?.({ path: n.path })}
+                  <I.x size={12} />
+                </button>
+              ) : null}
+            </div>
+            <div className="ctx-file-results">
+              <div className="h">
+                <span>{t("contextPanel.projectFilesTitle")}</span>
+                <span className="right">
+                  {mentionResults?.nonce === nonce
+                    ? t("contextPanel.filesCount", { count: results.length })
+                    : t("contextPanel.searching")}
+                </span>
+              </div>
+              <div className="tree">
+                {results.length === 0 && mentionResults?.nonce === nonce ? (
+                  <div className="ctx-empty">
+                    {t("contextPanel.noProjectFilesMsg")}
+                  </div>
+                ) : (
+                  results.map((item) => (
+                    <div
+                      className="node"
+                      data-kind={item.kind}
+                      data-active={activePath === item.path}
+                      data-jupiter-file-path={item.path}
+                      title={item.raw}
+                      key={`${item.raw}:${item.line ?? ""}`}
+                      onContextMenu={(event) => {
+                        if (item.kind === "dir") return;
+                        event.preventDefault();
+                        openMenuAt(item.path, event.clientX, event.clientY);
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="node-main"
+                        onClick={() => pickSearchItem(item)}
+                      >
+                        <span className="ico">
+                          {item.kind === "dir" ? (
+                            <I.folder size={12} />
+                          ) : (
+                            <I.file size={12} />
+                          )}
+                        </span>
+                        <span className="node-text">
+                          <span className="nm">{item.name}</span>
+                          <span className="full-path">
+                            {item.desc ?? item.path}
+                          </span>
+                        </span>
+                      </button>
+                      {item.kind === "file" ? (
+                        <>
+                          <button
+                            type="button"
+                            className="tree-action"
+                            aria-label={t("contextPanel.openFile", {
+                              path: item.path,
+                            })}
+                            title={t("contextPanel.openFile", {
+                              path: item.path,
+                            })}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void openContextFile(item.path, settings);
+                            }}
+                          >
+                            <I.file size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            className="tree-action"
+                            aria-label={t("fileActions.menu", {
+                              path: item.path,
+                            })}
+                            title={t("fileActions.menu", { path: item.path })}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openMenu(item.path, event.currentTarget);
+                            }}
+                          >
+                            <I.more size={12} />
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </>
+        ) : null}
+        <div className={canSearchProject ? "ctx-session-files" : undefined}>
+          <div className="h">
+            <span>{t("contextPanel.filesTitle")}</span>
+            <span className="right">
+              {files.length === 0
+                ? "—"
+                : t("contextPanel.filesCount", { count: files.length })}
+            </span>
+          </div>
+          <div className="tree">
+            {files.length === 0 ? (
+              <div className="ctx-empty">{t("contextPanel.noFilesMsg")}</div>
+            ) : (
+              tree.map((n) =>
+                n.kind === "dir" ? (
+                  <div
+                    className="node"
+                    key={n.key}
+                    data-d={n.depth}
+                    data-kind="dir"
+                    style={{ paddingLeft: 4 + n.depth * 14 }}
                   >
                     <span className="ico">
-                      <I.file size={12} />
+                      <I.folder size={12} />
                     </span>
-                    <span className="node-text">
-                      <span className="nm">{n.name}</span>
-                      <span className="full-path">{n.path}</span>
-                    </span>
-                  </button>
-                  <span
-                    className="dot"
-                    data-s={n.status}
-                    title={
-                      n.status === "m"
-                        ? t("contextPanel.fileModified")
-                        : t("contextPanel.fileInContext")
-                    }
-                  />
-                  <button
-                    type="button"
-                    className="tree-action"
-                    aria-label={t("contextPanel.openFile", { path: n.path })}
-                    title={t("contextPanel.openFile", { path: n.path })}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void openContextFile(n.path, settings);
-                    }}
-                  >
-                    <I.file size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    className="tree-action"
-                    aria-label={t("fileActions.menu", { path: n.path })}
-                    title={t("fileActions.menu", { path: n.path })}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      openMenu(n.path, event.currentTarget);
-                    }}
-                  >
-                    <I.more size={12} />
-                  </button>
-                </div>
-              ),
-            )
-          )}
+                    <span className="nm">{n.name}/</span>
+                  </div>
+                ) : (
+                  renderFileNode(n)
+                ),
+              )
+            )}
+          </div>
         </div>
       </div>
       {menu ? (
@@ -359,7 +1777,10 @@ function FilePreviewPane({
   onPreviewFile?: (target: FilePreviewTarget) => void;
   full?: boolean;
 }) {
-  const [menuAnchor, setMenuAnchor] = useState<{ left: number; top: number } | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
   const path = preview?.path ?? fallbackPath;
   if (!path && !loading && !error) return null;
   const meta = preview
@@ -396,12 +1817,16 @@ function FilePreviewPane({
           {path}
         </div>
       ) : null}
-      {meta.length > 0 ? <div className="file-preview-meta">{meta.join(" · ")}</div> : null}
+      {meta.length > 0 ? (
+        <div className="file-preview-meta">{meta.join(" · ")}</div>
+      ) : null}
       <div className="file-preview-body">
         {loading ? (
           <div className="ctx-empty">{t("fileActions.previewLoading")}</div>
         ) : error ? (
-          <div className="ctx-empty">{t("fileActions.previewError", { message: error })}</div>
+          <div className="ctx-empty">
+            {t("fileActions.previewError", { message: error })}
+          </div>
         ) : preview?.text !== undefined && preview.text !== null ? (
           <pre className="file-preview-text">{preview.text}</pre>
         ) : (
@@ -425,7 +1850,14 @@ function FilePreviewPane({
   );
 }
 
-const SUBAGENT_NAMES = ["Nash", "Sagan", "Zeno", "Euclid", "Plato", "Ramanujan"];
+const SUBAGENT_NAMES = [
+  "Nash",
+  "Sagan",
+  "Zeno",
+  "Euclid",
+  "Plato",
+  "Ramanujan",
+];
 const SUBAGENT_COLORS = [
   "var(--danger)",
   "var(--accent)",
@@ -437,7 +1869,8 @@ const SUBAGENT_COLORS = [
 
 function stableIndex(value: string, size: number): number {
   let acc = 0;
-  for (let i = 0; i < value.length; i++) acc = (acc * 31 + value.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < value.length; i++)
+    acc = (acc * 31 + value.charCodeAt(i)) >>> 0;
   return size === 0 ? 0 : acc % size;
 }
 
@@ -483,7 +1916,9 @@ function CtxSubagents({
       <div className="h">
         <span>{t("contextPanel.subagentsTitle")}</span>
         <span className="right">
-          {visible.length === 0 ? "—" : t("contextPanel.subagentsCount", { count: visible.length })}
+          {visible.length === 0
+            ? "—"
+            : t("contextPanel.subagentsCount", { count: visible.length })}
         </span>
       </div>
       {visible.length === 0 ? (
@@ -491,11 +1926,15 @@ function CtxSubagents({
       ) : (
         <div className="subagent-list">
           {visible.map((run) => {
-            const name = SUBAGENT_NAMES[stableIndex(run.runId, SUBAGENT_NAMES.length)] ?? "Nash";
+            const name =
+              SUBAGENT_NAMES[stableIndex(run.runId, SUBAGENT_NAMES.length)] ??
+              "Nash";
             const accent =
-              SUBAGENT_COLORS[stableIndex(`${run.runId}:color`, SUBAGENT_COLORS.length)] ??
-              "var(--accent)";
-            const role = run.skillName?.trim() || t("contextPanel.subagentRoleFallback");
+              SUBAGENT_COLORS[
+                stableIndex(`${run.runId}:color`, SUBAGENT_COLORS.length)
+              ] ?? "var(--accent)";
+            const role =
+              run.skillName?.trim() || t("contextPanel.subagentRoleFallback");
             const disabled = !run.sessionName;
             return (
               <button
@@ -505,7 +1944,11 @@ function CtxSubagents({
                 data-status={run.status}
                 disabled={disabled}
                 aria-label={t("contextPanel.subagentOpen", { task: run.task })}
-                title={disabled ? undefined : t("contextPanel.subagentOpen", { task: run.task })}
+                title={
+                  disabled
+                    ? undefined
+                    : t("contextPanel.subagentOpen", { task: run.task })
+                }
                 style={{ ["--subagent-accent" as string]: accent }}
                 onClick={() => {
                   if (run.sessionName) onOpen(run.sessionName);
@@ -532,7 +1975,13 @@ function CtxSubagents({
   );
 }
 
-function CtxTools({ specs, bridged }: { specs: McpSpecInfo[]; bridged: boolean }) {
+function CtxTools({
+  specs,
+  bridged,
+}: {
+  specs: McpSpecInfo[];
+  bridged: boolean;
+}) {
   const readyCount = specs.filter((s) => s.status === "connected").length;
   return (
     <div className="ctx-block">
@@ -543,7 +1992,10 @@ function CtxTools({ specs, bridged }: { specs: McpSpecInfo[]; bridged: boolean }
             ? "—"
             : bridged
               ? t("contextPanel.mcpReadyAll", { count: specs.length })
-              : t("contextPanel.mcpReadySome", { ready: readyCount, count: specs.length })}
+              : t("contextPanel.mcpReadySome", {
+                  ready: readyCount,
+                  count: specs.length,
+                })}
         </span>
       </div>
       {specs.length === 0 ? (
@@ -602,12 +2054,19 @@ function CtxMemory({
   return (
     <div
       className="ctx-block"
-      style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+      }}
     >
       <div className="h">
         <span>{t("contextPanel.memoryTitle")}</span>
         <span className="right">
-          {entries.length === 0 ? "—" : t("contextPanel.itemCount", { count: entries.length })}
+          {entries.length === 0
+            ? "—"
+            : t("contextPanel.itemCount", { count: entries.length })}
         </span>
       </div>
       {entries.length === 0 ? (
@@ -615,7 +2074,12 @@ function CtxMemory({
       ) : (
         <div
           className="mem"
-          style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            flex: 1,
+            minHeight: 0,
+          }}
         >
           <div style={{ flexShrink: 0 }}>
             {entries.map((m) => (

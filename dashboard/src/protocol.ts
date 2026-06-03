@@ -86,7 +86,10 @@ export type RevisionRequiredEvent = {
   summary?: string;
 };
 
-export type RevisionVerdict = { type: "accepted" } | { type: "rejected" } | { type: "cancelled" };
+export type RevisionVerdict =
+  | { type: "accepted" }
+  | { type: "rejected" }
+  | { type: "cancelled" };
 
 export type ModalKind =
   | "shell"
@@ -156,7 +159,12 @@ export type TabClosedEvent = {
   type: "$tab_closed";
 };
 
-export type McpSpecStatus = "configured" | "handshake" | "connected" | "failed" | "disabled";
+export type McpSpecStatus =
+  | "configured"
+  | "handshake"
+  | "connected"
+  | "failed"
+  | "disabled";
 
 export type McpSpecInfo = {
   raw: string;
@@ -222,7 +230,12 @@ export type MemoryDetailEvent = {
 
 export type RetryResultEvent = { type: "$retry_result"; text: string };
 
-export type BtwResultEvent = { type: "$btw_result"; question: string; answer: string };
+export type BtwResultEvent = {
+  type: "$btw_result";
+  question: string;
+  answer: string;
+  clientId?: string;
+};
 
 export type JobInfo = {
   id: number;
@@ -317,7 +330,9 @@ export type SettingsEvent = {
     baidu?: string;
   };
   subagentModels?: Record<string, "flash" | "pro">;
+  contextTokens?: Record<string, number>;
   showSystemEvents?: boolean;
+  processCardsDefaultOpen?: boolean;
   version: string;
 };
 
@@ -353,7 +368,9 @@ export type SettingsPatch = {
   webSearchEngine?: WebSearchEngineName;
   baiduApiKey?: string | null;
   subagentModels?: Record<string, "flash" | "pro">;
+  contextTokens?: Record<string, number>;
   showSystemEvents?: boolean;
+  processCardsDefaultOpen?: boolean;
 };
 
 export type QQConfigPatch = {
@@ -368,6 +385,7 @@ export type UserMessageEvent = {
   ts: string;
   turn: number;
   text: string;
+  clientId?: string;
 };
 
 export type ModelTurnStartedEvent = {
@@ -509,9 +527,14 @@ export type IncomingEvent = { tabId?: string } & (
 );
 
 export type OutgoingCommand = { tabId?: string } & (
-  | { cmd: "user_input"; text: string }
+  | { cmd: "user_input"; text: string; clientId?: string }
   | { cmd: "abort" }
-  | { cmd: "confirm_response"; id: number; response: ConfirmationChoice; kind: "shell" | "path" }
+  | {
+      cmd: "confirm_response";
+      id: number;
+      response: ConfirmationChoice;
+      kind: "shell" | "path";
+    }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
   | { cmd: "plan_response"; id: number; response: PlanVerdict }
   | { cmd: "checkpoint_response"; id: number; response: CheckpointVerdict }
@@ -544,5 +567,5 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "jobs_stop_all" }
   | { cmd: "compact_history" }
   | { cmd: "retry" }
-  | { cmd: "btw"; text: string }
+  | { cmd: "btw"; text: string; clientId?: string }
 );

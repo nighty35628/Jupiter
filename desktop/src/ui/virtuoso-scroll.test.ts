@@ -10,21 +10,23 @@ describe("desktop Virtuoso transcript scrolling", () => {
   it("scrolls the virtualized transcript to the last rendered message", () => {
     const handle = {
       scrollToIndex: vi.fn(),
+      scrollTo: vi.fn(),
       autoscrollToBottom: vi.fn(),
     };
 
     expect(scrollVirtuosoToBottom({ current: handle }, 4, true)).toBe(true);
 
-    expect(handle.scrollToIndex).toHaveBeenCalledWith({
-      index: 3,
-      align: "end",
+    expect(handle.scrollTo).toHaveBeenCalledWith({
+      top: Number.MAX_SAFE_INTEGER,
       behavior: "smooth",
     });
+    expect(handle.scrollToIndex).not.toHaveBeenCalled();
   });
 
   it("does nothing when there are no messages to scroll to", () => {
     const handle = {
       scrollToIndex: vi.fn(),
+      scrollTo: vi.fn(),
       autoscrollToBottom: vi.fn(),
     };
 
@@ -36,6 +38,7 @@ describe("desktop Virtuoso transcript scrolling", () => {
   it("asks Virtuoso to keep following output when the last item grows", () => {
     const handle = {
       scrollToIndex: vi.fn(),
+      scrollTo: vi.fn(),
       autoscrollToBottom: vi.fn(),
     };
 
@@ -47,25 +50,29 @@ describe("desktop Virtuoso transcript scrolling", () => {
   it("follows list height changes by end-aligning the last message", () => {
     const handle = {
       scrollToIndex: vi.fn(),
+      scrollTo: vi.fn(),
       autoscrollToBottom: vi.fn(),
     };
 
     expect(followVirtuosoHeightChange({ current: handle }, 5, true)).toBe(true);
 
-    expect(handle.scrollToIndex).toHaveBeenCalledWith({
-      index: 4,
-      align: "end",
+    expect(handle.scrollTo).toHaveBeenCalledWith({
+      top: Number.MAX_SAFE_INTEGER,
       behavior: "auto",
     });
+    expect(handle.scrollToIndex).not.toHaveBeenCalled();
   });
 
   it("does not follow list height changes when transcript following is disabled", () => {
     const handle = {
       scrollToIndex: vi.fn(),
+      scrollTo: vi.fn(),
       autoscrollToBottom: vi.fn(),
     };
 
-    expect(followVirtuosoHeightChange({ current: handle }, 5, false)).toBe(false);
+    expect(followVirtuosoHeightChange({ current: handle }, 5, false)).toBe(
+      false,
+    );
 
     expect(handle.scrollToIndex).not.toHaveBeenCalled();
   });
@@ -78,6 +85,8 @@ describe("desktop Virtuoso transcript scrolling", () => {
     };
 
     expect(isScrollElementNearBottom(element)).toBe(true);
-    expect(isScrollElementNearBottom({ ...element, scrollTop: 700 })).toBe(false);
+    expect(isScrollElementNearBottom({ ...element, scrollTop: 700 })).toBe(
+      false,
+    );
   });
 });

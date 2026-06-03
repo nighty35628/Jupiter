@@ -1,7 +1,10 @@
 import type { RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 
-type TranscriptVirtuosoHandle = Pick<VirtuosoHandle, "autoscrollToBottom" | "scrollToIndex">;
+type TranscriptVirtuosoHandle = Pick<
+  VirtuosoHandle,
+  "autoscrollToBottom" | "scrollTo" | "scrollToIndex"
+>;
 
 export type ScrollMetrics = {
   scrollTop: number;
@@ -15,7 +18,9 @@ export function isScrollElementNearBottom(
   element: ScrollMetrics,
   threshold = TRANSCRIPT_BOTTOM_THRESHOLD,
 ): boolean {
-  return element.scrollTop + element.clientHeight >= element.scrollHeight - threshold;
+  return (
+    element.scrollTop + element.clientHeight >= element.scrollHeight - threshold
+  );
 }
 
 export function scrollVirtuosoToBottom(
@@ -25,9 +30,8 @@ export function scrollVirtuosoToBottom(
 ): boolean {
   const handle = virtuosoRef.current;
   if (!handle || totalCount <= 0) return false;
-  handle.scrollToIndex({
-    index: totalCount - 1,
-    align: "end",
+  handle.scrollTo({
+    top: Number.MAX_SAFE_INTEGER,
     behavior: smooth ? "smooth" : "auto",
   });
   return true;

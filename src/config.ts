@@ -246,6 +246,9 @@ export interface JupiterConfig {
     /** When false, suppresses the quiet inline dividers for fold / abort / rate-limit
      *  warnings (severity="high" from the kernel). Default true. */
     showSystemEvents?: boolean;
+    /** When true, completed reasoning/tool/shell process cards open by default.
+     *  Running and failed process cards remain open regardless. Default false. */
+    processCardsDefaultOpen?: boolean;
   };
   /** Per-field visibility toggles for the bottom status row. All default to true (visible). */
   statusBar?: {
@@ -294,6 +297,8 @@ export interface JupiterConfig {
   /** User-declared extensions to the built-in memory types (#709). Unknown types round-trip even without a declaration; declaring one lets you attach a default priority + lifecycle. */
   memory?: {
     customTypes?: CustomMemoryTypeConfig[];
+    /** When true, model-invoked remember/forget asks before mutating memory files. Default false keeps memory capture frictionless. */
+    confirmWrites?: boolean;
   };
   pricingOverride?: Record<string, PricingOverride>;
   /** Per-app proxy override. Layered on top of HTTPS_PROXY / NO_PROXY env vars + the default DeepSeek-bypass whitelist. */
@@ -558,7 +563,10 @@ export function ensureDashboardToken(path: string = defaultConfigPath()): string
   const existing = cfg.dashboard?.token?.trim();
   if (existing && existing.length >= 16) return existing;
   const minted = randomBytes(32).toString("hex");
-  const next: JupiterConfig = { ...cfg, dashboard: { ...cfg.dashboard, token: minted } };
+  const next: JupiterConfig = {
+    ...cfg,
+    dashboard: { ...cfg.dashboard, token: minted },
+  };
   writeConfig(next, path);
   return minted;
 }
@@ -756,7 +764,10 @@ export function loadEndpoint(path: string = defaultConfigPath()): ResolvedEndpoi
   if (cfg.baseUrl) {
     return { baseUrl: cfg.baseUrl, apiKey: cfg.apiKey };
   }
-  return { baseUrl: undefined, apiKey: process.env.DEEPSEEK_API_KEY ?? cfg.apiKey };
+  return {
+    baseUrl: undefined,
+    apiKey: process.env.DEEPSEEK_API_KEY ?? cfg.apiKey,
+  };
 }
 
 export function loadApiKey(path: string = defaultConfigPath()): string | undefined {
@@ -983,7 +994,12 @@ export function addSkillPath(
   const seen = new Set(resolveSkillPaths(existing, baseDir).map(skillPathKey));
   const key = skillPathKey(entry.resolved);
   if (seen.has(key))
-    return { added: false, path: entry.raw, resolved: entry.resolved, paths: existing };
+    return {
+      added: false,
+      path: entry.raw,
+      resolved: entry.resolved,
+      paths: existing,
+    };
   const paths = saveSkillPaths([...existing, entry.raw], baseDir, path);
   return { added: true, path: entry.raw, resolved: entry.resolved, paths };
 }
@@ -1385,6 +1401,27 @@ export function loadShowSystemEvents(path: string = defaultConfigPath()): boolea
 export function saveShowSystemEvents(on: boolean, path: string = defaultConfigPath()): void {
   const cfg = readConfig(path);
   cfg.thread = { ...(cfg.thread ?? {}), showSystemEvents: on };
+  writeConfig(cfg, path);
+}
+
+/** Default false — keep completed process detail quiet unless the user opts in. */
+export function loadProcessCardsDefaultOpen(path: string = defaultConfigPath()): boolean {
+  return readConfig(path).thread?.processCardsDefaultOpen === true;
+}
+
+export function saveProcessCardsDefaultOpen(on: boolean, path: string = defaultConfigPath()): void {
+  const cfg = readConfig(path);
+  cfg.thread = { ...(cfg.thread ?? {}), processCardsDefaultOpen: on };
+  writeConfig(cfg, path);
+}
+
+export function loadMemoryConfirmWrites(path: string = defaultConfigPath()): boolean {
+  return readConfig(path).memory?.confirmWrites === true;
+}
+
+export function saveMemoryConfirmWrites(on: boolean, path: string = defaultConfigPath()): void {
+  const cfg = readConfig(path);
+  cfg.memory = { ...(cfg.memory ?? {}), confirmWrites: on };
   writeConfig(cfg, path);
 }
 

@@ -7,6 +7,7 @@ import type {
   McpSpecInfo,
   MemoryDetail,
   MemoryEntryInfo,
+  MemoryWriteInput,
   SettingsPatch,
   SkillInfo,
   SkillRootInfo,
@@ -96,6 +97,9 @@ export function SettingsModal({
   onCreateSkill,
   onSetSkillModel,
   onReadMemory,
+  onRefreshMemory,
+  onDeleteMemory,
+  onSaveMemory,
   onOpenAbout,
 }: {
   settings: SettingsType;
@@ -126,7 +130,11 @@ export function SettingsModal({
   onLoadQQ: () => void;
   onConnectQQ: () => void;
   onDisconnectQQ: () => void;
-  onSaveQQConfig: (patch: { appId?: string; appSecret?: string; sandbox: boolean }) => void;
+  onSaveQQConfig: (patch: {
+    appId?: string;
+    appSecret?: string;
+    sandbox: boolean;
+  }) => void;
   onOpenQQApplyLink: () => void;
   onPickWorkspace: () => void;
   onAddMcpSpec: (spec: string) => void;
@@ -139,6 +147,9 @@ export function SettingsModal({
   onCreateSkill: (name: string, scope: "project" | "global") => void;
   onSetSkillModel: (name: string, model: "flash" | "pro" | null) => void;
   onReadMemory: (path: string) => void;
+  onRefreshMemory: () => void;
+  onDeleteMemory: (path: string) => void;
+  onSaveMemory: (input: MemoryWriteInput) => void;
   onOpenAbout: () => void;
 }) {
   const [page, setPage] = useState<PageId>(initialPage ?? "general");
@@ -167,7 +178,11 @@ export function SettingsModal({
               onClick={() => setPage(p.id)}
             >
               <span className="ico">{I[p.icon]({ size: 13 })}</span>
-              <span>{t(`settings.page${p.id[0]!.toUpperCase()}${p.id.slice(1)}Label` as any)}</span>
+              <span>
+                {t(
+                  `settings.page${p.id[0]!.toUpperCase()}${p.id.slice(1)}Label` as any,
+                )}
+              </span>
             </div>
           ))}
         </nav>
@@ -199,7 +214,9 @@ export function SettingsModal({
                 onOpenAbout={onOpenAbout}
               />
             )}
-            {page === "models" && <PageModels settings={settings} onSave={onSave} />}
+            {page === "models" && (
+              <PageModels settings={settings} onSave={onSave} />
+            )}
             {page === "mcp" && (
               <>
                 <ApiKeySection
@@ -249,9 +266,20 @@ export function SettingsModal({
               />
             )}
             {page === "memory" && (
-              <PageMemory entries={memory} detail={memoryDetail} onRead={onReadMemory} />
+              <PageMemory
+                settings={settings}
+                entries={memory}
+                detail={memoryDetail}
+                onRead={onReadMemory}
+                onRefresh={onRefreshMemory}
+                onDelete={onDeleteMemory}
+                onSave={onSaveMemory}
+                onSaveSettings={onSave}
+              />
             )}
-            {page === "rules" && <PageRules settings={settings} onSave={onSave} />}
+            {page === "rules" && (
+              <PageRules settings={settings} onSave={onSave} />
+            )}
             {page === "appearance" && (
               <PageAppearance
                 theme={theme}
@@ -267,7 +295,11 @@ export function SettingsModal({
               />
             )}
             {page === "billing" && (
-              <PageBilling balance={balance} usage={usage} currency={currency} />
+              <PageBilling
+                balance={balance}
+                usage={usage}
+                currency={currency}
+              />
             )}
             {page === "shortcuts" && <PageShortcuts />}
           </div>
@@ -294,8 +326,16 @@ export function QQChannelSection({
   onCloseConfigure: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
-  onSaveConfig: (patch: { appId?: string; appSecret?: string; sandbox: boolean }) => void;
-  onSaveAndConnect: (patch: { appId?: string; appSecret?: string; sandbox: boolean }) => void;
+  onSaveConfig: (patch: {
+    appId?: string;
+    appSecret?: string;
+    sandbox: boolean;
+  }) => void;
+  onSaveAndConnect: (patch: {
+    appId?: string;
+    appSecret?: string;
+    sandbox: boolean;
+  }) => void;
   onOpenApplyLink: () => void;
 }) {
   const current = qq ?? {
@@ -398,10 +438,18 @@ export function QQChannelSection({
               <div className="n">{t("settings.qqEnvironment")}</div>
             </div>
             <div className="seg-ctrl">
-              <button type="button" data-on={sandbox} onClick={() => setSandbox(true)}>
+              <button
+                type="button"
+                data-on={sandbox}
+                onClick={() => setSandbox(true)}
+              >
                 {t("settings.qqSandbox")}
               </button>
-              <button type="button" data-on={!sandbox} onClick={() => setSandbox(false)}>
+              <button
+                type="button"
+                data-on={!sandbox}
+                onClick={() => setSandbox(false)}
+              >
                 {t("settings.qqProduction")}
               </button>
             </div>
@@ -462,7 +510,12 @@ function PageGeneral({
         <div className="setting-row">
           <div className="l">
             <div className="n">{t("settings.currentWorkspace")}</div>
-            <div className="h">{displayWorkspacePath(settings.workspaceDir, t("settings.notSelected"))}</div>
+            <div className="h">
+              {displayWorkspacePath(
+                settings.workspaceDir,
+                t("settings.notSelected"),
+              )}
+            </div>
           </div>
           <button type="button" className="btn" onClick={onPickWorkspace}>
             {t("settings.workspaceChange")}
@@ -509,13 +562,38 @@ function PageGeneral({
         </div>
         <div className="setting-row">
           <div className="l">
+            <div className="n">{t("settings.processCardsDefaultOpen")}</div>
+            <div className="h">{t("settings.processCardsDefaultOpenHint")}</div>
+          </div>
+          <div className="seg-ctrl">
+            <button
+              type="button"
+              data-on={settings.processCardsDefaultOpen === true}
+              onClick={() => onSave({ processCardsDefaultOpen: true })}
+            >
+              {t("settings.expanded")}
+            </button>
+            <button
+              type="button"
+              data-on={settings.processCardsDefaultOpen !== true}
+              onClick={() => onSave({ processCardsDefaultOpen: false })}
+            >
+              {t("settings.collapsed")}
+            </button>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="l">
             <div className="n">{t("settings.desktopCloseBehavior")}</div>
             <div className="h">{t("settings.desktopCloseBehaviorHint")}</div>
           </div>
           <div className="seg-ctrl">
             <button
               type="button"
-              data-on={(settings.desktopCloseBehavior ?? "closeToQuit") === "closeToQuit"}
+              data-on={
+                (settings.desktopCloseBehavior ?? "closeToQuit") ===
+                "closeToQuit"
+              }
               onClick={() => onSave({ desktopCloseBehavior: "closeToQuit" })}
             >
               {t("settings.closeToQuit")}
@@ -536,7 +614,12 @@ function PageGeneral({
           </div>
           <div className="seg-ctrl">
             {getSupportedLangs().map((code) => (
-              <button type="button" key={code} data-on={lang === code} onClick={() => setLang(code)}>
+              <button
+                type="button"
+                key={code}
+                data-on={lang === code}
+                onClick={() => setLang(code)}
+              >
                 {getLangLabel(code)}
               </button>
             ))}
@@ -616,12 +699,18 @@ function WebSearchSection({
           }
         >
           <option value="bing">{t("settings.webSearchEngineBing")}</option>
-          <option value="bing-intl">{t("settings.webSearchEngineBingIntl")}</option>
-          <option value="searxng">{t("settings.webSearchEngineSearxng")}</option>
+          <option value="bing-intl">
+            {t("settings.webSearchEngineBingIntl")}
+          </option>
+          <option value="searxng">
+            {t("settings.webSearchEngineSearxng")}
+          </option>
           <option value="metaso">{t("settings.webSearchEngineMetaso")}</option>
           <option value="baidu">{t("settings.webSearchEngineBaidu")}</option>
           <option value="tavily">{t("settings.webSearchEngineTavily")}</option>
-          <option value="perplexity">{t("settings.webSearchEnginePerplexity")}</option>
+          <option value="perplexity">
+            {t("settings.webSearchEnginePerplexity")}
+          </option>
           <option value="exa">{t("settings.webSearchEngineExa")}</option>
           <option value="brave">{t("settings.webSearchEngineBrave")}</option>
           <option value="ollama">{t("settings.webSearchEngineOllama")}</option>
@@ -674,10 +763,18 @@ function PageAppearance({
             <div className="h">{t("settings.themeHint")}</div>
           </div>
           <div className="seg-ctrl">
-            <button type="button" data-on={theme === THEME.DARK} onClick={() => onSetTheme(THEME.DARK)}>
+            <button
+              type="button"
+              data-on={theme === THEME.DARK}
+              onClick={() => onSetTheme(THEME.DARK)}
+            >
               {t("settings.themeDark")}
             </button>
-            <button type="button" data-on={theme === THEME.LIGHT} onClick={() => onSetTheme(THEME.LIGHT)}>
+            <button
+              type="button"
+              data-on={theme === THEME.LIGHT}
+              onClick={() => onSetTheme(THEME.LIGHT)}
+            >
               {t("settings.themeLight")}
             </button>
           </div>
@@ -699,7 +796,9 @@ function PageAppearance({
               >
                 <span className="style-card-head">
                   <span className="style-name">
-                    {t(`settings.themeStyle${style[0]!.toUpperCase()}${style.slice(1)}` as any)}
+                    {t(
+                      `settings.themeStyle${style[0]!.toUpperCase()}${style.slice(1)}` as any,
+                    )}
                   </span>
                   <span className="style-mode">
                     {themeForStyle(style) === THEME.DARK
@@ -713,7 +812,9 @@ function PageAppearance({
                   <span />
                 </span>
                 <span className="style-desc">
-                  {t(`settings.themeStyle${style[0]!.toUpperCase()}${style.slice(1)}Desc` as any)}
+                  {t(
+                    `settings.themeStyle${style[0]!.toUpperCase()}${style.slice(1)}Desc` as any,
+                  )}
                 </span>
               </button>
             ))}
@@ -729,13 +830,25 @@ function PageAppearance({
             <div className="h">{t("settings.fontScaleHint")}</div>
           </div>
           <div className="seg-ctrl">
-            <button type="button" data-on={fontScale === FONT_SCALE.SMALL} onClick={() => onSetFontScale(FONT_SCALE.SMALL)}>
+            <button
+              type="button"
+              data-on={fontScale === FONT_SCALE.SMALL}
+              onClick={() => onSetFontScale(FONT_SCALE.SMALL)}
+            >
               {t("settings.fontScaleSmall")}
             </button>
-            <button type="button" data-on={fontScale === FONT_SCALE.MEDIUM} onClick={() => onSetFontScale(FONT_SCALE.MEDIUM)}>
+            <button
+              type="button"
+              data-on={fontScale === FONT_SCALE.MEDIUM}
+              onClick={() => onSetFontScale(FONT_SCALE.MEDIUM)}
+            >
               {t("settings.fontScaleMedium")}
             </button>
-            <button type="button" data-on={fontScale === FONT_SCALE.LARGE} onClick={() => onSetFontScale(FONT_SCALE.LARGE)}>
+            <button
+              type="button"
+              data-on={fontScale === FONT_SCALE.LARGE}
+              onClick={() => onSetFontScale(FONT_SCALE.LARGE)}
+            >
               {t("settings.fontScaleLarge")}
             </button>
           </div>
@@ -746,16 +859,32 @@ function PageAppearance({
             <div className="h">{t("settings.fontFamilyHint")}</div>
           </div>
           <div className="seg-ctrl">
-            <button type="button" data-on={fontFamily === FONT_FAMILY.SANS} onClick={() => onSetFontFamily(FONT_FAMILY.SANS)}>
+            <button
+              type="button"
+              data-on={fontFamily === FONT_FAMILY.SANS}
+              onClick={() => onSetFontFamily(FONT_FAMILY.SANS)}
+            >
               {t("settings.fontFamilySans")}
             </button>
-            <button type="button" data-on={fontFamily === FONT_FAMILY.SYSTEM} onClick={() => onSetFontFamily(FONT_FAMILY.SYSTEM)}>
+            <button
+              type="button"
+              data-on={fontFamily === FONT_FAMILY.SYSTEM}
+              onClick={() => onSetFontFamily(FONT_FAMILY.SYSTEM)}
+            >
               {t("settings.fontFamilySystem")}
             </button>
-            <button type="button" data-on={fontFamily === FONT_FAMILY.SERIF} onClick={() => onSetFontFamily(FONT_FAMILY.SERIF)}>
+            <button
+              type="button"
+              data-on={fontFamily === FONT_FAMILY.SERIF}
+              onClick={() => onSetFontFamily(FONT_FAMILY.SERIF)}
+            >
               {t("settings.fontFamilySerif")}
             </button>
-            <button type="button" data-on={fontFamily === FONT_FAMILY.CUSTOM} onClick={() => onSetFontFamily(FONT_FAMILY.CUSTOM)}>
+            <button
+              type="button"
+              data-on={fontFamily === FONT_FAMILY.CUSTOM}
+              onClick={() => onSetFontFamily(FONT_FAMILY.CUSTOM)}
+            >
               {t("settings.fontFamilyCustom")}
             </button>
           </div>
@@ -787,7 +916,14 @@ function PageAppearance({
 }
 
 const SEARCH_ENGINE_API_KEY_FIELDS: ReadonlyArray<{
-  engine: "metaso" | "baidu" | "tavily" | "perplexity" | "exa" | "brave" | "ollama";
+  engine:
+    | "metaso"
+    | "baidu"
+    | "tavily"
+    | "perplexity"
+    | "exa"
+    | "brave"
+    | "ollama";
   patchKey:
     | "metasoApiKey"
     | "baiduApiKey"
@@ -798,21 +934,41 @@ const SEARCH_ENGINE_API_KEY_FIELDS: ReadonlyArray<{
     | "ollamaApiKey";
   signupUrl: string;
 }> = [
-  { engine: "metaso", patchKey: "metasoApiKey", signupUrl: "https://metaso.cn/settings/api" },
+  {
+    engine: "metaso",
+    patchKey: "metasoApiKey",
+    signupUrl: "https://metaso.cn/settings/api",
+  },
   {
     engine: "baidu",
     patchKey: "baiduApiKey",
     signupUrl: "https://cloud.baidu.com/doc/qianfan/s/2mh4su4uy",
   },
-  { engine: "tavily", patchKey: "tavilyApiKey", signupUrl: "https://app.tavily.com" },
+  {
+    engine: "tavily",
+    patchKey: "tavilyApiKey",
+    signupUrl: "https://app.tavily.com",
+  },
   {
     engine: "perplexity",
     patchKey: "perplexityApiKey",
     signupUrl: "https://www.perplexity.ai/settings/api",
   },
-  { engine: "exa", patchKey: "exaApiKey", signupUrl: "https://dashboard.exa.ai/api-keys" },
-  { engine: "brave", patchKey: "braveApiKey", signupUrl: "https://brave.com/search/api/" },
-  { engine: "ollama", patchKey: "ollamaApiKey", signupUrl: "https://ollama.com/settings/keys" },
+  {
+    engine: "exa",
+    patchKey: "exaApiKey",
+    signupUrl: "https://dashboard.exa.ai/api-keys",
+  },
+  {
+    engine: "brave",
+    patchKey: "braveApiKey",
+    signupUrl: "https://brave.com/search/api/",
+  },
+  {
+    engine: "ollama",
+    patchKey: "ollamaApiKey",
+    signupUrl: "https://ollama.com/settings/keys",
+  },
 ];
 
 function WebSearchEngineCredentials({
@@ -880,7 +1036,14 @@ function WebSearchApiKeyRow({
   prefix,
   onSave,
 }: {
-  engine: "metaso" | "baidu" | "tavily" | "perplexity" | "exa" | "brave" | "ollama";
+  engine:
+    | "metaso"
+    | "baidu"
+    | "tavily"
+    | "perplexity"
+    | "exa"
+    | "brave"
+    | "ollama";
   patchKey:
     | "metasoApiKey"
     | "baiduApiKey"
@@ -900,7 +1063,9 @@ function WebSearchApiKeyRow({
       <div className="l">
         <div className="n">{label}</div>
         <div className="h">
-          {prefix ? t("settings.apiKeySet", { prefix }) : t("settings.apiKeyNotSet")}{" "}
+          {prefix
+            ? t("settings.apiKeySet", { prefix })
+            : t("settings.apiKeyNotSet")}{" "}
           <a
             href={signupUrl}
             target="_blank"
@@ -1030,7 +1195,9 @@ function PageModels({
   return (
     <>
       <section className="section">
-        <div className="stitle">{t("settings.defaultModelCurrent", { model: settings.model })}</div>
+        <div className="stitle">
+          {t("settings.defaultModelCurrent", { model: settings.model })}
+        </div>
         <div className="model-grid">
           {KNOWN_MODELS.map((id) => (
             <div
@@ -1090,7 +1257,10 @@ function PageModels({
                 } else {
                   delete next[settings.model];
                 }
-                onSave({ contextTokens: Object.keys(next).length > 0 ? next : undefined });
+                onSave({
+                  contextTokens:
+                    Object.keys(next).length > 0 ? next : undefined,
+                });
               }}
               placeholder={t("settings.contextTokensPlaceholder")}
             />
@@ -1153,8 +1323,12 @@ function PageMCP({
       <section className="section">
         <div className="settings-toolbar">
           <div>
-            <div className="stitle">{t("settings.mcpConfigured", { count: specs.length })}</div>
-            <div className="h">{bridged ? t("settings.mcpBridged") : t("settings.mcpNotBridged")}</div>
+            <div className="stitle">
+              {t("settings.mcpConfigured", { count: specs.length })}
+            </div>
+            <div className="h">
+              {bridged ? t("settings.mcpBridged") : t("settings.mcpNotBridged")}
+            </div>
           </div>
           <button type="button" className="btn ghost" onClick={onReconnect}>
             <I.rotate size={12} />
@@ -1169,48 +1343,58 @@ function PageMCP({
             const disabled = s.status === "disabled";
             return (
               <div className="scard mcp-config-card" key={s.raw}>
-              <div className="top">
-                <span className="ico">
-                  <I.wrench size={14} />
-                </span>
-                <div className="mcp-spec-body">
-                  <div className="nm">{s.name ?? "(anonymous)"}</div>
-                  <div className="sub mcp-spec-summary" title={s.summary}>
-                    {s.summary}
+                <div className="top">
+                  <span className="ico">
+                    <I.wrench size={14} />
+                  </span>
+                  <div className="mcp-spec-body">
+                    <div className="nm">{s.name ?? "(anonymous)"}</div>
+                    <div className="sub mcp-spec-summary" title={s.summary}>
+                      {s.summary}
+                    </div>
                   </div>
+                  <span className="status-pill" data-status={s.status}>
+                    {statusLabel(s.status)}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    disabled={!canToggle}
+                    title={
+                      disabled
+                        ? t("settings.mcpEnable")
+                        : t("settings.mcpDisable")
+                    }
+                    onClick={() => {
+                      if (!s.name) return;
+                      disabled ? onEnable(s.name) : onDisable(s.name);
+                    }}
+                  >
+                    {disabled ? <I.play size={12} /> : <I.stop size={12} />}
+                    <span>
+                      {disabled
+                        ? t("settings.mcpEnable")
+                        : t("settings.mcpDisable")}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn ghost mcp-remove"
+                    title={t("settings.mcpRemove")}
+                    onClick={() => onRemove(s.raw)}
+                  >
+                    <I.trash size={12} />
+                  </button>
                 </div>
-                <span className="status-pill" data-status={s.status}>
-                  {statusLabel(s.status)}
-                </span>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  disabled={!canToggle}
-                  title={disabled ? t("settings.mcpEnable") : t("settings.mcpDisable")}
-                  onClick={() => {
-                    if (!s.name) return;
-                    disabled ? onEnable(s.name) : onDisable(s.name);
-                  }}
-                >
-                  {disabled ? <I.play size={12} /> : <I.stop size={12} />}
-                  <span>{disabled ? t("settings.mcpEnable") : t("settings.mcpDisable")}</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost mcp-remove"
-                  title={t("settings.mcpRemove")}
-                  onClick={() => onRemove(s.raw)}
-                >
-                  <I.trash size={12} />
-                </button>
+                {s.parseError ? (
+                  <div className="desc" style={{ color: "var(--danger)" }}>
+                    {t("settings.parseError", { error: s.parseError })}
+                  </div>
+                ) : null}
+                {s.statusReason ? (
+                  <div className="desc">{s.statusReason}</div>
+                ) : null}
               </div>
-              {s.parseError ? (
-                <div className="desc" style={{ color: "var(--danger)" }}>
-                  {t("settings.parseError", { error: s.parseError })}
-                </div>
-              ) : null}
-              {s.statusReason ? <div className="desc">{s.statusReason}</div> : null}
-            </div>
             );
           })
         )}
@@ -1220,7 +1404,10 @@ function PageMCP({
         <div className="setting-row">
           <div className="l">
             <div className="n">{t("settings.mcpSpecLabel")}</div>
-            <div className="h" dangerouslySetInnerHTML={{ __html: t("settings.mcpSpecFormat") }} />
+            <div
+              className="h"
+              dangerouslySetInnerHTML={{ __html: t("settings.mcpSpecFormat") }}
+            />
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <input
@@ -1232,7 +1419,12 @@ function PageMCP({
                 if (e.key === "Enter") submit();
               }}
             />
-            <button type="button" className="btn primary" disabled={!draft.trim()} onClick={submit}>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={!draft.trim()}
+              onClick={submit}
+            >
               <I.plus size={12} />
               {t("settings.mcpAdd")}
             </button>
@@ -1289,7 +1481,12 @@ function PageSkills({
               if (e.key === "Enter") addPath();
             }}
           />
-          <button type="button" className="btn primary" disabled={!pathDraft.trim()} onClick={addPath}>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!pathDraft.trim()}
+            onClick={addPath}
+          >
             <I.plus size={12} />
             <span>{t("settings.skillPathAdd")}</span>
           </button>
@@ -1303,9 +1500,14 @@ function PageSkills({
                 </span>
                 <div className="mcp-spec-body">
                   <div className="nm">{root.scope}</div>
-                  <div className="sub mcp-spec-summary" title={root.dir}>{root.dir}</div>
+                  <div className="sub mcp-spec-summary" title={root.dir}>
+                    {root.dir}
+                  </div>
                 </div>
-                <span className="status-pill" data-status={root.status === "ok" ? "connected" : "failed"}>
+                <span
+                  className="status-pill"
+                  data-status={root.status === "ok" ? "connected" : "failed"}
+                >
                   {root.status}
                 </span>
                 {root.scope === "custom" ? (
@@ -1335,18 +1537,29 @@ function PageSkills({
               if (e.key === "Enter") create();
             }}
           />
-          <select className="field" value={scope} onChange={(e) => setScope(e.target.value as "project" | "global")}>
+          <select
+            className="field"
+            value={scope}
+            onChange={(e) => setScope(e.target.value as "project" | "global")}
+          >
             <option value="project">{t("settings.skillScopeProject")}</option>
             <option value="global">{t("settings.skillScopeGlobal")}</option>
           </select>
-          <button type="button" className="btn primary" disabled={!skillName.trim()} onClick={create}>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!skillName.trim()}
+            onClick={create}
+          >
             <I.plus size={12} />
             <span>{t("settings.skillCreateAction")}</span>
           </button>
         </div>
       </section>
       <section className="section">
-        <div className="stitle">{t("settings.skillsLoaded", { count: skills.length })}</div>
+        <div className="stitle">
+          {t("settings.skillsLoaded", { count: skills.length })}
+        </div>
         {skills.length === 0 ? (
           <div className="muted-card">{t("settings.skillsEmpty")}</div>
         ) : (
@@ -1372,13 +1585,22 @@ function PageSkills({
                     value={subagentModels[s.name] ?? ""}
                     onChange={(e) => {
                       const value = e.target.value;
-                      onSetModel(s.name, value === "" ? null : (value as "flash" | "pro"));
+                      onSetModel(
+                        s.name,
+                        value === "" ? null : (value as "flash" | "pro"),
+                      );
                     }}
                     title={t("settings.subagentModelHint")}
                   >
-                    <option value="">{t("settings.subagentModelDefault")}</option>
-                    <option value="flash">{t("settings.subagentModelFlash")}</option>
-                    <option value="pro">{t("settings.subagentModelPro")}</option>
+                    <option value="">
+                      {t("settings.subagentModelDefault")}
+                    </option>
+                    <option value="flash">
+                      {t("settings.subagentModelFlash")}
+                    </option>
+                    <option value="pro">
+                      {t("settings.subagentModelPro")}
+                    </option>
                   </select>
                 ) : null}
               </div>
@@ -1393,41 +1615,333 @@ function PageSkills({
 }
 
 function PageMemory({
+  settings,
   entries,
   detail,
   onRead,
+  onRefresh,
+  onDelete,
+  onSave,
+  onSaveSettings,
 }: {
+  settings: SettingsType;
   entries: MemoryEntryInfo[];
   detail: MemoryDetail | null;
   onRead: (path: string) => void;
+  onRefresh: () => void;
+  onDelete: (path: string) => void;
+  onSave: (input: MemoryWriteInput) => void;
+  onSaveSettings: (patch: SettingsPatch) => void;
 }) {
+  type MemoryDraft = {
+    name: string;
+    scope: "project" | "global";
+    type: string;
+    description: string;
+    body: string;
+    priority: "" | "low" | "medium" | "high";
+    expires: "" | "project_end";
+  };
+  const emptyDraft: MemoryDraft = {
+    name: "",
+    scope: "project",
+    type: "user",
+    description: "",
+    body: "",
+    priority: "",
+    expires: "",
+  };
+  const [draft, setDraft] = useState(emptyDraft);
+  const [editingPath, setEditingPath] = useState<string | undefined>();
+  useEffect(() => {
+    if (!detail || detail.kind !== "structured") return;
+    setDraft({
+      name: detail.name,
+      scope: detail.scope,
+      type: detail.type ?? "user",
+      description: detail.description,
+      body: detail.body,
+      priority: detail.priority ?? "",
+      expires: detail.expires ?? "",
+    });
+    setEditingPath(detail.path);
+  }, [detail?.path]);
+  const resetDraft = () => {
+    setDraft(emptyDraft);
+    setEditingPath(undefined);
+  };
+  const submitDraft = () => {
+    const input: MemoryWriteInput = {
+      name: draft.name.trim(),
+      scope: draft.scope,
+      type: draft.type.trim() || "user",
+      description: draft.description.trim(),
+      body: draft.body.trim(),
+    };
+    if (editingPath) input.path = editingPath;
+    if (draft.priority) input.priority = draft.priority;
+    if (draft.expires) input.expires = draft.expires;
+    onSave(input);
+  };
+  const groups = [
+    {
+      key: "project",
+      title: t("settings.memoryProjectRules"),
+      desc: t("settings.memoryProjectRulesDesc"),
+      entries: entries.filter((entry) => entry.kind === "project_file"),
+    },
+    {
+      key: "global",
+      title: t("settings.memoryGlobalRules"),
+      desc: t("settings.memoryGlobalRulesDesc"),
+      entries: entries.filter((entry) => entry.kind === "global_file"),
+    },
+    {
+      key: "structured",
+      title: t("settings.memoryLongTerm"),
+      desc: t("settings.memoryLongTermDesc"),
+      entries: entries.filter((entry) => entry.kind === "structured"),
+    },
+  ];
   return (
     <section className="section">
-      <div className="stitle">{t("settings.memorySection")}</div>
-      {entries.length === 0 ? (
-        <div className="muted-card">{t("settings.memoryDesc")}</div>
-      ) : (
-        <div className="memory-browser">
-          <div className="memory-list">
-            {entries.map((m) => (
-              <button
-                type="button"
-                className="memory-item"
-                data-active={detail?.path === m.path}
-                key={m.path}
-                onClick={() => onRead(m.path)}
-              >
-                <span className="memory-kind">{m.kind.replace("_", " ")}</span>
-                <span className="memory-name">{m.description || m.name}</span>
-                <span className="memory-path">{m.path}</span>
-              </button>
-            ))}
-          </div>
-          <pre className="memory-detail">
-            {detail ? detail.body : t("settings.memoryDesc")}
-          </pre>
+      <div className="memory-toolbar">
+        <div>
+          <div className="stitle">{t("settings.memorySection")}</div>
+          <div className="section-hint">{t("settings.memoryEffectHint")}</div>
         </div>
-      )}
+        <div className="memory-toolbar-actions">
+          <button
+            type="button"
+            className="seg-pill"
+            aria-pressed={settings.memoryConfirmWrites === true}
+            data-on={settings.memoryConfirmWrites === true}
+            onClick={() =>
+              onSaveSettings({
+                memoryConfirmWrites: !(settings.memoryConfirmWrites === true),
+              })
+            }
+          >
+            {t("settings.memoryConfirmWrites")}
+          </button>
+          <button type="button" className="ghost-btn" onClick={onRefresh}>
+            <I.refresh size={13} />
+            {t("settings.memoryRefresh")}
+          </button>
+        </div>
+      </div>
+      <div className="memory-browser">
+        <div className="memory-list">
+          {groups.map((group) => (
+            <div className="memory-group" key={group.key}>
+              <div className="memory-group-head">
+                <div className="memory-group-title">{group.title}</div>
+                <div className="memory-group-desc">{group.desc}</div>
+              </div>
+              {group.entries.length === 0 ? (
+                <div className="memory-empty">
+                  {t("settings.memoryEmptyGroup")}
+                </div>
+              ) : (
+                group.entries.map((m) => {
+                  const label = m.description || m.name;
+                  return (
+                    <div
+                      className="memory-item"
+                      data-active={detail?.path === m.path}
+                      key={m.path}
+                    >
+                      <button
+                        type="button"
+                        className="memory-read"
+                        onClick={() => onRead(m.path)}
+                      >
+                        <span className="memory-kind">
+                          {m.scope} / {m.type ?? m.kind.replace("_", " ")}
+                        </span>
+                        <span className="memory-name">{label}</span>
+                        {m.priority || m.expires ? (
+                          <span className="memory-badges">
+                            {m.priority ? (
+                              <span className="memory-badge">
+                                {t(`settings.memoryPriority_${m.priority}`)}
+                              </span>
+                            ) : null}
+                            {m.expires ? (
+                              <span className="memory-badge">
+                                {t("settings.memoryExpiresProjectEnd")}
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : null}
+                        <span className="memory-path">{m.path}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="memory-delete"
+                        aria-label={t("settings.memoryDeleteLabel", {
+                          name: label,
+                        })}
+                        title={t("settings.memoryDeleteLabel", { name: label })}
+                        onClick={() => onDelete(m.path)}
+                      >
+                        <I.trash size={13} />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="memory-detail-panel">
+          <pre className="memory-detail">
+            {detail ? detail.body : t("settings.memoryDetailPlaceholder")}
+          </pre>
+          <div className="memory-editor">
+            <div className="memory-editor-head">
+              <div>
+                <div className="memory-editor-title">
+                  {editingPath
+                    ? t("settings.memoryEditStructured")
+                    : t("settings.memoryNewStructured")}
+                </div>
+                <div className="memory-editor-desc">
+                  {t("settings.memoryStructuredHint")}
+                </div>
+              </div>
+              <button type="button" className="ghost-btn" onClick={resetDraft}>
+                {t("settings.memoryNew")}
+              </button>
+            </div>
+            <div className="memory-form-grid">
+              <label className="memory-field">
+                <span>{t("settings.memoryNameLabel")}</span>
+                <input
+                  className="field"
+                  value={draft.name}
+                  onChange={(e) =>
+                    setDraft((v) => ({ ...v, name: e.target.value }))
+                  }
+                />
+              </label>
+              <label className="memory-field">
+                <span>{t("settings.memoryScopeLabel")}</span>
+                <select
+                  className="field"
+                  value={draft.scope}
+                  onChange={(e) =>
+                    setDraft((v) => ({
+                      ...v,
+                      scope: e.target.value as "project" | "global",
+                    }))
+                  }
+                >
+                  <option value="project">
+                    {t("settings.memoryScopeProject")}
+                  </option>
+                  <option value="global">
+                    {t("settings.memoryScopeGlobal")}
+                  </option>
+                </select>
+              </label>
+              <label className="memory-field">
+                <span>{t("settings.memoryTypeLabel")}</span>
+                <select
+                  className="field"
+                  value={draft.type}
+                  onChange={(e) =>
+                    setDraft((v) => ({ ...v, type: e.target.value }))
+                  }
+                >
+                  <option value="user">{t("settings.memoryTypeUser")}</option>
+                  <option value="feedback">
+                    {t("settings.memoryTypeFeedback")}
+                  </option>
+                  <option value="project">
+                    {t("settings.memoryTypeProject")}
+                  </option>
+                  <option value="reference">
+                    {t("settings.memoryTypeReference")}
+                  </option>
+                </select>
+              </label>
+              <label className="memory-field">
+                <span>{t("settings.memoryPriorityLabel")}</span>
+                <select
+                  className="field"
+                  value={draft.priority}
+                  onChange={(e) =>
+                    setDraft((v) => ({
+                      ...v,
+                      priority: e.target.value as
+                        | ""
+                        | "low"
+                        | "medium"
+                        | "high",
+                    }))
+                  }
+                >
+                  <option value="">{t("settings.memoryPriorityDefault")}</option>
+                  <option value="low">{t("settings.memoryPriority_low")}</option>
+                  <option value="medium">
+                    {t("settings.memoryPriority_medium")}
+                  </option>
+                  <option value="high">
+                    {t("settings.memoryPriority_high")}
+                  </option>
+                </select>
+              </label>
+              <label className="memory-field">
+                <span>{t("settings.memoryExpiresLabel")}</span>
+                <select
+                  className="field"
+                  value={draft.expires}
+                  onChange={(e) =>
+                    setDraft((v) => ({
+                      ...v,
+                      expires: e.target.value as "" | "project_end",
+                    }))
+                  }
+                >
+                  <option value="">{t("settings.memoryExpiresNone")}</option>
+                  <option value="project_end">
+                    {t("settings.memoryExpiresProjectEnd")}
+                  </option>
+                </select>
+              </label>
+              <label className="memory-field memory-field-wide">
+                <span>{t("settings.memoryDescriptionLabel")}</span>
+                <input
+                  className="field"
+                  value={draft.description}
+                  onChange={(e) =>
+                    setDraft((v) => ({
+                      ...v,
+                      description: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label className="memory-field memory-field-wide">
+                <span>{t("settings.memoryBodyLabel")}</span>
+                <textarea
+                  className="field memory-body-field"
+                  value={draft.body}
+                  onChange={(e) =>
+                    setDraft((v) => ({ ...v, body: e.target.value }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="memory-editor-actions">
+              <button type="button" className="primary-btn" onClick={submitDraft}>
+                {t("settings.memorySave")}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -1491,9 +2005,13 @@ function PageBilling({
   currency: "CNY" | "USD";
 }) {
   const symbol = currency === "CNY" ? "¥" : "$";
-  const sessionCost = currency === "CNY" ? usage.totalCostUsd * 7.2 : usage.totalCostUsd;
+  const sessionCost =
+    currency === "CNY" ? usage.totalCostUsd * 7.2 : usage.totalCostUsd;
   const totalTokens = usage.cacheHitTokens + usage.cacheMissTokens;
-  const hitPct = totalTokens > 0 ? Math.round((usage.cacheHitTokens / totalTokens) * 100) : 0;
+  const hitPct =
+    totalTokens > 0
+      ? Math.round((usage.cacheHitTokens / totalTokens) * 100)
+      : 0;
   return (
     <>
       <div className="bill-grid">
@@ -1515,7 +2033,9 @@ function PageBilling({
           <div className="v">
             {symbol} {sessionCost.toFixed(4)}
           </div>
-          <div className="sub">prompt {usage.totalPromptTokens.toLocaleString()} t</div>
+          <div className="sub">
+            prompt {usage.totalPromptTokens.toLocaleString()} t
+          </div>
         </div>
         <div className="bill-card">
           <div className="l">{t("settings.cacheHitRate")}</div>
@@ -1552,7 +2072,13 @@ function PageShortcuts() {
   );
 }
 
-function SectionRow({ nm, keys }: { nm: string; keys: ShortcutKey[] }): ReactNode {
+function SectionRow({
+  nm,
+  keys,
+}: {
+  nm: string;
+  keys: ShortcutKey[];
+}): ReactNode {
   return (
     <>
       <div className="nm">{nm}</div>

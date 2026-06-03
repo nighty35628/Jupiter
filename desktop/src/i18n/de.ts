@@ -47,7 +47,8 @@ export const de: typeof en = {
     repo: "Repository",
     checkUpdates: "Nach Updates suchen",
     checking: "Prüfe...",
-    updateChannelDisabled: "Der Jupiter-Update-Kanal ist noch nicht konfiguriert.",
+    updateChannelDisabled:
+      "Der Jupiter-Update-Kanal ist noch nicht konfiguriert.",
     upToDate: "Aktuell ({version})",
     updateAvailable: "Update verfügbar: {version}",
     openReleases: "Releases anzeigen",
@@ -133,22 +134,27 @@ export const de: typeof en = {
     themeDarkDesc: "Standard · wenig Licht",
     themeLightDesc: "hoher Kontrast · Tageslicht",
     themeStyle: "Stil",
-    themeStyleHint: "Wähle die visuelle Palette für den gewählten hellen oder dunklen Modus.",
+    themeStyleHint:
+      "Wähle die visuelle Palette für den gewählten hellen oder dunklen Modus.",
     themeStyleGraphite: "Graphit",
-    themeStyleGraphiteDesc: "Neutraler dunkler Grauton für lange Arbeitssitzungen.",
+    themeStyleGraphiteDesc:
+      "Neutraler dunkler Grauton für lange Arbeitssitzungen.",
     themeStyleSandstone: "Mist",
     themeStyleSandstoneDesc: "Blendarmes kühles Hellgrau für Tageslicht.",
     themeStylePorcelain: "Porzellan",
     themeStylePorcelainDesc: "Standardmäßige Codex-ähnliche helle Palette.",
     themeStyleMidnight: "Ink",
-    themeStyleMidnightDesc: "Fast schwarze Nachtpalette mit gedämpften grünen Akzenten.",
+    themeStyleMidnightDesc:
+      "Fast schwarze Nachtpalette mit gedämpften grünen Akzenten.",
     fontScale: "Schriftgröße",
-    fontScaleHint: "Skaliert die gesamte UI; wähle größer für hochauflösende Bildschirme.",
+    fontScaleHint:
+      "Skaliert die gesamte UI; wähle größer für hochauflösende Bildschirme.",
     fontScaleSmall: "klein",
     fontScaleMedium: "mittel",
     fontScaleLarge: "groß",
     fontFamily: "Schriftfamilie",
-    fontFamilyHint: "Textkörper; Code-Blöcke bleiben unabhängig davon monospace.",
+    fontFamilyHint:
+      "Textkörper; Code-Blöcke bleiben unabhängig davon monospace.",
     fontFamilySans: "serifenlos",
     fontFamilySystem: "System",
     fontFamilySerif: "Serife",
@@ -162,7 +168,8 @@ export const de: typeof en = {
     effortHighDesc: "schneller, weniger Denken",
     effortMaxDesc: "tieferes Reasoning, langsamer",
     editMode: "Berechtigungsmodus",
-    editModeHint: "Steuert, wie Jupiter Tools ausführen, Dateien ändern und Befehle starten darf.",
+    editModeHint:
+      "Steuert, wie Jupiter Tools ausführen, Dateien ändern und Befehle starten darf.",
     editModeReview: "Erst fragen",
     editModeAuto: "Auto-genehmigen",
     editModeYolo: "Volle Kontrolle",
@@ -171,6 +178,11 @@ export const de: typeof en = {
       "Zeige leise Inline-Hinweise zur Kontextkomprimierung, Abbruch und Ratelimit-Pausen.",
     shown: "angezeigt",
     hidden: "ausgeblendet",
+    processCardsDefaultOpen: "Prozessdetails",
+    processCardsDefaultOpenHint:
+      "Standardzustand für abgeschlossene Thinking-, Tool- und Shell-Karten im Gespräch.",
+    expanded: "geöffnet",
+    collapsed: "eingeklappt",
     desktopCloseBehavior: "Fenster schließen",
     desktopCloseBehaviorHint:
       "Standardmäßig beendet Schließen die App. In die Ablage ausblenden hält laufende Sitzungen aktiv.",
@@ -178,27 +190,35 @@ export const de: typeof en = {
     closeToTray: "in Ablage",
     editModeReviewDesc: "Vor Edits oder Befehlen fragen",
     editModeAutoDesc: "Routine-Edits automatisch, sensible Befehle fragen",
-    editModeYoloDesc: "Berechtigung mit voller Kontrolle; alle Tools automatisch ausführen",
+    editModeYoloDesc:
+      "Berechtigung mit voller Kontrolle; alle Tools automatisch ausführen",
     budget: "Budgetgrenze",
     budgetHint: "USD pro Sitzung. Leer = keine Grenze.",
     budgetPlaceholder: "keine Grenze",
     webSearchEngine: "Suchmaschine",
     webSearchEngineBing: "bing — Standard, funktioniert von CN ohne Proxy",
-    webSearchEngineBingIntl: "bing-intl — internationaler Index über www.bing.com",
-    webSearchEngineSearxng: "searxng — selbst gehostet (Endpunkt via /se searxng <url>)",
+    webSearchEngineBingIntl:
+      "bing-intl — internationaler Index über www.bing.com",
+    webSearchEngineSearxng:
+      "searxng — selbst gehostet (Endpunkt via /se searxng <url>)",
     webSearchEngineMetaso:
       "metaso — 100/Tag kostenlos (CN-freundlich, kostenloser Schlüssel auf metaso.cn)",
     webSearchEngineBaidu:
       "baidu — Baidu AI Search, laut Baidu-Doku 1500/Monat kostenlos (BAIDU_API_KEY oder QIANFAN_API_KEY setzen)",
-    webSearchEngineTavily: "tavily — 1000/Monat kostenlos (TAVILY_API_KEY setzen)",
-    webSearchEnginePerplexity: "perplexity — AI-native (PERPLEXITY_API_KEY setzen)",
-    webSearchEngineExa: "exa — AI-native 1000/Monat kostenlos (EXA_API_KEY setzen)",
+    webSearchEngineTavily:
+      "tavily — 1000/Monat kostenlos (TAVILY_API_KEY setzen)",
+    webSearchEnginePerplexity:
+      "perplexity — AI-native (PERPLEXITY_API_KEY setzen)",
+    webSearchEngineExa:
+      "exa — AI-native 1000/Monat kostenlos (EXA_API_KEY setzen)",
     webSearchEngineBrave:
       "brave — unabhängiger Index, 2000/Monat kostenlos (BRAVE_SEARCH_API_KEY setzen)",
-    webSearchEngineOllama: "ollama — Ollama Cloud-Websuche (OLLAMA_API_KEY setzen)",
+    webSearchEngineOllama:
+      "ollama — Ollama Cloud-Websuche (OLLAMA_API_KEY setzen)",
     webSearchEngineNote: "gilt für den nächsten web_search-Aufruf",
     webSearchEndpoint: "SearXNG-Endpunkt",
-    webSearchEndpointHint: "Basis-URL der SearXNG-Instanz. Leer = http://localhost:8080.",
+    webSearchEndpointHint:
+      "Basis-URL der SearXNG-Instanz. Leer = http://localhost:8080.",
     webSearchApiKeySignup: "(Schlüssel holen)",
     webSearchApiKeyClear: "Löschen",
     webSearchApiKey: {
@@ -222,10 +242,12 @@ export const de: typeof en = {
       "Wird beim Klicken auf einen Dateilink/-pfad verwendet. Systemstandard = OS-Dateizuordnung. Andere müssen im PATH sein.",
     editorSystem: "Systemstandard",
     editorCustom: "benutzerdefiniert",
-    editorPlaceholder: 'z.B. "code", "subl" oder vollständiger Pfad zur ausführbaren Datei',
+    editorPlaceholder:
+      'z.B. "code", "subl" oder vollständiger Pfad zur ausführbaren Datei',
     editorDefault: "(Standard)",
     apiKey: "API-Schlüssel",
-    apiKeyHint: "DeepSeek-Schlüssel — gespeichert in ~/.jupiter/config.json (0600).",
+    apiKeyHint:
+      "DeepSeek-Schlüssel — gespeichert in ~/.jupiter/config.json (0600).",
     apiKeyNotSet: "(nicht gesetzt)",
     apiKeyCancel: "Abbrechen",
     apiKeySave: "Speichern",
@@ -243,8 +265,8 @@ export const de: typeof en = {
     pageMcpDesc: "DeepSeek API, Websuche, QQ-Kanal und MCP-Tool-Server",
     pageSkillsLabel: "Skills",
     pageSkillsDesc: "Wiederverwendbare Prompt-Sets für /-Befehle",
-    pageMemoryLabel: "Memory",
-    pageMemoryDesc: "CLAUDE.md / AGENTS.md-Injektion",
+    pageMemoryLabel: "Regeln und Memory",
+    pageMemoryDesc: "Projektregeln, globale Notizen und Langzeit-Memory",
     pageAppearanceLabel: "Darstellung",
     pageAppearanceDesc: "Theme, Palette und Typografie",
     pageBillingLabel: "Konto & Abrechnung",
@@ -276,7 +298,8 @@ export const de: typeof en = {
     qqConfigure: "Konfigurieren…",
     qqDisconnect: "Trennen",
     qqConfigureTitle: "QQ-Kanal konfigurieren",
-    qqConfigureHint: "Registriere einen QQ-Bot zum Empfangen und Beantworten von Nachrichten.",
+    qqConfigureHint:
+      "Registriere einen QQ-Bot zum Empfangen und Beantworten von Nachrichten.",
     qqEnvironment: "QQ-Umgebung",
     qqEnvironmentHint:
       "Wähle die QQ-Open-Platform-Umgebung für diesen Bot. Verwende Sandbox zum Testen und Production für den Live-Betrieb.",
@@ -315,7 +338,8 @@ export const de: typeof en = {
     mcpBridged: "· Verbunden",
     mcpNotBridged:
       "· Aktuelle Desktop-Sitzung nicht verbunden — starte jupiter code (TUI) neu, um wirksam zu werden",
-    mcpEmpty: "Noch keine MCP-Server konfiguriert. Gib unten eine Spec ein, um einen hinzuzufügen.",
+    mcpEmpty:
+      "Noch keine MCP-Server konfiguriert. Gib unten eine Spec ein, um einen hinzuzufügen.",
     mcpRemove: "Entfernen",
     mcpReconnect: "Neu verbinden",
     mcpEnable: "Aktivieren",
@@ -330,7 +354,8 @@ export const de: typeof en = {
     parseError: "Parse fehlgeschlagen: {error}",
     mcpAddSection: "Server hinzufügen",
     mcpSpecLabel: "Spec-String",
-    mcpSpecFormat: "Format: <code>name=befehl args</code> oder <code>name=https://host/sse</code>",
+    mcpSpecFormat:
+      "Format: <code>name=befehl args</code> oder <code>name=https://host/sse</code>",
     mcpAdd: "Hinzufügen",
     skillRoots: "Skill-Pfade",
     skillPathAdd: "Pfad hinzufügen",
@@ -350,6 +375,47 @@ export const de: typeof en = {
     memorySection: "Langzeit-Memory",
     memoryDesc:
       "Aktuelle Version verwendet die eingebaute CLAUDE.md / AGENTS.md-Injektion. Projekt-Level-Memory wird auf Kernel-Ebene verwaltet.",
+    memoryEffectHint:
+      "Änderungen werden sofort gespeichert. Die Prompt-Injektion wirkt in neuen Chats oder nach /new.",
+    memoryConfirmWrites: "Vor dem Speichern von Modell-Memory fragen",
+    memoryRefresh: "Memory aktualisieren",
+    memoryProjectRules: "Projektregeln",
+    memoryProjectRulesDesc:
+      "Repository-weite Dateien wie JUPITER.md / AGENTS.md. Sie können mit dem Projekt committet werden.",
+    memoryGlobalRules: "Globale Regeln",
+    memoryGlobalRulesDesc:
+      "Maschinenlokale projektübergreifende Notizen aus ~/.jupiter/JUPITER.md oder Claude-Migrationsdateien.",
+    memoryLongTerm: "Langzeit-Memory",
+    memoryLongTermDesc:
+      "Strukturierte Memories, gespeichert über remember/forget. Privat und für künftige Sitzungen indexiert.",
+    memoryEmptyGroup: "Keine Einträge in dieser Gruppe.",
+    memoryDetailPlaceholder: "Wähle einen Eintrag, um den Inhalt zu prüfen.",
+    memoryDeleteLabel: "{name} löschen",
+    memoryNewStructured: "Neues strukturiertes Memory",
+    memoryEditStructured: "Strukturiertes Memory bearbeiten",
+    memoryStructuredHint:
+      "Wird als privates Markdown-Memory mit Frontmatter gespeichert und in künftigen Sitzungen verwendet.",
+    memoryNew: "Neu",
+    memoryNameLabel: "Memory-Name",
+    memoryScopeLabel: "Bereich",
+    memoryScopeProject: "Projekt",
+    memoryScopeGlobal: "Global",
+    memoryTypeLabel: "Typ",
+    memoryTypeUser: "User",
+    memoryTypeFeedback: "Feedback",
+    memoryTypeProject: "Projekt",
+    memoryTypeReference: "Referenz",
+    memoryPriorityLabel: "Priorität",
+    memoryPriorityDefault: "Standard",
+    memoryPriority_low: "Niedrig",
+    memoryPriority_medium: "Mittel",
+    memoryPriority_high: "Hoch",
+    memoryExpiresLabel: "Ablauf",
+    memoryExpiresNone: "Keiner",
+    memoryExpiresProjectEnd: "Projektende",
+    memoryDescriptionLabel: "Beschreibung",
+    memoryBodyLabel: "Memory-Inhalt",
+    memorySave: "Memory speichern",
     appMode: "Anwendungsmodus",
     ruleAutoApprovalSection: "Auto-genehmigte Befehle",
     ruleAutoApprovalHint:
@@ -370,7 +436,8 @@ export const de: typeof en = {
   },
   modal: {
     ...en.modal,
-    planFeedbackPlaceholder: "Welche Probleme hat der Plan? Was muss verbessert werden?",
+    planFeedbackPlaceholder:
+      "Welche Probleme hat der Plan? Was muss verbessert werden?",
     choiceCustomPlaceholder: "Wo kann der Plan weiter verfeinert werden?",
   },
   plan: {
@@ -395,11 +462,14 @@ export const de: typeof en = {
     planDesc: "schreibgeschützt · keine Edits, keine Shell",
     reviewDesc: "vor Edits oder Befehlen fragen",
     autoDesc: "Routine-Edits automatisch, sensible Befehle fragen",
-    yoloDesc: "Berechtigung mit voller Kontrolle; alle Tools laufen automatisch",
+    yoloDesc:
+      "Berechtigung mit voller Kontrolle; alle Tools laufen automatisch",
     planHint: "Nur lesen · alle Schreibvorgänge und Befehle werden blockiert",
     reviewHint: "Vorsichtiger Modus · vor Tool-Ausführung fragen",
-    autoHint: "Vertrauensmodus · Routineaktionen automatisch, sensible Aktionen fragen",
-    yoloHint: "Volle Kontrolle · alle Tools laufen automatisch, vorsichtig verwenden",
+    autoHint:
+      "Vertrauensmodus · Routineaktionen automatisch, sensible Aktionen fragen",
+    yoloHint:
+      "Volle Kontrolle · alle Tools laufen automatisch, vorsichtig verwenden",
   },
   markdown: {
     ...en.markdown,
@@ -472,7 +542,8 @@ export const de: typeof en = {
       copyLast: "Letzte Antwort kopieren",
       switchModel: "Modell wechseln",
       searchEngine: "Suchmaschine + API-Keys konfigurieren",
-      skill: "Skills auflisten / verwalten (Projekt + Custom + Global + Eingebaut)",
+      skill:
+        "Skills auflisten / verwalten (Projekt + Custom + Global + Eingebaut)",
       setMode: "Modus auf {mode} setzen",
       setEffort: "Reasoning-Effort auf {effort} setzen",
       toggleTheme: "Theme wechseln",
@@ -505,13 +576,16 @@ export const de: typeof en = {
       bannerBold: "auto-genehmigt",
       banner2: " ohne Nachfrage.",
       switchBack: "Zu Erst fragen wechseln",
-      toast: "Auf volle Kontrolle gewechselt; alle Operationen werden auto-genehmigt",
+      toast:
+        "Auf volle Kontrolle gewechselt; alle Operationen werden auto-genehmigt",
     },
-    btwUsage: "▸ /btw <Frage> — eine Randfrage stellen, ohne den Gesprächskontext zu belasten.",
+    btwUsage:
+      "▸ /btw <Frage> — eine Randfrage stellen, ohne den Gesprächskontext zu belasten.",
     errorLabel: "Fehler",
     warningLabel: "Warnung",
     dismissError: "Schließen",
     jumpToBottom: "Nach unten springen",
+    resizeContextSidebar: "Rechte Seitenleiste skalieren",
     splashSubtitle: "DeepSeek-Agenten",
     connecting: "Verbinde mit Jupiter core...",
     startupFailedTitle: "Jupiter konnte nicht starten",
@@ -558,7 +632,8 @@ export const de: typeof en = {
       ...en.app.empty,
       welcome: "Willkommen bei Jupiter",
       currentWorkspace: "Aktueller Arbeitsbereich: ",
-      selectWorkspace: "Wähle zuerst einen Arbeitsbereich aus der oberen Leiste",
+      selectWorkspace:
+        "Wähle zuerst einen Arbeitsbereich aus der oberen Leiste",
       suggestion0: "Aktuellen Repo-Status prüfen",
       suggestion1: "Diese Projektstruktur erklären",
       suggestion2: "Nächste prüfbare Aufgabe finden",
@@ -572,6 +647,13 @@ export const de: typeof en = {
       workspace: "Standardarbeitsbereich",
       notSelected: "Nicht ausgewählt",
       choose: "Wählen…",
+      apiKeyLabel: "DeepSeek-API-Schlüssel",
+      apiKeyPlaceholder: "DeepSeek-API-Schlüssel, beginnt meist mit sk-",
+      apiKeyHintTitle: "API-Schlüssel einfügen",
+      apiKeyHintBody:
+        "Erstelle einen Schlüssel in der DeepSeek Platform, füge ihn hier ein, und Jupiter speichert ihn nur lokal auf diesem Gerät.",
+      openApiKeys: "DeepSeek Platform öffnen",
+      openApiKeysAria: "DeepSeek API-Schlüssel öffnen",
       saveAndStart: "Speichern & starten",
     },
     update: {
@@ -685,9 +767,99 @@ export const de: typeof en = {
     showInfo: "Informationen anzeigen",
     toggleBottomBar: "Untere Leiste umschalten",
     toggleRightSidebar: "Rechte Seitenleiste umschalten",
+    infoTitle: "Informationen",
+    closeTab: "Schließen",
+    addTab: "Panel hinzufügen",
+    home: {
+      filesTitle: "Dateien",
+      filesDesc: "Projektdateien durchsuchen",
+      sidechatTitle: "Side Chat",
+      sidechatDesc: "Ohne Hauptkontext fragen",
+      browserTitle: "Browser",
+      browserDesc: "Website öffnen",
+      reviewTitle: "Review",
+      reviewDesc: "Codeänderungen ansehen",
+      terminalTitle: "Terminal",
+      terminalDesc: "Interaktive Shell starten",
+    },
+    placeholder: {
+      sidechat:
+        "Side Chat ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
+      browser:
+        "Browser ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
+      review:
+        "Review ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
+      terminal:
+        "Terminal ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
+    },
+    terminal: {
+      inputLabel: "Terminalbefehl",
+      placeholder: "Befehl ausführen…",
+      readyHint:
+        "Enter führt aus · ↑/↓ Verlauf · cd und clear werden unterstützt",
+      noWorkspace: "Kein Arbeitsbereich geöffnet.",
+      empty: "Einen Befehl in diesem Arbeitsbereich ausführen.",
+      running: "Läuft…",
+      exitCode: "Exit {code}",
+    },
+    sideChat: {
+      title: "Temporärer Side Chat",
+      desc: "Fragt aus einem leeren Kontext. Die Antwort erscheint hier, wird aber nicht Teil des Hauptkontexts.",
+      inputLabel: "Side-Chat-Nachricht",
+      placeholder: "Eine einmalige Nebenfrage stellen…",
+      readyHint: "Enter sendet · Shift Enter neue Zeile",
+      busyHint: "Eine temporäre Antwort läuft noch.",
+      sendLabel: "Side Chat senden",
+      queueLabel: "Side Chat einreihen",
+      sendButton: "Senden",
+      queueButton: "Einreihen",
+      empty: "Temporäre Antworten erscheinen hier.",
+      pending: "Denke nach…",
+    },
+    browser: {
+      urlLabel: "Website URL",
+      placeholder: "URL eingeben…",
+      open: "Website öffnen",
+      back: "Zurück",
+      forward: "Vorwärts",
+      reload: "Neu laden",
+      openExternal: "Im Standardbrowser öffnen",
+      external: "Öffnen",
+      previewTitle: "Browser-Vorschau",
+      emptyTitle: "Website öffnen",
+      emptyBody: "Gib oben eine URL ein, um sie in der Seitenleiste zu öffnen.",
+      invalidUrl: "Gib eine gültige http- oder https-URL ein.",
+      nativeError: "Die native Browseransicht konnte nicht erstellt werden.",
+      nativeHint:
+        "Verwendet eine native Webview und ist daher nicht durch iframe-Einbettungsregeln begrenzt.",
+      embedHint:
+        "Manche Websites blockieren eingebettetes Browsing. Wenn die Seite leer bleibt, nutze Öffnen.",
+    },
+    review: {
+      refresh: "Änderungen aktualisieren",
+      loading: "Änderungen werden geladen…",
+      noWorkspace: "Kein Arbeitsbereich geöffnet.",
+      filesChanged: "{count} geändert",
+      changedFiles: "Geänderte Dateien",
+      noChanges: "Keine Codeänderungen.",
+      diffTitle: "Diff",
+      noDiff:
+        "Kein getrackter Diff. Ungetrackte Dateien können über die Dateiliste geöffnet werden.",
+      status: {
+        modified: "M",
+        added: "A",
+        deleted: "D",
+        renamed: "R",
+        untracked: "U",
+      },
+    },
     contextTokens: "Kontext · Tokens",
     cacheKey: "Cache",
     freeKey: "frei",
+    projectFilesTitle: "Projektdateien",
+    fileSearchPlaceholder: "Projektdateien suchen…",
+    clearSearch: "Suche löschen",
+    searching: "Suche…",
     filesTitle: "Dateien im Kontext",
     filesCount: "{count} Dateien",
     fileModified: "geändert",
@@ -720,6 +892,7 @@ export const de: typeof en = {
     scopeProject: "Projekt",
     scopeGlobal: "Global",
     noFilesMsg: "Noch keine Dateien im Kontext.",
+    noProjectFilesMsg: "Keine passenden Projektdateien.",
     noMemoriesMsg: "Noch keine Erinnerungen gespeichert.",
   },
   sidebarPanel: {
@@ -874,6 +1047,7 @@ export const de: typeof en = {
     readBody: "Lesen: {path}",
     writeBody: "Schreiben: {path}",
     turnCompleteTitle: "Jupiter-Aufgabe abgeschlossen",
-    turnCompleteBody: "Die aktuelle Aufgabe ist abgeschlossen und bereit zur Überprüfung.",
+    turnCompleteBody:
+      "Die aktuelle Aufgabe ist abgeschlossen und bereit zur Überprüfung.",
   },
 };

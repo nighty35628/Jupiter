@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getThreadMaxWidth } from "./thread-layout";
 
 const MIN_WIDTH = 160;
-const MAX_WIDTH_PCT = 0.4;
+const MAX_WIDTH_PCT = { side: 0.4, ctx: 0.65 } as const;
 const CSS_VAR = { side: "--side-width", ctx: "--ctx-width" } as const;
 const PERSIST_KEY_SIDE = "jupiter.sideWidth";
 const PERSIST_KEY_CTX = "jupiter.ctxWidth";
@@ -65,7 +65,7 @@ export function useResizable(
       } else {
         next = startWidthRef.current - delta;
       }
-      const maxW = Math.floor(window.innerWidth * MAX_WIDTH_PCT);
+      const maxW = Math.floor(window.innerWidth * MAX_WIDTH_PCT[side]);
       next = Math.max(MIN_WIDTH, Math.min(next, maxW));
       widthRef.current = next;
 

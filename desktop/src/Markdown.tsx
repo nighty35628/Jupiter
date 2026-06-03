@@ -37,6 +37,8 @@ type WorkspaceCtx = {
   dir?: string;
   editor?: string;
   onPreviewFile?: (target: FilePreviewTarget) => void;
+  onOpenBrowserUrl?: (url: string) => void;
+  onOpenHtmlFile?: (target: FilePreviewTarget) => void;
 };
 const WorkspaceContext = createContext<WorkspaceCtx>({});
 export const WorkspaceProvider = WorkspaceContext.Provider;
@@ -101,6 +103,10 @@ function parseFileHref(value: string): ParsedFileRef | null {
   return { ...parsed, line: parsed.line ?? hashLine };
 }
 
+function isHtmlPath(path: string): boolean {
+  return /\.html?$/i.test(path.split(/[?#]/)[0] ?? path);
+}
+
 function FilePill({ path, line }: { path: string; line?: string }) {
   useLang();
   const ctx = useContext(WorkspaceContext);
@@ -108,6 +114,10 @@ function FilePill({ path, line }: { path: string; line?: string }) {
   const [menuAnchor, setMenuAnchor] = useState<{ left: number; top: number } | null>(null);
   const display = line ? `${path}:${line}` : path;
   const previewOrOpen = async () => {
+    if (isHtmlPath(path) && ctx.onOpenHtmlFile) {
+      ctx.onOpenHtmlFile({ path, line });
+      return;
+    }
     if (ctx.onPreviewFile) {
       ctx.onPreviewFile({ path, line });
       return;
@@ -303,6 +313,10 @@ function SafeLink({ href, children }: { href?: string; children: ReactNode }) {
     e.preventDefault();
     if (!href) return;
     if (isExternal) {
+      if (ctx.onOpenBrowserUrl) {
+        ctx.onOpenBrowserUrl(href);
+        return;
+      }
       try {
         await openUrl(href);
       } catch {
@@ -312,6 +326,10 @@ function SafeLink({ href, children }: { href?: string; children: ReactNode }) {
     }
     try {
       const target = localFileTarget ?? { path: decodeMaybeUri(stripFileScheme(href)) };
+      if (isHtmlPath(target.path) && ctx.onOpenHtmlFile) {
+        ctx.onOpenHtmlFile(target);
+        return;
+      }
       if (ctx.onPreviewFile) {
         ctx.onPreviewFile(target);
         return;

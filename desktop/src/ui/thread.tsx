@@ -1,5 +1,8 @@
 import type { ApprovalPrompt } from "@jupiter/core-utils";
-import { isCompactionSummary, stripCompactionMarker } from "@jupiter/core-utils/compaction";
+import {
+  isCompactionSummary,
+  stripCompactionMarker,
+} from "@jupiter/core-utils/compaction";
 import { derivePrefix } from "@jupiter/core-utils/derive-prefix";
 import { Copy } from "lucide-react";
 import { type ReactNode, memo, useEffect, useRef, useState } from "react";
@@ -103,16 +106,31 @@ export const UserMsg = memo(function UserMsg({
   );
 });
 
-function ToolGroupShell({ segs, renderTool: rt }: {
+function ToolGroupShell({
+  segs,
+  renderTool: rt,
+  defaultOpen,
+}: {
   segs: (AssistantSegment & { kind: "tool" })[];
-  renderTool: (s: AssistantSegment & { kind: "tool" }, idx: number, expanded?: boolean) => ReactNode;
+  renderTool: (
+    s: AssistantSegment & { kind: "tool" },
+    idx: number,
+    expanded?: boolean,
+  ) => ReactNode;
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen ?? false);
   return (
     <div className="tool-group">
       <button className="tool-group-header" onClick={() => setOpen((o) => !o)}>
-        <span>{segs.length > 1 ? t("thread.toolCalls", { count: segs.length }) : t("thread.oneToolCall")}</span>
-        <span className={`chevron ${open ? "open" : ""}`}>{I.chev({ size: 12 })}</span>
+        <span>
+          {segs.length > 1
+            ? t("thread.toolCalls", { count: segs.length })
+            : t("thread.oneToolCall")}
+        </span>
+        <span className={`chevron ${open ? "open" : ""}`}>
+          {I.chev({ size: 12 })}
+        </span>
       </button>
       {open && (
         <div className="tool-group-body">
@@ -132,6 +150,7 @@ export const AssistantMsg = memo(function AssistantMsg({
   onRejectConfirm,
   onAlwaysAllowConfirm,
   pendingConfirms,
+  processCardsDefaultOpen = false,
 }: {
   segments: AssistantSegment[];
   pending: boolean;
@@ -141,6 +160,7 @@ export const AssistantMsg = memo(function AssistantMsg({
   onRejectConfirm: (id: number) => void;
   onAlwaysAllowConfirm: (id: number, prefix: string) => void;
   pendingConfirms: PendingConfirm[];
+  processCardsDefaultOpen?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const content = segments
@@ -160,7 +180,10 @@ export const AssistantMsg = memo(function AssistantMsg({
   const rendered: ReactNode[] = [];
 
   let firstReasoningShown = false;
-  let toolGroup: { segments: (AssistantSegment & { kind: "tool" })[]; indices: number[] } | null = null;
+  let toolGroup: {
+    segments: (AssistantSegment & { kind: "tool" })[];
+    indices: number[];
+  } | null = null;
 
   function flushToolGroup(): void {
     if (!toolGroup) return;
@@ -169,14 +192,26 @@ export const AssistantMsg = memo(function AssistantMsg({
     if (tSegs.length === 1) {
       rendered.push(renderTool(tSegs[0]!, groupKey));
     } else {
-      rendered.push(<ToolGroupShell key={`tool-group-${groupKey}`} segs={tSegs} renderTool={renderTool} />);
+      rendered.push(
+        <ToolGroupShell
+          key={`tool-group-${groupKey}`}
+          segs={tSegs}
+          renderTool={renderTool}
+          defaultOpen={processCardsDefaultOpen}
+        />,
+      );
     }
     toolGroup = null;
   }
 
-  function renderTool(s: AssistantSegment & { kind: "tool" }, idx: number, expanded?: boolean): ReactNode {
+  function renderTool(
+    s: AssistantSegment & { kind: "tool" },
+    idx: number,
+    expanded?: boolean,
+  ): ReactNode {
     const pendingConfirm =
-      (s.name === "run_command" || s.name === "run_background") && s.result === undefined
+      (s.name === "run_command" || s.name === "run_background") &&
+      s.result === undefined
         ? pendingConfirms.find((c) => c.command === extractCommand(s.args))
         : undefined;
     if (s.name === "run_command" || s.name === "run_background") {
@@ -196,9 +231,19 @@ export const AssistantMsg = memo(function AssistantMsg({
           output={s.result}
           state={state}
           durationMs={s.durationMs}
-          defaultOpen={expanded ?? state !== "done"}
-          onApprove={pendingConfirm ? () => onApproveConfirm(pendingConfirm.id) : undefined}
-          onReject={pendingConfirm ? () => onRejectConfirm(pendingConfirm.id) : undefined}
+          defaultOpen={
+            expanded ?? (state !== "done" || processCardsDefaultOpen)
+          }
+          onApprove={
+            pendingConfirm
+              ? () => onApproveConfirm(pendingConfirm.id)
+              : undefined
+          }
+          onReject={
+            pendingConfirm
+              ? () => onRejectConfirm(pendingConfirm.id)
+              : undefined
+          }
           onAlwaysAllow={
             pendingConfirm
               ? () => {
@@ -209,20 +254,54 @@ export const AssistantMsg = memo(function AssistantMsg({
         />
       );
     }
-    if (s.result && (s.name === "edit_file" || s.name === "multi_edit" || s.name === "write_file")) {
+    if (
+      s.result &&
+      (s.name === "edit_file" ||
+        s.name === "multi_edit" ||
+        s.name === "write_file")
+    ) {
       const files = parseEditResult(s.result);
       return files.length > 0 ? (
         <>
           {files.map((f, fi) => (
-            <DiffCard key={`${idx}-${fi}`} filename={f.filename} lines={f.lines} applied={s.ok !== false} />
+            <DiffCard
+              key={`${idx}-${fi}`}
+              filename={f.filename}
+              lines={f.lines}
+              applied={s.ok !== false}
+            />
           ))}
         </>
       ) : (
-        <ToolCard key={idx} name={s.name} args={s.args} result={s.result} ok={s.ok} durationMs={s.durationMs} defaultOpen={expanded} />
+        <ToolCard
+          key={idx}
+          name={s.name}
+          args={s.args}
+          result={s.result}
+          ok={s.ok}
+          durationMs={s.durationMs}
+          defaultOpen={
+            expanded ??
+            (s.result === undefined ||
+              s.ok === false ||
+              processCardsDefaultOpen)
+          }
+        />
       );
     }
     return (
-      <ToolCard key={idx} name={s.name} args={s.args} result={s.result} ok={s.ok} durationMs={s.durationMs} defaultOpen={expanded} />
+      <ToolCard
+        key={idx}
+        name={s.name}
+        args={s.args}
+        result={s.result}
+        ok={s.ok}
+        durationMs={s.durationMs}
+        defaultOpen={
+          expanded ??
+          (s.result === undefined || s.ok === false || processCardsDefaultOpen)
+        }
+      />
     );
   }
 
@@ -232,7 +311,12 @@ export const AssistantMsg = memo(function AssistantMsg({
       flushToolGroup();
       if (!s.text.trim()) continue;
       if (isCompactionSummary(s.text)) {
-        rendered.push(<CompactionCard key={`t-${i}`} summary={stripCompactionMarker(s.text)} />);
+        rendered.push(
+          <CompactionCard
+            key={`t-${i}`}
+            summary={stripCompactionMarker(s.text)}
+          />,
+        );
       } else {
         rendered.push(<AssistantText key={`t-${i}`} text={s.text} />);
       }
@@ -243,7 +327,12 @@ export const AssistantMsg = memo(function AssistantMsg({
       if (!firstReasoningShown) {
         firstReasoningShown = true;
         rendered.push(
-          <ReasoningCard key={`r-${i}`} text={s.text} streaming={pending && i === segments.length - 1} />,
+          <ReasoningCard
+            key={`r-${i}`}
+            text={s.text}
+            streaming={pending && i === segments.length - 1}
+            defaultOpen={processCardsDefaultOpen}
+          />,
         );
       }
       // Subsequent reasoning segments are intermediate tool-calling thought — hidden
@@ -291,7 +380,8 @@ function extractCommand(args: string): string | undefined {
   if (!args) return undefined;
   try {
     const v = JSON.parse(args);
-    if (v && typeof v === "object" && typeof v.command === "string") return v.command;
+    if (v && typeof v === "object" && typeof v.command === "string")
+      return v.command;
   } catch {
     // ignore
   }
@@ -369,7 +459,9 @@ export function PlanApprovalCard({
   onCancel: (feedback?: string) => void;
 }) {
   useLang();
-  const [feedbackMode, setFeedbackMode] = useState<"cancel" | "refine" | null>(null);
+  const [feedbackMode, setFeedbackMode] = useState<"cancel" | "refine" | null>(
+    null,
+  );
   const [feedbackText, setFeedbackText] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -397,7 +489,8 @@ export function PlanApprovalCard({
   };
 
   const stepCount = p.steps?.length ?? 0;
-  const sub = stepCount > 0 ? t("thread.planStepCount", { count: stepCount }) : undefined;
+  const sub =
+    stepCount > 0 ? t("thread.planStepCount", { count: stepCount }) : undefined;
 
   if (feedbackMode) {
     const isCancel = feedbackMode === "cancel";
@@ -410,7 +503,9 @@ export function PlanApprovalCard({
           <div>
             <div className="ap-kind">{t("thread.planConfirmationKind")}</div>
             <div className="ap-title">
-              {isCancel ? t("thread.cancelFeedbackLabel") : t("thread.refineFeedbackLabel")}
+              {isCancel
+                ? t("thread.cancelFeedbackLabel")
+                : t("thread.refineFeedbackLabel")}
             </div>
           </div>
         </div>
@@ -425,7 +520,11 @@ export function PlanApprovalCard({
           />
         </div>
         <div className="ap-foot">
-          <button type="button" className="btn primary" onClick={handleSendFeedback}>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={handleSendFeedback}
+          >
             {t("thread.sendFeedback")}
           </button>
           <button
@@ -483,13 +582,23 @@ export function CheckpointApprovalCard({
     <ApprovalCard
       kind={t("thread.checkpointKind")}
       tone="brand"
-      title={c.title ?? t("thread.checkpointTitle", { completed: c.completed, total: c.total })}
-      sub={t("thread.checkpointSub", { completed: c.completed, total: c.total })}
+      title={
+        c.title ??
+        t("thread.checkpointTitle", { completed: c.completed, total: c.total })
+      }
+      sub={t("thread.checkpointSub", {
+        completed: c.completed,
+        total: c.total,
+      })}
       body={
         <>
           <div style={{ whiteSpace: "pre-wrap" }}>{c.result}</div>
           {c.notes ? (
-            <div style={{ marginTop: 8, fontSize: 11.5, color: "var(--muted)" }}>{c.notes}</div>
+            <div
+              style={{ marginTop: 8, fontSize: 11.5, color: "var(--muted)" }}
+            >
+              {c.notes}
+            </div>
           ) : null}
         </>
       }
@@ -524,7 +633,9 @@ export function RevisionApprovalCard({
         <>
           <div style={{ marginBottom: 8 }}>{r.reason}</div>
           {r.summary ? (
-            <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 8 }}>
+            <div
+              style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 8 }}
+            >
               {r.summary}
             </div>
           ) : null}
@@ -562,7 +673,9 @@ export function RevisionApprovalCard({
   );
 }
 
-function mapTone(tone: ApprovalPrompt["tone"]): import("./extra-cards").ApprovalTone {
+function mapTone(
+  tone: ApprovalPrompt["tone"],
+): import("./extra-cards").ApprovalTone {
   switch (tone) {
     case "error":
       return "danger";
@@ -587,7 +700,9 @@ export function ConfirmApprovalCard({
   useLang();
   const prefix = String(prompt.data?.prefix ?? "");
   const allowAction = prompt.actions.find((a) => a.kind === "allow_once");
-  const alwaysAllowAction = prompt.actions.find((a) => a.kind === "allow_always");
+  const alwaysAllowAction = prompt.actions.find(
+    (a) => a.kind === "allow_always",
+  );
   const rejectAction = prompt.actions.find((a) => a.kind === "reject");
   return (
     <ApprovalCard
@@ -597,7 +712,8 @@ export function ConfirmApprovalCard({
       sub={prompt.subtitle}
       preview={
         <>
-          <span style={{ color: "var(--accent)" }}>$</span> {prompt.preview ?? prompt.subtitle}
+          <span style={{ color: "var(--accent)" }}>$</span>{" "}
+          {prompt.preview ?? prompt.subtitle}
         </>
       }
       previewClassName="ap-preview--long"
@@ -606,7 +722,9 @@ export function ConfirmApprovalCard({
       })}
       primaryLabel={allowAction?.label ?? t("thread.execute")}
       secondaryLabel={rejectAction?.label ?? t("thread.reject")}
-      tertiaryLabel={alwaysAllowAction?.label ?? t("thread.alwaysAllow", { prefix })}
+      tertiaryLabel={
+        alwaysAllowAction?.label ?? t("thread.alwaysAllow", { prefix })
+      }
       onPrimary={onAllow}
       onSecondary={onDeny}
       onTertiary={() => onAlwaysAllow(prefix)}
@@ -630,7 +748,9 @@ export function PathAccessApprovalCard({
   const intent = String(prompt.data?.intent ?? "read");
   const isWrite = intent === "write";
   const allowAction = prompt.actions.find((a) => a.kind === "allow_once");
-  const alwaysAllowAction = prompt.actions.find((a) => a.kind === "allow_always");
+  const alwaysAllowAction = prompt.actions.find(
+    (a) => a.kind === "allow_always",
+  );
   const rejectAction = prompt.actions.find((a) => a.kind === "reject");
   return (
     <ApprovalCard
@@ -651,10 +771,13 @@ export function PathAccessApprovalCard({
       previewClassName="ap-preview--long"
       meta={t("thread.riskMedium", { kind: intent })}
       primaryLabel={
-        allowAction?.label ?? (isWrite ? t("thread.allowWrite") : t("thread.allowRead"))
+        allowAction?.label ??
+        (isWrite ? t("thread.allowWrite") : t("thread.allowRead"))
       }
       secondaryLabel={rejectAction?.label ?? t("thread.reject")}
-      tertiaryLabel={alwaysAllowAction?.label ?? t("thread.alwaysAllowPrefix", { prefix })}
+      tertiaryLabel={
+        alwaysAllowAction?.label ?? t("thread.alwaysAllowPrefix", { prefix })
+      }
       onPrimary={onAllow}
       onSecondary={onDeny}
       onTertiary={() => onAlwaysAllow(prefix)}
@@ -673,36 +796,50 @@ export function ChoiceApprovalCard({
 }) {
   useLang();
   return (
-    <ApprovalCard
-      kind={t("thread.userChoiceKind")}
-      tone="info"
-      title={c.question}
-      sub={t("thread.optionCount", { count: c.options.length })}
-      body={
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {c.options.map((o) => (
-            <button
-              key={o.id}
-              type="button"
-              className="btn"
-              style={{ justifyContent: "flex-start", textAlign: "left" }}
-              onClick={() => onPick(o.id)}
-            >
-              <div>
-                <div style={{ fontWeight: 600 }}>{o.title}</div>
-                {o.summary ? (
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                    {o.summary}
-                  </div>
-                ) : null}
-              </div>
-            </button>
-          ))}
+    <div className="approval choice-approval" data-tone="info">
+      <div className="choice-approval-head">
+        <span className="choice-approval-ico">
+          <I.list size={15} />
+        </span>
+        <div className="choice-approval-copy">
+          <div className="choice-approval-kind">
+            {t("thread.userChoiceKind")}
+          </div>
+          <div className="choice-approval-title">{c.question}</div>
         </div>
-      }
-      primaryLabel={t("thread.cancel")}
-      onPrimary={onCancel}
-    />
+        <span className="choice-approval-count">
+          {t("thread.optionCount", { count: c.options.length })}
+        </span>
+      </div>
+
+      <div className="choice-approval-options">
+        {c.options.map((o, index) => (
+          <button
+            key={o.id}
+            type="button"
+            className="choice-approval-option"
+            onClick={() => onPick(o.id)}
+          >
+            <span className="choice-approval-option-index">{index + 1}</span>
+            <span className="choice-approval-option-copy">
+              <span className="choice-approval-option-title">{o.title}</span>
+              {o.summary ? (
+                <span className="choice-approval-option-summary">
+                  {o.summary}
+                </span>
+              ) : null}
+            </span>
+            <I.chevR className="choice-approval-option-arrow" size={14} />
+          </button>
+        ))}
+      </div>
+
+      <div className="choice-approval-foot">
+        <button type="button" className="btn ghost" onClick={onCancel}>
+          {t("thread.cancel")}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -710,7 +847,11 @@ export function activePlanToTaskSteps(plan: ActivePlan): TaskStepView[] {
   const done = new Set(plan.completedStepIds);
   return plan.steps.map((s, i) => ({
     n: String(i + 1),
-    state: done.has(s.id) ? "done" : i === plan.completedStepIds.length ? "running" : "queued",
+    state: done.has(s.id)
+      ? "done"
+      : i === plan.completedStepIds.length
+        ? "running"
+        : "queued",
     label: s.title,
     hint: s.action,
     durationLabel: undefined,

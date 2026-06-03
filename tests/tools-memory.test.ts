@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { PauseGate } from "../src/core/pause-gate.js";
 import { MemoryStore } from "../src/memory/user.js";
 import { ToolRegistry } from "../src/tools.js";
 import { registerMemoryTools } from "../src/tools/memory.js";
@@ -94,6 +95,35 @@ describe("memory tools", () => {
       });
       const parsed = JSON.parse(out);
       expect(parsed.error).toMatch(/description/);
+    });
+
+    it("does not write when confirmation is enabled and the user cancels", async () => {
+      const reg = new ToolRegistry();
+      const gate = new PauseGate();
+      let question = "";
+      gate.on((req) => {
+        expect(req.kind).toBe("choice");
+        question = (req.payload as { question: string }).question;
+        gate.resolve(req.id, { type: "cancel" });
+      });
+      registerMemoryTools(reg, { homeDir: home, confirmWrites: true });
+
+      const out = await reg.dispatch(
+        "remember",
+        {
+          type: "user",
+          scope: "global",
+          name: "confirm_me",
+          description: "Ask before saving",
+          content: "Only save after explicit approval.",
+        },
+        { confirmationGate: gate },
+      );
+
+      expect(question).toMatch(/Save memory/);
+      expect(out).toMatch(/cancelled/);
+      const store = new MemoryStore({ homeDir: home });
+      expect(store.list().map((e) => e.name)).not.toContain("confirm_me");
     });
   });
 

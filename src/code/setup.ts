@@ -5,6 +5,7 @@ import {
   loadEndpoint,
   loadFilesystemOutlineThresholdBytes,
   loadJavaSourceEnabled,
+  loadMemoryConfirmWrites,
   loadProjectShellAllowed,
   loadResolvedSkillPaths,
   loadSubagentModels,
@@ -80,7 +81,10 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
       onJobsChanged: opts.onJobsChanged,
       sensitivePaths: cfg.sensitivePaths,
     });
-    registerMemoryTools(tools, { projectRoot: root });
+    registerMemoryTools(tools, {
+      projectRoot: root,
+      confirmWrites: () => loadMemoryConfirmWrites(opts.configPath),
+    });
     registerCodeQueryTools(tools, { rootDir: root });
   };
 

@@ -33,10 +33,12 @@ import {
   loadEndpoint,
   loadExaApiKey,
   loadMaxIterPerTurn,
+  loadMemoryConfirmWrites,
   loadMetasoApiKey,
   loadModel,
   loadOllamaApiKey,
   loadPerplexityApiKey,
+  loadProcessCardsDefaultOpen,
   loadPromptHistory,
   loadQQConfig,
   loadReasoningEffort,
@@ -56,7 +58,9 @@ import {
   saveDesktopOpenTabs,
   saveEditMode,
   saveEditor,
+  saveMemoryConfirmWrites,
   saveModel,
+  saveProcessCardsDefaultOpen,
   savePromptHistory,
   saveReasoningEffort,
   saveShowSystemEvents,
@@ -90,8 +94,11 @@ import { augmentProcessPath } from "../../desktop/login-shell-path.js";
 import {
   type MemoryEntryDetail,
   type MemoryEntryInfo,
+  type MemoryWriteRequest,
   collectMemoryEntriesForWorkspace,
+  deleteMemoryEntryForWorkspace,
   readMemoryEntryDetail,
+  saveStructuredMemoryForWorkspace,
 } from "../../desktop/memory-browser.js";
 import { classifyDesktopQQIngress } from "../../desktop/qq-ingress.js";
 import {
@@ -162,7 +169,7 @@ export function desktopUserAbortLoopOptions(): LoopAbortOptions | undefined {
 }
 
 type InMessage = { tabId?: string } & (
-  | { cmd: "user_input"; text: string }
+  | { cmd: "user_input"; text: string; clientId?: string }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
@@ -173,10 +180,18 @@ type InMessage = { tabId?: string } & (
   | { cmd: "session_delete"; name: string }
   | { cmd: "session_load"; name: string }
   | { cmd: "session_rename"; name: string; title: string }
-  | { cmd: "session_import"; source: ExternalSessionSource; path: string; name?: string }
+  | {
+      cmd: "session_import";
+      source: ExternalSessionSource;
+      path: string;
+      name?: string;
+    }
   | { cmd: "session_import_scan" }
   | { cmd: "session_import_bulk"; sources: ExternalSessionSource[] }
   | { cmd: "memory_read"; path: string }
+  | { cmd: "memory_refresh" }
+  | { cmd: "memory_delete"; path: string }
+  | ({ cmd: "memory_save" } & MemoryWriteRequest)
   | { cmd: "new_chat"; workspaceDir?: string }
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_get" }
@@ -213,6 +228,8 @@ type InMessage = { tabId?: string } & (
       subagentModels?: Record<string, "flash" | "pro">;
       contextTokens?: Record<string, number>;
       showSystemEvents?: boolean;
+      processCardsDefaultOpen?: boolean;
+      memoryConfirmWrites?: boolean;
       promptHistory?: string[];
     }
   | { cmd: "qq_status_get" }
@@ -247,7 +264,7 @@ type InMessage = { tabId?: string } & (
   | { cmd: "jobs_stop_all" }
   | { cmd: "compact_history" }
   | { cmd: "retry" }
-  | { cmd: "btw"; text: string }
+  | { cmd: "btw"; text: string; clientId?: string }
   | { cmd: "desktop_resync" }
 );
 
@@ -292,6 +309,8 @@ interface SettingsEvent {
   subagentModels?: Record<string, "flash" | "pro">;
   contextTokens?: Record<string, number>;
   showSystemEvents?: boolean;
+  processCardsDefaultOpen?: boolean;
+  memoryConfirmWrites?: boolean;
   promptHistory?: string[];
   version: string;
 }
@@ -577,6 +596,7 @@ interface BtwResultEvent {
   type: "$btw_result";
   question: string;
   answer: string;
+  clientId?: string;
 }
 
 type DesktopSubagentEvent = {
@@ -828,6 +848,8 @@ function emitSettings(tab: Tab): void {
       subagentModels: loadSubagentModels(),
       contextTokens: readConfig().contextTokens,
       showSystemEvents: loadShowSystemEvents(),
+      processCardsDefaultOpen: loadProcessCardsDefaultOpen(),
+      memoryConfirmWrites: loadMemoryConfirmWrites(),
       promptHistory: loadPromptHistory(),
       version: VERSION,
     },
@@ -886,7 +908,13 @@ function emitSessions(tab: Tab): void {
       }));
     emit({ type: "$sessions", items }, tab.id);
   } catch (err) {
-    emit({ type: "$error", message: `session_list failed: ${(err as Error).message}` }, tab.id);
+    emit(
+      {
+        type: "$error",
+        message: `session_list failed: ${(err as Error).message}`,
+      },
+      tab.id,
+    );
   }
 }
 
@@ -999,7 +1027,12 @@ function emitMcpSpecs(tab: Tab): void {
     }
     const live = tab.mcpStatuses.get(raw);
     if (!live) return base;
-    return { ...base, status: live.kind, statusReason: live.reason, toolCount: live.toolCount };
+    return {
+      ...base,
+      status: live.kind,
+      statusReason: live.reason,
+      toolCount: live.toolCount,
+    };
   });
   const bridged = specs.length > 0 && specs.every((s) => s.status === "connected");
   emit({ type: "$mcp_specs", specs, bridged }, tab.id);
@@ -1010,7 +1043,13 @@ function emitMemory(tab: Tab): void {
     const entries = collectMemoryEntriesForWorkspace(tab.rootDir);
     emit({ type: "$memory", entries }, tab.id);
   } catch (err) {
-    emit({ type: "$error", message: `memory_get failed: ${(err as Error).message}` }, tab.id);
+    emit(
+      {
+        type: "$error",
+        message: `memory_get failed: ${(err as Error).message}`,
+      },
+      tab.id,
+    );
   }
 }
 
@@ -1060,7 +1099,13 @@ function emitSkills(tab: Tab): void {
     }));
     emit({ type: "$skills", items, roots: store.roots() }, tab.id);
   } catch (err) {
-    emit({ type: "$error", message: `skills_get failed: ${(err as Error).message}` }, tab.id);
+    emit(
+      {
+        type: "$error",
+        message: `skills_get failed: ${(err as Error).message}`,
+      },
+      tab.id,
+    );
   }
 }
 
@@ -1186,7 +1231,10 @@ function buildRuntimeFor(tab: Tab): RuntimeState {
   applyPlanMode(toolset.tools, loadEditMode());
   const ep = loadEndpoint();
   const client = new DeepSeekClient({ apiKey: ep.apiKey, baseUrl: ep.baseUrl });
-  const prefix = new ImmutablePrefix({ system: tab.system, toolSpecs: toolset.tools.specs() });
+  const prefix = new ImmutablePrefix({
+    system: tab.system,
+    toolSpecs: toolset.tools.specs(),
+  });
   const reasoningEffort = loadReasoningEffort();
   const loop = new CacheFirstLoop({
     client,
@@ -1201,7 +1249,11 @@ function buildRuntimeFor(tab: Tab): RuntimeState {
     hookCwd: tab.rootDir,
   });
   const eventizer = new Eventizer();
-  const ctx = { model: tab.currentModel, prefixHash: prefix.fingerprint, reasoningEffort };
+  const ctx = {
+    model: tab.currentModel,
+    prefixHash: prefix.fingerprint,
+    reasoningEffort,
+  };
   return { loop, eventizer, ctx };
 }
 
@@ -1215,7 +1267,9 @@ async function getFileIndexFor(tab: Tab): Promise<FileWithStats[]> {
   const fresh = tab.fileIndex && Date.now() - tab.fileIndexBuiltAt < FILE_INDEX_TTL_MS;
   if (fresh) return tab.fileIndex as FileWithStats[];
   if (tab.fileIndexBuilding) return tab.fileIndexBuilding;
-  tab.fileIndexBuilding = listFilesWithStatsAsync(tab.rootDir, { maxResults: 5000 })
+  tab.fileIndexBuilding = listFilesWithStatsAsync(tab.rootDir, {
+    maxResults: 5000,
+  })
     .then((res) => {
       tab.fileIndex = res;
       tab.fileIndexBuiltAt = Date.now();
@@ -1250,7 +1304,13 @@ async function getSymbolIndexFor(tab: Tab): Promise<SymbolEntry[]> {
               const line = lines[li]!;
               if (!line.startsWith("export ")) continue;
               const m = TS_EXPORT_RE.exec(line);
-              if (m) out.push({ kind: m[1]!, name: m[2]!, path: entry.path, line: li + 1 });
+              if (m)
+                out.push({
+                  kind: m[1]!,
+                  name: m[2]!,
+                  path: entry.path,
+                  line: li + 1,
+                });
             }
           } catch {
             // unreadable / binary — skip
@@ -1395,7 +1455,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     void qqRuntime.channel?.sendResponse(message).catch((err) => {
       const active = activeDesktopTab();
       if (active) {
-        emit({ type: "$error", message: `qq send failed: ${(err as Error).message}` }, active.id);
+        emit(
+          {
+            type: "$error",
+            message: `qq send failed: ${(err as Error).message}`,
+          },
+          active.id,
+        );
       }
     });
   }
@@ -1454,6 +1520,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   function runBtwOnTab(
     tab: Tab,
     question: string,
+    clientId?: string,
     hooks?: {
       onAnswer?: (answer: string) => void;
       onError?: (message: string) => void;
@@ -1475,7 +1542,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         });
         const answer =
           (typeof reply.content === "string" ? reply.content.trim() : "") || "(no answer)";
-        emit({ type: "$btw_result", question, answer }, tab.id);
+        emit(
+          {
+            type: "$btw_result",
+            question,
+            answer,
+            ...(clientId ? { clientId } : {}),
+          },
+          tab.id,
+        );
         hooks?.onAnswer?.(answer);
       } catch (err) {
         const message = `/btw failed: ${(err as Error).message}`;
@@ -1592,7 +1667,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           sendQQInfo("Desktop is not configured yet.", tab);
           return true;
         }
-        runBtwOnTab(tab, cmd.text, {
+        runBtwOnTab(tab, cmd.text, undefined, {
           onAnswer: (answer) =>
             void qqRuntime.channel?.sendResponse(`≫ btw\n${answer}`).catch(() => undefined),
           onError: (message) =>
@@ -1733,7 +1808,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         return true;
       case "choice": {
         const payload =
-          (interaction.payload as { options?: ChoiceOption[]; allowCustom?: boolean }) ?? {};
+          (interaction.payload as {
+            options?: ChoiceOption[];
+            allowCustom?: boolean;
+          }) ?? {};
         const options = payload.options ?? [];
         const pickedIndex = parseIndexedChoice(text);
         if (pickedIndex >= 0 && pickedIndex < options.length) {
@@ -1769,7 +1847,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         break;
       }
       case "path_access": {
-        const p = payload as { path: string; intent: "read" | "write"; toolName: string };
+        const p = payload as {
+          path: string;
+          intent: "read" | "write";
+          toolName: string;
+        };
         const intentText = p.intent === "read" ? "Read" : "Write";
         qqMessage = `Need file access confirmation\n\nAction: ${intentText}\nPath: ${p.path}\nTool: ${p.toolName}\n\nReply with:\n1. Run once\n2. Always allow\n3. Deny`;
         break;
@@ -1792,7 +1874,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         break;
       }
       case "choice": {
-        const p = payload as { question: string; options: ChoiceOption[]; allowCustom: boolean };
+        const p = payload as {
+          question: string;
+          options: ChoiceOption[];
+          allowCustom: boolean;
+        };
         const optionsList = p.options.map((opt, idx) => `${idx + 1}. ${opt.title}`).join("\n");
         qqMessage = `Please choose\n\n${p.question}\n\nOptions:\n${optionsList}${
           p.allowCustom ? "\n\n(You can also reply with custom text.)" : ""
@@ -1802,7 +1888,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     if (qqMessage) {
       void qqRuntime.channel.sendResponse(qqMessage).catch((err) => {
-        emit({ type: "$error", message: `qq send failed: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `qq send failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       });
     }
   }
@@ -1955,7 +2047,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         .reloadFromConfig(tab.runtime.loop)
         .then(() => emitMcpSpecs(tab))
         .catch((err) => {
-          emit({ type: "$error", message: `mcp reload failed: ${(err as Error).message}` }, tab.id);
+          emit(
+            {
+              type: "$error",
+              message: `mcp reload failed: ${(err as Error).message}`,
+            },
+            tab.id,
+          );
         });
     }
     const allSpecs = getAllMcpSpecs(readConfig());
@@ -1986,7 +2084,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (notice.kind === "handshake") {
         tab.mcpStatuses.set(target, { kind: "handshake" });
       } else if (notice.kind === "connected") {
-        tab.mcpStatuses.set(target, { kind: "connected", toolCount: notice.tools });
+        tab.mcpStatuses.set(target, {
+          kind: "connected",
+          toolCount: notice.tools,
+        });
       } else if (notice.kind === "failed") {
         tab.mcpStatuses.set(target, { kind: "failed", reason: notice.reason });
       } else if (notice.kind === "disabled") {
@@ -1998,7 +2099,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       .reloadFromConfig(tab.runtime.loop)
       .then(() => undefined)
       .catch((err) => {
-        emit({ type: "$error", message: `mcp bridge failed: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `mcp bridge failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       });
   }
 
@@ -2040,7 +2147,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     emit({ type: "$tab_closed" }, tab.id);
   }
 
-  async function runTurn(tab: Tab, text: string, fromQQ = false): Promise<void> {
+  async function runTurn(tab: Tab, text: string, fromQQ = false, clientId?: string): Promise<void> {
     if (!tab.runtime) return;
     const rt = tab.runtime;
     tab.aborter = new AbortController();
@@ -2086,7 +2193,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           if (ev.role === "assistant_final" && ev.content) {
             lastAssistantText = ev.content;
           }
-          for (const kev of rt.eventizer.consume(ev, rt.ctx)) emit(kev, tab.id);
+          for (const kev of rt.eventizer.consume(ev, rt.ctx)) {
+            emit(kev.type === "user.message" && clientId ? { ...kev, clientId } : kev, tab.id);
+          }
           if (ev.role === "assistant_final" || ev.role === "tool") {
             emitCtxBreakdown(tab);
           }
@@ -2113,7 +2222,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           ) {
             await qqRuntime.channel.sendResponse(lastAssistantText).catch((err) => {
               emit(
-                { type: "$error", message: `qq send failed: ${(err as Error).message}` },
+                {
+                  type: "$error",
+                  message: `qq send failed: ${(err as Error).message}`,
+                },
                 tab.id,
               );
             });
@@ -2413,7 +2525,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
     if (req.kind === "plan_proposed") {
-      const payload = req.payload as { plan: string; steps?: PlanStepLite[]; summary?: string };
+      const payload = req.payload as {
+        plan: string;
+        steps?: PlanStepLite[];
+        summary?: string;
+      };
       if (tab) {
         tab.completedStepIds.clear();
         tab.planTotalSteps = payload.steps?.length ?? 0;
@@ -2526,7 +2642,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         // unreadable jsonl — fall back to the freshly minted session
       }
     }
-    emit({ type: "$tab_opened", workspaceDir: tab.rootDir, active: restore?.active }, tab.id);
+    emit(
+      {
+        type: "$tab_opened",
+        workspaceDir: tab.rootDir,
+        active: restore?.active,
+      },
+      tab.id,
+    );
     emitSessions(tab);
     emitSettings(tab);
     emitMcpSpecs(tab);
@@ -2603,7 +2726,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     try {
       msg = JSON.parse(trimmed) as InMessage;
     } catch {
-      emit({ type: "$error", message: `bad json on stdin: ${trimmed.slice(0, 80)}` });
+      emit({
+        type: "$error",
+        message: `bad json on stdin: ${trimmed.slice(0, 80)}`,
+      });
       return;
     }
 
@@ -2614,7 +2740,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         lastActiveTabId = opened.id;
         persistOpenTabs();
       } catch (err) {
-        emit({ type: "$error", message: `tab_open failed: ${(err as Error).message}` });
+        emit({
+          type: "$error",
+          message: `tab_open failed: ${(err as Error).message}`,
+        });
       }
       return;
     }
@@ -2687,7 +2816,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           void emitBalance(tab);
         }
       } catch (err) {
-        emit({ type: "$error", message: `saveApiKey failed: ${(err as Error).message}` });
+        emit({
+          type: "$error",
+          message: `saveApiKey failed: ${(err as Error).message}`,
+        });
       }
       return;
     }
@@ -2699,7 +2831,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       const hasKey = !!loadApiKey();
       for (const t of tabs.values()) {
         emit(
-          { type: "$tab_opened", workspaceDir: t.rootDir, active: t.id === lastActiveTabId },
+          {
+            type: "$tab_opened",
+            workspaceDir: t.rootDir,
+            active: t.id === lastActiveTabId,
+          },
           t.id,
         );
         emitSessions(t);
@@ -2786,7 +2922,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitMcpSpecs(tab);
         void bridgeTabMcp(tab);
       } catch (err) {
-        emit({ type: "$error", message: `mcp_specs_add: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `mcp_specs_add: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       }
       return;
     }
@@ -2797,7 +2939,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitMcpSpecs(tab);
         void bridgeTabMcp(tab);
       } catch (err) {
-        emit({ type: "$error", message: `mcp_specs_remove: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `mcp_specs_remove: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       }
       return;
     }
@@ -2832,14 +2980,22 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     if (msg.cmd === "skill_path_add") {
       try {
-        const result = addSkillPathSetting(msg.path, { projectRoot: tab.rootDir });
+        const result = addSkillPathSetting(msg.path, {
+          projectRoot: tab.rootDir,
+        });
         if ("error" in result) {
           emit({ type: "$error", message: `skill_path_add: ${result.error}` }, tab.id);
           return;
         }
         emitSkills(tab);
       } catch (err) {
-        emit({ type: "$error", message: `skill_path_add: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `skill_path_add: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       }
       return;
     }
@@ -2848,7 +3004,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         removeSkillPathSetting(msg.path, { projectRoot: tab.rootDir });
         emitSkills(tab);
       } catch (err) {
-        emit({ type: "$error", message: `skill_path_remove: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `skill_path_remove: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       }
       return;
     }
@@ -2864,7 +3026,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         }
         emitSkills(tab);
       } catch (err) {
-        emit({ type: "$error", message: `skill_create: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `skill_create: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       }
       return;
     }
@@ -2878,14 +3046,23 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitSkills(tab);
         emitSettings(tab);
       } catch (err) {
-        emit({ type: "$error", message: `skill_model_set: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `skill_model_set: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       }
       return;
     }
     if (msg.cmd === "skill_run") {
       if (!tab.runtime) {
         emit(
-          { type: "$error", message: "Not configured yet — paste your DeepSeek API key first." },
+          {
+            type: "$error",
+            message: "Not configured yet — paste your DeepSeek API key first.",
+          },
           tab.id,
         );
         return;
@@ -2922,7 +3099,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitSessions(tab);
       } catch (err) {
         emit(
-          { type: "$error", message: `session_rename failed: ${(err as Error).message}` },
+          {
+            type: "$error",
+            message: `session_rename failed: ${(err as Error).message}`,
+          },
           tab.id,
         );
       }
@@ -2944,7 +3124,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         });
       } catch (err) {
         emit(
-          { type: "$error", message: `session_import failed: ${(err as Error).message}` },
+          {
+            type: "$error",
+            message: `session_import failed: ${(err as Error).message}`,
+          },
           tab.id,
         );
       }
@@ -2952,10 +3135,19 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     if (msg.cmd === "session_import_scan") {
       try {
-        emit({ type: "$session_import_sources", apps: discoverExternalSessionApps() }, tab.id);
+        emit(
+          {
+            type: "$session_import_sources",
+            apps: discoverExternalSessionApps(),
+          },
+          tab.id,
+        );
       } catch (err) {
         emit(
-          { type: "$error", message: `session_import_scan failed: ${(err as Error).message}` },
+          {
+            type: "$error",
+            message: `session_import_scan failed: ${(err as Error).message}`,
+          },
           tab.id,
         );
       }
@@ -2986,7 +3178,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         }
       } catch (err) {
         emit(
-          { type: "$error", message: `session_import_bulk failed: ${(err as Error).message}` },
+          {
+            type: "$error",
+            message: `session_import_bulk failed: ${(err as Error).message}`,
+          },
           tab.id,
         );
       }
@@ -3016,7 +3211,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         });
       } catch (err) {
         process.stderr.write(`session_load: "${msg.name}" threw — ${(err as Error).message}\n`);
-        emit({ type: "$error", message: `session_load failed: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `session_load failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       }
       return;
     }
@@ -3025,7 +3226,48 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         const detail = readMemoryEntryDetail({ path: msg.path }, tab.rootDir);
         emit({ type: "$memory_detail", detail }, tab.id);
       } catch (err) {
-        emit({ type: "$error", message: `memory_read failed: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `memory_read failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "memory_refresh") {
+      emitMemory(tab);
+      return;
+    }
+    if (msg.cmd === "memory_delete") {
+      try {
+        deleteMemoryEntryForWorkspace({ path: msg.path }, tab.rootDir);
+        emitMemory(tab);
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `memory_delete failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "memory_save") {
+      try {
+        const detail = saveStructuredMemoryForWorkspace(msg, tab.rootDir);
+        emit({ type: "$memory_detail", detail }, tab.id);
+        emitMemory(tab);
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `memory_save failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
       }
       return;
     }
@@ -3079,6 +3321,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           saveDesktopCloseBehavior(msg.desktopCloseBehavior);
         }
         if (msg.showSystemEvents !== undefined) saveShowSystemEvents(msg.showSystemEvents);
+        if (msg.processCardsDefaultOpen !== undefined) {
+          saveProcessCardsDefaultOpen(msg.processCardsDefaultOpen);
+        }
+        if (msg.memoryConfirmWrites !== undefined) {
+          saveMemoryConfirmWrites(msg.memoryConfirmWrites);
+        }
         if (
           msg.webSearchEngine !== undefined ||
           msg.webSearchEndpoint !== undefined ||
@@ -3153,7 +3401,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitSettings(tab);
       } catch (err) {
         emit(
-          { type: "$error", message: `settings_save failed: ${(err as Error).message}` },
+          {
+            type: "$error",
+            message: `settings_save failed: ${(err as Error).message}`,
+          },
           tab.id,
         );
       }
@@ -3172,7 +3423,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitQQSettings(tab);
       } catch (err) {
         emit(
-          { type: "$error", message: `qq_config_save failed: ${(err as Error).message}` },
+          {
+            type: "$error",
+            message: `qq_config_save failed: ${(err as Error).message}`,
+          },
           tab.id,
         );
       }
@@ -3207,14 +3461,23 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           },
           (err) => {
             emit(
-              { type: "$error", message: `qq_connect failed: ${(err as Error).message}` },
+              {
+                type: "$error",
+                message: `qq_connect failed: ${(err as Error).message}`,
+              },
               tab.id,
             );
             emitQQSettings(tab);
           },
         );
       } catch (err) {
-        emit({ type: "$error", message: `qq_connect failed: ${(err as Error).message}` }, tab.id);
+        emit(
+          {
+            type: "$error",
+            message: `qq_connect failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
         emitQQSettings(tab);
       }
       return;
@@ -3237,7 +3500,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           },
           (err) => {
             emit(
-              { type: "$error", message: `qq_disconnect failed: ${(err as Error).message}` },
+              {
+                type: "$error",
+                message: `qq_disconnect failed: ${(err as Error).message}`,
+              },
               tab.id,
             );
             emitQQSettings(tab);
@@ -3245,7 +3511,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         );
       } catch (err) {
         emit(
-          { type: "$error", message: `qq_disconnect failed: ${(err as Error).message}` },
+          {
+            type: "$error",
+            message: `qq_disconnect failed: ${(err as Error).message}`,
+          },
           tab.id,
         );
         emitQQSettings(tab);
@@ -3268,7 +3537,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           })
           .catch((err) => {
             emit(
-              { type: "$error", message: `mention_query (dir) failed: ${(err as Error).message}` },
+              {
+                type: "$error",
+                message: `mention_query (dir) failed: ${(err as Error).message}`,
+              },
               tab.id,
             );
             emit({ type: "$mention_results", nonce, query, results: [] }, tab.id);
@@ -3289,12 +3561,20 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             symResults = rankSymbols(syms, query, 6);
           }
           emit(
-            { type: "$mention_results", nonce, query, results: [...symResults, ...fileResults] },
+            {
+              type: "$mention_results",
+              nonce,
+              query,
+              results: [...symResults, ...fileResults],
+            },
             tab.id,
           );
         } catch (err) {
           emit(
-            { type: "$error", message: `mention_query failed: ${(err as Error).message}` },
+            {
+              type: "$error",
+              message: `mention_query failed: ${(err as Error).message}`,
+            },
             tab.id,
           );
           emit({ type: "$mention_results", nonce, query, results: [] }, tab.id);
@@ -3313,7 +3593,16 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       const safeAbs = resolve(abs);
       const safeRoot = resolve(tab.rootDir);
       if (!safeAbs.startsWith(safeRoot)) {
-        emit({ type: "$mention_preview", nonce, path: rel, head: "", totalLines: 0 }, tab.id);
+        emit(
+          {
+            type: "$mention_preview",
+            nonce,
+            path: rel,
+            head: "",
+            totalLines: 0,
+          },
+          tab.id,
+        );
         return;
       }
       void readFile(safeAbs, "utf8")
@@ -3322,12 +3611,27 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
           const head = lines.slice(0, 12).join("\n");
           emit(
-            { type: "$mention_preview", nonce, path: rel, head, totalLines: lines.length },
+            {
+              type: "$mention_preview",
+              nonce,
+              path: rel,
+              head,
+              totalLines: lines.length,
+            },
             tab.id,
           );
         })
         .catch(() => {
-          emit({ type: "$mention_preview", nonce, path: rel, head: "", totalLines: 0 }, tab.id);
+          emit(
+            {
+              type: "$mention_preview",
+              nonce,
+              path: rel,
+              head: "",
+              totalLines: 0,
+            },
+            tab.id,
+          );
         });
       return;
     }
@@ -3353,18 +3657,21 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (!tab.runtime) return;
       const question = msg.text.trim();
       if (!question) return;
-      runBtwOnTab(tab, question);
+      runBtwOnTab(tab, question, msg.clientId);
       return;
     }
     if (msg.cmd === "user_input") {
       if (!tab.runtime) {
         emit(
-          { type: "$error", message: "Not configured yet — paste your DeepSeek API key first." },
+          {
+            type: "$error",
+            message: "Not configured yet — paste your DeepSeek API key first.",
+          },
           tab.id,
         );
         return;
       }
-      void runTurn(tab, msg.text);
+      void runTurn(tab, msg.text, false, msg.clientId);
     }
   });
 
