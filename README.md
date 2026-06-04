@@ -1,15 +1,69 @@
 # Jupiter
 
-Jupiter is a local AI coding workbench for personal development. It keeps the fast terminal loop, desktop shell, MCP wiring, skills, memory, checkpoints, and dashboard flows in one repo.
+[![Release](https://img.shields.io/github/v/release/nighty35628/Jupiter?display_name=tag&label=release)](https://github.com/nighty35628/Jupiter/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 
-## Current Focus
+Jupiter is a local-first AI coding workbench for personal development. It keeps the fast terminal loop,
+desktop shell, MCP wiring, skills, memory, checkpoints, browser previews, diffs, and dashboard flows in one
+repo.
+
+Jupiter 是一个本地优先的 AI 编程工作台，面向个人开发场景。它把快速终端循环、桌面端外壳、MCP、
+Skill、记忆、检查点、浏览器预览、Diff 和 Dashboard 流程放在同一个项目里。
+
+## Download / 下载
+
+Desktop installers are published on GitHub Releases:
+
+桌面端安装包发布在 GitHub Releases：
+
+- [Latest Release / 最新版本](https://github.com/nighty35628/Jupiter/releases/latest)
+- [All Releases / 全部版本](https://github.com/nighty35628/Jupiter/releases)
+
+## Current Release / 当前版本
+
+**Jupiter Desktop 0.89.3**
+
+### 中文更新摘要
+
+- 侧栏默认工具箱升级：文件、侧边聊天、浏览器、审查/Diff、终端五个入口统一管理。
+- 信息面板改为与侧栏同宽的切换面板，会像侧栏一样推开主对话区。
+- 新增底栏面板，使用与右侧栏一致的卡片和标签逻辑。
+- URL 和 HTML 文件默认在内置浏览器打开，并保留浏览器侧栏状态。
+- 队列模式改为纵向堆叠，加入“插队/引导”操作。
+- 对话 hover 操作新增回滚按钮；`/undo` 和 `/rewind` 支持回退最新一轮对话。
+- 工具卡展示 diff 统计，Diff 和终端面板体验更接近 Codex/Claude。
+- 设置页补充过程细节默认展开/收起、全局记忆开关和保存模型记忆前询问选项。
+- Desktop slash 命令补齐 CLI 行为，包括 `/init`、`/undo`、`/rewind`。
+
+### English Highlights
+
+- Upgraded the sidebar default toolbox with Files, Side Chat, Browser, Review/Diff, and Terminal entries.
+- Reworked the info panel into a sidebar-width switchable panel that pushes the main conversation area.
+- Added a bottom panel with the same card and tab behavior as the right sidebar.
+- URLs and HTML files now open in the in-app browser by default, while browser sidebar state is preserved.
+- Queue mode now uses a vertical stacked layout with interrupt/guide actions.
+- Message hover actions now include rollback; `/undo` and `/rewind` can roll back the latest conversation turn.
+- Tool cards show diff totals, with diff and terminal panels closer to Codex/Claude workflows.
+- Settings now include process-detail defaults, global memory, and ask-before-saving-model-memory controls.
+- Desktop slash commands now mirror more CLI behavior, including `/init`, `/undo`, and `/rewind`.
+
+For the full bilingual changelog, see [CHANGELOG.md](./CHANGELOG.md).
+
+完整双语更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
+
+## Focus / 方向
 
 - Desktop-first workbench UI.
 - Graphical MCP and skills configuration.
 - DeepSeek-oriented coding sessions with long-running context.
 - Local-first development and testing.
 
-## Development
+- 桌面端优先的工作台界面。
+- 图形化 MCP 和 Skill 配置。
+- 面向 DeepSeek 的长上下文编码会话。
+- 本地优先的开发、测试和验证流程。
+
+## Development / 开发
 
 ```bash
 npm ci
@@ -21,10 +75,14 @@ npm --prefix desktop run build
 
 For desktop UI development:
 
+桌面端 UI 开发：
+
 ```bash
 npm --prefix desktop run dev -- --host 127.0.0.1
 ```
 
-## License
+## License / 许可证
 
 MIT. Required source-only notice is kept in `src/legal/upstream-notice.ts`.
+
+MIT。必要的源码声明保留在 `src/legal/upstream-notice.ts`。
