@@ -80,6 +80,9 @@ export const en = {
     placeholder: "Ask the agent / describe a task…",
     queueCount: "queued {n}",
     queue: "queue",
+    queuePrioritize: "Jump ahead",
+    queuePrioritizeLabel: "Jump ahead: {text}",
+    queueRemoveLabel: "Remove queued message: {text}",
     interrupt: "stop",
     mentionFiles: "mention files",
     commandPalette: "command palette",
@@ -164,6 +167,8 @@ export const en = {
       "Show quiet inline notices for context compaction, abort, and rate-limit pauses.",
     shown: "shown",
     hidden: "hidden",
+    enabled: "enabled",
+    disabled: "disabled",
     processCardsDefaultOpen: "Process details",
     processCardsDefaultOpenHint:
       "Default state for completed thinking, tool, and shell cards in the conversation.",
@@ -362,6 +367,7 @@ export const en = {
       "Current version relies on built-in CLAUDE.md / AGENTS.md injection. Project-level memory is maintained at the kernel level.",
     memoryEffectHint:
       "Changes are saved immediately. Prompt injection takes effect in new chats or after /new.",
+    memoryGlobalEnabled: "Cross-chat global memory",
     memoryConfirmWrites: "Ask before saving model memory",
     memoryRefresh: "Refresh memory",
     memoryProjectRules: "Project rules",
@@ -378,9 +384,12 @@ export const en = {
     memoryDeleteLabel: "Delete {name}",
     memoryNewStructured: "New structured memory",
     memoryEditStructured: "Edit structured memory",
+    memoryEditorTitle: "Structured memory editor",
+    memoryEditorClose: "Close editor",
+    memoryEdit: "Edit",
     memoryStructuredHint:
       "Saved as a private Markdown memory with frontmatter and included in future sessions.",
-    memoryNew: "New",
+    memoryNew: "New memory",
     memoryNameLabel: "Memory name",
     memoryScopeLabel: "Scope",
     memoryScopeProject: "Project",
@@ -400,6 +409,7 @@ export const en = {
     memoryExpiresProjectEnd: "Project end",
     memoryDescriptionLabel: "Description",
     memoryBodyLabel: "Memory body",
+    memoryCancel: "Cancel",
     memorySave: "Save memory",
     // Rules
     appMode: "Application mode",
@@ -496,6 +506,7 @@ export const en = {
     cancel: "Cancel",
   },
   app: {
+    thinkingNow: "Thinking",
     toast: {
       newSession: "New session created",
       cleared: "Cleared",
@@ -559,6 +570,7 @@ export const en = {
     dismissError: "Dismiss",
     jumpToBottom: "Jump to bottom",
     resizeContextSidebar: "Resize right sidebar",
+    resizeBottomBar: "Resize bottom bar",
     splashSubtitle: "DeepSeek Agents",
     connecting: "Connecting to Jupiter core…",
     startupFailedTitle: "Jupiter could not start",
@@ -1011,6 +1023,8 @@ export const en = {
     subagent: "subagent",
     copyMessage: "Copy this message",
     editMessage: "Edit this message and re-send",
+    rollbackToHere: "Rollback to here",
+    rollbackUnavailable: "Cannot rollback to here",
     copyResponse: "Copy this response",
   },
   live: {

@@ -407,6 +407,7 @@ export const JA: TranslationSchema = {
         "保留中の編集を1ブロックずつ確認（git-add-p スタイル: ブロックごとに y/n、a で残りを適用、A でAUTOに切替）",
     },
     undo: { description: "最後に適用された編集バッチをロールバック" },
+    rewind: { description: "最後に適用された編集バッチをロールバック" },
     history: {
       description: "このセッションの全編集バッチを一覧（/show用のID、取り消しマーカー付き）",
     },

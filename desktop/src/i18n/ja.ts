@@ -80,6 +80,9 @@ export const ja = {
     placeholder: "エージェントに質問 / タスクを説明…",
     queueCount: "{n}件キュー",
     queue: "キュー",
+    queuePrioritize: "割り込み",
+    queuePrioritizeLabel: "割り込み: {text}",
+    queueRemoveLabel: "キューから削除: {text}",
     interrupt: "停止",
     mentionFiles: "ファイルをメンション",
     commandPalette: "コマンドパレット",
@@ -164,6 +167,8 @@ export const ja = {
       "コンテキスト圧縮、中断、レート制限の一時停止に関する静かなインライン通知を表示します。",
     shown: "表示",
     hidden: "非表示",
+    enabled: "オン",
+    disabled: "オフ",
     processCardsDefaultOpen: "プロセス詳細",
     processCardsDefaultOpenHint:
       "完了済みの思考、ツール、shell カードを既定で開くか閉じるかを制御します。",
@@ -357,6 +362,7 @@ export const ja = {
       "現在のバージョンはビルトインの CLAUDE.md / AGENTS.md インジェクションに依存しています。プロジェクトレベルのメモリはカーネルレベルで維持されます。",
     memoryEffectHint:
       "変更はすぐ保存されます。プロンプトへの注入は新しいチャットまたは /new 後に反映されます。",
+    memoryGlobalEnabled: "チャット横断グローバルメモリ",
     memoryConfirmWrites: "モデルメモリ保存前に確認",
     memoryRefresh: "メモリを更新",
     memoryProjectRules: "プロジェクトルール",
@@ -373,9 +379,12 @@ export const ja = {
     memoryDeleteLabel: "{name} を削除",
     memoryNewStructured: "新しい構造化メモリ",
     memoryEditStructured: "構造化メモリを編集",
+    memoryEditorTitle: "構造化メモリエディタ",
+    memoryEditorClose: "エディタを閉じる",
+    memoryEdit: "編集",
     memoryStructuredHint:
       "frontmatter 付きの非公開 Markdown メモリとして保存し、今後のセッションで使用します。",
-    memoryNew: "新規",
+    memoryNew: "新規メモリ",
     memoryNameLabel: "メモリ名",
     memoryScopeLabel: "範囲",
     memoryScopeProject: "プロジェクト",
@@ -395,6 +404,7 @@ export const ja = {
     memoryExpiresProjectEnd: "プロジェクト終了",
     memoryDescriptionLabel: "説明",
     memoryBodyLabel: "メモリ本文",
+    memoryCancel: "キャンセル",
     memorySave: "メモリを保存",
     appMode: "アプリケーションモード",
     ruleAutoApprovalSection: "コマンドの自動承認",
@@ -486,6 +496,7 @@ export const ja = {
     cancel: "キャンセル",
   },
   app: {
+    thinkingNow: "思考中",
     toast: {
       newSession: "新しいセッションを作成しました",
       cleared: "クリアしました",
@@ -549,6 +560,7 @@ export const ja = {
     dismissError: "閉じる",
     jumpToBottom: "最下部にジャンプ",
     resizeContextSidebar: "右サイドバーの幅を調整",
+    resizeBottomBar: "下部バーの高さを調整",
     splashSubtitle: "DeepSeek Agents",
     connecting: "Jupiterコアに接続中…",
     startupFailedTitle: "Jupiterを起動できませんでした",
@@ -1000,6 +1012,8 @@ export const ja = {
     subagent: "サブエージェント",
     copyMessage: "このメッセージをコピー",
     editMessage: "このメッセージを編集して再送信",
+    rollbackToHere: "ここまでロールバック",
+    rollbackUnavailable: "ここにはロールバックできません",
     copyResponse: "この返信をコピー",
   },
   live: {

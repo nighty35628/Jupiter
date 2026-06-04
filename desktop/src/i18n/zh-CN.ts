@@ -82,6 +82,9 @@ export const zhCN: typeof en = {
     placeholder: "向 Agent 提问 / 安排任务…",
     queueCount: "排队 {n}",
     queue: "排队",
+    queuePrioritize: "插队",
+    queuePrioritizeLabel: "插队：{text}",
+    queueRemoveLabel: "删除排队消息：{text}",
     interrupt: "中断",
     mentionFiles: "提及文件",
     commandPalette: "命令面板",
@@ -161,6 +164,8 @@ export const zhCN: typeof en = {
     showSystemEventsHint: "在对话流中以细线显示压缩 / 中断 / 限速等系统事件",
     shown: "显示",
     hidden: "隐藏",
+    enabled: "开启",
+    disabled: "关闭",
     processCardsDefaultOpen: "过程细节",
     processCardsDefaultOpenHint:
       "控制已完成的思考、工具和 shell 卡片默认展开还是收起。",
@@ -346,6 +351,7 @@ export const zhCN: typeof en = {
     memoryDesc:
       "当前版本依赖内置 CLAUDE.md / AGENTS.md 注入；项目级别记忆在内核侧维护。",
     memoryEffectHint: "变更会立即保存；注入到提示词需要新会话或 /new 后生效。",
+    memoryGlobalEnabled: "跨对话全局记忆",
     memoryConfirmWrites: "保存模型记忆前询问",
     memoryRefresh: "刷新记忆",
     memoryProjectRules: "项目规则",
@@ -362,9 +368,12 @@ export const zhCN: typeof en = {
     memoryDeleteLabel: "删除 {name}",
     memoryNewStructured: "新建结构化记忆",
     memoryEditStructured: "编辑结构化记忆",
+    memoryEditorTitle: "结构化记忆编辑器",
+    memoryEditorClose: "关闭编辑器",
+    memoryEdit: "编辑",
     memoryStructuredHint:
       "以带 frontmatter 的私有 Markdown 记忆保存，并在未来会话中注入。",
-    memoryNew: "新建",
+    memoryNew: "新建记忆",
     memoryNameLabel: "记忆名称",
     memoryScopeLabel: "范围",
     memoryScopeProject: "项目",
@@ -384,6 +393,7 @@ export const zhCN: typeof en = {
     memoryExpiresProjectEnd: "项目结束",
     memoryDescriptionLabel: "描述",
     memoryBodyLabel: "记忆内容",
+    memoryCancel: "取消",
     memorySave: "保存记忆",
     appMode: "应用模式",
     ruleAutoApprovalSection: "命令自动批准",
@@ -506,6 +516,7 @@ export const zhCN: typeof en = {
     kbClose: "关闭",
   },
   app: {
+    thinkingNow: "正在思考",
     toast: {
       newSession: "已创建新会话",
       cleared: "已清空",
@@ -566,6 +577,7 @@ export const zhCN: typeof en = {
     dismissError: "关闭",
     jumpToBottom: "回到底部",
     resizeContextSidebar: "调整右侧栏宽度",
+    resizeBottomBar: "调整底边栏高度",
     splashSubtitle: "DeepSeek Agents",
     connecting: "正在连接 jupiter 内核…",
     startupFailedTitle: "Jupiter 无法启动",
@@ -975,6 +987,8 @@ export const zhCN: typeof en = {
     subagent: "subagent",
     copyMessage: "复制这条消息",
     editMessage: "编辑并重新发送",
+    rollbackToHere: "回滚到当前",
+    rollbackUnavailable: "无法回滚到当前",
     copyResponse: "复制这条回复",
   },
   live: {

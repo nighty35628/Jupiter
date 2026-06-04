@@ -37,7 +37,7 @@ describe("desktop composer Codex-style lower tools", () => {
     expect(cssRule(".composer-foot .composer-busy-status")).toContain("border-radius: 999px");
     expect(css).toContain(".composer-plus-menu,\n.composer-mode-menu");
     expect(css).toContain("@container composer (max-width: 520px)");
-    expect(css).toContain(".composer-foot .composer-busy-status { display: none; }");
+    expect(css).toContain(".composer-foot .composer-busy-status {\n    display: none;");
   });
 
   it("does not fade transcript content behind the composer", () => {

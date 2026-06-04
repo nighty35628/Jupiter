@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings as SettingsType, UsageStats } from "../App";
 import { setLang } from "../i18n";
@@ -27,6 +33,7 @@ const settings: SettingsType = {
   recentWorkspaces: ["/tmp/Jupiter"],
   model: "deepseek-v4-flash",
   memoryConfirmWrites: false,
+  memoryGlobalEnabled: true,
   version: "0.0.0-test",
 };
 
@@ -128,7 +135,18 @@ describe("SettingsModal", () => {
     const onSave = vi.fn();
     renderSettings({ onSave });
 
-    fireEvent.click(screen.getByRole("button", { name: /expanded|展开/ }));
+    const processGroup = screen.getByRole("group", {
+      name: /Process details|过程细节/,
+    });
+    expect(
+      within(processGroup)
+        .getByRole("button", { name: /collapsed|收起/ })
+        .getAttribute("data-on"),
+    ).toBe("true");
+
+    fireEvent.click(
+      within(processGroup).getByRole("button", { name: /expanded|展开/ }),
+    );
 
     expect(onSave).toHaveBeenCalledWith({ processCardsDefaultOpen: true });
   });
@@ -138,12 +156,29 @@ describe("SettingsModal", () => {
     renderSettings({ initialPage: "memory", onSave });
 
     fireEvent.click(
-      screen.getByRole("button", {
-        name: /Ask before saving model memory|保存模型记忆前询问/,
-      }),
+      within(
+        screen.getByRole("group", {
+          name: /Ask before saving model memory|保存模型记忆前询问/,
+        }),
+      ).getByRole("button", { name: /enabled|开启/ }),
     );
 
     expect(onSave).toHaveBeenCalledWith({ memoryConfirmWrites: true });
+  });
+
+  it("saves the cross-chat global memory setting", () => {
+    const onSave = vi.fn();
+    renderSettings({ initialPage: "memory", onSave });
+
+    fireEvent.click(
+      within(
+        screen.getByRole("group", {
+          name: /Cross-chat global memory|跨对话全局记忆/,
+        }),
+      ).getByRole("button", { name: /disabled|关闭/ }),
+    );
+
+    expect(onSave).toHaveBeenCalledWith({ memoryGlobalEnabled: false });
   });
 
   it("manages rules and memory from the settings memory page", () => {
@@ -220,6 +255,17 @@ describe("SettingsModal", () => {
       initialPage: "memory",
       onSaveMemory,
     });
+
+    expect(screen.queryByLabelText(/Memory name|记忆名称/)).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: /New memory|新建记忆/ }),
+    );
+
+    const editor = screen.getByRole("dialog", {
+      name: /Structured memory editor|结构化记忆编辑器/,
+    });
+    expect(editor.querySelector(".memory-form-stack")).toBeTruthy();
+    expect(editor.querySelector(".memory-form-grid")).toBeNull();
 
     fireEvent.change(screen.getByLabelText(/Memory name|记忆名称/), {
       target: { value: "response_style" },

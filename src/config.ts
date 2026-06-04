@@ -297,6 +297,8 @@ export interface JupiterConfig {
   /** User-declared extensions to the built-in memory types (#709). Unknown types round-trip even without a declaration; declaring one lets you attach a default priority + lifecycle. */
   memory?: {
     customTypes?: CustomMemoryTypeConfig[];
+    /** When false, skip cross-chat/global memory injection and block model writes to global memory. Default true. */
+    globalEnabled?: boolean;
     /** When true, model-invoked remember/forget asks before mutating memory files. Default false keeps memory capture frictionless. */
     confirmWrites?: boolean;
   };
@@ -1422,6 +1424,16 @@ export function loadMemoryConfirmWrites(path: string = defaultConfigPath()): boo
 export function saveMemoryConfirmWrites(on: boolean, path: string = defaultConfigPath()): void {
   const cfg = readConfig(path);
   cfg.memory = { ...(cfg.memory ?? {}), confirmWrites: on };
+  writeConfig(cfg, path);
+}
+
+export function loadMemoryGlobalEnabled(path: string = defaultConfigPath()): boolean {
+  return readConfig(path).memory?.globalEnabled !== false;
+}
+
+export function saveMemoryGlobalEnabled(on: boolean, path: string = defaultConfigPath()): void {
+  const cfg = readConfig(path);
+  cfg.memory = { ...(cfg.memory ?? {}), globalEnabled: on };
   writeConfig(cfg, path);
 }
 

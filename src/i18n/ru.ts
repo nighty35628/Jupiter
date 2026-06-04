@@ -337,6 +337,7 @@ export const ru: TranslationSchema = {
         "проходить правки по одной (в стиле git-add-p: y/n на блок, a = применить остальные, A = AUTO)",
     },
     undo: { ...EN.slash.undo, description: "отменить последний применённый пакет правок" },
+    rewind: { ...EN.slash.rewind, description: "отменить последний применённый пакет правок" },
     history: {
       ...EN.slash.history,
       description: "список всех пакетов правок этой сессии (ID для /show, отметки отмены)",

@@ -260,6 +260,7 @@ const cwd: SlashHandler = (args, _loop, ctx) => {
 
 export const handlers: Record<string, SlashHandler> = {
   undo,
+  rewind: undo,
   history,
   show,
   apply,

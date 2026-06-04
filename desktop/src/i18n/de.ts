@@ -90,6 +90,9 @@ export const de: typeof en = {
     placeholder: "Frag den Agenten / beschreibe eine Aufgabe...",
     queueCount: "{n} in Warteschlange",
     queue: "Warteschlange",
+    queuePrioritize: "Vorziehen",
+    queuePrioritizeLabel: "Vorziehen: {text}",
+    queueRemoveLabel: "Nachricht aus Warteschlange entfernen: {text}",
     interrupt: "stopp",
     mentionFiles: "Dateien erwähnen",
     commandPalette: "Befehlsübersicht",
@@ -178,6 +181,8 @@ export const de: typeof en = {
       "Zeige leise Inline-Hinweise zur Kontextkomprimierung, Abbruch und Ratelimit-Pausen.",
     shown: "angezeigt",
     hidden: "ausgeblendet",
+    enabled: "ein",
+    disabled: "aus",
     processCardsDefaultOpen: "Prozessdetails",
     processCardsDefaultOpenHint:
       "Standardzustand für abgeschlossene Thinking-, Tool- und Shell-Karten im Gespräch.",
@@ -377,6 +382,7 @@ export const de: typeof en = {
       "Aktuelle Version verwendet die eingebaute CLAUDE.md / AGENTS.md-Injektion. Projekt-Level-Memory wird auf Kernel-Ebene verwaltet.",
     memoryEffectHint:
       "Änderungen werden sofort gespeichert. Die Prompt-Injektion wirkt in neuen Chats oder nach /new.",
+    memoryGlobalEnabled: "Globales Memory über Chats",
     memoryConfirmWrites: "Vor dem Speichern von Modell-Memory fragen",
     memoryRefresh: "Memory aktualisieren",
     memoryProjectRules: "Projektregeln",
@@ -393,9 +399,12 @@ export const de: typeof en = {
     memoryDeleteLabel: "{name} löschen",
     memoryNewStructured: "Neues strukturiertes Memory",
     memoryEditStructured: "Strukturiertes Memory bearbeiten",
+    memoryEditorTitle: "Editor für strukturiertes Memory",
+    memoryEditorClose: "Editor schließen",
+    memoryEdit: "Bearbeiten",
     memoryStructuredHint:
       "Wird als privates Markdown-Memory mit Frontmatter gespeichert und in künftigen Sitzungen verwendet.",
-    memoryNew: "Neu",
+    memoryNew: "Neues Memory",
     memoryNameLabel: "Memory-Name",
     memoryScopeLabel: "Bereich",
     memoryScopeProject: "Projekt",
@@ -415,6 +424,7 @@ export const de: typeof en = {
     memoryExpiresProjectEnd: "Projektende",
     memoryDescriptionLabel: "Beschreibung",
     memoryBodyLabel: "Memory-Inhalt",
+    memoryCancel: "Abbrechen",
     memorySave: "Memory speichern",
     appMode: "Anwendungsmodus",
     ruleAutoApprovalSection: "Auto-genehmigte Befehle",
@@ -518,6 +528,7 @@ export const de: typeof en = {
   },
   app: {
     ...en.app,
+    thinkingNow: "Denkt nach",
     toast: {
       ...en.app.toast,
       newSession: "Neue Sitzung erstellt",
@@ -586,6 +597,7 @@ export const de: typeof en = {
     dismissError: "Schließen",
     jumpToBottom: "Nach unten springen",
     resizeContextSidebar: "Rechte Seitenleiste skalieren",
+    resizeBottomBar: "Untere Leiste skalieren",
     splashSubtitle: "DeepSeek-Agenten",
     connecting: "Verbinde mit Jupiter core...",
     startupFailedTitle: "Jupiter konnte nicht starten",
@@ -1022,6 +1034,8 @@ export const de: typeof en = {
     subagent: "Subagent",
     copyMessage: "Diese Nachricht kopieren",
     editMessage: "Diese Nachricht bearbeiten und erneut senden",
+    rollbackToHere: "Bis hierher zurückrollen",
+    rollbackUnavailable: "Kann nicht bis hierher zurückrollen",
     copyResponse: "Diese Antwort kopieren",
   },
   live: {

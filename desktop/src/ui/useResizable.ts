@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getThreadMaxWidth } from "./thread-layout";
 
 const MIN_WIDTH = 160;
+const MIN_HEIGHT = 160;
 const MAX_WIDTH_PCT = { side: 0.4, ctx: 0.65 } as const;
+const MAX_BOTTOM_HEIGHT_PCT = 0.65;
 const CSS_VAR = { side: "--side-width", ctx: "--ctx-width" } as const;
 const PERSIST_KEY_SIDE = "jupiter.sideWidth";
 const PERSIST_KEY_CTX = "jupiter.ctxWidth";
+const PERSIST_KEY_BOTTOM = "jupiter.bottomHeight";
 
 export function useResizable(
   side: "side" | "ctx",
@@ -107,4 +110,81 @@ export function useResizable(
   }, [collapsed, side, persistKey, cssVar]);
 
   return { width, onMouseDown };
+}
+
+export function useBottomResizable(collapsed: boolean): {
+  height: number;
+  onMouseDown: (e: React.MouseEvent) => void;
+} {
+  const [height, setHeight] = useState(() => {
+    try {
+      const saved = localStorage.getItem(PERSIST_KEY_BOTTOM);
+      if (saved) {
+        const n = Number(saved);
+        if (Number.isFinite(n) && n >= MIN_HEIGHT) return n;
+      }
+    } catch {
+      /* localStorage not available */
+    }
+    return 300;
+  });
+
+  const draggingRef = useRef(false);
+  const startYRef = useRef(0);
+  const startHeightRef = useRef(0);
+  const heightRef = useRef(height);
+  heightRef.current = height;
+  const appRef = useRef<HTMLElement | null>(null);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    startYRef.current = e.clientY;
+    startHeightRef.current = heightRef.current;
+    const appEl = document.querySelector(".app") as HTMLElement | null;
+    appRef.current = appEl;
+    if (appEl) appEl.dataset.dragging = "true";
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+  }, []);
+
+  useEffect(() => {
+    if (collapsed) return;
+
+    const onMove = (e: MouseEvent) => {
+      if (!draggingRef.current) return;
+      const appEl = appRef.current;
+      if (!appEl) return;
+      const delta = startYRef.current - e.clientY;
+      const maxH = Math.floor(window.innerHeight * MAX_BOTTOM_HEIGHT_PCT);
+      const next = Math.max(MIN_HEIGHT, Math.min(startHeightRef.current + delta, maxH));
+      heightRef.current = next;
+      appEl.style.setProperty("--bottom-height", `${next}px`);
+      setHeight(next);
+    };
+
+    const onUp = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      const appEl = appRef.current;
+      if (appEl) delete appEl.dataset.dragging;
+      appRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      try {
+        localStorage.setItem(PERSIST_KEY_BOTTOM, String(heightRef.current));
+      } catch {
+        /* localStorage not available */
+      }
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [collapsed]);
+
+  return { height, onMouseDown };
 }

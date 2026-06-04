@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { useResizable } from "./useResizable";
+import { useBottomResizable, useResizable } from "./useResizable";
 
 function ResizeProbe({ collapsed = false }: { collapsed?: boolean }) {
   const { width, onMouseDown } = useResizable("ctx", collapsed);
@@ -10,6 +10,17 @@ function ResizeProbe({ collapsed = false }: { collapsed?: boolean }) {
     <div className="app" style={{ ["--ctx-width" as string]: `${width}px` }}>
       <button type="button" onMouseDown={onMouseDown}>
         drag
+      </button>
+    </div>
+  );
+}
+
+function BottomResizeProbe({ collapsed = false }: { collapsed?: boolean }) {
+  const { height, onMouseDown } = useBottomResizable(collapsed);
+  return (
+    <div className="app" style={{ ["--bottom-height" as string]: `${height}px` }}>
+      <button type="button" onMouseDown={onMouseDown}>
+        drag bottom
       </button>
     </div>
   );
@@ -30,5 +41,16 @@ describe("useResizable", () => {
     fireEvent.mouseUp(window);
 
     expect(localStorage.getItem("jupiter.ctxWidth")).toBe("650");
+  });
+
+  it("resizes the bottom panel height by dragging upward", () => {
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+    render(<BottomResizeProbe />);
+
+    fireEvent.mouseDown(screen.getByRole("button", { name: "drag bottom" }), { clientY: 700 });
+    fireEvent.mouseMove(window, { clientY: 500 });
+    fireEvent.mouseUp(window);
+
+    expect(localStorage.getItem("jupiter.bottomHeight")).toBe("500");
   });
 });

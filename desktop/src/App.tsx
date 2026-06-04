@@ -10,7 +10,19 @@ import {
   requestPermission as requestNotificationPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+import {
+  DESKTOP_CLI_SLASH_COMMANDS,
+  isKnownDesktopCliSlash,
+  parseDesktopSlash,
+} from "./cli-slash";
 import {
   CommandPalette,
   Toast,
@@ -108,6 +120,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { Sidebar } from "./ui/sidebar";
 import { Splash, shouldShowSplash } from "./ui/splash";
 import { SettingsStatusCard } from "./ui/statusbar";
+import { ThinkingBottomIndicator } from "./ui/thinking-indicator";
 import {
   StartupFailure,
   coerceStartupFailure,
@@ -135,9 +148,9 @@ import {
 import { WorkdirPop } from "./ui/workdir-pop";
 import { parseEditResult } from "./ui/cards";
 import { useAutoCollapse } from "./ui/useAutoCollapse";
-import { useResizable } from "./ui/useResizable";
+import { useBottomResizable, useResizable } from "./ui/useResizable";
 import { useDisableTextAssist } from "./ui/useDisableTextAssist";
-import { getThreadMaxWidth } from "./ui/thread-layout";
+import { getThreadMaxWidth, getVisibleContextWidth } from "./ui/thread-layout";
 import { elideTranscriptMessages } from "./ui/transcript-elision";
 import {
   TRANSCRIPT_BOTTOM_THRESHOLD,
@@ -206,6 +219,7 @@ export type ChatMessage =
       text: string;
       clientId: string;
       turn: number;
+      rollbackable?: boolean;
       skill?: SkillOrigin;
     }
   | {
@@ -370,6 +384,7 @@ export type Settings = {
   showSystemEvents?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
+  memoryGlobalEnabled?: boolean;
   promptHistory?: string[];
   version: string;
 };
@@ -464,7 +479,7 @@ type DeltaBatchItem = {
 };
 
 type Action =
-  | { t: "send_user"; text: string; clientId: string }
+  | { t: "send_user"; text: string; clientId: string; rollbackable?: boolean }
   | { t: "start_skill"; skill: SkillOrigin; args?: string; clientId: string }
   | { t: "incoming"; event: IncomingEvent }
   | { t: "batch_delta"; items: DeltaBatchItem[] }
@@ -482,6 +497,7 @@ type Action =
   | { t: "mention_preview"; preview: MentionPreviewState }
   | { t: "enqueue_send"; text: string }
   | { t: "dequeue_send"; index: number }
+  | { t: "prioritize_queued_send"; index: number }
   | { t: "shift_queued_send" }
   | { t: "side_chat_sent"; id: string; question: string }
   | { t: "settings_patch"; patch: SettingsPatch }
@@ -519,13 +535,36 @@ function fallbackSkillDesc(skill: SkillInfo): string {
   return t("app.skill.generic", { scope, runAs });
 }
 
-function nextMessageTurn(messages: ChatMessage[]): number {
+function isCommandEchoClientId(clientId: string): boolean {
+  return /^(slash|btw|skill)-/.test(clientId);
+}
+
+function isRollbackableUserMessage(message: ChatMessage): message is Extract<ChatMessage, { kind: "user" }> {
+  return (
+    message.kind === "user" &&
+    message.rollbackable !== false &&
+    !isCommandEchoClientId(message.clientId)
+  );
+}
+
+function isConversationTurnMessage(message: ChatMessage): boolean {
+  return (
+    isRollbackableUserMessage(message) ||
+    (message.kind === "assistant" && !message.pending)
+  );
+}
+
+function latestConversationTurn(messages: ChatMessage[]): number {
   const lastTurn = messages.reduce((max, m) => {
-    if (m.kind === "user" || m.kind === "assistant")
+    if (isRollbackableUserMessage(m) || m.kind === "assistant")
       return Math.max(max, m.turn);
     return max;
   }, 0);
-  return lastTurn + 1;
+  return lastTurn;
+}
+
+function nextMessageTurn(messages: ChatMessage[]): number {
+  return latestConversationTurn(messages) + 1;
 }
 
 export function chatMessageKey(
@@ -547,6 +586,40 @@ export function chatMessageKey(
   }
 }
 
+export function canRollbackMessage(
+  messages: ChatMessage[],
+  index: number,
+  busy: boolean,
+): boolean {
+  if (busy || index < 0 || index >= messages.length - 1) return false;
+  const message = messages[index];
+  if (!message || (message.kind !== "user" && message.kind !== "assistant"))
+    return false;
+  if (message.kind === "user" && !isRollbackableUserMessage(message)) return false;
+  if (message.kind === "assistant" && message.pending) return false;
+  return messages.slice(index + 1).some(isConversationTurnMessage);
+}
+
+export function rollbackTargetForMessage(
+  messages: ChatMessage[],
+  index: number,
+): { turn: number; role: "user" | "assistant" } | null {
+  const message = messages[index];
+  if (!message || (message.kind !== "user" && message.kind !== "assistant"))
+    return null;
+  if (message.kind === "user" && !isRollbackableUserMessage(message)) return null;
+  if (message.kind === "assistant" && message.pending) return null;
+
+  let turn = 0;
+  for (let i = 0; i <= index; i++) {
+    const current = messages[i];
+    if (current && isRollbackableUserMessage(current)) turn += 1;
+  }
+  if (message.kind === "assistant" && turn === 0) return null;
+  if (message.kind === "user" && turn < 1) return null;
+  return { turn, role: message.kind };
+}
+
 let _errSeq = 0;
 function nextErrorId(): string {
   _errSeq += 1;
@@ -560,6 +633,10 @@ export function reduce(state: State, action: Action): State {
 function reduceRaw(state: State, action: Action): State {
   switch (action.t) {
     case "send_user": {
+      const rollbackable = action.rollbackable !== false;
+      const turn = rollbackable
+        ? nextMessageTurn(state.messages)
+        : Math.max(1, latestConversationTurn(state.messages));
       return {
         ...state,
         busy: true,
@@ -569,7 +646,8 @@ function reduceRaw(state: State, action: Action): State {
             kind: "user",
             text: action.text,
             clientId: action.clientId,
-            turn: nextMessageTurn(state.messages),
+            turn,
+            ...(rollbackable ? {} : { rollbackable: false }),
           },
         ],
       };
@@ -586,7 +664,8 @@ function reduceRaw(state: State, action: Action): State {
             kind: "user",
             text: `/${action.skill.name}${argsLine}`,
             clientId: action.clientId,
-            turn: nextMessageTurn(state.messages),
+            turn: Math.max(1, latestConversationTurn(state.messages)),
+            rollbackable: false,
             skill: action.skill,
           },
         ],
@@ -755,6 +834,17 @@ function reduceRaw(state: State, action: Action): State {
         ...state,
         queuedSends: state.queuedSends.filter((_, i) => i !== action.index),
       };
+    case "prioritize_queued_send": {
+      const picked = state.queuedSends[action.index];
+      if (!picked || action.index <= 0) return state;
+      return {
+        ...state,
+        queuedSends: [
+          picked,
+          ...state.queuedSends.filter((_, i) => i !== action.index),
+        ],
+      };
+    }
     case "shift_queued_send":
       return { ...state, queuedSends: state.queuedSends.slice(1) };
     case "side_chat_sent":
@@ -1027,8 +1117,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           const messages = [...state.messages];
           const existing = messages[existingIndex]!;
           if (existing.kind === "user") {
+            const existingUser = { ...existing };
+            delete existingUser.rollbackable;
             messages[existingIndex] = {
-              ...existing,
+              ...existingUser,
               text: ev.text,
               turn: ev.turn > 0 ? ev.turn : existing.turn,
             };
@@ -1301,6 +1393,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           showSystemEvents: ev.showSystemEvents,
           processCardsDefaultOpen: ev.processCardsDefaultOpen,
           memoryConfirmWrites: ev.memoryConfirmWrites,
+          memoryGlobalEnabled: ev.memoryGlobalEnabled,
           promptHistory: ev.promptHistory,
           version: ev.version,
         },
@@ -1308,13 +1401,15 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     }
     case "$session_loaded": {
       const sessionName = ev.name;
+      let loadedUserTurn = 0;
       const loaded: ChatMessage[] = ev.messages.map((m, i) => {
         if (m.kind === "user") {
+          loadedUserTurn += 1;
           return {
             kind: "user",
             text: m.text,
             clientId: `c-loaded-${i}`,
-            turn: i + 1,
+            turn: loadedUserTurn,
           };
         }
         const segments: AssistantSegment[] = m.segments.map((s) => {
@@ -1709,13 +1804,17 @@ interface TabRuntimeProps {
   onSetCustomFontFamily: (family: string) => void;
   sideCollapsed: boolean;
   ctxCollapsed: boolean;
+  bottomCollapsed: boolean;
   sideWidth: number;
   ctxWidth: number;
-  threadMaxWidth: number;
+  bottomHeight: number;
+  viewportWidth: number;
   onSideResizeDown: (e: React.MouseEvent) => void;
   onCtxResizeDown: (e: React.MouseEvent) => void;
+  onBottomResizeDown: (e: React.MouseEvent) => void;
   onToggleSide: () => void;
   onToggleCtx: () => void;
+  onToggleBottom: () => void;
   onToggleCurrency: () => void;
   tabsList: { id: string; workspaceDir?: string }[];
   activeTabId: string;
@@ -1743,13 +1842,17 @@ function TabRuntime({
   onSetCustomFontFamily,
   sideCollapsed,
   ctxCollapsed,
+  bottomCollapsed,
   sideWidth,
   ctxWidth,
-  threadMaxWidth,
+  bottomHeight,
+  viewportWidth,
   onSideResizeDown,
   onCtxResizeDown,
+  onBottomResizeDown,
   onToggleSide,
   onToggleCtx,
+  onToggleBottom,
   onToggleCurrency,
   tabsList,
   activeTabId,
@@ -1803,6 +1906,15 @@ function TabRuntime({
   const [browserRequest, setBrowserRequest] =
     useState<BrowserOpenRequest | null>(null);
   const [contextInfoOpen, setContextInfoOpen] = useState(false);
+  const threadMaxWidth = getThreadMaxWidth({
+    viewportWidth,
+    visibleSide: sideCollapsed ? 0 : sideWidth,
+    visibleCtx: getVisibleContextWidth({
+      ctxCollapsed,
+      contextInfoOpen,
+      ctxWidth,
+    }),
+  });
   const [toast, setToast] = useState<{ msg: string; yolo?: boolean } | null>(
     null,
   );
@@ -1900,7 +2012,9 @@ function TabRuntime({
     (target: FilePreviewTarget) => {
       const workspaceDir = state.settings?.workspaceDir;
       const targetKey = `${target.path}:${target.line ?? ""}`;
-      if (ctxCollapsed) onToggleCtx();
+      if (bottomCollapsed) {
+        if (ctxCollapsed) onToggleCtx();
+      }
       setContextPanelMode("preview");
       setFilePreview({ target, preview: null, loading: true, error: null });
       void readFilePreview(target.path, workspaceDir).then(
@@ -1929,17 +2043,19 @@ function TabRuntime({
         },
       );
     },
-    [ctxCollapsed, onToggleCtx, state.settings?.workspaceDir],
+    [bottomCollapsed, ctxCollapsed, onToggleCtx, state.settings?.workspaceDir],
   );
   const openBrowserUrl = useCallback(
     (url: string) => {
-      if (ctxCollapsed) onToggleCtx();
+      if (bottomCollapsed) {
+        if (ctxCollapsed) onToggleCtx();
+      }
       setContextInfoOpen(false);
       setContextPanelMode("browser");
       browserRequestIdRef.current += 1;
       setBrowserRequest({ id: browserRequestIdRef.current, url });
     },
-    [ctxCollapsed, onToggleCtx],
+    [bottomCollapsed, ctxCollapsed, onToggleCtx],
   );
   const openHtmlFileInBrowser = useCallback(
     (target: FilePreviewTarget) => {
@@ -1968,8 +2084,9 @@ function TabRuntime({
       sidebarCollapsed: ctxCollapsed,
     });
     if (next.collapseSidebar) onToggleCtx();
+    if (next.infoOpen && !bottomCollapsed) onToggleBottom();
     setContextInfoOpen(next.infoOpen);
-  }, [contextInfoOpen, ctxCollapsed, onToggleCtx]);
+  }, [bottomCollapsed, contextInfoOpen, ctxCollapsed, onToggleBottom, onToggleCtx]);
   const toggleContextPanel = useCallback(() => {
     const next = nextContextSidebarToggle({
       infoOpen: contextInfoOpen,
@@ -1977,8 +2094,17 @@ function TabRuntime({
     });
     if (next.panelMode) setContextPanelMode(next.panelMode);
     setContextInfoOpen(next.infoOpen);
+    if (ctxCollapsed && !bottomCollapsed) onToggleBottom();
     onToggleCtx();
-  }, [contextInfoOpen, ctxCollapsed, onToggleCtx]);
+  }, [bottomCollapsed, contextInfoOpen, ctxCollapsed, onToggleBottom, onToggleCtx]);
+  const toggleBottomPanel = useCallback(() => {
+    const expandingBottom = bottomCollapsed;
+    if (expandingBottom) {
+      setContextInfoOpen(false);
+      if (!ctxCollapsed) onToggleCtx();
+    }
+    onToggleBottom();
+  }, [bottomCollapsed, ctxCollapsed, onToggleBottom, onToggleCtx]);
   const saveSettings = useCallback(
     (patch: SettingsPatch) => sendRpc({ cmd: "settings_save", ...patch }),
     [sendRpc],
@@ -2207,10 +2333,22 @@ function TabRuntime({
         }
         const clientId = `btw-${Date.now()}`;
         recordAbortDraft("btw", text);
-        dispatch({ t: "send_user", text, clientId });
+        dispatch({ t: "send_user", text, clientId, rollbackable: false });
         sendRpc({ cmd: "btw", text: question });
         if (!override) setDraft("");
         return;
+      }
+
+      const slash = parseDesktopSlash(text);
+      if (slash) {
+        if (isKnownDesktopCliSlash(slash.cmd)) {
+          const clientId = `slash-${Date.now()}`;
+          recordAbortDraft("user_input", text);
+          dispatch({ t: "send_user", text, clientId, rollbackable: false });
+          sendRpc({ cmd: "slash", text, clientId });
+          if (!override) setDraft("");
+          return;
+        }
       }
 
       const skillMatch = text.match(/^\/([a-zA-Z0-9_-]+)(\s+.*)?$/);
@@ -2297,6 +2435,13 @@ function TabRuntime({
     setDraft(t);
     composerRef.current?.focus();
   }, []);
+  const rollbackToMessage = useCallback(
+    (turn: number, role: "user" | "assistant") => {
+      clearAbortDraft();
+      sendRpc({ cmd: "rollback_to_turn", turn, role });
+    },
+    [clearAbortDraft, sendRpc],
+  );
 
   useEffect(() => {
     if (state.busy || !state.ready || state.queuedSends.length === 0) return;
@@ -2923,6 +3068,21 @@ function TabRuntime({
       },
     })),
   ];
+  const slashCommandNames = new Set(
+    slashCommands.map((command) => command.cmd.replace(/^\//, "")),
+  );
+  const cliSlashCommands: SlashCmd[] = DESKTOP_CLI_SLASH_COMMANDS.filter(
+    (spec) => !slashCommandNames.has(spec.cmd),
+  ).map((spec) => ({
+    cmd: `/${spec.cmd}`,
+    desc: spec.argsHint ? `${spec.argsHint} · ${spec.summary}` : spec.summary,
+    insertOnly: true,
+    run: () => {
+      setDraft(`/${spec.cmd} `);
+      composerRef.current?.focus();
+    },
+  }));
+  const allSlashCommands = [...slashCommands, ...cliSlashCommands];
 
   const elapsed = useElapsed(state.busy);
   const workspaceLabel = state.settings?.workspaceDir
@@ -2990,6 +3150,30 @@ function TabRuntime({
     flashToast(t("app.toast.copiedMd"));
   }, [state.messages, flashToast]);
 
+  const threadVirtuosoComponents = useMemo(
+    () => ({
+      Header: state.activePlan
+        ? () => (
+            <div className="thread-inner">
+              <PlanBanner
+                plan={state.activePlan!}
+                onDismiss={
+                  state.busy ? undefined : () => dispatch({ t: "dismiss_plan" })
+                }
+              />
+              <ActivePlanTaskCard plan={state.activePlan!} />
+            </div>
+          )
+        : undefined,
+      Footer: () => (
+        <div className="thread-bottom-spacer">
+          <ThinkingBottomIndicator active={state.busy} />
+        </div>
+      ),
+    }),
+    [state.activePlan, state.busy],
+  );
+
   return (
     <WorkspaceProvider
       value={{
@@ -3006,11 +3190,18 @@ function TabRuntime({
         data-theme-style={themeStyle}
         data-side-collapsed={sideCollapsed}
         data-ctx-collapsed={ctxCollapsed}
+        data-bottom-collapsed={bottomCollapsed}
+        data-context-info-open={contextInfoOpen}
         style={{
           display: active ? undefined : "none",
           ["--side-width" as string]: sideCollapsed ? "0px" : `${sideWidth}px`,
-          ["--ctx-width" as string]: ctxCollapsed ? "0px" : `${ctxWidth}px`,
+          ["--ctx-width" as string]:
+            ctxCollapsed && !contextInfoOpen ? "0px" : `${ctxWidth}px`,
+          ["--bottom-height" as string]: bottomCollapsed
+            ? "0px"
+            : `${bottomHeight}px`,
           ["--thread-max-width" as string]: `${threadMaxWidth}px`,
+          ["--composer-max-width" as string]: `${threadMaxWidth}px`,
         }}
       >
         <TitleBar
@@ -3019,11 +3210,11 @@ function TabRuntime({
           sideOn={!sideCollapsed}
           ctxOn={!ctxCollapsed}
           contextInfoOn={contextInfoOpen}
-          bottomBarOn={settingsCardOpen}
+          bottomBarOn={!bottomCollapsed}
           onToggleSide={onToggleSide}
           onToggleCtx={toggleContextPanel}
           onShowContextInfo={showContextInfo}
-          onToggleBottomBar={() => setSettingsCardOpen((open) => !open)}
+          onToggleBottomBar={toggleBottomPanel}
           onOpenCommands={() => palette.setOpen(true)}
           onOpenSettings={() => openSettingsAt("general")}
           onCopy={conversationCopy}
@@ -3115,7 +3306,7 @@ function TabRuntime({
                         const trimmed = text.trim();
                         if (trimmed.startsWith("/")) {
                           const cmd = trimmed.split(/\s+/)[0] ?? "";
-                          const match = slashCommands.find(
+                          const match = allSlashCommands.find(
                             (s) => s.cmd === cmd,
                           );
                           if (match) {
@@ -3151,32 +3342,19 @@ function TabRuntime({
                           );
                       if (didFollow) setShowJumpButton(false);
                     }}
-                    components={{
-                      Header: state.activePlan
-                        ? () => (
-                            <div className="thread-inner">
-                              <PlanBanner
-                                plan={state.activePlan!}
-                                onDismiss={
-                                  state.busy
-                                    ? undefined
-                                    : () => dispatch({ t: "dismiss_plan" })
-                                }
-                              />
-                              <ActivePlanTaskCard plan={state.activePlan!} />
-                            </div>
-                          )
-                        : undefined,
-                      Footer: () => (
-                        <div
-                          className="thread-bottom-spacer"
-                          aria-hidden="true"
-                        />
-                      ),
-                    }}
+                    components={threadVirtuosoComponents}
                     itemContent={(index) => {
                       const m = state.messages[index]!;
                       if (m.kind === "user") {
+                        const rollbackAvailable = canRollbackMessage(
+                          state.messages,
+                          index,
+                          state.busy,
+                        );
+                        const rollbackTarget = rollbackTargetForMessage(
+                          state.messages,
+                          index,
+                        );
                         return (
                           <div className="thread-inner" data-turn={m.turn}>
                             <TurnDivider label={`turn ${m.turn}`} />
@@ -3184,14 +3362,30 @@ function TabRuntime({
                               text={m.text}
                               skill={m.skill}
                               onEdit={onEditUserMsg}
+                              rollbackAvailable={rollbackAvailable}
+                              onRollback={() => {
+                                if (rollbackTarget) rollbackToMessage(
+                                  rollbackTarget.turn,
+                                  rollbackTarget.role,
+                                );
+                              }}
                             />
                           </div>
                         );
                       }
                       if (m.kind === "assistant") {
+                        const rollbackAvailable = canRollbackMessage(
+                          state.messages,
+                          index,
+                          state.busy,
+                        );
                         const stats = !m.pending
                           ? countFileStats(m.segments)
                           : null;
+                        const rollbackTarget = rollbackTargetForMessage(
+                          state.messages,
+                          index,
+                        );
                         return (
                           <div className="thread-inner">
                             <AssistantMsg
@@ -3202,6 +3396,13 @@ function TabRuntime({
                               onRejectConfirm={onRejectConfirm}
                               onAlwaysAllowConfirm={onAlwaysAllowConfirm}
                               pendingConfirms={state.pendingConfirms}
+                              rollbackAvailable={rollbackAvailable}
+                              onRollback={() => {
+                                if (rollbackTarget) rollbackToMessage(
+                                  rollbackTarget.turn,
+                                  rollbackTarget.role,
+                                );
+                              }}
                               processCardsDefaultOpen={
                                 state.settings?.processCardsDefaultOpen ?? false
                               }
@@ -3348,7 +3549,7 @@ function TabRuntime({
                 editMode={state.settings?.editMode ?? "review"}
                 onEditModeChange={applyEditMode}
                 workspaceDir={state.settings?.workspaceDir}
-                slashCommands={slashCommands}
+                slashCommands={allSlashCommands}
                 onMentionQuery={queryMentions}
                 onMentionPreview={previewMention}
                 onMentionPicked={markMentionPicked}
@@ -3360,6 +3561,9 @@ function TabRuntime({
                 }}
                 onDequeueSend={(index) =>
                   dispatch({ t: "dequeue_send", index })
+                }
+                onPrioritizeQueuedSend={(index) =>
+                  dispatch({ t: "prioritize_queued_send", index })
                 }
                 initialHistory={state.settings?.promptHistory}
                 onHistoryPush={(entry) => {
@@ -3375,7 +3579,7 @@ function TabRuntime({
           )}
         </main>
 
-        {!ctxCollapsed ? (
+        {(!ctxCollapsed || contextInfoOpen) && bottomCollapsed ? (
           <div
             className="resize-handle"
             data-side="right"
@@ -3384,7 +3588,21 @@ function TabRuntime({
             aria-orientation="vertical"
             aria-label={t("app.resizeContextSidebar")}
             title={t("app.resizeContextSidebar")}
+            tabIndex={0}
             onMouseDown={onCtxResizeDown}
+          />
+        ) : null}
+        {!bottomCollapsed ? (
+          <div
+            className="resize-handle"
+            data-side="bottom"
+            data-dragging={undefined}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label={t("app.resizeBottomBar")}
+            title={t("app.resizeBottomBar")}
+            tabIndex={0}
+            onMouseDown={onBottomResizeDown}
           />
         ) : null}
         <ContextPanel
@@ -3403,6 +3621,10 @@ function TabRuntime({
           mode={contextPanelMode}
           onModeChange={setContextPanelMode}
           onCloseSidebar={() => {
+            if (!bottomCollapsed) {
+              toggleBottomPanel();
+              return;
+            }
             if (!ctxCollapsed) onToggleCtx();
           }}
           onMentionQuery={queryMentions}
@@ -3415,7 +3637,10 @@ function TabRuntime({
           sideChatDisabled={!state.ready}
           onSideChatSend={sendSideChat}
           browserRequest={browserRequest}
-          visible={!ctxCollapsed}
+          visible={
+            bottomCollapsed ? !ctxCollapsed && !contextInfoOpen : !bottomCollapsed
+          }
+          placement={bottomCollapsed ? "side" : "bottom"}
           onOpenSubagent={(name) => {
             clearAbortDraft();
             sendRpc({ cmd: "session_load", name });
@@ -3517,7 +3742,7 @@ function TabRuntime({
             memoryDetail={state.memoryDetail}
             qq={state.qq}
             onClose={() => setSettingsOpen(false)}
-            onSave={saveSettings}
+            onSave={applySettingsPatch}
             onSaveApiKey={saveApiKey}
             onLoadQQ={loadQQSettings}
             onConnectQQ={connectQQ}
@@ -4430,6 +4655,11 @@ export function App() {
     requireCollapsed: requireCtxCollapsed,
     releaseCollapsed: releaseCtxCollapsed,
   } = useAutoCollapse("jupiter.ctxCollapsed");
+  const {
+    collapsed: bottomCollapsed,
+    toggle: onToggleBottom,
+    requireCollapsed: requireBottomCollapsed,
+  } = useAutoCollapse("jupiter.bottomCollapsed", true);
 
   const { width: sideWidth, onMouseDown: onSideResizeDown } = useResizable(
     "side",
@@ -4439,14 +4669,9 @@ export function App() {
     "ctx",
     ctxCollapsed,
   );
+  const { height: bottomHeight, onMouseDown: onBottomResizeDown } =
+    useBottomResizable(bottomCollapsed);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-  const visibleSide = sideCollapsed ? 0 : sideWidth;
-  const visibleCtx = ctxCollapsed ? 0 : ctxWidth;
-  const threadMaxWidth = getThreadMaxWidth({
-    viewportWidth,
-    visibleSide,
-    visibleCtx,
-  });
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -4454,17 +4679,6 @@ export function App() {
     localStorage.setItem("jupiter.theme", theme);
     localStorage.setItem("jupiter.themeStyle", themeStyle);
   }, [theme, themeStyle]);
-
-  // Sync --composer-max-width to .app (separate from inline style to avoid React override)
-  const composerRef = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    if (!composerRef.current)
-      composerRef.current = document.querySelector(".app");
-    composerRef.current?.style.setProperty(
-      "--composer-max-width",
-      `${threadMaxWidth}px`,
-    );
-  }, [threadMaxWidth]);
 
   useEffect(() => {
     let raf = 0;
@@ -4487,9 +4701,11 @@ export function App() {
         // from narrow, the user may have manually opened ctx and we keep that.
         if (prev === null || prev === RESPONSIVE_STAGE.WIDE)
           requireCtxCollapsed();
+        requireBottomCollapsed();
         releaseSideCollapsed();
       } else {
         requireCtxCollapsed();
+        requireBottomCollapsed();
         requireSideCollapsed();
       }
     };
@@ -4506,6 +4722,7 @@ export function App() {
       window.removeEventListener("resize", onResize);
     };
   }, [
+    requireBottomCollapsed,
     requireCtxCollapsed,
     releaseCtxCollapsed,
     requireSideCollapsed,
@@ -4913,13 +5130,17 @@ export function App() {
           onSetCustomFontFamily={setCustomFontFamily}
           sideCollapsed={sideCollapsed}
           ctxCollapsed={ctxCollapsed}
+          bottomCollapsed={bottomCollapsed}
           sideWidth={sideWidth}
           ctxWidth={ctxWidth}
-          threadMaxWidth={threadMaxWidth}
+          bottomHeight={bottomHeight}
+          viewportWidth={viewportWidth}
           onSideResizeDown={onSideResizeDown}
           onCtxResizeDown={onCtxResizeDown}
+          onBottomResizeDown={onBottomResizeDown}
           onToggleSide={onToggleSide}
           onToggleCtx={onToggleCtx}
+          onToggleBottom={onToggleBottom}
           onToggleCurrency={onToggleCurrency}
           tabsList={tabs}
           activeTabId={activeTabId}

@@ -377,6 +377,7 @@ export const zhCN: TranslationSchema = {
       description: "逐块逐步处理待处理的编辑（git-add-p 风格：每块 y/n，a 应用剩余，A 切换 AUTO）",
     },
     undo: { description: "回滚最后应用的编辑批处理" },
+    rewind: { description: "回滚最后应用的编辑批处理" },
     history: {
       description: "列出此会话的每个编辑批处理（用于 /show 的 ID，撤消标记）",
     },

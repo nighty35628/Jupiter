@@ -228,6 +228,7 @@ export function ContextPanel({
   browserRequest,
   onPreviewFile,
   visible = true,
+  placement = "side",
 }: {
   settings: Settings | null;
   usage: UsageStats;
@@ -253,6 +254,7 @@ export function ContextPanel({
   onSideChatSend?: (text: string) => void;
   browserRequest?: BrowserOpenRequest | null;
   visible?: boolean;
+  placement?: "side" | "bottom";
   onOpenSubagent: (sessionName: string) => void;
   onReadMemory: (path: string) => void;
   onPreviewFile?: (target: FilePreviewTarget) => void;
@@ -277,7 +279,11 @@ export function ContextPanel({
     setPanelMode("home");
   };
   return (
-    <aside className="ctx" data-mode={showPreview ? "preview" : activeMode}>
+    <aside
+      className="ctx"
+      data-mode={showPreview ? "preview" : activeMode}
+      data-placement={placement}
+    >
       {showPreview ? (
         <div className="ctx-mode-shell">
           <CtxTabBar

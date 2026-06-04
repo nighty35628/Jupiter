@@ -4,7 +4,7 @@ import {
   stripCompactionMarker,
 } from "@jupiter/core-utils/compaction";
 import { derivePrefix } from "@jupiter/core-utils/derive-prefix";
-import { Copy } from "lucide-react";
+import { Copy, Undo2 } from "lucide-react";
 import { type ReactNode, memo, useEffect, useRef, useState } from "react";
 import type {
   ActivePlan,
@@ -46,11 +46,15 @@ export const UserMsg = memo(function UserMsg({
   time,
   skill,
   onEdit,
+  onRollback,
+  rollbackAvailable = false,
 }: {
   text: string;
   time?: string;
   skill?: SkillOrigin;
   onEdit?: (text: string) => void;
+  onRollback?: () => void;
+  rollbackAvailable?: boolean;
 }) {
   useLang();
   const [copied, setCopied] = useState(false);
@@ -81,6 +85,10 @@ export const UserMsg = memo(function UserMsg({
         </div>
         <div className="msg-text">{text}</div>
         <div className="msg-actions">
+          <RollbackButton
+            available={rollbackAvailable}
+            onRollback={onRollback}
+          />
           {onEdit ? (
             <button
               type="button"
@@ -105,6 +113,30 @@ export const UserMsg = memo(function UserMsg({
     </div>
   );
 });
+
+function RollbackButton({
+  available,
+  onRollback,
+}: {
+  available: boolean;
+  onRollback?: () => void;
+}) {
+  const title = available
+    ? t("thread.rollbackToHere")
+    : t("thread.rollbackUnavailable");
+  return (
+    <button
+      type="button"
+      className="rollback-btn"
+      onClick={available ? onRollback : undefined}
+      disabled={!available}
+      title={title}
+      aria-label={title}
+    >
+      <Undo2 size={12} />
+    </button>
+  );
+}
 
 function ToolGroupShell({
   segs,
@@ -146,6 +178,8 @@ export const AssistantMsg = memo(function AssistantMsg({
   pending,
   model,
   time,
+  onRollback,
+  rollbackAvailable = false,
   onApproveConfirm,
   onRejectConfirm,
   onAlwaysAllowConfirm,
@@ -156,6 +190,8 @@ export const AssistantMsg = memo(function AssistantMsg({
   pending: boolean;
   model?: string;
   time?: string;
+  onRollback?: () => void;
+  rollbackAvailable?: boolean;
   onApproveConfirm: (id: number) => void;
   onRejectConfirm: (id: number) => void;
   onAlwaysAllowConfirm: (id: number, prefix: string) => void;
@@ -360,6 +396,10 @@ export const AssistantMsg = memo(function AssistantMsg({
         {rendered}
         {content ? (
           <div className="msg-actions">
+            <RollbackButton
+              available={rollbackAvailable}
+              onRollback={onRollback}
+            />
             <button
               type="button"
               className={`copy-btn ${copied ? "done" : ""}`}

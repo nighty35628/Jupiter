@@ -219,6 +219,7 @@ export function Composer({
   queuedSends,
   onQueueWhileBusy,
   onDequeueSend,
+  onPrioritizeQueuedSend,
   initialHistory,
   onHistoryPush,
 }: {
@@ -249,6 +250,7 @@ export function Composer({
   /** Called when the user presses Enter while busy with a non-empty draft. Owns clearing the draft. */
   onQueueWhileBusy?: (text: string) => void;
   onDequeueSend?: (index: number) => void;
+  onPrioritizeQueuedSend?: (index: number) => void;
   /** Seed the in-session history from persisted storage so ArrowUp works after restart (#2051). */
   initialHistory?: string[];
   /** Called whenever an entry is pushed so the caller can persist the updated list. */
@@ -689,18 +691,39 @@ export function Composer({
       <div className="composer-inner">
         {queuedSends && queuedSends.length > 0 ? (
           <div className="composer-queued">
-            <span className="composer-queued-label">
-              {t("composer.queueCount", { n: queuedSends.length })}
-            </span>
+            <div className="composer-queued-head">
+              <span>{t("composer.queueCount", { n: queuedSends.length })}</span>
+            </div>
             {queuedSends.map((text, i) => (
-              <span key={i} className="composer-queue-chip" title={text}>
-                <span className="text">{text}</span>
-                {onDequeueSend ? (
-                  <span className="x" onClick={() => onDequeueSend(i)}>
-                    <I.x size={10} />
-                  </span>
+              <div key={`${i}-${text}`} className="composer-queue-row" title={text}>
+                <span className="composer-queue-corner" aria-hidden="true">
+                  ↳
+                </span>
+                <span className="composer-queue-text">{text}</span>
+                {onPrioritizeQueuedSend ? (
+                  <button
+                    type="button"
+                    className="composer-queue-action"
+                    aria-label={t("composer.queuePrioritizeLabel", { text })}
+                    title={t("composer.queuePrioritizeLabel", { text })}
+                    onClick={() => onPrioritizeQueuedSend(i)}
+                  >
+                    <span aria-hidden="true">↪</span>
+                    <span>{t("composer.queuePrioritize")}</span>
+                  </button>
                 ) : null}
-              </span>
+                {onDequeueSend ? (
+                  <button
+                    type="button"
+                    className="composer-queue-icon-action"
+                    aria-label={t("composer.queueRemoveLabel", { text })}
+                    title={t("composer.queueRemoveLabel", { text })}
+                    onClick={() => onDequeueSend(i)}
+                  >
+                    <I.trash size={13} />
+                  </button>
+                ) : null}
+              </div>
             ))}
           </div>
         ) : null}

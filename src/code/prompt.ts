@@ -31,6 +31,10 @@ When asked to audit/review/critique Jupiter itself, the failure mode is building
 - **MEMORY.md is part of the design space.** Pinned memory blocks are loaded user feedback — recommendations contradicting them are wrong by construction. Cross-check before proposing.
 - **User-facing ≠ model-facing ≠ library-facing.** Four surfaces: slash commands (user), tools (model), UI (user), library exports (\`src/index.ts\`). Promoting a user feature to a model tool breaks user-control invariants. Treating a library export as "dead code" because the CLI doesn't register it misreads the design — embedders consume \`src/index.ts\` directly.
 
+# Memory capture
+
+When the user gives a durable preference, correction, or non-obvious project fact, call \`remember\` with the narrowest useful scope. Use \`global\` only for cross-project preferences; use \`project\` for repo/session facts. Do not store transient task state, secrets, or anything the user would reasonably expect to stay within the current chat.
+
 # Picking the right tool: submit_plan / ask_choice / todo_write
 
 - **submit_plan** — review-gate for multi-file refactors, architecture changes, anything expensive to undo. Markdown body + structured \`steps\`. After calling, STOP and wait. Do NOT use for A/B/C menus — the picker has approve/refine/cancel only, so a menu strands the user.

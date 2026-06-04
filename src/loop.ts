@@ -92,6 +92,10 @@ function chatMessagesEqual(a: ChatMessage[], b: ChatMessage[]): boolean {
   return true;
 }
 
+function countUserTurns(messages: readonly ChatMessage[]): number {
+  return messages.reduce((count, message) => (message.role === "user" ? count + 1 : count), 0);
+}
+
 export interface CacheFirstLoopOptions {
   client: DeepSeekClient;
   prefix: ImmutablePrefix;
@@ -265,7 +269,7 @@ export class CacheFirstLoop {
       const tokensSaved = shrunk.tokensSaved;
       this.log.initWindow(messages);
       this.resumedMessageCount = messages.length;
-      this._turn = messages.reduce((n, m) => (m.role === "assistant" ? n + 1 : n), 0);
+      this._turn = countUserTurns(messages);
       // Carry forward cumulative cost / turn count so the TUI's session
       // total continues across resumes; otherwise each restart resets to $0.
       if (messages.length > 0) {
@@ -575,6 +579,7 @@ export class CacheFirstLoop {
       .slice(0, index)
       .map((m) => ({ ...m }));
     this.log.compactInPlace(preserved);
+    this._turn = countUserTurns(preserved);
     if (this.sessionName) {
       try {
         rewriteSession(this.sessionName, preserved);
@@ -599,6 +604,7 @@ export class CacheFirstLoop {
     const userText = typeof raw === "string" ? raw : "";
     const preserved = entries.slice(0, lastUserIdx).map((m) => ({ ...m }));
     this.log.compactInPlace(preserved);
+    this._turn = countUserTurns(preserved);
     if (this.sessionName) {
       try {
         rewriteSession(this.sessionName, preserved);
@@ -607,6 +613,75 @@ export class CacheFirstLoop {
       }
     }
     return userText;
+  }
+
+  /** Drop the latest user prompt and everything after it. Persists to session file. */
+  rollbackLatestTurn(): boolean {
+    const entries = this.log.toFullHistory();
+    let lastUserIdx = -1;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i]!.role === "user") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) return false;
+    const preserved = entries.slice(0, lastUserIdx).map((m) => ({ ...m }));
+    this.log.compactInPlace(preserved);
+    this._turn = countUserTurns(preserved);
+    if (this.sessionName) {
+      try {
+        rewriteSession(this.sessionName, preserved);
+      } catch {
+        /* disk-full / perms — in-memory rollback still applies */
+      }
+    }
+    return true;
+  }
+
+  rollbackLatestResponse(): boolean {
+    return this.rollbackLatestTurn();
+  }
+
+  /** Preserve the selected UI turn and drop everything after it. Persists to session file. */
+  rollbackToTurn(target: {
+    turn: number;
+    role: "user" | "assistant";
+  }): boolean {
+    if (!Number.isInteger(target.turn) || target.turn < 1) return false;
+    const entries = this.log.toFullHistory();
+    let turn = 0;
+    let targetUserIdx = -1;
+    let nextUserIdx = entries.length;
+
+    for (let i = 0; i < entries.length; i++) {
+      if (entries[i]!.role !== "user") continue;
+      turn += 1;
+      if (turn === target.turn) {
+        targetUserIdx = i;
+        continue;
+      }
+      if (turn === target.turn + 1) {
+        nextUserIdx = i;
+        break;
+      }
+    }
+
+    if (targetUserIdx < 0) return false;
+    const cutoff = target.role === "user" ? targetUserIdx + 1 : nextUserIdx;
+    if (cutoff >= entries.length) return false;
+
+    const preserved = entries.slice(0, cutoff).map((m) => ({ ...m }));
+    this.log.compactInPlace(preserved);
+    this._turn = countUserTurns(preserved);
+    if (this.sessionName) {
+      try {
+        rewriteSession(this.sessionName, preserved);
+      } catch {
+        /* disk-full / perms — in-memory rollback still applies */
+      }
+    }
+    return true;
   }
 
   /** Rewind to the N-th user turn (0-indexed). Drops that turn + everything after. */

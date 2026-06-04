@@ -125,6 +125,24 @@ describe("memory tools", () => {
       const store = new MemoryStore({ homeDir: home });
       expect(store.list().map((e) => e.name)).not.toContain("confirm_me");
     });
+
+    it("refuses global writes when global memory is disabled", async () => {
+      const reg = new ToolRegistry();
+      registerMemoryTools(reg, { homeDir: home, globalEnabled: false });
+
+      const out = await reg.dispatch("remember", {
+        type: "user",
+        scope: "global",
+        name: "global_off",
+        description: "Should not persist",
+        content: "This must not be written while global memory is disabled.",
+      });
+
+      const parsed = JSON.parse(out);
+      expect(parsed.error).toMatch(/global memory is disabled/);
+      const store = new MemoryStore({ homeDir: home });
+      expect(store.list().map((e) => e.name)).not.toContain("global_off");
+    });
   });
 
   describe("forget", () => {

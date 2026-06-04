@@ -430,6 +430,13 @@ describe("handleSlash", () => {
     expect(r.info).toMatch(/restored 2 file/);
   });
 
+  it("/rewind in code mode invokes the undo callback", () => {
+    const r = handleSlash("rewind", [], makeLoop(), {
+      codeUndo: () => "▸ restored 2 file(s)",
+    });
+    expect(r.info).toMatch(/restored 2 file/);
+  });
+
   it("/undo records reverted edits in model context", () => {
     const loop = makeLoop();
     const r = handleSlash("undo", [], loop, {
@@ -446,9 +453,10 @@ describe("handleSlash", () => {
     });
   });
 
-  it("/help mentions /undo and /commit", () => {
+  it("/help mentions /undo, /rewind, and /commit", () => {
     const r = handleSlash("help", [], makeLoop());
     expect(r.info).toMatch(/\/undo/);
+    expect(r.info).toMatch(/\/rewind/);
     expect(r.info).toMatch(/\/commit/);
   });
 
@@ -684,6 +692,7 @@ describe("handleSlash", () => {
       "apply",
       "discard",
       "undo",
+      "rewind",
       "commit",
       "plan",
     ]) {
@@ -696,10 +705,11 @@ describe("handleSlash", () => {
     // Case-insensitive.
     expect(suggestSlashCommands("HE").map((s) => s.cmd)).toEqual(["help"]);
     // Empty prefix returns the full non-advanced release list, including code commands.
-    expect(suggestSlashCommands("", true)).toHaveLength(44);
+    expect(suggestSlashCommands("", true)).toHaveLength(45);
     expect(suggestSlashCommands("", true).map((s) => s.cmd)).toContain("logs");
     expect(suggestSlashCommands("", true).map((s) => s.cmd)).toContain("language");
     expect(suggestSlashCommands("lan").map((s) => s.cmd)).toContain("language");
+    expect(suggestSlashCommands("rew", true).map((s) => s.cmd)).toContain("rewind");
   });
 
   describe("/btw — issue #725", () => {
@@ -769,6 +779,7 @@ describe("handleSlash", () => {
     const names = suggestSlashCommands("", false).map((s) => s.cmd);
     expect(names).toContain("apply");
     expect(names).toContain("undo");
+    expect(names).toContain("rewind");
   });
 
   it("suggestSlashCommands keeps code-mode gating for typed prefixes", () => {

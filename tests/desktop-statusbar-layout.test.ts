@@ -26,7 +26,8 @@ describe("desktop settings status card layout", () => {
 
   it("removes the permanent bottom status row from the app grid", () => {
     const appRule = cssRule(".app");
-    expect(appRule).toContain("grid-template-rows: 38px 34px 1fr");
+    expect(appRule).toContain("grid-template-rows: 38px 34px minmax(0, 1fr) var(--bottom-height)");
+    expect(appRule).toContain('"side   bottom  bottom"');
     expect(appRule).not.toContain("status status");
   });
 

@@ -359,6 +359,7 @@ export const de: TranslationSchema = {
         "Schrittweise durch ausstehende Edits gehen (git-add-p-Stil: y/n pro Block, a = Rest anwenden, A = AUTO umschalten)",
     },
     undo: { ...EN.slash.undo, description: "Letzten angewandten Edit-Batch rückgängig machen" },
+    rewind: { ...EN.slash.rewind, description: "Letzten angewandten Edit-Batch rückgängig machen" },
     history: {
       ...EN.slash.history,
       description:

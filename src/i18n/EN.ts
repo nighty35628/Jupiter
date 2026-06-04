@@ -394,6 +394,7 @@ export const EN: TranslationSchema = {
         "step through pending edits one block at a time (git-add-p style: y/n per block, a apply rest, A flip AUTO)",
     },
     undo: { description: "roll back the last applied edit batch" },
+    rewind: { description: "roll back the last applied edit batch" },
     history: { description: "list every edit batch this session (ids for /show, undone markers)" },
     show: {
       description: "dump a stored edit diff (omit id for newest non-undone)",

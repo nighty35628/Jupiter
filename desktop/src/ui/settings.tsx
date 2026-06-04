@@ -560,12 +560,16 @@ function PageGeneral({
             </button>
           </div>
         </div>
-        <div className="setting-row">
+        <div className="setting-row switch-row">
           <div className="l">
             <div className="n">{t("settings.processCardsDefaultOpen")}</div>
             <div className="h">{t("settings.processCardsDefaultOpenHint")}</div>
           </div>
-          <div className="seg-ctrl">
+          <div
+            className="seg-ctrl"
+            role="group"
+            aria-label={t("settings.processCardsDefaultOpen")}
+          >
             <button
               type="button"
               data-on={settings.processCardsDefaultOpen === true}
@@ -1653,7 +1657,13 @@ function PageMemory({
   };
   const [draft, setDraft] = useState(emptyDraft);
   const [editingPath, setEditingPath] = useState<string | undefined>();
-  useEffect(() => {
+  const [editorOpen, setEditorOpen] = useState(false);
+  const openNewDraft = () => {
+    setDraft(emptyDraft);
+    setEditingPath(undefined);
+    setEditorOpen(true);
+  };
+  const openEditDraft = () => {
     if (!detail || detail.kind !== "structured") return;
     setDraft({
       name: detail.name,
@@ -1665,10 +1675,10 @@ function PageMemory({
       expires: detail.expires ?? "",
     });
     setEditingPath(detail.path);
-  }, [detail?.path]);
-  const resetDraft = () => {
-    setDraft(emptyDraft);
-    setEditingPath(undefined);
+    setEditorOpen(true);
+  };
+  const closeEditor = () => {
+    setEditorOpen(false);
   };
   const submitDraft = () => {
     const input: MemoryWriteInput = {
@@ -1682,6 +1692,7 @@ function PageMemory({
     if (draft.priority) input.priority = draft.priority;
     if (draft.expires) input.expires = draft.expires;
     onSave(input);
+    setEditorOpen(false);
   };
   const groups = [
     {
@@ -1703,26 +1714,73 @@ function PageMemory({
       entries: entries.filter((entry) => entry.kind === "structured"),
     },
   ];
+  const globalMemoryOn = settings.memoryGlobalEnabled !== false;
+  const confirmMemoryWritesOn = settings.memoryConfirmWrites === true;
   return (
     <section className="section">
+      <div className="memory-settings">
+        <div className="setting-row memory-switch-row">
+          <span className="l">
+            <span className="n">{t("settings.memoryGlobalEnabled")}</span>
+            <span className="h">{t("settings.memoryGlobalRulesDesc")}</span>
+          </span>
+          <div
+            className="seg-ctrl"
+            role="group"
+            aria-label={t("settings.memoryGlobalEnabled")}
+          >
+            <button
+              type="button"
+              data-on={globalMemoryOn}
+              onClick={() => onSaveSettings({ memoryGlobalEnabled: true })}
+            >
+              {t("settings.enabled")}
+            </button>
+            <button
+              type="button"
+              data-on={!globalMemoryOn}
+              onClick={() => onSaveSettings({ memoryGlobalEnabled: false })}
+            >
+              {t("settings.disabled")}
+            </button>
+          </div>
+        </div>
+        <div className="setting-row memory-switch-row">
+          <span className="l">
+            <span className="n">{t("settings.memoryConfirmWrites")}</span>
+            <span className="h">{t("settings.memoryLongTermDesc")}</span>
+          </span>
+          <div
+            className="seg-ctrl"
+            role="group"
+            aria-label={t("settings.memoryConfirmWrites")}
+          >
+            <button
+              type="button"
+              data-on={confirmMemoryWritesOn}
+              onClick={() => onSaveSettings({ memoryConfirmWrites: true })}
+            >
+              {t("settings.enabled")}
+            </button>
+            <button
+              type="button"
+              data-on={!confirmMemoryWritesOn}
+              onClick={() => onSaveSettings({ memoryConfirmWrites: false })}
+            >
+              {t("settings.disabled")}
+            </button>
+          </div>
+        </div>
+      </div>
       <div className="memory-toolbar">
         <div>
           <div className="stitle">{t("settings.memorySection")}</div>
           <div className="section-hint">{t("settings.memoryEffectHint")}</div>
         </div>
         <div className="memory-toolbar-actions">
-          <button
-            type="button"
-            className="seg-pill"
-            aria-pressed={settings.memoryConfirmWrites === true}
-            data-on={settings.memoryConfirmWrites === true}
-            onClick={() =>
-              onSaveSettings({
-                memoryConfirmWrites: !(settings.memoryConfirmWrites === true),
-              })
-            }
-          >
-            {t("settings.memoryConfirmWrites")}
+          <button type="button" className="ghost-btn" onClick={openNewDraft}>
+            <I.plus size={13} />
+            {t("settings.memoryNew")}
           </button>
           <button type="button" className="ghost-btn" onClick={onRefresh}>
             <I.refresh size={13} />
@@ -1795,151 +1853,202 @@ function PageMemory({
           ))}
         </div>
         <div className="memory-detail-panel">
-          <pre className="memory-detail">
-            {detail ? detail.body : t("settings.memoryDetailPlaceholder")}
-          </pre>
-          <div className="memory-editor">
-            <div className="memory-editor-head">
-              <div>
-                <div className="memory-editor-title">
-                  {editingPath
-                    ? t("settings.memoryEditStructured")
-                    : t("settings.memoryNewStructured")}
+          {detail ? (
+            <>
+              <div className="memory-detail-head">
+                <div>
+                  <div className="memory-detail-title">
+                    {detail.description || detail.name}
+                  </div>
+                  <div className="memory-detail-meta">
+                    {detail.scope} / {detail.type ?? detail.kind.replace("_", " ")}
+                  </div>
                 </div>
-                <div className="memory-editor-desc">
-                  {t("settings.memoryStructuredHint")}
-                </div>
+                {detail.kind === "structured" ? (
+                  <button type="button" className="ghost-btn" onClick={openEditDraft}>
+                    {t("settings.memoryEdit")}
+                  </button>
+                ) : null}
               </div>
-              <button type="button" className="ghost-btn" onClick={resetDraft}>
-                {t("settings.memoryNew")}
-              </button>
+              <pre className="memory-detail">{detail.body}</pre>
+            </>
+          ) : (
+            <div className="memory-detail-placeholder">
+              {t("settings.memoryDetailPlaceholder")}
             </div>
-            <div className="memory-form-grid">
-              <label className="memory-field">
-                <span>{t("settings.memoryNameLabel")}</span>
-                <input
-                  className="field"
-                  value={draft.name}
-                  onChange={(e) =>
-                    setDraft((v) => ({ ...v, name: e.target.value }))
-                  }
-                />
-              </label>
-              <label className="memory-field">
-                <span>{t("settings.memoryScopeLabel")}</span>
-                <select
-                  className="field"
-                  value={draft.scope}
-                  onChange={(e) =>
-                    setDraft((v) => ({
-                      ...v,
-                      scope: e.target.value as "project" | "global",
-                    }))
-                  }
+          )}
+          {editorOpen ? (
+            <div
+              className="memory-editor-drawer"
+              role="dialog"
+              aria-label={t("settings.memoryEditorTitle")}
+            >
+              <div className="memory-editor-head">
+                <div>
+                  <div className="memory-editor-title">
+                    {editingPath
+                      ? t("settings.memoryEditStructured")
+                      : t("settings.memoryNewStructured")}
+                  </div>
+                  <div className="memory-editor-desc">
+                    {t("settings.memoryStructuredHint")}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="memory-icon-btn"
+                  aria-label={t("settings.memoryEditorClose")}
+                  onClick={closeEditor}
                 >
-                  <option value="project">
-                    {t("settings.memoryScopeProject")}
-                  </option>
-                  <option value="global">
-                    {t("settings.memoryScopeGlobal")}
-                  </option>
-                </select>
-              </label>
-              <label className="memory-field">
-                <span>{t("settings.memoryTypeLabel")}</span>
-                <select
-                  className="field"
-                  value={draft.type}
-                  onChange={(e) =>
-                    setDraft((v) => ({ ...v, type: e.target.value }))
-                  }
+                  <I.x size={13} />
+                </button>
+              </div>
+              <div className="memory-form-stack">
+                <label className="memory-field">
+                  <span>{t("settings.memoryNameLabel")}</span>
+                  <input
+                    className="field"
+                    value={draft.name}
+                    onChange={(e) =>
+                      setDraft((v) => ({ ...v, name: e.target.value }))
+                    }
+                  />
+                </label>
+                <div className="memory-inline-fields">
+                  <label className="memory-field">
+                    <span>{t("settings.memoryScopeLabel")}</span>
+                    <select
+                      className="field"
+                      value={draft.scope}
+                      onChange={(e) =>
+                        setDraft((v) => ({
+                          ...v,
+                          scope: e.target.value as "project" | "global",
+                        }))
+                      }
+                    >
+                      <option value="project">
+                        {t("settings.memoryScopeProject")}
+                      </option>
+                      <option value="global">
+                        {t("settings.memoryScopeGlobal")}
+                      </option>
+                    </select>
+                  </label>
+                  <label className="memory-field">
+                    <span>{t("settings.memoryTypeLabel")}</span>
+                    <select
+                      className="field"
+                      value={draft.type}
+                      onChange={(e) =>
+                        setDraft((v) => ({ ...v, type: e.target.value }))
+                      }
+                    >
+                      <option value="user">{t("settings.memoryTypeUser")}</option>
+                      <option value="feedback">
+                        {t("settings.memoryTypeFeedback")}
+                      </option>
+                      <option value="project">
+                        {t("settings.memoryTypeProject")}
+                      </option>
+                      <option value="reference">
+                        {t("settings.memoryTypeReference")}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+                <div className="memory-inline-fields">
+                  <label className="memory-field">
+                    <span>{t("settings.memoryPriorityLabel")}</span>
+                    <select
+                      className="field"
+                      value={draft.priority}
+                      onChange={(e) =>
+                        setDraft((v) => ({
+                          ...v,
+                          priority: e.target.value as
+                            | ""
+                            | "low"
+                            | "medium"
+                            | "high",
+                        }))
+                      }
+                    >
+                      <option value="">
+                        {t("settings.memoryPriorityDefault")}
+                      </option>
+                      <option value="low">
+                        {t("settings.memoryPriority_low")}
+                      </option>
+                      <option value="medium">
+                        {t("settings.memoryPriority_medium")}
+                      </option>
+                      <option value="high">
+                        {t("settings.memoryPriority_high")}
+                      </option>
+                    </select>
+                  </label>
+                  <label className="memory-field">
+                    <span>{t("settings.memoryExpiresLabel")}</span>
+                    <select
+                      className="field"
+                      value={draft.expires}
+                      onChange={(e) =>
+                        setDraft((v) => ({
+                          ...v,
+                          expires: e.target.value as "" | "project_end",
+                        }))
+                      }
+                    >
+                      <option value="">{t("settings.memoryExpiresNone")}</option>
+                      <option value="project_end">
+                        {t("settings.memoryExpiresProjectEnd")}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+                <label className="memory-field">
+                  <span>{t("settings.memoryDescriptionLabel")}</span>
+                  <input
+                    className="field"
+                    value={draft.description}
+                    onChange={(e) =>
+                      setDraft((v) => ({
+                        ...v,
+                        description: e.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="memory-field">
+                  <span>{t("settings.memoryBodyLabel")}</span>
+                  <textarea
+                    className="field memory-body-field"
+                    value={draft.body}
+                    onChange={(e) =>
+                      setDraft((v) => ({ ...v, body: e.target.value }))
+                    }
+                  />
+                </label>
+              </div>
+              <div className="memory-editor-actions">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={closeEditor}
                 >
-                  <option value="user">{t("settings.memoryTypeUser")}</option>
-                  <option value="feedback">
-                    {t("settings.memoryTypeFeedback")}
-                  </option>
-                  <option value="project">
-                    {t("settings.memoryTypeProject")}
-                  </option>
-                  <option value="reference">
-                    {t("settings.memoryTypeReference")}
-                  </option>
-                </select>
-              </label>
-              <label className="memory-field">
-                <span>{t("settings.memoryPriorityLabel")}</span>
-                <select
-                  className="field"
-                  value={draft.priority}
-                  onChange={(e) =>
-                    setDraft((v) => ({
-                      ...v,
-                      priority: e.target.value as
-                        | ""
-                        | "low"
-                        | "medium"
-                        | "high",
-                    }))
-                  }
+                  {t("settings.memoryCancel")}
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={submitDraft}
                 >
-                  <option value="">{t("settings.memoryPriorityDefault")}</option>
-                  <option value="low">{t("settings.memoryPriority_low")}</option>
-                  <option value="medium">
-                    {t("settings.memoryPriority_medium")}
-                  </option>
-                  <option value="high">
-                    {t("settings.memoryPriority_high")}
-                  </option>
-                </select>
-              </label>
-              <label className="memory-field">
-                <span>{t("settings.memoryExpiresLabel")}</span>
-                <select
-                  className="field"
-                  value={draft.expires}
-                  onChange={(e) =>
-                    setDraft((v) => ({
-                      ...v,
-                      expires: e.target.value as "" | "project_end",
-                    }))
-                  }
-                >
-                  <option value="">{t("settings.memoryExpiresNone")}</option>
-                  <option value="project_end">
-                    {t("settings.memoryExpiresProjectEnd")}
-                  </option>
-                </select>
-              </label>
-              <label className="memory-field memory-field-wide">
-                <span>{t("settings.memoryDescriptionLabel")}</span>
-                <input
-                  className="field"
-                  value={draft.description}
-                  onChange={(e) =>
-                    setDraft((v) => ({
-                      ...v,
-                      description: e.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label className="memory-field memory-field-wide">
-                <span>{t("settings.memoryBodyLabel")}</span>
-                <textarea
-                  className="field memory-body-field"
-                  value={draft.body}
-                  onChange={(e) =>
-                    setDraft((v) => ({ ...v, body: e.target.value }))
-                  }
-                />
-              </label>
+                  {t("settings.memorySave")}
+                </button>
+              </div>
             </div>
-            <div className="memory-editor-actions">
-              <button type="button" className="primary-btn" onClick={submitDraft}>
-                {t("settings.memorySave")}
-              </button>
-            </div>
-          </div>
+          ) : null}
         </div>
       </div>
     </section>

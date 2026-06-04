@@ -13,6 +13,16 @@ import {
   rankPickerCandidates,
 } from "../../at-mentions.js";
 import { pickPrimaryBalance } from "../../client.js";
+import { prepareAutoGitRollbackForEditBlocks } from "../../code/auto-git-rollback.js";
+import { formatAllBlockDiffs } from "../../code/diff-preview.js";
+import {
+  type ApplyResult,
+  type EditBlock,
+  type EditSnapshot,
+  applyEditBlocks,
+  restoreSnapshots,
+  snapshotBeforeEdits,
+} from "../../code/edit-blocks.js";
 import { codeSystemPrompt } from "../../code/prompt.js";
 import { applyPlanMode, buildCodeToolset } from "../../code/setup.js";
 import {
@@ -34,6 +44,7 @@ import {
   loadExaApiKey,
   loadMaxIterPerTurn,
   loadMemoryConfirmWrites,
+  loadMemoryGlobalEnabled,
   loadMetasoApiKey,
   loadModel,
   loadOllamaApiKey,
@@ -59,6 +70,7 @@ import {
   saveEditMode,
   saveEditor,
   saveMemoryConfirmWrites,
+  saveMemoryGlobalEnabled,
   saveModel,
   saveProcessCardsDefaultOpen,
   savePromptHistory,
@@ -154,6 +166,17 @@ import type { ChoiceOption } from "../../tools/choice.js";
 import type { SubagentEvent, SubagentSink } from "../../tools/subagent.js";
 import type { ChatMessage } from "../../types.js";
 import { VERSION } from "../../version.js";
+import {
+  type EditHistoryEntry,
+  entryStatus,
+  formatEditResults,
+  formatUndoRows,
+  isEntryFullyUndone,
+} from "../ui/edit-history.js";
+import { buildEditToolBlocks, isReviewGatedEditTool } from "../ui/edit-tool-gate.js";
+import { parseSlash, resolveSlashAlias } from "../ui/slash/commands.js";
+import { handleSlash } from "../ui/slash/dispatch.js";
+import type { CodeUndoResult } from "../ui/undo-context.js";
 import { type McpRuntime, createMcpRuntime } from "./mcp-runtime.js";
 
 export interface DesktopOptions {
@@ -230,6 +253,7 @@ type InMessage = { tabId?: string } & (
       showSystemEvents?: boolean;
       processCardsDefaultOpen?: boolean;
       memoryConfirmWrites?: boolean;
+      memoryGlobalEnabled?: boolean;
       promptHistory?: string[];
     }
   | { cmd: "qq_status_get" }
@@ -264,6 +288,8 @@ type InMessage = { tabId?: string } & (
   | { cmd: "jobs_stop_all" }
   | { cmd: "compact_history" }
   | { cmd: "retry" }
+  | { cmd: "rollback_to_turn"; turn: number; role: "user" | "assistant" }
+  | { cmd: "slash"; text: string; clientId?: string }
   | { cmd: "btw"; text: string; clientId?: string }
   | { cmd: "desktop_resync" }
 );
@@ -311,6 +337,7 @@ interface SettingsEvent {
   showSystemEvents?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
+  memoryGlobalEnabled?: boolean;
   promptHistory?: string[];
   version: string;
 }
@@ -850,6 +877,7 @@ function emitSettings(tab: Tab): void {
       showSystemEvents: loadShowSystemEvents(),
       processCardsDefaultOpen: loadProcessCardsDefaultOpen(),
       memoryConfirmWrites: loadMemoryConfirmWrites(),
+      memoryGlobalEnabled: loadMemoryGlobalEnabled(),
       promptHistory: loadPromptHistory(),
       version: VERSION,
     },
@@ -936,6 +964,9 @@ function loadSessionIntoTab(
   actions.abortTurn(tab);
   actions.cancelPendingGates(tab);
   tab.currentSession = name;
+  tab.editHistory = [];
+  tab.nextEditHistoryId = 1;
+  tab.currentTurnEditEntry = null;
   actions.persistOpenTabs();
   if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
   const loadedMessages = buildLoadedMessages(records);
@@ -967,6 +998,24 @@ function loadSessionIntoTab(
   );
   emitCtxBreakdown(tab);
   if (backfilledWorkspace) emitSessions(tab);
+}
+
+function emitCurrentSessionLoaded(tab: Tab): void {
+  const meta = loadSessionMeta(tab.currentSession);
+  emit(
+    {
+      type: "$session_loaded",
+      name: tab.currentSession,
+      messages: buildLoadedMessages(loadSessionMessages(tab.currentSession)),
+      carryover: {
+        totalCostUsd: meta.totalCostUsd ?? 0,
+        cacheHitTokens: meta.cacheHitTokens ?? 0,
+        cacheMissTokens: meta.cacheMissTokens ?? 0,
+        totalCompletionTokens: meta.totalCompletionTokens ?? 0,
+      },
+    },
+    tab.id,
+  );
 }
 
 function emptySessionLoadedEvent(name: string): SessionLoadedEvent {
@@ -1121,6 +1170,220 @@ interface RuntimeState {
 
 type SymbolEntry = { name: string; path: string; line: number; kind: string };
 
+function recordDesktopEdit(
+  tab: Tab,
+  source: string,
+  blocks: readonly EditBlock[],
+  results: readonly ApplyResult[],
+  snaps: readonly EditSnapshot[],
+): void {
+  if (snaps.length === 0) return;
+  let entry = tab.currentTurnEditEntry;
+  if (!entry) {
+    entry = {
+      id: tab.nextEditHistoryId++,
+      at: Date.now(),
+      source,
+      blocks: [],
+      results: [],
+      snapshots: [],
+      undoneFiles: new Set<string>(),
+    };
+    tab.currentTurnEditEntry = entry;
+    tab.editHistory.push(entry);
+  }
+  entry.blocks.push(...blocks);
+  entry.results.push(...results);
+  const seen = new Set(entry.snapshots.map((s) => s.path));
+  for (const snap of snaps) {
+    if (!seen.has(snap.path)) entry.snapshots.push(snap);
+  }
+}
+
+function desktopCodeUndo(tab: Tab, args: readonly string[] = []): CodeUndoResult {
+  const revert = (entry: EditHistoryEntry, paths: readonly string[]): CodeUndoResult => {
+    const subset = entry.snapshots.filter((s) => paths.includes(s.path));
+    if (subset.length === 0) {
+      return {
+        info: `batch #${entry.id}: nothing to undo (already restored or path not in batch)`,
+      };
+    }
+    const results = restoreSnapshots(subset, tab.rootDir);
+    for (const snap of subset) entry.undoneFiles.add(snap.path);
+    if (tab.currentTurnEditEntry === entry && isEntryFullyUndone(entry)) {
+      tab.currentTurnEditEntry = null;
+    }
+    const when = new Date(entry.at).toISOString().replace("T", " ").slice(11, 19);
+    const scope = subset.length === 1 ? subset[0]!.path : `${subset.length} file(s)`;
+    const header = `▸ undo: reverted ${scope} from batch #${entry.id} (${when})`;
+    const revertedPaths = results
+      .filter((r) => r.status === "applied" || r.status === "created")
+      .map((r) => r.path);
+    return {
+      info: [header, ...formatUndoRows(results)].join("\n"),
+      contextEvent:
+        revertedPaths.length > 0
+          ? { batchId: entry.id, source: entry.source, paths: revertedPaths }
+          : undefined,
+    };
+  };
+
+  const idArg = args[0];
+  const pathArg = args[1];
+  if (!idArg) {
+    for (let i = tab.editHistory.length - 1; i >= 0; i--) {
+      const entry = tab.editHistory[i]!;
+      if (isEntryFullyUndone(entry)) continue;
+      const remaining = entry.snapshots
+        .map((s) => s.path)
+        .filter((path) => !entry.undoneFiles.has(path));
+      return revert(entry, remaining);
+    }
+    return { info: "nothing to undo — every batch in the session history is already undone" };
+  }
+
+  const id = Number.parseInt(idArg, 10);
+  if (!Number.isFinite(id)) {
+    return {
+      info: "usage: /undo [id] [path]   (omit id for newest; id from /history; path from /show <id>)",
+    };
+  }
+  const entry = tab.editHistory.find((item) => item.id === id);
+  if (!entry) return { info: `no edit #${id} — run /history to see valid ids` };
+
+  if (!pathArg) {
+    const remaining = entry.snapshots
+      .map((s) => s.path)
+      .filter((path) => !entry.undoneFiles.has(path));
+    if (remaining.length === 0) return { info: `batch #${id} is already fully undone` };
+    return revert(entry, remaining);
+  }
+
+  const snap = entry.snapshots.find((item) => item.path === pathArg);
+  if (!snap) {
+    const files = [...new Set(entry.blocks.map((block) => block.path))];
+    return {
+      info: `batch #${id} doesn't include "${pathArg}" — files in this batch: ${files.join(", ")}`,
+    };
+  }
+  if (entry.undoneFiles.has(pathArg)) {
+    return { info: `${pathArg} in batch #${id} is already undone` };
+  }
+  return revert(entry, [pathArg]);
+}
+
+function hasUndoableDesktopEdits(tab: Tab): boolean {
+  return tab.editHistory.some((entry) => !isEntryFullyUndone(entry));
+}
+
+function desktopRewindLatestConversation(tab: Tab): boolean {
+  if (!tab.runtime) return false;
+  const ok = tab.runtime.loop.rollbackLatestTurn();
+  if (!ok) return false;
+  emitCurrentSessionLoaded(tab);
+  emitCtxBreakdown(tab);
+  return true;
+}
+
+function desktopCodeHistory(tab: Tab): string {
+  if (tab.editHistory.length === 0) return "no edits recorded this session yet";
+  const lines = ["Edit history (oldest first):"];
+  for (const entry of tab.editHistory) {
+    const when = new Date(entry.at).toISOString().replace("T", " ").slice(11, 19);
+    const files = new Set(entry.blocks.map((block) => block.path));
+    const fileList = [...files].join(", ");
+    const fileSummary = fileList.length > 60 ? `${fileList.slice(0, 60)}…` : fileList;
+    lines.push(
+      `  #${String(entry.id).padStart(3)}  ${when}  ${entryStatus(entry).padEnd(7)}  ${entry.source.padEnd(12)} ${files.size} file · ${entry.blocks.length} block   ${fileSummary}`,
+    );
+  }
+  lines.push("");
+  lines.push("/show <id> [path]   → inspect edit diff");
+  lines.push("/undo [id] [path]   → revert newest batch, or a specific file");
+  return lines.join("\n");
+}
+
+function desktopCodeShowEdit(tab: Tab, args: readonly string[] = []): string {
+  if (tab.editHistory.length === 0) return "no edits recorded this session — /history is empty";
+  const idArg = args[0];
+  const pathArg = args[1];
+  let entry: EditHistoryEntry | undefined;
+  if (!idArg) {
+    entry =
+      [...tab.editHistory].reverse().find((item) => !isEntryFullyUndone(item)) ??
+      tab.editHistory[tab.editHistory.length - 1];
+  } else {
+    const id = Number.parseInt(idArg, 10);
+    if (!Number.isFinite(id)) {
+      return "usage: /show [id] [path]   (omit id for newest; path from file summary)";
+    }
+    entry = tab.editHistory.find((item) => item.id === id);
+    if (!entry) return `edit #${id} not found — run /history`;
+  }
+  if (!entry) return "edit history lookup failed";
+
+  if (pathArg) {
+    const fileBlocks = entry.blocks.filter((block) => block.path === pathArg);
+    if (fileBlocks.length === 0) {
+      const files = [...new Set(entry.blocks.map((block) => block.path))];
+      return `batch #${entry.id} doesn't include "${pathArg}" — files in this batch: ${files.join(", ")}`;
+    }
+    const when = new Date(entry.at).toISOString().replace("T", " ").slice(11, 19);
+    const state = entry.undoneFiles.has(pathArg) ? "UNDONE" : "applied";
+    const header = `▸ edit #${entry.id} · ${when} · ${pathArg} · ${state} · ${fileBlocks.length} block(s)`;
+    const diff = formatAllBlockDiffs(fileBlocks, { maxLines: 60, contextLines: 2 });
+    const footer = entry.undoneFiles.has(pathArg)
+      ? "already reverted"
+      : `/undo ${entry.id} ${pathArg}  → revert just this file`;
+    return [header, ...diff, "", footer].join("\n");
+  }
+
+  const when = new Date(entry.at).toISOString().replace("T", " ").slice(11, 19);
+  const files = [...new Set(entry.blocks.map((block) => block.path))];
+  const header = `▸ edit #${entry.id} · ${when} · ${entry.source} · ${entryStatus(entry)} · ${files.length} file(s)`;
+  const countLines = (value: string) =>
+    value.length === 0 ? 0 : (value.match(/\n/g)?.length ?? 0) + 1;
+  const fileLines = files.map((path) => {
+    const fileBlocks = entry!.blocks.filter((block) => block.path === path);
+    let removed = 0;
+    let added = 0;
+    for (const block of fileBlocks) {
+      removed += countLines(block.search);
+      added += countLines(block.replace);
+    }
+    const state = entry!.undoneFiles.has(path) ? "UNDONE" : "applied";
+    return `  ${state.padEnd(7)}  -${String(removed).padStart(3)}/+${String(added).padStart(3)}   ${path}  (${fileBlocks.length} block${fileBlocks.length === 1 ? "" : "s"})`;
+  });
+  return [
+    header,
+    ...fileLines,
+    "",
+    `/show ${entry.id} <path>   → full diff of one file`,
+    `/undo ${entry.id} <path>   → revert just that file   ·   /undo ${entry.id} → revert whole batch`,
+  ].join("\n");
+}
+
+function desktopEditToolResult(
+  blocks: readonly EditBlock[],
+  results: readonly ApplyResult[],
+): string {
+  const diff = blocks.flatMap((block) => desktopUnifiedBlockDiff(block));
+  return diff.length > 0
+    ? `${formatEditResults([...results])}\n${diff.join("\n")}`
+    : formatEditResults([...results]);
+}
+
+function desktopUnifiedBlockDiff(block: EditBlock): string[] {
+  const oldLines = block.search === "" ? [] : block.search.split(/\r?\n/);
+  const newLines = block.replace.split(/\r?\n/);
+  return [
+    `# ${block.path}`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+    ...oldLines.map((line) => `- ${line}`),
+    ...newLines.map((line) => `+ ${line}`),
+  ];
+}
+
 interface Tab {
   readonly id: string;
   rootDir: string;
@@ -1149,6 +1412,9 @@ interface Tab {
   mcpStatuses: Map<string, { kind: McpSpecStatus; reason?: string; toolCount?: number }>;
   subagentSink: SubagentSink;
   subagentParentSessions: Map<string, string>;
+  editHistory: EditHistoryEntry[];
+  nextEditHistoryId: number;
+  currentTurnEditEntry: EditHistoryEntry | null;
   /** True while a session switch is in progress — prevents stale events from the old turn. */
   switching: boolean;
   hooks: ResolvedHook[];
@@ -1255,6 +1521,22 @@ function buildRuntimeFor(tab: Tab): RuntimeState {
     reasoningEffort,
   };
   return { loop, eventizer, ctx };
+}
+
+function installDesktopEditInterceptor(tab: Tab): void {
+  if (!tab.toolset) return;
+  tab.toolset.tools.addToolInterceptor("desktop-edit-history", (name, args) => {
+    if (!isReviewGatedEditTool(name)) return null;
+    const blocks = buildEditToolBlocks(name, args, tab.rootDir);
+    if (!blocks || blocks.length === 0) return null;
+    const guard = prepareAutoGitRollbackForEditBlocks(tab.rootDir, blocks, {});
+    if (guard) return guard;
+    const snaps = snapshotBeforeEdits(blocks, tab.rootDir);
+    const results = applyEditBlocks(blocks, tab.rootDir);
+    const anyApplied = results.some((r) => r.status === "applied" || r.status === "created");
+    if (anyApplied) recordDesktopEdit(tab, "auto", blocks, results, snaps);
+    return desktopEditToolResult(blocks, results);
+  });
 }
 
 const TS_EXPORT_RE =
@@ -1441,16 +1723,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   function sendQQInfo(message: string, tabOverride?: Tab): void {
     const tab = tabOverride ?? activeDesktopTab();
     if (tab) {
-      emit(
-        {
-          type: "status",
-          id: Date.now(),
-          ts: new Date().toISOString(),
-          turn: 0,
-          text: message,
-        },
-        tab.id,
-      );
+      emitStatus(tab, message);
     }
     void qqRuntime.channel?.sendResponse(message).catch((err) => {
       const active = activeDesktopTab();
@@ -1464,6 +1737,23 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         );
       }
     });
+  }
+
+  function emitStatus(tab: Tab, text: string): void {
+    emit(
+      {
+        type: "status",
+        id: Date.now(),
+        ts: new Date().toISOString(),
+        turn: 0,
+        text,
+      },
+      tab.id,
+    );
+  }
+
+  function finishDesktopCommand(tab: Tab): void {
+    emit({ type: "$turn_complete" }, tab.id);
   }
 
   function emitQQNotice(message: string, tabOverride?: Tab): void {
@@ -1488,6 +1778,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     abortTurn(tab);
     cancelPendingGates(tab);
     tab.currentSession = mintSessionFor(tab.rootDir);
+    tab.editHistory = [];
+    tab.nextEditHistoryId = 1;
+    tab.currentTurnEditEntry = null;
     persistOpenTabs();
     if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
     emit(emptySessionLoadedEvent(tab.currentSession), tab.id);
@@ -1558,6 +1851,129 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         hooks?.onError?.(message);
       }
     })();
+  }
+
+  function handleDesktopSlash(tab: Tab, text: string, clientId?: string): void {
+    const parsed = parseSlash(text);
+    if (!parsed) {
+      emitStatus(tab, `Not a slash command: ${text}`);
+      finishDesktopCommand(tab);
+      return;
+    }
+    if (!tab.runtime) {
+      emit(
+        {
+          type: "$error",
+          message: "Not configured yet — paste your DeepSeek API key first.",
+        },
+        tab.id,
+      );
+      finishDesktopCommand(tab);
+      return;
+    }
+
+    const canonical = resolveSlashAlias(parsed.cmd);
+    if (
+      (canonical === "undo" || canonical === "rewind") &&
+      parsed.args.length === 0 &&
+      !hasUndoableDesktopEdits(tab)
+    ) {
+      if (desktopRewindLatestConversation(tab)) {
+        emitStatus(tab, "已回退最新对话");
+      } else {
+        emit({ type: "$error", message: "无法回滚到当前" }, tab.id);
+      }
+      finishDesktopCommand(tab);
+      return;
+    }
+
+    const result = handleSlash(parsed.cmd, parsed.args, tab.runtime.loop, {
+      mcpSpecs: getAllMcpSpecs(readConfig()),
+      codeRoot: tab.rootDir,
+      memoryRoot: tab.rootDir,
+      codeUndo: (args) => desktopCodeUndo(tab, args),
+      codeHistory: () => desktopCodeHistory(tab),
+      codeShowEdit: (args) => desktopCodeShowEdit(tab, args),
+      codeApply: () => "nothing pending to apply.",
+      codeDiscard: () => "nothing pending to discard.",
+      planMode: loadEditMode() === "plan",
+      editMode: loadEditMode(),
+      setEditMode: (mode) => {
+        saveEditMode(mode);
+        if (tab.toolset) applyPlanMode(tab.toolset.tools, mode);
+        emitSettings(tab);
+      },
+      jobs: tab.toolset?.jobs,
+      pendingEditCount: 0,
+      postInfo: (message) => emitStatus(tab, message),
+      reloadHooks: () => {
+        tab.hooks = loadHooks({ projectRoot: tab.rootDir });
+        return tab.hooks.length;
+      },
+      reloadMcp: tab.mcpRuntime
+        ? async () => {
+            const reload = await tab.mcpRuntime!.reloadFromConfig(tab.runtime!.loop);
+            emitMcpSpecs(tab);
+            return reload;
+          }
+        : undefined,
+      qq: {
+        connect: async () => {
+          await startDesktopQQ(true);
+          return "QQ connected";
+        },
+        disconnect: async () => {
+          await stopDesktopQQ(true);
+          return "QQ disconnected";
+        },
+        status: () => currentQqSettings().runtimeState,
+      },
+      sessionId: tab.currentSession,
+    });
+
+    if (result.clear) {
+      startNewChatInTab(tab);
+    }
+    if (result.info) {
+      emitStatus(tab, result.info);
+    }
+    if (result.ctxBreakdown) {
+      emitCtxBreakdown(tab);
+    }
+    if (result.exit) {
+      void gracefulShutdown();
+      return;
+    }
+    if (result.openModelPicker) {
+      emitStatus(tab, "Open Settings → Models to change model from the desktop UI.");
+    }
+    if (result.openSessionsPicker) {
+      emitSessions(tab);
+      emitStatus(tab, "Use the left sidebar session list to open saved sessions.");
+    }
+    if (result.openWorkspacePicker) {
+      emitStatus(tab, "Use the workspace picker in the title bar to switch workspace.");
+    }
+    if (result.openMcpHub) {
+      emitMcpSpecs(tab);
+      emitStatus(tab, "Open Settings → MCP to manage MCP servers from the desktop UI.");
+    }
+    if (result.openArgPickerFor) {
+      emitStatus(tab, `Type /${result.openArgPickerFor} with an argument to run it.`);
+    }
+
+    if (canonical === "model" && parsed.args[0]) {
+      tab.currentModel = parsed.args[0];
+      emitSettings(tab);
+    } else if (canonical === "effort" || canonical === "budget") {
+      emitSettings(tab);
+    }
+
+    if (result.resubmit) {
+      void runTurn(tab, result.resubmit, false, clientId);
+    } else {
+      finishDesktopCommand(tab);
+    }
   }
 
   function handleQQRemoteDesktopCommand(tab: Tab, text: string): boolean {
@@ -2010,6 +2426,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       mcpStatuses: new Map(),
       subagentSink: { current: null },
       subagentParentSessions: new Map(),
+      editHistory: [],
+      nextEditHistoryId: 1,
+      currentTurnEditEntry: null,
       switching: false,
       hooks: loadHooks({ projectRoot: dir }),
     };
@@ -2028,6 +2447,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       subagentSink: tab.subagentSink,
     });
     tab.toolset = toolset;
+    installDesktopEditInterceptor(tab);
     tab.system = codeSystemPrompt(tab.rootDir, {
       hasSemanticSearch: toolset.semantic.enabled,
       modelId: tab.currentModel,
@@ -2150,6 +2570,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   async function runTurn(tab: Tab, text: string, fromQQ = false, clientId?: string): Promise<void> {
     if (!tab.runtime) return;
     const rt = tab.runtime;
+    tab.currentTurnEditEntry = null;
     tab.aborter = new AbortController();
     if (fromQQ) markQQTurnStarted(qqRuntime.routing, tab.id);
     let lastAssistantText = "";
@@ -2288,6 +2709,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.symbolBuilding = null;
     tab.recentMentions.length = 0;
     tab.subagentParentSessions.clear();
+    tab.editHistory = [];
+    tab.nextEditHistoryId = 1;
+    tab.currentTurnEditEntry = null;
     tab.hooks = loadHooks({ projectRoot: target });
     tab.currentSession = mintSessionFor(target);
     tab.toolset = await buildCodeToolset({
@@ -2296,6 +2720,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       onJobsChanged: () => emitJobs(),
       subagentSink: tab.subagentSink,
     });
+    installDesktopEditInterceptor(tab);
     tab.system = codeSystemPrompt(target, {
       hasSemanticSearch: tab.toolset.semantic.enabled,
       modelId: tab.currentModel,
@@ -3065,17 +3490,20 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           },
           tab.id,
         );
+        finishDesktopCommand(tab);
         return;
       }
       try {
         const payload = buildSkillPayload(tab, msg.name, msg.args);
         if (!payload) {
           emit({ type: "$error", message: `skill not found: ${msg.name}` }, tab.id);
+          finishDesktopCommand(tab);
           return;
         }
         void runTurn(tab, payload);
       } catch (err) {
         emit({ type: "$error", message: `skill_run: ${(err as Error).message}` }, tab.id);
+        finishDesktopCommand(tab);
       }
       return;
     }
@@ -3326,6 +3754,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         }
         if (msg.memoryConfirmWrites !== undefined) {
           saveMemoryConfirmWrites(msg.memoryConfirmWrites);
+        }
+        if (msg.memoryGlobalEnabled !== undefined) {
+          saveMemoryGlobalEnabled(msg.memoryGlobalEnabled);
         }
         if (
           msg.webSearchEngine !== undefined ||
@@ -3653,10 +4084,34 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       }
       return;
     }
-    if (msg.cmd === "btw") {
+    if (msg.cmd === "rollback_to_turn") {
       if (!tab.runtime) return;
+      const ok = tab.runtime.loop.rollbackToTurn({
+        turn: msg.turn,
+        role: msg.role,
+      });
+      if (!ok) {
+        emit({ type: "$error", message: "无法回滚到当前" }, tab.id);
+        return;
+      }
+      emitCurrentSessionLoaded(tab);
+      emitCtxBreakdown(tab);
+      return;
+    }
+    if (msg.cmd === "slash") {
+      handleDesktopSlash(tab, msg.text, msg.clientId);
+      return;
+    }
+    if (msg.cmd === "btw") {
+      if (!tab.runtime) {
+        finishDesktopCommand(tab);
+        return;
+      }
       const question = msg.text.trim();
-      if (!question) return;
+      if (!question) {
+        finishDesktopCommand(tab);
+        return;
+      }
       runBtwOnTab(tab, question, msg.clientId);
       return;
     }
@@ -3669,6 +4124,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           },
           tab.id,
         );
+        finishDesktopCommand(tab);
         return;
       }
       void runTurn(tab, msg.text, false, msg.clientId);

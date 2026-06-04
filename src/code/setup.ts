@@ -6,6 +6,7 @@ import {
   loadFilesystemOutlineThresholdBytes,
   loadJavaSourceEnabled,
   loadMemoryConfirmWrites,
+  loadMemoryGlobalEnabled,
   loadProjectShellAllowed,
   loadResolvedSkillPaths,
   loadSubagentModels,
@@ -84,6 +85,7 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
     registerMemoryTools(tools, {
       projectRoot: root,
       confirmWrites: () => loadMemoryConfirmWrites(opts.configPath),
+      globalEnabled: () => loadMemoryGlobalEnabled(opts.configPath),
     });
     registerCodeQueryTools(tools, { rootDir: root });
   };

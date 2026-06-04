@@ -117,6 +117,12 @@ describe("codeSystemPrompt", () => {
       expect(CODE_SYSTEM_PROMPT).toMatch(/MEMORY\.md is part of the design space/);
     });
 
+    it("tells the model to proactively capture durable memory", () => {
+      expect(CODE_SYSTEM_PROMPT).toMatch(/Memory capture/);
+      expect(CODE_SYSTEM_PROMPT).toMatch(/call `remember`/);
+      expect(CODE_SYSTEM_PROMPT).toMatch(/narrowest useful scope/);
+    });
+
     it("flags promoting user-facing features to model tools as a category error", () => {
       expect(CODE_SYSTEM_PROMPT).toMatch(/User-facing ≠ model-facing ≠ library-facing/);
     });

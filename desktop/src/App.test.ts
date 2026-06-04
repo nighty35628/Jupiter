@@ -35,14 +35,16 @@ vi.mock("./theme", () => ({
 }));
 
 import {
+  canRollbackMessage,
   chatMessageKey,
   pathToFileUrl,
   readWindowExpanded,
   reduce,
+  rollbackTargetForMessage,
   shouldShowSettingsChangeToast,
   toggleWindowExpanded,
 } from "./App";
-import { getThreadMaxWidth } from "./ui/thread-layout";
+import { getThreadMaxWidth, getVisibleContextWidth } from "./ui/thread-layout";
 
 function initialState(): Parameters<typeof reduce>[0] {
   return {
@@ -196,6 +198,76 @@ describe("Desktop App reducer — usage", () => {
       clientId: "c-local",
       turn: 12,
     });
+  });
+
+  it("keeps local command echoes from advancing conversation rollback turns", () => {
+    const state = {
+      ...initialState(),
+      messages: [
+        { kind: "user" as const, text: "first", clientId: "c-1", turn: 1 },
+        {
+          kind: "assistant" as const,
+          turn: 1,
+          segments: [{ kind: "text" as const, text: "done" }],
+          pending: false,
+        },
+      ],
+    };
+
+    const withCommand = reduce(state, {
+      t: "send_user",
+      text: "/undo",
+      clientId: "slash-1",
+      rollbackable: false,
+    });
+
+    expect(withCommand.messages.at(-1)).toMatchObject({
+      kind: "user",
+      turn: 1,
+      rollbackable: false,
+    });
+    expect(canRollbackMessage(withCommand.messages, 2, false)).toBe(false);
+    expect(canRollbackMessage(withCommand.messages, 1, false)).toBe(false);
+
+    const withNextUser = reduce(
+      { ...withCommand, busy: false },
+      { t: "send_user", text: "next real prompt", clientId: "c-2" },
+    );
+
+    expect(withNextUser.messages.at(-1)).toMatchObject({
+      kind: "user",
+      turn: 2,
+    });
+  });
+
+  it("computes rollback targets from conversation messages instead of stale UI turns", () => {
+    const messages = [
+      { kind: "user" as const, text: "first", clientId: "c-1", turn: 1 },
+      {
+        kind: "assistant" as const,
+        turn: 1,
+        segments: [{ kind: "text" as const, text: "done" }],
+        pending: false,
+      },
+      { kind: "user" as const, text: "/undo", clientId: "slash-1", turn: 2 },
+      { kind: "user" as const, text: "second", clientId: "c-2", turn: 3 },
+      {
+        kind: "assistant" as const,
+        turn: 3,
+        segments: [{ kind: "text" as const, text: "done again" }],
+        pending: false,
+      },
+    ];
+
+    expect(rollbackTargetForMessage(messages, 3)).toEqual({
+      turn: 2,
+      role: "user",
+    });
+    expect(rollbackTargetForMessage(messages, 4)).toEqual({
+      turn: 2,
+      role: "assistant",
+    });
+    expect(rollbackTargetForMessage(messages, 2)).toBeNull();
   });
 
   it("encodes local html paths as file URLs for sidebar browser preview", () => {
@@ -628,6 +700,87 @@ describe("desktop thread layout", () => {
       }),
     ).toBe(1120);
   });
+
+  it("treats the context info panel as occupied right-side width", () => {
+    expect(
+      getVisibleContextWidth({
+        ctxCollapsed: true,
+        contextInfoOpen: false,
+        ctxWidth: 318,
+      }),
+    ).toBe(0);
+    expect(
+      getVisibleContextWidth({
+        ctxCollapsed: true,
+        contextInfoOpen: true,
+        ctxWidth: 318,
+      }),
+    ).toBe(318);
+    expect(
+      getVisibleContextWidth({
+        ctxCollapsed: false,
+        contextInfoOpen: false,
+        ctxWidth: 318,
+      }),
+    ).toBe(318);
+  });
+});
+
+describe("desktop message rollback availability", () => {
+  it("allows rollback only for settled non-latest messages", () => {
+    const messages = [
+      { kind: "user" as const, text: "one", clientId: "u1", turn: 1 },
+      {
+        kind: "assistant" as const,
+        turn: 1,
+        segments: [{ kind: "text" as const, text: "done" }],
+        pending: false,
+      },
+    ];
+
+    expect(canRollbackMessage(messages, 0, false)).toBe(true);
+    expect(canRollbackMessage(messages, 1, false)).toBe(false);
+    expect(canRollbackMessage(messages, 0, true)).toBe(false);
+  });
+
+  it("preserves user turn numbers when loading a prior session", () => {
+    const next = reduce(initialState(), {
+      t: "incoming",
+      event: {
+        type: "$session_loaded",
+        name: "demo-session",
+        messages: [
+          { kind: "user", text: "first" },
+          {
+            kind: "assistant",
+            turn: 1,
+            segments: [{ kind: "text", text: "done" }],
+            pending: false,
+          },
+          { kind: "user", text: "second" },
+          {
+            kind: "assistant",
+            turn: 2,
+            segments: [{ kind: "text", text: "done again" }],
+            pending: false,
+          },
+        ],
+        carryover: {
+          totalCostUsd: 0,
+          cacheHitTokens: 0,
+          cacheMissTokens: 0,
+          totalCompletionTokens: 0,
+        },
+      },
+    });
+
+    expect(next.messages).toMatchObject([
+      { kind: "user", turn: 1 },
+      { kind: "assistant", turn: 1 },
+      { kind: "user", turn: 2 },
+      { kind: "assistant", turn: 2 },
+    ]);
+  });
 });
 
 describe("settings change notifications", () => {
@@ -636,5 +789,16 @@ describe("settings change notifications", () => {
     expect(shouldShowSettingsChangeToast("reasoningEffort")).toBe(false);
     expect(shouldShowSettingsChangeToast("editMode")).toBe(false);
     expect(shouldShowSettingsChangeToast("language")).toBe(false);
+  });
+});
+
+describe("Desktop App reducer — queued sends", () => {
+  it("moves a queued send to the front when prioritizing", () => {
+    const next = reduce(
+      { ...initialState(), queuedSends: ["first", "second", "third"] },
+      { t: "prioritize_queued_send", index: 2 },
+    );
+
+    expect(next.queuedSends).toEqual(["third", "first", "second"]);
   });
 });

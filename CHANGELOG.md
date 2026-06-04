@@ -3,6 +3,58 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.89.3] — 2026-06-04
+
+### 中文
+
+**Desktop 工作台体验升级。** 右侧栏改为默认工具箱入口，支持文件、侧边聊天、浏览器、审查/Diff
+和终端五个卡片；信息面板改成与侧栏宽度一致的可切换浮层，并会像侧栏一样推开主对话区。
+新增底栏面板，使用与右侧栏一致的卡片/标签逻辑，底栏项目也有统一默认高度。
+
+**内置浏览器与文件预览。** URL 和 HTML 文件现在会默认在侧栏浏览器中打开，浏览器状态在侧栏收起后继续保留；
+本地 HTML 预览路径和原生 WebView 创建流程做了修复，减少侧栏收起后浏览器残留遮挡的问题。
+
+**对话流、队列与回滚。** 队列模式改为纵向堆叠，并加入“插队/引导”入口；对话 hover 操作新增回滚按钮。
+`/undo` 和 `/rewind` 在没有可撤销代码编辑时会回退最新一轮对话，行为与点击回滚按钮一致：
+最后一条用户输入及其后的回复会一起移除。
+
+**工具卡、Diff、终端和思考提示。** 工具卡增加变更统计展示，Diff 展示更贴近 Codex/Claude 风格；
+新增桌面编辑历史、Diff 查看与终端面板能力；“正在思考”提示改为更稳定的文本/点状状态，避免流光动画抖动或闪烁。
+
+**设置与记忆。** 新增过程细节默认展开/收起设置，优化设置页分段控件样式；
+记忆 UI 重新整理，加入跨对话全局记忆开关与保存模型记忆前询问选项，并补充结构化记忆相关测试。
+
+**命令与兼容性。** Desktop slash 命令补齐 CLI 命令注册，包括 `/init`、`/undo`、`/rewind` 等；
+初始化、回滚和过程细节等路径补充测试，确保 Desktop 与 CLI 的命令行为更一致。
+
+### English
+
+**Desktop workbench polish.** The right sidebar now opens from a default toolbox with five entries:
+Files, Side Chat, Browser, Review/Diff, and Terminal. The info panel is now a width-matched switchable layer
+that pushes the main conversation area just like the sidebar. A bottom panel was added with the same card/tab
+logic as the right sidebar, including a shared default height for opened cards.
+
+**In-app browser and file previews.** URLs and HTML files now open in the sidebar browser by default. Browser
+state is preserved when the sidebar is collapsed, local HTML preview paths were fixed, and native WebView
+creation is more robust so browser content no longer lingers over the toolbox after panel transitions.
+
+**Conversation flow, queue UI, and rollback.** Queue mode now uses a vertical stacked layout with an
+interrupt/guide action. Message hover actions now include rollback. When there is no code edit history to
+revert, `/undo` and `/rewind` roll back the latest conversation turn, matching the message rollback button:
+the latest user input and everything after it are removed together.
+
+**Tool cards, diffs, terminal, and thinking state.** Tool cards now show file diff totals, diff rendering is
+closer to Codex/Claude, and desktop edit history, diff inspection, and terminal panel workflows were added.
+The thinking indicator was replaced with a steadier text/dot state to avoid shimmer jitter and flicker.
+
+**Settings and memory.** Added a setting for default process-card expanded/collapsed state and refined
+segmented controls. The memory UI was cleaned up with a cross-conversation global memory toggle and an option
+to ask before saving model memory, with structured-memory tests added.
+
+**Commands and compatibility.** Desktop slash commands now mirror more CLI commands, including `/init`,
+`/undo`, and `/rewind`. Initialization, rollback, process-detail preferences, and memory flows have additional
+test coverage so Desktop and CLI command behavior stay aligned.
+
 ## [0.52.0] — 2026-05-26
 
 **Ink renderer in-tree as `@esengine/ink`.** The vendored Ink fork now

@@ -9,7 +9,9 @@ describe("markdown code block rendering", () => {
     for (const css of [desktopCss, dashboardCss]) {
       expect(css).toContain(".markdown .codeview");
       expect(css).toContain("font-variant-ligatures: none");
-      expect(css).toContain('font-feature-settings: "liga" 0, "calt" 0');
+      expect(css).toContain("font-feature-settings");
+      expect(css).toContain('"liga" 0');
+      expect(css).toContain('"calt" 0');
     }
   });
 });

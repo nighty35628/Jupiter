@@ -5,15 +5,21 @@ import { useCallback, useRef, useState } from "react";
  *  (requireCollapsed / releaseCollapsed). Only user-driven changes persist —
  *  auto-collapses survive in memory but never overwrite the stored preference,
  *  and only auto-collapses get restored when the layout releases them. */
-export function useAutoCollapse(persistKey: string): {
+export function useAutoCollapse(
+  persistKey: string,
+  defaultCollapsed = false,
+): {
   collapsed: boolean;
   toggle: () => void;
   requireCollapsed: () => void;
   releaseCollapsed: () => void;
 } {
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem(persistKey) === "1",
-  );
+  const [collapsed, setCollapsed] = useState(() => {
+    const saved = localStorage.getItem(persistKey);
+    if (saved === "1") return true;
+    if (saved === "0") return false;
+    return defaultCollapsed;
+  });
   const sourceRef = useRef<"user" | "auto">("user");
 
   const toggle = useCallback(() => {

@@ -319,6 +319,37 @@ describe("user-memory", () => {
       expect(out.indexOf("global_one")).toBeLessThan(out.indexOf("project_one"));
     });
 
+    it("skips global structured memory when global memory is disabled", () => {
+      const store = new MemoryStore({ homeDir: home, projectRoot });
+      store.write({
+        name: "global_one",
+        type: "user",
+        scope: "global",
+        description: "global pref",
+        body: "b",
+        priority: "high",
+      });
+      store.write({
+        name: "project_one",
+        type: "project",
+        scope: "project",
+        description: "project fact",
+        body: "b",
+      });
+
+      const out = applyUserMemory(BASE, {
+        homeDir: home,
+        projectRoot,
+        cfg: { memory: { globalEnabled: false } },
+      });
+
+      expect(out).not.toContain("# User memory — global");
+      expect(out).not.toContain("global_one");
+      expect(out).not.toContain("HIGH PRIORITY");
+      expect(out).toContain("# User memory — this project");
+      expect(out).toContain("project_one");
+    });
+
     it("is deterministic — identical state ⇒ identical output (cache-safe)", () => {
       const store = new MemoryStore({ homeDir: home, projectRoot });
       store.write({
@@ -418,6 +449,15 @@ describe("user-memory", () => {
 
     it("returns BASE unchanged when the file is missing", () => {
       const out = applyGlobalJupiterMemory(BASE, home);
+      expect(out).toBe(BASE);
+    });
+
+    it("returns BASE unchanged when global memory is disabled", () => {
+      mkdirSync(home, { recursive: true });
+      writeFileSync(join(home, "JUPITER.md"), "- always pnpm not npm\n", "utf8");
+      const out = applyGlobalJupiterMemory(BASE, home, {
+        cfg: { memory: { globalEnabled: false } },
+      });
       expect(out).toBe(BASE);
     });
 

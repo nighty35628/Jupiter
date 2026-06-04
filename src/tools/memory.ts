@@ -19,10 +19,23 @@ export interface MemoryToolsOptions {
   homeDir?: string;
   /** When true, remember/forget ask the user before mutating disk. */
   confirmWrites?: boolean | (() => boolean);
+  /** When false, model tools cannot read/write global memory. Project memory remains available. */
+  globalEnabled?: boolean | (() => boolean);
 }
 
 function shouldConfirmWrites(value: MemoryToolsOptions["confirmWrites"]): boolean {
   return typeof value === "function" ? value() : value === true;
+}
+
+function globalMemoryEnabled(value: MemoryToolsOptions["globalEnabled"]): boolean {
+  return typeof value === "function" ? value() : value !== false;
+}
+
+function globalDisabledError(): string {
+  return JSON.stringify({
+    error:
+      "global memory is disabled. Use scope='project' or enable cross-chat global memory in Settings.",
+  });
 }
 
 export function registerMemoryTools(
@@ -46,7 +59,7 @@ export function registerMemoryTools(
   registry.register({
     name: "remember",
     description:
-      "Save a memory for future sessions — preferences, corrections, non-obvious project facts. Not for transient task state. Loads into the system prompt on next `/new` or launch.",
+      'Save a memory for future sessions. Use proactively when the user states a durable preference, correction, or non-obvious project fact; do not wait for the user to say "remember". Not for transient task state. Loads into the system prompt on next `/new` or launch.',
     parameters: {
       type: "object",
       properties: {
@@ -104,6 +117,9 @@ export function registerMemoryTools(
           error:
             "scope='project' is unavailable in this session (no sandbox root). Retry with scope='global', or ask the user to switch to `jupiter code` for project-scoped memory.",
         });
+      }
+      if (args.scope === "global" && !globalMemoryEnabled(opts.globalEnabled)) {
+        return globalDisabledError();
       }
       try {
         if (shouldConfirmWrites(opts.confirmWrites)) {
@@ -168,6 +184,9 @@ export function registerMemoryTools(
           error: "scope='project' is unavailable in this session (no sandbox root).",
         });
       }
+      if (args.scope === "global" && !globalMemoryEnabled(opts.globalEnabled)) {
+        return globalDisabledError();
+      }
       try {
         if (shouldConfirmWrites(opts.confirmWrites)) {
           const verdict = await (ctx?.confirmationGate ?? pauseGate).ask({
@@ -214,6 +233,9 @@ export function registerMemoryTools(
         return JSON.stringify({
           error: "scope='project' is unavailable in this session (no sandbox root).",
         });
+      }
+      if (args.scope === "global" && !globalMemoryEnabled(opts.globalEnabled)) {
+        return globalDisabledError();
       }
       try {
         const entry = store.read(args.scope, args.name);

@@ -1,4 +1,4 @@
-import { memo, useState, type ReactNode } from "react";
+import { memo, useEffect, useState, type ReactNode } from "react";
 import { I } from "../icons";
 import { Markdown } from "../Markdown";
 import { t, useLang } from "../i18n";
@@ -29,12 +29,11 @@ export function Card({
   headRight?: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    setOpen(defaultOpen);
+  }, [defaultOpen]);
   return (
-    <div
-      className={compact ? "card is-compact" : "card"}
-      data-tone={tone}
-      data-open={open}
-    >
+    <div className={compact ? "card is-compact" : "card"} data-tone={tone} data-open={open}>
       <button
         type="button"
         className="card-head"
@@ -97,43 +96,15 @@ function StatusIcon({
 }) {
   switch (state) {
     case "running":
-      return (
-        <span
-          className="spin-meta"
-          role="img"
-          aria-label={label}
-          title={label}
-        />
-      );
+      return <span className="spin-meta" role="img" aria-label={label} title={label} />;
     case "done":
-      return (
-        <I.check
-          size={10}
-          style={{ color: "var(--success)" }}
-          aria-label={label}
-        />
-      );
+      return <I.check size={10} style={{ color: "var(--success)" }} aria-label={label} />;
     case "failed":
-      return (
-        <I.x size={10} style={{ color: "var(--danger)" }} aria-label={label} />
-      );
+      return <I.x size={10} style={{ color: "var(--danger)" }} aria-label={label} />;
     case "waiting":
-      return (
-        <span
-          className="status-dot warn"
-          role="img"
-          aria-label={label}
-          title={label}
-        />
-      );
+      return <span className="status-dot warn" role="img" aria-label={label} title={label} />;
     case "blocked":
-      return (
-        <I.slash
-          size={10}
-          style={{ color: "var(--warning)" }}
-          aria-label={label}
-        />
-      );
+      return <I.slash size={10} style={{ color: "var(--warning)" }} aria-label={label} />;
   }
 }
 
@@ -164,15 +135,10 @@ export function PlanCardView({
         </>
       }
     >
-      <ul
-        className="plan-list"
-        style={{ listStyle: "none", margin: 0, padding: "8px 12px 12px" }}
-      >
+      <ul className="plan-list" style={{ listStyle: "none", margin: 0, padding: "8px 12px 12px" }}>
         {items.map((it) => (
           <li key={it.id} className="plan-item" data-status={it.status}>
-            <span className="ck">
-              {it.status === "done" ? <I.check size={12} /> : null}
-            </span>
+            <span className="ck">{it.status === "done" ? <I.check size={12} /> : null}</span>
             <div>
               <div className="text">{it.text}</div>
               {it.tool || it.note ? (
@@ -257,8 +223,7 @@ export function ReasoningCard({
             ) : null}
             {tokens !== undefined ? (
               <span>
-                <span className="k">{t("statusbar.tokens")}</span>{" "}
-                {tokens.toLocaleString()}
+                <span className="k">{t("statusbar.tokens")}</span> {tokens.toLocaleString()}
               </span>
             ) : null}
           </div>
@@ -290,8 +255,7 @@ export function ShellCard({
   defaultOpen?: boolean;
 }) {
   useLang();
-  const tone: Tone =
-    state === "failed" ? "danger" : state === "done" ? "success" : "warning";
+  const tone: Tone = state === "failed" ? "danger" : state === "done" ? "success" : "warning";
   return (
     <Card
       tone={tone}
@@ -331,11 +295,7 @@ export function ShellCard({
                     <span className="ok">{ln}</span>
                   </div>
                 );
-              if (
-                ln.startsWith(" ✗") ||
-                ln.startsWith("✗") ||
-                /error/i.test(ln)
-              )
+              if (ln.startsWith(" ✗") || ln.startsWith("✗") || /error/i.test(ln))
                 return (
                   <div key={i}>
                     <span className="err">{ln}</span>
@@ -352,11 +312,7 @@ export function ShellCard({
             </div>
             <div className="actions">
               {onAlwaysAllow ? (
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={onAlwaysAllow}
-                >
+                <button type="button" className="btn ghost" onClick={onAlwaysAllow}>
                   {t("cards.shellAlwaysAllow")}
                 </button>
               ) : null}
@@ -387,11 +343,7 @@ export function CompactionCard({ summary }: { summary: string }) {
       icon={<I.archive size={12} />}
       kind="compaction"
       name={t("cards.compactionName")}
-      meta={
-        <span>
-          {t("cards.compactionMeta", { chars: charCount.toLocaleString() })}
-        </span>
-      }
+      meta={<span>{t("cards.compactionMeta", { chars: charCount.toLocaleString() })}</span>}
       defaultOpen={false}
       compact
     >
@@ -422,6 +374,7 @@ export function ToolCard({
   useLang();
   const running = result === undefined;
   const tone: Tone = running ? "default" : ok === false ? "danger" : "success";
+  const editPreview = deriveToolEditPreview(name, args);
   return (
     <Card
       tone={tone}
@@ -432,6 +385,7 @@ export function ToolCard({
       compact
       meta={
         <>
+          {editPreview ? <ToolEditPreviewStat preview={editPreview} /> : null}
           {running ? (
             <StatusIcon state="running" label={t("cards.running")} />
           ) : ok === false ? (
@@ -450,17 +404,13 @@ export function ToolCard({
           <div className="row">
             <span className="k">args</span>
             <span className="v">
-              <span className="str">
-                {args.length > 600 ? `${args.slice(0, 600)}…` : args}
-              </span>
+              <span className="str">{args.length > 600 ? `${args.slice(0, 600)}…` : args}</span>
             </span>
           </div>
         ) : null}
         {result !== undefined ? (
           <div className="row">
-            <span className="k">
-              {ok === false ? t("cards.error") : t("cards.result")}
-            </span>
+            <span className="k">{ok === false ? t("cards.error") : t("cards.result")}</span>
             <span className="v">
               <span className={ok === false ? "num" : "str"}>
                 {result.length > 1200 ? `${result.slice(0, 1200)}…` : result}
@@ -473,6 +423,85 @@ export function ToolCard({
   );
 }
 
+export type ToolEditPreview = {
+  label: string;
+  added: number;
+  removed: number;
+};
+
+function changedLineCount(value: unknown): number {
+  if (typeof value !== "string" || value.length === 0) return 0;
+  return value.split(/\r\n|\r|\n/).length;
+}
+
+function basename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+function parseToolArgs(args: string | undefined): unknown {
+  if (!args) return null;
+  try {
+    return JSON.parse(args);
+  } catch {
+    return null;
+  }
+}
+
+function editDelta(edit: unknown): ToolEditPreview | null {
+  if (!edit || typeof edit !== "object") return null;
+  const raw = edit as Record<string, unknown>;
+  if (typeof raw.path !== "string") return null;
+  return {
+    label: basename(raw.path),
+    added: changedLineCount(raw.replace),
+    removed: changedLineCount(raw.search),
+  };
+}
+
+export function deriveToolEditPreview(
+  name: string,
+  args: string | undefined,
+): ToolEditPreview | null {
+  const parsed = parseToolArgs(args);
+  if (!parsed || typeof parsed !== "object") return null;
+  const raw = parsed as Record<string, unknown>;
+  if (name === "write_file") {
+    if (typeof raw.path !== "string") return null;
+    return {
+      label: basename(raw.path),
+      added: changedLineCount(raw.content),
+      removed: 0,
+    };
+  }
+  if (name === "edit_file") {
+    return editDelta(raw);
+  }
+  if (name === "multi_edit") {
+    if (!Array.isArray(raw.edits)) return null;
+    const entries = raw.edits
+      .map((edit) => editDelta(edit))
+      .filter((entry): entry is ToolEditPreview => Boolean(entry));
+    if (entries.length === 0) return null;
+    const labels = new Set(entries.map((entry) => entry.label));
+    return {
+      label: labels.size === 1 ? entries[0]!.label : `${labels.size} files`,
+      added: entries.reduce((sum, entry) => sum + entry.added, 0),
+      removed: entries.reduce((sum, entry) => sum + entry.removed, 0),
+    };
+  }
+  return null;
+}
+
+function ToolEditPreviewStat({ preview }: { preview: ToolEditPreview }) {
+  return (
+    <span className="tool-edit-preview">
+      <span className="file">{preview.label}</span>
+      <span className="add">+{preview.added}</span>
+      <span className="rm">-{preview.removed}</span>
+    </span>
+  );
+}
+
 // ---- Diff ----
 
 export type DiffLine =
@@ -481,9 +510,7 @@ export type DiffLine =
   | { t: "add"; r: number; s: string }
   | { t: "rm"; l: number; s: string };
 
-export function parseEditResult(
-  text: string,
-): { filename: string; lines: DiffLine[] }[] {
+export function parseEditResult(text: string): { filename: string; lines: DiffLine[] }[] {
   const files: { filename: string; lines: DiffLine[] }[] = [];
   const lines = text.split("\n");
 

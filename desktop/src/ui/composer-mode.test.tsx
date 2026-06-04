@@ -66,3 +66,33 @@ describe("desktop permission mode copy", () => {
     expect(document.body.textContent).not.toMatch(/YOLO/i);
   });
 });
+
+describe("desktop Composer queued sends", () => {
+  beforeEach(() => {
+    setLang("zh-CN");
+  });
+
+  it("renders queued sends as vertical rows with jump-the-line actions", () => {
+    renderComposer({
+      queuedSends: ["先做这个", "再做那个"],
+      onPrioritizeQueuedSend: vi.fn(),
+      onDequeueSend: vi.fn(),
+    });
+
+    expect(document.querySelectorAll(".composer-queue-row").length).toBe(2);
+    expect(screen.getAllByRole("button", { name: /插队/ }).length).toBe(2);
+  });
+
+  it("asks the caller to prioritize the selected queued send", () => {
+    const onPrioritizeQueuedSend = vi.fn();
+    renderComposer({
+      queuedSends: ["先做这个", "再做那个"],
+      onPrioritizeQueuedSend,
+      onDequeueSend: vi.fn(),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "插队：再做那个" }));
+
+    expect(onPrioritizeQueuedSend).toHaveBeenCalledWith(1);
+  });
+});

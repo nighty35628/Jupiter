@@ -330,8 +330,17 @@ export function readGlobalJupiterMemory(
   return { path, content, originalChars, truncated };
 }
 
-export function applyGlobalJupiterMemory(basePrompt: string, homeDir?: string): string {
+function globalMemoryEnabled(cfg?: JupiterConfig): boolean {
+  return cfg?.memory?.globalEnabled !== false;
+}
+
+export function applyGlobalJupiterMemory(
+  basePrompt: string,
+  homeDir?: string,
+  opts: { cfg?: JupiterConfig } = {},
+): string {
   if (!memoryEnabled()) return basePrompt;
+  if (!globalMemoryEnabled(opts.cfg)) return basePrompt;
   const dir = homeDir ?? join(homedir(), ".jupiter");
   const mem = readGlobalJupiterMemory(dir);
   if (!mem) return basePrompt;
@@ -371,8 +380,12 @@ export function readGlobalClaudeMemory(
   return { path, content, originalChars, truncated };
 }
 
-export function applyGlobalClaudeMemory(basePrompt: string): string {
+export function applyGlobalClaudeMemory(
+  basePrompt: string,
+  opts: { cfg?: JupiterConfig } = {},
+): string {
   if (!memoryEnabled()) return basePrompt;
+  if (!globalMemoryEnabled(opts.cfg)) return basePrompt;
   const mem = readGlobalClaudeMemory();
   if (!mem) return basePrompt;
   return [
@@ -422,9 +435,13 @@ export function applyUserMemory(
 ): string {
   if (!memoryEnabled()) return basePrompt;
   const store = new MemoryStore(opts);
-  const global = store.loadIndex("global");
+  const allowGlobal = globalMemoryEnabled(opts.cfg);
+  const global = allowGlobal ? store.loadIndex("global") : null;
   const project = store.hasProjectScope() ? store.loadIndex("project") : null;
-  const high = highPriorityBlock(store.list(), opts.cfg);
+  const high = highPriorityBlock(
+    store.list().filter((entry) => allowGlobal || entry.scope !== "global"),
+    opts.cfg,
+  );
   if (!global && !project && !high) return basePrompt;
   const parts: string[] = [basePrompt];
   if (high) parts.push("", high);
@@ -466,8 +483,9 @@ export function applyMemoryStack(
   const withGlobal = applyGlobalJupiterMemory(
     withProject,
     homeDir ? join(homeDir, ".jupiter") : undefined,
+    { cfg },
   );
-  const withGlobalClaude = applyGlobalClaudeMemory(withGlobal);
+  const withGlobalClaude = applyGlobalClaudeMemory(withGlobal, { cfg });
   const withMemory = applyUserMemory(withGlobalClaude, { projectRoot: rootDir, homeDir, cfg });
   const customSkillPaths = cfg?.skills?.paths
     ? resolveSkillPaths(cfg.skills.paths, rootDir)

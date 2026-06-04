@@ -230,6 +230,12 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     contextual: "code",
   },
   {
+    cmd: "rewind",
+    group: "code",
+    summary: "roll back the last applied edit batch",
+    contextual: "code",
+  },
+  {
     cmd: "history",
     group: "code",
     summary: "list every edit batch this session (ids for /show, undone markers)",

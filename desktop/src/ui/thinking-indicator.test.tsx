@@ -1,0 +1,39 @@
+// @vitest-environment jsdom
+
+import { cleanup, render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLang } from "../i18n";
+import { ThinkingBottomIndicator } from "./thinking-indicator";
+
+afterEach(() => {
+  cleanup();
+  setLang("en");
+});
+
+describe("ThinkingBottomIndicator", () => {
+  it("shows a bottom status while the main turn is busy", () => {
+    setLang("zh-CN");
+
+    render(<ThinkingBottomIndicator active />);
+
+    expect(screen.getByRole("status").textContent).toBe("正在思考");
+  });
+
+  it("does not render when the main turn is idle", () => {
+    render(<ThinkingBottomIndicator active={false} />);
+
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("does not replay an entrance animation during streaming rerenders", () => {
+    const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+    const indicatorRule = css.match(
+      /\.thread-thinking-indicator\s*\{[^}]*\}/,
+    )?.[0];
+
+    expect(indicatorRule).toBeTruthy();
+    expect(indicatorRule).not.toMatch(/\banimation\s*:/);
+  });
+});

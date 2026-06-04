@@ -1,6 +1,6 @@
 {
   "name": "dsnix",
-  "version": "0.89.2",
+  "version": "0.89.3",
   "description": "Short alias for jupiter — DeepSeek-native coding agent. Forwards to the jupiter CLI.",
   "bin": {
     "dsnix": "bin.cjs"

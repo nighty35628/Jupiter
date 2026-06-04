@@ -414,6 +414,7 @@ export type SettingsEvent = {
   showSystemEvents?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
+  memoryGlobalEnabled?: boolean;
   /** Desktop prompt-history entries seeded on tab load, most-recent-first (#2051). */
   promptHistory?: string[];
   version: string;
@@ -472,6 +473,7 @@ export type SettingsPatch = {
   showSystemEvents?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
+  memoryGlobalEnabled?: boolean;
   /** Persisted prompt-history entries to update on each send (#2051). */
   promptHistory?: string[];
 };
@@ -685,5 +687,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "jobs_stop_all" }
   | { cmd: "compact_history" }
   | { cmd: "retry" }
+  | { cmd: "rollback_to_turn"; turn: number; role: "user" | "assistant" }
+  | { cmd: "slash"; text: string; clientId?: string }
   | { cmd: "btw"; text: string; clientId?: string }
 );

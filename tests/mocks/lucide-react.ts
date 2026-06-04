@@ -17,3 +17,4 @@ export const Settings = vi.fn(() => null);
 export const SquareX = vi.fn(() => null);
 export const StopCircle = vi.fn(() => null);
 export const Trash2 = vi.fn(() => null);
+export const Undo2 = vi.fn(() => null);
