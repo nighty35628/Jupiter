@@ -40,9 +40,11 @@ describe("/init slash handler", () => {
     expect(result.resubmit).toMatch(/Initialize JUPITER.md/);
     // The hard length cap is the most important constraint — pin it.
     expect(result.resubmit).toMatch(/≤\s*80\s*lines/);
-    // The "STOP after writing" line is load-bearing for flash; pin it
-    // so a future tightening pass doesn't accidentally drop it.
-    expect(result.resubmit).toMatch(/STOP/);
+    // The final report is load-bearing for desktop: without it /init can
+    // complete silently after writing the pending edit.
+    expect(result.resubmit).toMatch(/After writing, report/i);
+    expect(result.resubmit).toMatch(/pending edit/i);
+    expect(result.resubmit).not.toMatch(/do not summarize/i);
     expect(result.info).toMatch(/scan the project/);
   });
 

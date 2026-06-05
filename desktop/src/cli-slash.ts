@@ -126,8 +126,8 @@ export const DESKTOP_CLI_SLASH_COMMANDS: readonly DesktopCliSlashCommand[] = [
   },
   {
     cmd: "mode",
-    argsHint: "[review|auto|yolo|plan]",
-    summary: "edit-gate mode",
+    argsHint: "[ask|auto|full]",
+    summary: "permission mode",
   },
   {
     cmd: "diff",
@@ -136,8 +136,8 @@ export const DESKTOP_CLI_SLASH_COMMANDS: readonly DesktopCliSlashCommand[] = [
   },
   {
     cmd: "plan",
-    argsHint: "[on|off|strict]",
-    summary: "toggle read-only plan mode / strict lifecycle rails",
+    argsHint: "[task|off]",
+    summary: "one-shot planning: propose a plan before executing a task",
   },
   {
     cmd: "checkpoint",

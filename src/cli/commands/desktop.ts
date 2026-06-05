@@ -112,6 +112,7 @@ import {
   readMemoryEntryDetail,
   saveStructuredMemoryForWorkspace,
 } from "../../desktop/memory-browser.js";
+import { buildOneShotPlanPrompt } from "../../desktop/one-shot-plan.js";
 import { classifyDesktopQQIngress } from "../../desktop/qq-ingress.js";
 import {
   parseQQRemoteDesktopCommand,
@@ -142,6 +143,7 @@ import {
   type LoopAbortOptions,
 } from "../../index.js";
 import { parseMcpSpec, specToRaw } from "../../mcp/spec.js";
+import { isProjectMemoryPath } from "../../memory/project.js";
 import {
   deleteSession,
   isInternalSessionName,
@@ -160,7 +162,7 @@ import {
   importExternalSession,
   importExternalSessions,
 } from "../../session-import.js";
-import { SkillStore } from "../../skills.js";
+import { SkillStore, skillDisplayDescription } from "../../skills.js";
 import { countTokensBounded } from "../../tokenizer.js";
 import type { ChoiceOption } from "../../tools/choice.js";
 import type { SubagentEvent, SubagentSink } from "../../tools/subagent.js";
@@ -192,7 +194,7 @@ export function desktopUserAbortLoopOptions(): LoopAbortOptions | undefined {
 }
 
 type InMessage = { tabId?: string } & (
-  | { cmd: "user_input"; text: string; clientId?: string }
+  | { cmd: "user_input"; text: string; clientId?: string; planOneShot?: boolean }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
@@ -578,7 +580,7 @@ interface SkillInfo {
 
 interface SkillRootInfo {
   dir: string;
-  scope: "project" | "custom" | "global";
+  scope: "project" | "custom" | "global" | "builtin";
   status: "ok" | "missing" | "not-directory" | "unreadable";
   priority: number;
 }
@@ -1140,7 +1142,7 @@ function emitSkills(tab: Tab): void {
     });
     const items = store.list().map((s) => ({
       name: s.name,
-      description: s.description,
+      description: skillDisplayDescription(s),
       scope: s.scope,
       path: s.path,
       runAs: s.runAs,
@@ -1200,6 +1202,17 @@ function recordDesktopEdit(
   }
 }
 
+function resultsTouchProjectMemory(
+  rootDir: string,
+  results: readonly ApplyResult[],
+  paths: readonly string[] = [],
+): boolean {
+  const changed = results
+    .filter((r) => r.status === "applied" || r.status === "created")
+    .map((r) => r.path);
+  return [...changed, ...paths].some((path) => isProjectMemoryPath(rootDir, path));
+}
+
 function desktopCodeUndo(tab: Tab, args: readonly string[] = []): CodeUndoResult {
   const revert = (entry: EditHistoryEntry, paths: readonly string[]): CodeUndoResult => {
     const subset = entry.snapshots.filter((s) => paths.includes(s.path));
@@ -1219,6 +1232,7 @@ function desktopCodeUndo(tab: Tab, args: readonly string[] = []): CodeUndoResult
     const revertedPaths = results
       .filter((r) => r.status === "applied" || r.status === "created")
       .map((r) => r.path);
+    if (resultsTouchProjectMemory(tab.rootDir, results, paths)) emitMemory(tab);
     return {
       info: [header, ...formatUndoRows(results)].join("\n"),
       contextEvent:
@@ -1408,6 +1422,12 @@ interface Tab {
   completedStepIds: Set<string>;
   /** Total steps in the in-flight plan (0 = no active plan / steps not provided). */
   planTotalSteps: number;
+  /** True while a one-shot /plan request is waiting for its first approved plan. */
+  oneShotPlanActive: boolean;
+  /** Tool registry plan gate before this one-shot /plan request temporarily enabled it. */
+  oneShotPlanPreviousPlanMode: boolean | null;
+  /** Plan gate ids created by the one-shot /plan guard. */
+  oneShotPlanGateIds: Set<number>;
   mcpRuntime: McpRuntime | null;
   mcpStatuses: Map<string, { kind: McpSpecStatus; reason?: string; toolCount?: number }>;
   subagentSink: SubagentSink;
@@ -1534,7 +1554,10 @@ function installDesktopEditInterceptor(tab: Tab): void {
     const snaps = snapshotBeforeEdits(blocks, tab.rootDir);
     const results = applyEditBlocks(blocks, tab.rootDir);
     const anyApplied = results.some((r) => r.status === "applied" || r.status === "created");
-    if (anyApplied) recordDesktopEdit(tab, "auto", blocks, results, snaps);
+    if (anyApplied) {
+      recordDesktopEdit(tab, "auto", blocks, results, snaps);
+      if (resultsTouchProjectMemory(tab.rootDir, results)) emitMemory(tab);
+    }
     return desktopEditToolResult(blocks, results);
   });
 }
@@ -2422,6 +2445,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       pendingGateIds: new Set<number>(),
       completedStepIds: new Set<string>(),
       planTotalSteps: 0,
+      oneShotPlanActive: false,
+      oneShotPlanPreviousPlanMode: null,
+      oneShotPlanGateIds: new Set<number>(),
       mcpRuntime: null,
       mcpStatuses: new Map(),
       subagentSink: { current: null },
@@ -2567,11 +2593,19 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     emit({ type: "$tab_closed" }, tab.id);
   }
 
-  async function runTurn(tab: Tab, text: string, fromQQ = false, clientId?: string): Promise<void> {
+  async function runTurn(
+    tab: Tab,
+    text: string,
+    fromQQ = false,
+    clientId?: string,
+    opts: { planOneShot?: boolean } = {},
+  ): Promise<void> {
     if (!tab.runtime) return;
     const rt = tab.runtime;
+    const modelText = opts.planOneShot ? buildOneShotPlanPrompt(text) : text;
     tab.currentTurnEditEntry = null;
     tab.aborter = new AbortController();
+    if (opts.planOneShot) beginOneShotPlanGuard(tab);
     if (fromQQ) markQQTurnStarted(qqRuntime.routing, tab.id);
     let lastAssistantText = "";
     if (tab.currentSession) {
@@ -2606,7 +2640,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     await tabContext.run(tab.id, async () => {
       try {
         let emittedTurnContext = false;
-        for await (const ev of rt.loop.step(text)) {
+        for await (const ev of rt.loop.step(modelText)) {
           if (!emittedTurnContext) {
             emittedTurnContext = true;
             emitCtxBreakdown(tab);
@@ -2615,7 +2649,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             lastAssistantText = ev.content;
           }
           for (const kev of rt.eventizer.consume(ev, rt.ctx)) {
-            emit(kev.type === "user.message" && clientId ? { ...kev, clientId } : kev, tab.id);
+            emit(
+              kev.type === "user.message" && clientId ? { ...kev, text, clientId } : kev,
+              tab.id,
+            );
           }
           if (ev.role === "assistant_final" || ev.role === "tool") {
             emitCtxBreakdown(tab);
@@ -2631,6 +2668,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       } catch (err) {
         emit({ type: "$error", message: (err as Error).message }, tab.id);
       } finally {
+        if (opts.planOneShot) restoreOneShotPlanGuard(tab);
         tab.aborter = null;
         // If a session switch happened while this turn was running,
         // suppress stale events to avoid UI state corruption (#1217).
@@ -2739,9 +2777,34 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     return undefined;
   }
 
+  function beginOneShotPlanGuard(tab: Tab): void {
+    const tools = tab.toolset?.tools;
+    if (!tools) return;
+    if (tab.oneShotPlanPreviousPlanMode === null) {
+      tab.oneShotPlanPreviousPlanMode = tools.planMode;
+    }
+    tab.oneShotPlanActive = true;
+    tools.setPlanMode(true);
+  }
+
+  function restoreOneShotPlanGuard(tab: Tab): void {
+    const tools = tab.toolset?.tools;
+    if (tools) {
+      if (tab.oneShotPlanPreviousPlanMode !== null) {
+        tools.setPlanMode(tab.oneShotPlanPreviousPlanMode);
+      } else {
+        applyPlanMode(tools, loadEditMode());
+      }
+    }
+    tab.oneShotPlanActive = false;
+    tab.oneShotPlanPreviousPlanMode = null;
+    tab.oneShotPlanGateIds.clear();
+  }
+
   function abortTurn(tab: Tab, opts: LoopAbortOptions = {}): void {
     tab.aborter?.abort();
     tab.runtime?.loop.abort(opts);
+    restoreOneShotPlanGuard(tab);
   }
 
   function tabSessionLabel(tab: Tab): string {
@@ -2812,6 +2875,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     const hadActivePlan = tab.planTotalSteps > 0 || tab.completedStepIds.size > 0;
     const ids = [...tab.pendingGateIds];
     tab.pendingGateIds.clear();
+    restoreOneShotPlanGuard(tab);
     for (const id of ids) pauseGate.cancel(id);
     if (hadActivePlan) {
       tab.completedStepIds.clear();
@@ -2958,6 +3022,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         tab.completedStepIds.clear();
         tab.planTotalSteps = payload.steps?.length ?? 0;
+        if (tab.oneShotPlanActive) tab.oneShotPlanGateIds.add(req.id);
         setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
       }
       emit(
@@ -3111,6 +3176,41 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     return tab;
   }
 
+  function focusTab(tab: Tab): void {
+    lastActiveTabId = tab.id;
+    persistOpenTabs();
+    emit(
+      {
+        type: "$tab_opened",
+        workspaceDir: tab.rootDir,
+        active: true,
+      },
+      tab.id,
+    );
+  }
+
+  function openSessionInFocusedTab(workspaceDir: string, session: string): Tab {
+    const targetDir = resolveDesktopRoot(workspaceDir);
+    const existing = Array.from(tabs.values()).find(
+      (t) => t.currentSession === session && resolve(t.rootDir) === resolve(targetDir),
+    );
+    if (existing) {
+      focusTab(existing);
+      return existing;
+    }
+    const opened = bootstrapTab(targetDir, { session, active: true });
+    lastActiveTabId = opened.id;
+    persistOpenTabs();
+    return opened;
+  }
+
+  function openNewChatInFocusedTab(workspaceDir: string): Tab {
+    const opened = bootstrapTab(workspaceDir, { active: true });
+    lastActiveTabId = opened.id;
+    persistOpenTabs();
+    return opened;
+  }
+
   // Restore the full tab set from the previous session — workspace dir,
   // loaded session and focused tab (issues #933, #1244). Missing dirs
   // are silently skipped — a deleted workspace shouldn't break boot.
@@ -3191,6 +3291,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     if (msg.cmd === "plan_response") {
       const tab = forgetGate(msg.id);
+      const oneShot = tab?.oneShotPlanGateIds.has(msg.id) ?? false;
+      if (tab && oneShot && msg.response.type !== "refine") {
+        restoreOneShotPlanGuard(tab);
+      }
       if (tab && msg.response.type === "cancel") {
         tab.completedStepIds.clear();
         tab.planTotalSteps = 0;
@@ -3622,8 +3726,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           loadSessionMeta(msg.name).workspace,
           defaultDesktopRoot(),
         );
-        if (typeof workspace === "string" && resolve(workspace) !== tab.rootDir) {
-          void switchWorkspace(tab, workspace).then(() =>
+        const targetWorkspace =
+          typeof workspace === "string" ? resolveDesktopRoot(workspace) : tab.rootDir;
+        if (tab.aborter) {
+          openSessionInFocusedTab(targetWorkspace, msg.name);
+          return;
+        }
+        if (resolve(targetWorkspace) !== resolve(tab.rootDir)) {
+          void switchWorkspace(tab, targetWorkspace).then(() =>
             loadSessionIntoTab(tab, msg.name, {
               abortTurn,
               cancelPendingGates,
@@ -3700,8 +3810,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
     if (msg.cmd === "new_chat") {
-      // Only set switching flag when there's a live turn to abort —
-      // otherwise the flag stays true and suppresses the first turn's events (#1217).
+      if (tab.aborter) {
+        openNewChatInFocusedTab(msg.workspaceDir !== undefined ? msg.workspaceDir : tab.rootDir);
+        return;
+      }
       if (msg.workspaceDir !== undefined && resolveDesktopRoot(msg.workspaceDir) !== tab.rootDir) {
         void switchWorkspace(tab, msg.workspaceDir).then(() => startNewChatInTab(tab));
         return;
@@ -4127,7 +4239,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         finishDesktopCommand(tab);
         return;
       }
-      void runTurn(tab, msg.text, false, msg.clientId);
+      void runTurn(tab, msg.text, false, msg.clientId, {
+        planOneShot: msg.planOneShot === true,
+      });
     }
   });
 

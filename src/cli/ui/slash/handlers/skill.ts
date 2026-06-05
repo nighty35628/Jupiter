@@ -6,8 +6,39 @@ import {
   removeSkillPath,
 } from "@/config.js";
 import { t } from "@/i18n/index.js";
-import { SkillStore, builtinSkillDescription } from "@/skills.js";
+import {
+  type SkillPackInstallResult,
+  type SkillPackUpdateStatus,
+  checkSkillPackUpdates,
+  configuredSkillPackRegistryUrl,
+  installSkillPackUpdates,
+} from "@/skill-packs.js";
+import { SkillStore, skillDisplayDescription } from "@/skills.js";
 import type { SlashHandler } from "../dispatch.js";
+
+function formatSkillPackStatus(status: SkillPackUpdateStatus): string {
+  if (!status.ok) return t("handlers.skill.updateFailed", { reason: status.error });
+  if (status.packs.length === 0) return t("handlers.skill.updateEmpty");
+  const updates = status.packs.filter((pack) => pack.updateAvailable);
+  if (updates.length === 0) return t("handlers.skill.updateNoUpdates");
+  return [
+    t("handlers.skill.updateAvailable", { count: updates.length }),
+    ...updates.map(
+      (pack) => `  · ${pack.id}: ${pack.currentVersion ?? "none"} -> ${pack.latestVersion}`,
+    ),
+  ].join("\n");
+}
+
+function formatSkillPackInstall(result: SkillPackInstallResult): string {
+  if (!result.ok) return t("handlers.skill.updateFailed", { reason: result.error });
+  if (result.installed.length === 0) return t("handlers.skill.updateNoUpdates");
+  return [
+    t("handlers.skill.updateInstalled", { count: result.installed.length }),
+    ...result.installed.map((pack) => `  · ${pack.id}: ${pack.version}`),
+    "",
+    t("handlers.skill.updateRestartHint"),
+  ].join("\n");
+}
 
 const skill: SlashHandler = (args, _loop, ctx) => {
   const baseDir = ctx.codeRoot ?? process.cwd();
@@ -18,6 +49,35 @@ const skill: SlashHandler = (args, _loop, ctx) => {
     customSkillPaths: loadResolvedSkillPaths(baseDir, configPath),
   });
   const sub = (args[0] ?? "").toLowerCase();
+
+  if (sub === "update" || sub === "upgrade") {
+    const checkOnly = args.includes("--check") || (args[1] ?? "").toLowerCase() === "check";
+    const post = ctx.postInfo ?? (() => undefined);
+    void (async () => {
+      if (checkOnly) {
+        post(
+          formatSkillPackStatus(
+            await checkSkillPackUpdates({
+              homeDir: ctx.homeDir,
+            }),
+          ),
+        );
+        return;
+      }
+      post(
+        formatSkillPackInstall(
+          await installSkillPackUpdates({
+            homeDir: ctx.homeDir,
+          }),
+        ),
+      );
+    })();
+    return {
+      info: t("handlers.skill.updateChecking", {
+        url: configuredSkillPackRegistryUrl(),
+      }),
+    };
+  }
 
   if (sub === "new" || sub === "init") {
     const name = args[1];
@@ -101,7 +161,7 @@ const skill: SlashHandler = (args, _loop, ctx) => {
     for (const s of skills) {
       const scope = `(${s.scope})`.padEnd(11);
       const name = s.name.padEnd(24);
-      const resolvedDesc = s.scope === "builtin" ? builtinSkillDescription(s.name) : s.description;
+      const resolvedDesc = skillDisplayDescription(s);
       const desc = resolvedDesc.length > 70 ? `${resolvedDesc.slice(0, 69)}…` : resolvedDesc;
       const shortPath = s.path.replace(baseDir, ".");
       lines.push(`  ${scope} ${name}  ${desc}  ${shortPath}`);
@@ -119,9 +179,7 @@ const skill: SlashHandler = (args, _loop, ctx) => {
     return {
       info: [
         `▸ ${found.name}  (${found.scope})`,
-        found.description
-          ? `  ${found.scope === "builtin" ? builtinSkillDescription(found.name) : found.description}`
-          : "",
+        found.description ? `  ${skillDisplayDescription(found)}` : "",
         `  ${found.path}`,
         "",
         found.body,
@@ -137,8 +195,7 @@ const skill: SlashHandler = (args, _loop, ctx) => {
     return { info: t("handlers.skill.runNotFound", { name }) };
   }
   const extra = args.slice(1).join(" ").trim();
-  const skillDesc =
-    found.scope === "builtin" ? builtinSkillDescription(found.name) : found.description;
+  const skillDesc = skillDisplayDescription(found);
   const header = `# Skill: ${found.name}${skillDesc ? `\n> ${skillDesc}` : ""}`;
   const argsLine = extra ? `\n\nArguments: ${extra}` : "";
   const payload = `${header}\n\n${found.body}${argsLine}`;

@@ -17,7 +17,13 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadResolvedSkillPaths, loadSubagentModels } from "../../config.js";
 import { parseFrontmatter } from "../../frontmatter.js";
-import { SKILLS_DIRNAME, SKILL_FILE, SkillStore, validateSkillFrontmatter } from "../../skills.js";
+import {
+  SKILLS_DIRNAME,
+  SKILL_FILE,
+  SkillStore,
+  skillDisplayDescription,
+  validateSkillFrontmatter,
+} from "../../skills.js";
 import { readUsageLog } from "../../telemetry/usage.js";
 import type { DashboardContext } from "../context.js";
 import type { ApiResult } from "../router.js";
@@ -190,20 +196,18 @@ export async function handleSkills(
         global: tag(listSkills(globalSkillsDir(), "global")),
         custom: tag(customRoots.flatMap((root) => listSkills(root.dir, "custom"))),
         project: cwd ? tag(listSkills(projectSkillsDir(cwd), "project")) : [],
-        builtin: [
-          {
-            name: "explore",
+        builtin: store
+          .list()
+          .filter((skill) => skill.scope === "builtin")
+          .map((skill) => ({
+            name: skill.name,
             scope: "builtin",
-            description: "subagent — broad codebase survey",
-            runs7d: runs7d.get("explore") ?? 0,
-          },
-          {
-            name: "research",
-            scope: "builtin",
-            description: "subagent — deep web + repo research",
-            runs7d: runs7d.get("research") ?? 0,
-          },
-        ],
+            description: skillDisplayDescription(skill),
+            path: skill.path,
+            size: skill.body.length,
+            mtime: 0,
+            runs7d: runs7d.get(skill.name) ?? 0,
+          })),
         paths: {
           global: globalSkillsDir(),
           project: cwd ? projectSkillsDir(cwd) : null,

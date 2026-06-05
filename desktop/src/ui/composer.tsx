@@ -27,7 +27,6 @@ type ModeEntry = { k: EditMode; label: TKey; icon: React.ReactNode; hint: TKey }
 const EFFORTS: readonly ReasoningEffort[] = ["low", "medium", "high", "max"];
 
 const MODE_INFO: ModeEntry[] = [
-  { k: "plan", label: "editMode.plan", icon: <I.list size={11} />, hint: "editMode.planHint" },
   { k: "review", label: "editMode.review", icon: <I.shield size={11} />, hint: "editMode.reviewHint" },
   { k: "auto", label: "editMode.auto", icon: <I.zap size={11} />, hint: "editMode.autoHint" },
   { k: "yolo", label: "editMode.yolo", icon: <I.warn size={11} />, hint: "editMode.yoloHint" },
@@ -961,7 +960,7 @@ function PermissionModeMenu({
   onChange: (mode: EditMode) => void;
   wrapRef: RefObject<HTMLDivElement | null>;
 }) {
-  const active = MODE_INFO.find((m) => m.k === mode) ?? MODE_INFO[1]!;
+  const active = MODE_INFO.find((m) => m.k === mode) ?? MODE_INFO[0]!;
 
   return (
     <div className="composer-mode-wrap" ref={wrapRef}>

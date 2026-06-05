@@ -40,7 +40,7 @@ export interface CodeToolsetOpts {
   rootDir: string;
   /** Override the default `~/.jupiter/config.json` lookup — primarily for tests that pin a tmp config. */
   configPath?: string;
-  /** Fired after `install_skill` writes a new skill — desktop wires this to push a fresh `$skills` event so the sidebar updates without a tab reload. */
+  /** Fired after skills change — desktop wires this to push a fresh `$skills` event so the sidebar updates without a tab reload. */
   onSkillInstalled?: SkillInstalledHook;
   /** Fired after `run_background` / `stop_job` mutate the JobRegistry — desktop pushes a fresh `$jobs` event so the popover updates without waiting for poll. */
   onJobsChanged?: () => void;

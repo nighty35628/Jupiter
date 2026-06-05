@@ -244,7 +244,7 @@ export type SkillInfo = {
 
 export type SkillRootInfo = {
   dir: string;
-  scope: Exclude<SkillScope, "builtin">;
+  scope: SkillScope;
   status: "ok" | "missing" | "not-directory" | "unreadable";
   priority: number;
 };
@@ -633,7 +633,7 @@ export type IncomingEvent = { tabId?: string } & (
 );
 
 export type OutgoingCommand = { tabId?: string } & (
-  | { cmd: "user_input"; text: string; clientId?: string }
+  | { cmd: "user_input"; text: string; clientId?: string; planOneShot?: boolean }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }

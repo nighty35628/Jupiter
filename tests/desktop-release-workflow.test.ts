@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 const linuxInstaller = readFileSync("install-linux.sh", "utf8");
+const readme = readFileSync("README.md", "utf8");
 
 describe("desktop release packaging", () => {
   it("publishes platform installers for the Jupiter desktop release", () => {
@@ -10,8 +11,28 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain("releaseName: Jupiter");
     expect(releaseWorkflow).toContain("releaseDraft: false");
     expect(releaseWorkflow).toContain('label: "linux-x64"');
+    expect(releaseWorkflow).toContain('label: "linux-arm64"');
+    expect(releaseWorkflow).toContain("ubuntu-24.04-arm");
+    expect(releaseWorkflow).toContain("aarch64-unknown-linux-gnu");
     expect(releaseWorkflow).toContain('bundles: "--bundles deb"');
     expect(releaseWorkflow).toContain('bundles: "--bundles dmg"');
+    expect(releaseWorkflow).toContain('bundles: "--bundles nsis"');
+    expect(releaseWorkflow).toContain(
+      "releaseAssetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]",
+    );
+  });
+
+  it("verifies the bundled Node architecture for Linux packages", () => {
+    expect(releaseWorkflow).toContain("Verify bundled Node matches host arch (Linux)");
+    expect(releaseWorkflow).toContain("bundled_arch=");
+  });
+
+  it("does not require Windows Authenticode signing for unsigned releases", () => {
+    expect(releaseWorkflow).not.toContain("Require Windows code signing certificate");
+    expect(releaseWorkflow).not.toContain("HAS_WIN_CERT");
+    expect(releaseWorkflow).not.toContain("WINDOWS_CERTIFICATE");
+    expect(releaseWorkflow).not.toContain("signtool.FullName sign");
+    expect(releaseWorkflow).not.toContain("Verify Windows Authenticode signatures");
     expect(releaseWorkflow).toContain('bundles: "--bundles nsis"');
   });
 
@@ -32,7 +53,21 @@ describe("Linux installer", () => {
     expect(linuxInstaller).toContain('REPO="${JUPITER_REPO:-nighty35628/Jupiter}"');
     expect(linuxInstaller).toContain("install_debian_deb");
     expect(linuxInstaller).toContain("install_arch_from_deb");
+    expect(linuxInstaller).toContain("deb_arch_regex");
+    expect(linuxInstaller).toContain("aarch64|arm64");
     expect(linuxInstaller).toMatch(/\*debian\*\|\*ubuntu\*\|\*linuxmint\*\|\*pop\*/);
     expect(linuxInstaller).toMatch(/\*arch\*\|\*endeavouros\*\|\*manjaro\*/);
+  });
+});
+
+describe("README installer guidance", () => {
+  it("documents platform-specific release names, unsigned Windows, and the macOS quarantine command", () => {
+    expect(readme).toContain("Jupiter_<version>_windows-x64.exe");
+    expect(readme).toContain("Jupiter_<version>_macos-arm64.dmg");
+    expect(readme).toContain("Jupiter_<version>_linux-arm64.deb");
+    expect(readme).toContain("current Windows installers are unsigned");
+    expect(readme).toContain("More info");
+    expect(readme).toContain("Run anyway");
+    expect(readme).toContain("sudo xattr -rd com.apple.quarantine /Applications/Jupiter.app");
   });
 });

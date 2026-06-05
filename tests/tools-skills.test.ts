@@ -32,6 +32,17 @@ function writeSkillWithFrontmatter(
   writeFileSync(join(dir, "SKILL.md"), `${lines.join("\n")}${body}\n`, "utf8");
 }
 
+function makeFetch(routes: Record<string, unknown>): typeof fetch {
+  return (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    const body = routes[url];
+    if (body === undefined) {
+      return { ok: false, status: 404, json: async () => ({}) } as unknown as Response;
+    }
+    return { ok: true, status: 200, json: async () => body } as unknown as Response;
+  }) as typeof fetch;
+}
+
 describe("run_skill tool", () => {
   let home: string;
   let projectRoot: string;
@@ -441,6 +452,109 @@ describe("install_skill tool", () => {
     const raw = readFileSync(JSON.parse(out).path, "utf8");
     expect(raw).toContain("description: first line second line third");
     expect(raw).not.toMatch(/description: first line\n/);
+  });
+});
+
+describe("official skill pack tools", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "jupiter-skillpack-tool-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("registers searchable official skill-pack tools", () => {
+    const reg = new ToolRegistry();
+    registerSkillTools(reg, { homeDir: home, disableBuiltins: true });
+
+    expect(reg.get("search_skill_packs")?.readOnly).toBe(true);
+    expect(reg.get("install_skill_pack")?.readOnly).not.toBe(true);
+  });
+
+  it("searches the official channel before authoring a custom skill", async () => {
+    const registryUrl = "https://updates.jupiter.test/skill-packs.json";
+    const reg = new ToolRegistry();
+    registerSkillTools(reg, {
+      homeDir: home,
+      disableBuiltins: true,
+      skillPackRegistryUrl: registryUrl,
+      skillPackFetchImpl: makeFetch({
+        [registryUrl]: {
+          schema: 1,
+          packs: [
+            {
+              id: "playwright",
+              version: "1.0.0",
+              url: "https://updates.jupiter.test/playwright.json",
+              description: "Browser automation skill pack",
+              skills: ["playwright"],
+            },
+          ],
+        },
+      }),
+      bundledSkillPacks: [],
+    });
+
+    const out = await reg.dispatch("search_skill_packs", { query: "playwright skill" });
+    const parsed = JSON.parse(out);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.matches[0]).toMatchObject({
+      id: "playwright",
+      installed: false,
+      latestVersion: "1.0.0",
+      updateAvailable: true,
+    });
+  });
+
+  it("installs a matched official pack and makes its skill runnable in the same registry", async () => {
+    const registryUrl = "https://updates.jupiter.test/skill-packs.json";
+    const bundleUrl = "https://updates.jupiter.test/playwright.json";
+    const reg = new ToolRegistry();
+    registerSkillTools(reg, {
+      homeDir: home,
+      skillPackRegistryUrl: registryUrl,
+      skillPackFetchImpl: makeFetch({
+        [registryUrl]: {
+          schema: 1,
+          packs: [
+            {
+              id: "playwright",
+              version: "1.0.0",
+              url: bundleUrl,
+              description: "Browser automation skill pack",
+              skills: ["playwright"],
+            },
+          ],
+        },
+        [bundleUrl]: {
+          schema: 1,
+          id: "playwright",
+          version: "1.0.0",
+          files: [
+            {
+              path: "skills/playwright/SKILL.md",
+              content:
+                "---\ndescription: Browser automation with Playwright\n---\nUse Playwright to inspect pages.\n",
+            },
+          ],
+        },
+      }),
+      bundledSkillPacks: [],
+    });
+
+    const installed = JSON.parse(
+      await reg.dispatch("install_skill_pack", { name: "playwright skill" }),
+    );
+    expect(installed.ok).toBe(true);
+    expect(installed.installed).toEqual([{ id: "playwright", version: "1.0.0" }]);
+
+    const skill = await reg.dispatch("run_skill", { name: "playwright" });
+    expect(skill).toContain("# Skill: playwright");
+    expect(skill).toContain("Use Playwright to inspect pages.");
   });
 });
 

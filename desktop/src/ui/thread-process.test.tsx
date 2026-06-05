@@ -64,6 +64,23 @@ describe("AssistantMsg process cards", () => {
     expect(screen.getByText("hello from shell")).toBeTruthy();
   });
 
+  it("keeps streaming reasoning collapsed when process cards default collapsed", () => {
+    render(
+      <AssistantMsg
+        {...baseProps}
+        pending
+        segments={[
+          {
+            kind: "reasoning",
+            text: "first reasoning line",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("first reasoning line")).toBeNull();
+  });
+
   it("collapses running shell output after completion when default is collapsed", () => {
     const { rerender } = render(
       <AssistantMsg

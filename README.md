@@ -19,9 +19,38 @@ Desktop installers are published on GitHub Releases:
 - [Latest Release / 最新版本](https://github.com/nighty35628/Jupiter/releases/latest)
 - [All Releases / 全部版本](https://github.com/nighty35628/Jupiter/releases)
 
+Release asset names include the platform so you can pick the right installer:
+
+Release 里的安装包文件名会带平台名，方便选择：
+
+- Windows: `Jupiter_<version>_windows-x64.exe`
+- macOS Intel: `Jupiter_<version>_macos-x64.dmg`
+- macOS Apple Silicon: `Jupiter_<version>_macos-arm64.dmg`
+- Linux x64: `Jupiter_<version>_linux-x64.deb`
+- Linux ARM64: `Jupiter_<version>_linux-arm64.deb`
+
+Windows note: current Windows installers are unsigned. Microsoft Defender SmartScreen may show
+an "unrecognized app" warning on first launch; choose **More info** -> **Run anyway** if you
+downloaded Jupiter from the official GitHub Releases page above.
+
+Windows 提示：当前 Windows 安装包未做代码签名。首次安装或启动时，Microsoft Defender
+SmartScreen 可能提示“无法识别的应用”；如果你是从上面的官方 GitHub Releases 下载的，
+可以点 **更多信息** -> **仍要运行** 继续安装。
+
+macOS note: if the app cannot be opened after installing from the DMG, move `Jupiter.app` to
+`/Applications`, then run:
+
+macOS 提示：如果从 DMG 安装后提示无法打开或 App 已损坏，先把 `Jupiter.app` 拖进
+`/Applications`，然后执行：
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/Jupiter.app
+open /Applications/Jupiter.app
+```
+
 ## Current Release / 当前版本
 
-**Jupiter Desktop 0.89.3**
+**Jupiter Desktop 0.89.4**
 
 ### 中文更新摘要
 

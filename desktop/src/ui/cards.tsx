@@ -198,7 +198,7 @@ export function ReasoningCard({
           )}
         </>
       }
-      defaultOpen={streaming || (defaultOpen ?? false)}
+      defaultOpen={defaultOpen ?? false}
       compact
     >
       <div className="reason">

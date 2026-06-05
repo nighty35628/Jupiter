@@ -2,11 +2,13 @@
 
 Walkthrough for shipping a signed Jupiter Desktop bundle.
 
-The release workflow at `.github/workflows/release.yml` reads everything
-below from repository **Secrets** — nothing in this repo holds keys.
-Without these secrets set the workflow still builds, but installers come
-out unsigned (Windows shows SmartScreen warnings; macOS marks the app
-"damaged" until the user right-clicks → Open).
+The release workflow at `.github/workflows/release.yml` reads signing
+material from repository **Secrets** when optional signing is enabled —
+nothing in this repo holds keys. Without these secrets set the workflow
+still builds, but installers come out unsigned for Windows/Linux/macOS.
+Unsigned Windows NSIS installers may trigger Microsoft Defender
+SmartScreen warnings. Unsigned macOS builds may be marked "damaged" until
+the quarantine attribute is removed.
 
 ## Tauri updater signing (all platforms)
 
@@ -33,11 +35,16 @@ The workflow exports both as env vars; `tauri-action` picks them up and
 signs the per-platform update bundle (`*.tar.gz.sig`, `*.zip.sig`,
 `*.msi.zip.sig`, …) automatically.
 
-## Windows — Authenticode
+## Windows — optional Authenticode
 
 You need a **code signing certificate** from a CA Microsoft trusts
 (DigiCert, Sectigo, SSL.com, …). EV certs avoid SmartScreen reputation
 ramp; OV certs work but warn until enough installs build trust.
+
+Jupiter currently publishes unsigned Windows installers. Users should
+download only from the official GitHub Releases page and use
+**More info** -> **Run anyway** if SmartScreen blocks the installer.
+This keeps release packaging simple until a certificate is available.
 
 ### One-time: export the cert as PFX
 
@@ -54,9 +61,9 @@ openssl pkcs12 -export \
 
 Set a strong export password — needed below.
 
-### Wire into the release workflow
+### Wire into a signed release workflow
 
-Tauri v2 reads three env vars on Windows:
+A future signed Windows workflow should read these secrets:
 
 | Secret | What it is |
 |---|---|
@@ -69,22 +76,12 @@ Encode the cert before adding the secret:
 base64 -w0 jupiter.pfx > jupiter.pfx.b64
 ```
 
-Then add a step to the matrix' Windows job that imports the cert and
-points Tauri at it. The simplest approach uses the [Azure trusted
-signing action] or the older `@tauri-apps/action`'s built-in
-Authenticode path — set the secrets and `tauri-action` will pick them
-up via `tauri-plugin-windows-installer`.
-
-For the workflow already in this repo, add to the env block of the
-`Build Tauri bundle` step:
-
-```yaml
-WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-```
-
-`tauri-action` v0 detects these and signs both the `.msi` and the
-`.exe` produced by NSIS.
+The current workflow does not require these secrets. If signing is added
+later, import the PFX into the current-user certificate store, sign the
+bundled `node.exe` before packaging, let `tauri-action` sign the app and
+NSIS installer, then verify all Windows binaries with `signtool`. EV
+certificates are preferable because they carry stronger initial
+reputation.
 
 ### Verify locally before pushing the tag
 
@@ -94,8 +91,6 @@ signtool verify /pa /v Jupiter_0.40.0_x64-setup.exe
 
 Output should include `Successfully verified` and the certificate's
 common name.
-
-[Azure trusted signing action]: https://github.com/Azure/trusted-signing-action
 
 ## macOS — Developer ID + notarization
 
@@ -153,6 +148,17 @@ codesign --verify --deep --strict --verbose=2 /Applications/Jupiter.app
 ```
 
 [Apple Developer Program]: https://developer.apple.com/programs/
+
+### Unsigned macOS workaround
+
+If a test build is not signed/notarized and macOS says the app is
+damaged or cannot be opened, move it into `/Applications` and remove the
+quarantine flag:
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/Jupiter.app
+open /Applications/Jupiter.app
+```
 
 ## Linux
 

@@ -334,6 +334,30 @@ describe("Desktop App reducer — usage", () => {
     expect(error?.message).toBe("SSE body read failed: terminated");
   });
 
+  it("creates a pending assistant when a live delta arrives before turn started", () => {
+    const next = reduce(initialState(), {
+      t: "batch_delta",
+      items: [
+        { turn: 1, channel: "reasoning", text: "thinking" },
+        { turn: 1, channel: "reasoning", text: "..." },
+        { turn: 1, channel: "content", text: "hello" },
+      ],
+    });
+
+    expect(next.busy).toBe(true);
+    expect(next.messages).toEqual([
+      {
+        kind: "assistant",
+        turn: 1,
+        pending: true,
+        segments: [
+          { kind: "reasoning", text: "thinking..." },
+          { kind: "text", text: "hello" },
+        ],
+      },
+    ]);
+  });
+
   it("keeps cumulative usage when live context breakdown refreshes", () => {
     const base = initialState();
     const next = reduce(

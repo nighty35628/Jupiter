@@ -1,11 +1,19 @@
 import type { EditMode, ReasoningEffort } from "./protocol";
 
-export const SLASH_EDIT_MODES = [
-  "plan",
-  "review",
-  "auto",
-  "yolo",
-] as const satisfies readonly EditMode[];
+const SLASH_MODE_ALIASES = {
+  ask: "review",
+  review: "review",
+  auto: "auto",
+  full: "yolo",
+  yolo: "yolo",
+} as const satisfies Readonly<Record<string, Exclude<EditMode, "plan">>>;
+
+const SLASH_MODE_DESCRIPTORS = [
+  { cmd: "/mode ask", editMode: "review" },
+  { cmd: "/mode auto", editMode: "auto" },
+  { cmd: "/mode full", editMode: "yolo" },
+] as const satisfies readonly { cmd: string; editMode: EditMode }[];
+
 export const SLASH_REASONING_EFFORTS = [
   "low",
   "medium",
@@ -22,8 +30,8 @@ export type SlashSettingsDescriptor = {
   action: SlashSettingsCommand;
 };
 
-function isEditMode(value: string): value is EditMode {
-  return (SLASH_EDIT_MODES as readonly string[]).includes(value);
+function parseEditMode(value: string): EditMode | null {
+  return SLASH_MODE_ALIASES[value as keyof typeof SLASH_MODE_ALIASES] ?? null;
 }
 
 function isReasoningEffort(value: string): value is ReasoningEffort {
@@ -42,33 +50,23 @@ export function parseSlashSettingsCommand(input: string): SlashSettingsCommand |
     return null;
   }
 
-  if (name === "plan" && !arg) {
-    return { type: "editMode", editMode: "plan" };
-  }
-
-  if ((name === "model" || name === "mode" || name === "plan") && arg && isEditMode(arg)) {
-    return { type: "editMode", editMode: arg };
+  if (name === "mode" && arg) {
+    const editMode = parseEditMode(arg);
+    if (editMode) return { type: "editMode", editMode };
   }
 
   return null;
 }
 
 export function buildSlashSettingsDescriptors(): SlashSettingsDescriptor[] {
-  const modelModes = SLASH_EDIT_MODES.map((mode) => ({
-    cmd: `/model ${mode}`,
-    action: { type: "editMode", editMode: mode } as const,
+  const modeCommands = SLASH_MODE_DESCRIPTORS.map(({ cmd, editMode }) => ({
+    cmd,
+    action: { type: "editMode", editMode } as const,
   }));
-  const planModes = [
-    { cmd: "/plan", action: { type: "editMode", editMode: "plan" } as const },
-    ...SLASH_EDIT_MODES.filter((mode) => mode !== "plan").map((mode) => ({
-      cmd: `/plan ${mode}`,
-      action: { type: "editMode", editMode: mode } as const,
-    })),
-  ];
   const effortCommands = SLASH_REASONING_EFFORTS.map((effort) => ({
     cmd: `/effort ${effort}`,
     action: { type: "reasoningEffort", reasoningEffort: effort } as const,
   }));
 
-  return [...modelModes, ...planModes, ...effortCommands];
+  return [...modeCommands, ...effortCommands];
 }

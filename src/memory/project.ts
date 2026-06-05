@@ -1,7 +1,7 @@
 /** Reads JUPITER.md → AGENTS.md → AGENT.md (first that exists); writes prefer the file already on disk. */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 
 /** Default WRITE target — created when no candidate exists yet. */
 export const PROJECT_MEMORY_FILE = "JUPITER.md";
@@ -52,6 +52,15 @@ export function findProjectMemoryPath(rootDir: string): string | null {
 /** Path callers should write to: an existing candidate wins, otherwise rootDir/JUPITER.md. */
 export function resolveProjectMemoryWritePath(rootDir: string): string {
   return findProjectMemoryPath(rootDir) ?? join(rootDir, PROJECT_MEMORY_FILE);
+}
+
+/** True iff candidatePath points at a root-level project-memory file for rootDir. */
+export function isProjectMemoryPath(rootDir: string, candidatePath: string): boolean {
+  const root = resolve(rootDir);
+  const candidate = resolve(root, candidatePath);
+  const rel = relative(root, candidate).replaceAll("\\", "/");
+  if (rel === "" || rel.startsWith("../") || rel === "..") return false;
+  return (PROJECT_MEMORY_FILES as readonly string[]).includes(rel);
 }
 
 export interface ProjectMemory {

@@ -77,11 +77,24 @@ release_api_url() {
   fi
 }
 
+deb_arch_regex() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf '%s\n' '(amd64|x86_64|x64)' ;;
+    aarch64|arm64) printf '%s\n' '(arm64|aarch64)' ;;
+    *)
+      echo "Unsupported CPU architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+}
+
 download_deb() {
+  need awk
   need curl
-  local tmp json_url asset_url deb
+  local tmp json_url asset_url deb arch_re
   tmp="$(mktemp -d)"
   json_url="$(release_api_url)"
+  arch_re="$(deb_arch_regex)"
 
   echo "Fetching release metadata: $json_url" >&2
   asset_url="$(
@@ -89,14 +102,22 @@ download_deb() {
       -H 'Accept: application/vnd.github+json' \
       -H 'X-GitHub-Api-Version: 2022-11-28' \
       "$json_url" |
-      grep -E '"browser_download_url": ".*\.deb"' |
-      head -n 1 |
-      sed -E 's/.*"browser_download_url": "([^"]+)".*/\1/' ||
+      awk -v arch_re="$arch_re" '
+        /"browser_download_url": ".*\.deb"/ {
+          url = $0
+          sub(/^.*"browser_download_url": "/, "", url)
+          sub(/".*$/, "", url)
+          if (url ~ arch_re) {
+            print url
+            exit
+          }
+        }
+      ' ||
       true
   )"
 
   if [ -z "$asset_url" ]; then
-    echo "No .deb asset found in release metadata for $REPO ($VERSION)." >&2
+    echo "No $(uname -m) .deb asset found in release metadata for $REPO ($VERSION)." >&2
     echo "Open: https://github.com/$REPO/releases" >&2
     exit 1
   fi

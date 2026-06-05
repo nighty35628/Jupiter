@@ -2072,7 +2072,7 @@ function PageRules({
             <div className="h">{t("settings.editModeHint")}</div>
           </div>
           <div className="seg-ctrl">
-            {(["plan", "review", "auto", "yolo"] as const).map((m) => (
+            {(["review", "auto", "yolo"] as const).map((m) => (
               <button
                 type="button"
                 key={m}

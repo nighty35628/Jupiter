@@ -59,6 +59,15 @@ describe("desktop permission mode copy", () => {
     expect(document.body.textContent).not.toMatch(/YOLO/i);
   });
 
+  it("does not expose the legacy read-only plan permission as a mode option", () => {
+    renderComposer({ editMode: "review" });
+
+    fireEvent.click(screen.getByRole("button", { name: "权限模式" }));
+
+    expect(document.body.textContent).not.toContain("只读模式");
+    expect(document.querySelectorAll(".composer-mode-option").length).toBe(3);
+  });
+
   it("does not show a legacy YOLO badge in the full-control toast", () => {
     render(<Toast message={{ msg: "已切换到完全控制权限，所有操作将自动批准", yolo: true }} />);
 

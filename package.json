@@ -1,6 +1,6 @@
 {
   "name": "jupiter",
-  "version": "0.89.3",
+  "version": "0.89.4",
   "description": "Jupiter workbench: local AI coding desktop and CLI fork with MCP and skills configuration.",
   "type": "module",
   "bin": {
@@ -22,6 +22,7 @@
     "dashboard/index.html",
     "dashboard/app.css",
     "dashboard/dist",
+    "resources/skill-packs",
     "patches",
     "scripts/postinstall.mjs",
     "README.md",

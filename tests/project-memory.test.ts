@@ -12,6 +12,7 @@ import {
   applyProjectMemory,
   detectForeignAgentPlatform,
   findProjectMemoryPath,
+  isProjectMemoryPath,
   memoryEnabled,
   readProjectMemory,
   resolveProjectMemoryWritePath,
@@ -129,6 +130,19 @@ describe("project-memory", () => {
         "AGENTS.md",
         "AGENT.md",
       ]);
+    });
+  });
+
+  describe("isProjectMemoryPath", () => {
+    it("recognizes root-level project memory candidates", () => {
+      expect(isProjectMemoryPath(root, join(root, "JUPITER.md"))).toBe(true);
+      expect(isProjectMemoryPath(root, "AGENTS.md")).toBe(true);
+      expect(isProjectMemoryPath(root, ".claude/CLAUDE.md")).toBe(true);
+    });
+
+    it("does not treat subdirectory memory as the root project memory", () => {
+      expect(isProjectMemoryPath(root, join(root, "frontend", "JUPITER.md"))).toBe(false);
+      expect(isProjectMemoryPath(root, "frontend/AGENTS.md")).toBe(false);
     });
   });
 

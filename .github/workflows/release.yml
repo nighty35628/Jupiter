@@ -25,8 +25,9 @@ jobs:
       matrix:
         target:
           # Release assets intentionally stay installer-focused:
-          # Linux gets a .deb, macOS gets per-arch DMGs, Windows gets NSIS.
+          # Linux gets per-arch .deb packages, macOS gets per-arch DMGs, Windows gets NSIS.
           - { os: ubuntu-22.04, label: "linux-x64", rust: "x86_64-unknown-linux-gnu", tauri: "x86_64-unknown-linux-gnu", bundles: "--bundles deb" }
+          - { os: ubuntu-24.04-arm, label: "linux-arm64", rust: "aarch64-unknown-linux-gnu", tauri: "aarch64-unknown-linux-gnu", bundles: "--bundles deb" }
           - { os: macos-15-intel, label: "macos-x64", rust: "x86_64-apple-darwin", tauri: "x86_64-apple-darwin", bundles: "--bundles dmg" }
           - { os: macos-14, label: "macos-arm64", rust: "aarch64-apple-darwin", tauri: "aarch64-apple-darwin", bundles: "--bundles dmg" }
           - { os: windows-latest, label: "windows-x64", rust: "x86_64-pc-windows-msvc", tauri: "x86_64-pc-windows-msvc", bundles: "--bundles nsis" }
@@ -35,7 +36,6 @@ jobs:
     # job-level env. Treat "true"/"false" strings as booleans downstream.
     env:
       HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
-      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -110,6 +110,20 @@ jobs:
           fi
           codesign -d --entitlements :- src-tauri/binaries/node 2>&1 | grep -q "com.apple.security.inherit"
 
+      - name: Verify bundled Node matches host arch (Linux)
+        if: startsWith(matrix.target.os, 'ubuntu-')
+        working-directory: desktop
+        shell: bash
+        run: |
+          expected_arch="$(node -p 'process.arch')"
+          bundled_arch="$(src-tauri/binaries/node -p 'process.arch')"
+          echo "bundled Node arch: $bundled_arch"
+          echo "expected arch: $expected_arch"
+          if [ "$bundled_arch" != "$expected_arch" ]; then
+            echo "Expected $expected_arch Node, got: $bundled_arch" >&2
+            exit 1
+          fi
+
       - name: Build & verify desktop frontend
         working-directory: desktop
         shell: bash
@@ -118,15 +132,11 @@ jobs:
           test -f dist/index.html
           ls dist/assets/*.js >/dev/null
 
-      # tauri-action signs OS bundles whenever the corresponding env vars are
-      # defined — including when they're defined to the empty string, which is
-      # what `secrets.UNSET` evaluates to. Gate each signing block on its
-      # certificate being non-empty so unsigned prereleases don't trip
-      # `security import` / `signtool` on missing certs.
+      # tauri-action treats empty signing env vars as present, so keep the
+      # unsigned path separate from the optional macOS signing block.
       - name: Build Tauri bundle (unsigned)
         if: >-
-          (matrix.target.os != 'windows-latest' || env.HAS_WIN_CERT != 'true')
-          && (!startsWith(matrix.target.os, 'macos-') || env.HAS_APPLE_CERT != 'true')
+          !startsWith(matrix.target.os, 'macos-') || env.HAS_APPLE_CERT != 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -136,23 +146,7 @@ jobs:
           projectPath: desktop
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: Jupiter ${{ steps.tag.outputs.name }}
-          releaseDraft: false
-          prerelease: false
-          args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}
-
-      - name: Build Tauri bundle (Windows, signed)
-        if: matrix.target.os == 'windows-latest' && env.HAS_WIN_CERT == 'true'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        with:
-          projectPath: desktop
-          tagName: ${{ steps.tag.outputs.name }}
-          releaseName: Jupiter ${{ steps.tag.outputs.name }}
+          releaseAssetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}
@@ -174,6 +168,7 @@ jobs:
           projectPath: desktop
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: Jupiter ${{ steps.tag.outputs.name }}
+          releaseAssetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}

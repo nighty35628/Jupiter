@@ -12,22 +12,13 @@ describe("desktop slash settings", () => {
     });
   });
 
-  it("parses edit mode commands from model and plan aliases", () => {
-    expect(parseSlashSettingsCommand("/model auto")).toEqual({
-      type: "editMode",
-      editMode: "auto",
-    });
-    expect(parseSlashSettingsCommand("/plan auto")).toEqual({
-      type: "editMode",
-      editMode: "auto",
-    });
+  it("does not treat model or plan commands as permission-mode aliases", () => {
+    expect(parseSlashSettingsCommand("/model auto")).toBeNull();
+    expect(parseSlashSettingsCommand("/plan auto")).toBeNull();
   });
 
-  it("treats bare /plan as plan mode", () => {
-    expect(parseSlashSettingsCommand("/plan")).toEqual({
-      type: "editMode",
-      editMode: "plan",
-    });
+  it("does not treat bare /plan as the legacy read-only edit mode", () => {
+    expect(parseSlashSettingsCommand("/plan")).toBeNull();
   });
 
   it("ignores unknown or incomplete setting commands", () => {
@@ -39,8 +30,10 @@ describe("desktop slash settings", () => {
   it("exposes setting commands to slash suggestions and help", () => {
     const commands = buildSlashSettingsDescriptors().map((entry) => entry.cmd);
 
-    expect(commands).toContain("/model auto");
-    expect(commands).toContain("/plan auto");
+    expect(commands).not.toContain("/model auto");
+    expect(commands).not.toContain("/plan auto");
+    expect(commands).not.toContain("/plan");
+    expect(commands).toContain("/mode auto");
     expect(commands).toContain("/effort low");
   });
 });

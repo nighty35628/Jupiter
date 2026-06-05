@@ -15,6 +15,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseFrontmatter } from "./frontmatter.js";
 import { t } from "./i18n/index.js";
 import { NEGATIVE_CLAIM_RULE, TUI_FORMATTING_RULES } from "./prompt-fragments.js";
+import { defaultSkillPackSkillRoots } from "./skill-packs.js";
 
 export const SKILLS_DIRNAME = "skills";
 export const SKILL_FILE = "SKILL.md";
@@ -50,7 +51,7 @@ export interface Skill {
 
 export interface SkillRoot {
   dir: string;
-  scope: Exclude<SkillScope, "builtin">;
+  scope: SkillScope;
   status: SkillPathStatus;
   priority: number;
 }
@@ -61,6 +62,8 @@ export interface SkillStoreOptions {
   /** Required for project-scope skills; omit to read only the global scope. */
   projectRoot?: string;
   customSkillPaths?: readonly string[];
+  /** Skill roots supplied by Jupiter-managed built-in packs. Test seam; production discovers installed/bundled packs. */
+  builtinSkillPackRoots?: readonly string[];
   /** Suppress bundled built-ins — for tests asserting exact list contents. */
   disableBuiltins?: boolean;
   /** Per-skill model override applied to `runAs: subagent` skills (overrides frontmatter `model:`). */
@@ -102,6 +105,7 @@ export class SkillStore {
   private readonly homeDir: string;
   private readonly projectRoot: string | undefined;
   private readonly customSkillPaths: readonly string[];
+  private readonly builtinSkillPackRoots: readonly string[] | null;
   private readonly disableBuiltins: boolean;
   private readonly subagentModels: Record<string, "flash" | "pro">;
 
@@ -112,6 +116,12 @@ export class SkillStore {
     this.customSkillPaths = dedupePaths(
       opts.customSkillPaths?.map((p) => resolveCustomSkillPath(p, baseDir, this.homeDir)) ?? [],
     );
+    this.builtinSkillPackRoots =
+      opts.builtinSkillPackRoots === undefined
+        ? null
+        : dedupePaths(
+            opts.builtinSkillPackRoots.map((p) => resolveCustomSkillPath(p, baseDir, this.homeDir)),
+          );
     this.disableBuiltins = opts.disableBuiltins === true;
     this.subagentModels = opts.subagentModels ?? {};
   }
@@ -123,7 +133,7 @@ export class SkillStore {
 
   /** Project scope first so per-repo skill overrides custom/global entries with the same name. */
   roots(): SkillRoot[] {
-    const out: Array<{ dir: string; scope: Exclude<SkillScope, "builtin"> }> = [];
+    const out: Array<{ dir: string; scope: SkillScope }> = [];
     if (this.projectRoot) {
       out.push({
         dir: join(this.projectRoot, ".jupiter", SKILLS_DIRNAME),
@@ -145,7 +155,14 @@ export class SkillStore {
     out.push({ dir: join(this.homeDir, ".jupiter", SKILLS_DIRNAME), scope: "global" });
     out.push({ dir: join(this.homeDir, ".agents", SKILLS_DIRNAME), scope: "global" });
     out.push({ dir: join(this.homeDir, ".claude", SKILLS_DIRNAME), scope: "global" });
+    if (!this.disableBuiltins) {
+      for (const dir of this.resolvedBuiltinSkillPackRoots()) out.push({ dir, scope: "builtin" });
+    }
     return out.map((root, priority) => ({ ...root, priority, status: skillPathStatus(root.dir) }));
+  }
+
+  private resolvedBuiltinSkillPackRoots(): readonly string[] {
+    return this.builtinSkillPackRoots ?? defaultSkillPackSkillRoots(this.homeDir);
   }
 
   customRoots(): SkillRoot[] {
@@ -376,14 +393,28 @@ export function builtinSkillDescription(name: string): string {
   return t(`builtinSkills.${key}`);
 }
 
-function skillDescription(s: Pick<Skill, "name" | "description" | "scope">): string {
+const CORE_BUILTIN_SKILL_NAMES = new Set([
+  "explore",
+  "research",
+  "review",
+  "security-review",
+  "test",
+  "qq",
+]);
+
+export function skillDisplayDescription(
+  s: Pick<Skill, "name" | "description" | "scope" | "path">,
+): string {
   if (s.scope !== "builtin") return s.description;
+  if (!CORE_BUILTIN_SKILL_NAMES.has(s.name)) return s.description;
   return builtinSkillDescription(s.name);
 }
 
 /** Subagent tag goes AFTER the name in brackets — leading-marker tags get copied into `name` arg verbatim. */
-function skillIndexLine(s: Pick<Skill, "name" | "description" | "runAs" | "scope">): string {
-  const safeDesc = skillDescription(s).replace(/\n/g, " ").trim();
+function skillIndexLine(
+  s: Pick<Skill, "name" | "description" | "runAs" | "scope" | "path">,
+): string {
+  const safeDesc = skillDisplayDescription(s).replace(/\n/g, " ").trim();
   const tag = s.runAs === "subagent" ? " [🧬 subagent]" : "";
   const max = 130 - s.name.length - tag.length;
   const clipped = safeDesc.length > max ? `${safeDesc.slice(0, Math.max(1, max - 1))}…` : safeDesc;

@@ -1,16 +1,24 @@
 /** runAs: inline appends the body to the parent log; subagent spawns an isolated child loop and only returns the final answer. */
 
+import { join } from "node:path";
+import {
+  type SkillPackSearchMatch,
+  type SkillPackVersion,
+  installSkillPackUpdates,
+  managedSkillPacksDir,
+  searchSkillPacks,
+} from "../skill-packs.js";
 import { type Skill, SkillStore } from "../skills.js";
 import type { ToolRegistry } from "../tools.js";
 
 /** Returns serialized tool-result string — dispatch path is pure pass-through. */
 export type SubagentRunner = (skill: Skill, task: string, signal?: AbortSignal) => Promise<string>;
 
-/** Fired after a successful `install_skill` write — host wires this to push a fresh `$skills` event so the desktop sidebar updates without a tab reload. */
+/** Fired after skills change — host wires this to push a fresh `$skills` event so the desktop sidebar updates without a tab reload. */
 export type SkillInstalledHook = (info: {
   name: string;
   path: string;
-  scope: "project" | "global";
+  scope: "project" | "global" | "builtin";
 }) => void;
 
 export interface SkillToolsOptions {
@@ -26,6 +34,12 @@ export interface SkillToolsOptions {
   onSkillInstalled?: SkillInstalledHook;
   /** Per-skill model override for `runAs: subagent` skills — sourced from config.json's `subagentModels`. */
   subagentModels?: Record<string, "flash" | "pro">;
+  /** Test seam / enterprise override for Jupiter's official skill-pack update channel. */
+  skillPackRegistryUrl?: string;
+  /** Test seam for skill-pack registry and bundle fetches. */
+  skillPackFetchImpl?: typeof fetch;
+  /** Test seam for local bundled pack versions. Production discovers bundled resources on disk. */
+  bundledSkillPacks?: readonly SkillPackVersion[];
 }
 
 interface BuiltinSubagentToolSpec {
@@ -85,6 +99,26 @@ function registerBuiltinSubagentTool(
       return subagentRunner(skill, task, ctx?.signal);
     },
   });
+}
+
+function skillPackToolOptions(opts: SkillToolsOptions) {
+  return {
+    homeDir: opts.homeDir,
+    registryUrl: opts.skillPackRegistryUrl,
+    fetchImpl: opts.skillPackFetchImpl,
+    bundledPacks: opts.bundledSkillPacks,
+  };
+}
+
+function pickSkillPackMatch(
+  matches: readonly SkillPackSearchMatch[],
+  rawName: string,
+): SkillPackSearchMatch | null {
+  if (matches.length === 0) return null;
+  const exact = matches.filter((match) => match.exact || match.id === rawName);
+  if (exact.length === 1) return exact[0] ?? null;
+  if (matches.length === 1) return matches[0] ?? null;
+  return null;
 }
 
 export function registerSkillTools(
@@ -225,6 +259,100 @@ export function registerSkillTools(
       "Optional scope hint (e.g. 'focus on token handling in src/auth/') or 'full' for everything in the diff.",
   });
 
+  registry.register({
+    name: "search_skill_packs",
+    description:
+      "Search Jupiter's official skill-pack channel before authoring a new skill. Use this FIRST when the user asks to install/add/get a skill by name (e.g. 'install playwright skill', 'add documents skill'). Returns official channel matches plus local built-in/managed pack status.",
+    readOnly: true,
+    parallelSafe: true,
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Skill or pack name to search for. Include the user's wording; the search normalizes words like 'skill'. Empty query lists matching local/channel packs.",
+        },
+      },
+      required: ["query"],
+    },
+    fn: async (args: { query?: unknown }) => {
+      const query = typeof args.query === "string" ? args.query.trim() : "";
+      const result = await searchSkillPacks(query, skillPackToolOptions(opts));
+      return JSON.stringify(result);
+    },
+  });
+
+  registry.register({
+    name: "install_skill_pack",
+    description:
+      "Install a skill pack from Jupiter's official skill-pack channel. Use after `search_skill_packs` finds a suitable official match. Do not use this to author brand-new ad-hoc skills; use `install_skill` only when the official channel has no match.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description:
+            "Official pack id or user query. Prefer an exact `id` returned by `search_skill_packs`.",
+        },
+      },
+      required: ["name"],
+    },
+    fn: async (args: { name?: unknown }) => {
+      const name = typeof args.name === "string" ? args.name.trim() : "";
+      if (!name) return JSON.stringify({ error: "install_skill_pack requires a non-empty 'name'" });
+
+      const search = await searchSkillPacks(name, skillPackToolOptions(opts));
+      if (!search.ok) return JSON.stringify(search);
+      const target = pickSkillPackMatch(search.matches, name);
+      if (!target) {
+        return JSON.stringify({
+          error:
+            search.matches.length === 0
+              ? `no official skill pack matched ${JSON.stringify(name)}`
+              : `ambiguous official skill pack query ${JSON.stringify(name)} — retry with an exact id`,
+          matches: search.matches.slice(0, 8),
+        });
+      }
+
+      if (target.installed && !target.updateAvailable) {
+        return JSON.stringify({
+          ok: true,
+          id: target.id,
+          installed: [],
+          alreadyAvailable: true,
+          currentVersion: target.currentVersion,
+          note: "This official skill pack is already available. Invoke its skills with run_skill when needed.",
+        });
+      }
+
+      const installed = await installSkillPackUpdates({
+        ...skillPackToolOptions(opts),
+        packIds: [target.id],
+      });
+      if (installed.ok && installed.installed.length > 0) {
+        for (const pack of installed.installed) {
+          try {
+            onSkillInstalled?.({
+              name: pack.id,
+              path: join(managedSkillPacksDir(opts.homeDir), pack.id),
+              scope: "builtin",
+            });
+          } catch {
+            // UI refresh hook failure must not undo a successful pack install.
+          }
+        }
+      }
+      return JSON.stringify({
+        ...installed,
+        id: target.id,
+        note: installed.ok
+          ? "Installed official skill pack. Its skills are readable by run_skill in this session; the pinned Skills index refreshes on /new or relaunch."
+          : undefined,
+      });
+    },
+  });
+
   const installScopeDesc = hasProjectScope
     ? "'project' (default) writes to <repo>/.jupiter/skills/, scoped to this workspace only; 'global' writes to ~/.jupiter/skills/, available in every project."
     : "'global' (only option here — no project workspace) writes to ~/.jupiter/skills/.";
@@ -232,7 +360,7 @@ export function registerSkillTools(
   registry.register({
     name: "install_skill",
     description:
-      "Author and save a new skill — a reusable playbook future turns invoke via `run_skill`. Runnable immediately (same turn); appears in the pinned Skills index on next `/new` or launch. Skill bodies become prompts for future turns, so write what you'd want your future self to follow.",
+      "Fallback authoring tool for saving a brand-new custom skill when Jupiter's official skill-pack channel has no suitable match. For user requests like 'install/add/get <name> skill', call `search_skill_packs` first, then `install_skill_pack` if there is an official match. Use this only to create an ad-hoc reusable playbook from scratch. Runnable immediately (same turn); appears in the pinned Skills index on next `/new` or launch.",
     parameters: {
       type: "object",
       properties: {

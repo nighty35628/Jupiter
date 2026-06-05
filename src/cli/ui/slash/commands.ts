@@ -172,7 +172,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     cmd: "skill",
     group: "extend",
     argsHint:
-      "[list|paths|paths add <path>|paths remove <path|N>|show <name>|new <name>|<name> [args]]",
+      "[list|update [--check]|paths|paths add <path>|paths remove <path|N>|show <name>|new <name>|<name> [args]]",
     summary: "list / run / scaffold skills (project + custom + global + builtin)",
     argCompleter: "skills",
   },
@@ -258,11 +258,11 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   {
     cmd: "mode",
     group: "code",
-    argsHint: "[review|auto|yolo|plan]",
+    argsHint: "[review|auto|yolo]",
     summary:
-      "edit-gate: review (queue) · auto (apply+undo) · yolo (apply+auto-shell) · plan (read-only). Shift+Tab cycles.",
+      "edit-gate: review (queue) · auto (apply+undo) · yolo (apply+auto-shell). Shift+Tab cycles.",
     contextual: "code",
-    argCompleter: ["review", "auto", "yolo", "plan"],
+    argCompleter: ["review", "auto", "yolo"],
   },
   {
     cmd: "diff",
@@ -277,7 +277,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     cmd: "plan",
     group: "code",
     argsHint: "[on|off|strict]",
-    summary: "toggle read-only plan mode / strict lifecycle rails",
+    summary: "legacy CLI read-only plan rails; desktop /plan is one-shot planning",
     contextual: "code",
     argCompleter: ["on", "off", "strict"],
   },

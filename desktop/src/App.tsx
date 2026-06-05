@@ -61,6 +61,7 @@ import {
   parseSlashSettingsCommand,
   type SlashSettingsCommand,
 } from "./slash-settings";
+import { parseOneShotPlanCommand } from "./one-shot-plan";
 import {
   FONT_FAMILY,
   FONT_FAMILY_STACK,
@@ -539,7 +540,9 @@ function isCommandEchoClientId(clientId: string): boolean {
   return /^(slash|btw|skill)-/.test(clientId);
 }
 
-function isRollbackableUserMessage(message: ChatMessage): message is Extract<ChatMessage, { kind: "user" }> {
+function isRollbackableUserMessage(
+  message: ChatMessage,
+): message is Extract<ChatMessage, { kind: "user" }> {
   return (
     message.kind === "user" &&
     message.rollbackable !== false &&
@@ -595,7 +598,8 @@ export function canRollbackMessage(
   const message = messages[index];
   if (!message || (message.kind !== "user" && message.kind !== "assistant"))
     return false;
-  if (message.kind === "user" && !isRollbackableUserMessage(message)) return false;
+  if (message.kind === "user" && !isRollbackableUserMessage(message))
+    return false;
   if (message.kind === "assistant" && message.pending) return false;
   return messages.slice(index + 1).some(isConversationTurnMessage);
 }
@@ -607,7 +611,8 @@ export function rollbackTargetForMessage(
   const message = messages[index];
   if (!message || (message.kind !== "user" && message.kind !== "assistant"))
     return null;
-  if (message.kind === "user" && !isRollbackableUserMessage(message)) return null;
+  if (message.kind === "user" && !isRollbackableUserMessage(message))
+    return null;
   if (message.kind === "assistant" && message.pending) return null;
 
   let turn = 0;
@@ -710,22 +715,44 @@ function reduceRaw(state: State, action: Action): State {
           collapsed.push({ ...item });
         }
       }
+      const byTurn = new Map<number, DeltaBatchItem[]>();
+      for (const item of collapsed) {
+        const bucket = byTurn.get(item.turn) ?? [];
+        bucket.push(item);
+        byTurn.set(item.turn, bucket);
+      }
+      const seenAssistantTurns = new Set<number>();
+      const messages = state.messages.map((m) => {
+        if (m.kind !== "assistant") return m;
+        seenAssistantTurns.add(m.turn);
+        const relevant = byTurn.get(m.turn);
+        if (!relevant || relevant.length === 0) return m;
+        let segments = m.segments;
+        for (const it of relevant) {
+          segments = appendTextSegment(
+            segments,
+            it.channel === "content" ? "text" : "reasoning",
+            it.text,
+          );
+        }
+        return { ...m, segments };
+      });
+      for (const [turn, items] of byTurn) {
+        if (seenAssistantTurns.has(turn)) continue;
+        let segments: AssistantSegment[] = [];
+        for (const it of items) {
+          segments = appendTextSegment(
+            segments,
+            it.channel === "content" ? "text" : "reasoning",
+            it.text,
+          );
+        }
+        messages.push({ kind: "assistant", turn, segments, pending: true });
+      }
       return {
         ...state,
-        messages: state.messages.map((m) => {
-          if (m.kind !== "assistant") return m;
-          const relevant = collapsed.filter((it) => it.turn === m.turn);
-          if (relevant.length === 0) return m;
-          let segments = m.segments;
-          for (const it of relevant) {
-            segments = appendTextSegment(
-              segments,
-              it.channel === "content" ? "text" : "reasoning",
-              it.text,
-            );
-          }
-          return { ...m, segments };
-        }),
+        busy: collapsed.length > 0 ? true : state.busy,
+        messages,
       };
     }
     case "clear":
@@ -1558,7 +1585,20 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         next[i] = updated;
         return { ...state, messages: next };
       }
-      return state;
+      let segments: AssistantSegment[] = [];
+      if (ev.channel === "content")
+        segments = appendTextSegment(segments, "text", ev.text);
+      else if (ev.channel === "reasoning")
+        segments = appendTextSegment(segments, "reasoning", ev.text);
+      if (segments.length === 0) return state;
+      return {
+        ...state,
+        busy: true,
+        messages: [
+          ...state.messages,
+          { kind: "assistant", turn: ev.turn, segments, pending: true },
+        ],
+      };
     }
     case "model.final": {
       const u = ev.usage;
@@ -1895,6 +1935,7 @@ function TabRuntime({
   useLang();
   useDisableTextAssist();
   const [draft, setDraft] = useState("");
+  const [oneShotPlanArmed, setOneShotPlanArmed] = useState(false);
   const [filePreview, setFilePreview] = useState<{
     target: FilePreviewTarget | null;
     preview: FilePreview | null;
@@ -2086,7 +2127,13 @@ function TabRuntime({
     if (next.collapseSidebar) onToggleCtx();
     if (next.infoOpen && !bottomCollapsed) onToggleBottom();
     setContextInfoOpen(next.infoOpen);
-  }, [bottomCollapsed, contextInfoOpen, ctxCollapsed, onToggleBottom, onToggleCtx]);
+  }, [
+    bottomCollapsed,
+    contextInfoOpen,
+    ctxCollapsed,
+    onToggleBottom,
+    onToggleCtx,
+  ]);
   const toggleContextPanel = useCallback(() => {
     const next = nextContextSidebarToggle({
       infoOpen: contextInfoOpen,
@@ -2096,7 +2143,13 @@ function TabRuntime({
     setContextInfoOpen(next.infoOpen);
     if (ctxCollapsed && !bottomCollapsed) onToggleBottom();
     onToggleCtx();
-  }, [bottomCollapsed, contextInfoOpen, ctxCollapsed, onToggleBottom, onToggleCtx]);
+  }, [
+    bottomCollapsed,
+    contextInfoOpen,
+    ctxCollapsed,
+    onToggleBottom,
+    onToggleCtx,
+  ]);
   const toggleBottomPanel = useCallback(() => {
     const expandingBottom = bottomCollapsed;
     if (expandingBottom) {
@@ -2177,9 +2230,10 @@ function TabRuntime({
   );
   const newChat = useCallback(() => {
     clearAbortDraft();
+    setOneShotPlanArmed(false);
     sendRpc({ cmd: "new_chat" });
-    dispatch({ t: "clear" });
-  }, [clearAbortDraft, sendRpc]);
+    if (!state.busy) dispatch({ t: "clear" });
+  }, [clearAbortDraft, sendRpc, state.busy]);
 
   const pickWorkspace = useCallback(async () => {
     try {
@@ -2317,6 +2371,45 @@ function TabRuntime({
         return;
       }
 
+      const oneShotPlanCommand = parseOneShotPlanCommand(text);
+      if (oneShotPlanCommand) {
+        if (oneShotPlanCommand.type === "arm") {
+          setOneShotPlanArmed(true);
+          dispatch({
+            t: "push_status",
+            text:
+              getLang() === "zh-CN"
+                ? "▸ /plan 已开启：下一条普通消息会先生成计划，批准后执行。"
+                : "▸ /plan armed: the next normal message will produce a plan before execution.",
+          });
+          if (!override) setDraft("");
+          return;
+        }
+        if (oneShotPlanCommand.type === "cancel") {
+          setOneShotPlanArmed(false);
+          dispatch({
+            t: "push_status",
+            text:
+              getLang() === "zh-CN" ? "▸ /plan 已取消。" : "▸ /plan cancelled.",
+          });
+          if (!override) setDraft("");
+          return;
+        }
+
+        const clientId = `plan-${Date.now()}`;
+        setOneShotPlanArmed(false);
+        recordAbortDraft("user_input", oneShotPlanCommand.text);
+        dispatch({ t: "send_user", text: oneShotPlanCommand.text, clientId });
+        sendRpc({
+          cmd: "user_input",
+          text: oneShotPlanCommand.text,
+          clientId,
+          planOneShot: true,
+        });
+        if (!override) setDraft("");
+        return;
+      }
+
       // /btw <question> — route to side-question RPC instead of user_input.
       // Empty payload used to silently swallow the keystroke (#1370); surface
       // the usage hint as a status message so the user knows what's expected.
@@ -2385,9 +2478,11 @@ function TabRuntime({
         }
       }
       const clientId = `c-${Date.now()}`;
+      const planOneShot = oneShotPlanArmed;
+      if (planOneShot) setOneShotPlanArmed(false);
       recordAbortDraft("user_input", text);
       dispatch({ t: "send_user", text, clientId });
-      sendRpc({ cmd: "user_input", text, clientId });
+      sendRpc({ cmd: "user_input", text, clientId, planOneShot });
       if (!override) setDraft("");
     },
     [
@@ -2399,10 +2494,12 @@ function TabRuntime({
       recordAbortDraft,
       applySlashSettingsCommand,
       openSettingsAt,
+      oneShotPlanArmed,
     ],
   );
 
   const abort = useCallback(() => {
+    setOneShotPlanArmed(false);
     const restored = restoreAbortedDraft(draft, abortDraftRef.current);
     clearAbortDraft();
     if (restored !== null) {
@@ -2418,6 +2515,7 @@ function TabRuntime({
 
   const clearConversation = useCallback(() => {
     clearAbortDraft();
+    setOneShotPlanArmed(false);
     dispatch({ t: "clear" });
   }, [clearAbortDraft]);
 
@@ -3364,10 +3462,11 @@ function TabRuntime({
                               onEdit={onEditUserMsg}
                               rollbackAvailable={rollbackAvailable}
                               onRollback={() => {
-                                if (rollbackTarget) rollbackToMessage(
-                                  rollbackTarget.turn,
-                                  rollbackTarget.role,
-                                );
+                                if (rollbackTarget)
+                                  rollbackToMessage(
+                                    rollbackTarget.turn,
+                                    rollbackTarget.role,
+                                  );
                               }}
                             />
                           </div>
@@ -3398,10 +3497,11 @@ function TabRuntime({
                               pendingConfirms={state.pendingConfirms}
                               rollbackAvailable={rollbackAvailable}
                               onRollback={() => {
-                                if (rollbackTarget) rollbackToMessage(
-                                  rollbackTarget.turn,
-                                  rollbackTarget.role,
-                                );
+                                if (rollbackTarget)
+                                  rollbackToMessage(
+                                    rollbackTarget.turn,
+                                    rollbackTarget.role,
+                                  );
                               }}
                               processCardsDefaultOpen={
                                 state.settings?.processCardsDefaultOpen ?? false
@@ -3638,7 +3738,9 @@ function TabRuntime({
           onSideChatSend={sendSideChat}
           browserRequest={browserRequest}
           visible={
-            bottomCollapsed ? !ctxCollapsed && !contextInfoOpen : !bottomCollapsed
+            bottomCollapsed
+              ? !ctxCollapsed && !contextInfoOpen
+              : !bottomCollapsed
           }
           placement={bottomCollapsed ? "side" : "bottom"}
           onOpenSubagent={(name) => {
@@ -4598,6 +4700,7 @@ export function App() {
   const pendingEventsRef = useRef<Map<string, TabAction[]>>(new Map());
   const pendingDeltasRef = useRef<Map<string, DeltaBatchItem[]>>(new Map());
   const rafScheduledRef = useRef(false);
+  const deltaFlushTimeoutRef = useRef<number | null>(null);
   const startupStderrRef = useRef<string[]>([]);
   const tabsRef = useRef<TabMeta[]>([]);
   useEffect(() => {
@@ -4835,8 +4938,15 @@ export function App() {
     let cancelled = false;
     const cleanups: Array<() => void> = [];
 
+    const clearDeltaFlushTimeout = () => {
+      if (deltaFlushTimeoutRef.current === null) return;
+      window.clearTimeout(deltaFlushTimeoutRef.current);
+      deltaFlushTimeoutRef.current = null;
+    };
     const flushDeltas = () => {
       rafScheduledRef.current = false;
+      clearDeltaFlushTimeout();
+      if (cancelled) return;
       for (const [tabId, items] of pendingDeltasRef.current) {
         if (items.length === 0) continue;
         deliverToTab(tabId, { t: "batch_delta", items });
@@ -4846,7 +4956,8 @@ export function App() {
     const scheduleFlush = () => {
       if (rafScheduledRef.current || cancelled) return;
       rafScheduledRef.current = true;
-      requestAnimationFrame(flushDeltas);
+      window.requestAnimationFrame(flushDeltas);
+      deltaFlushTimeoutRef.current = window.setTimeout(flushDeltas, 50);
     };
     const flushTabDeltas = (tabId: string) => {
       const bucket = pendingDeltasRef.current.get(tabId);
@@ -5009,6 +5120,7 @@ export function App() {
     void setup();
     return () => {
       cancelled = true;
+      clearDeltaFlushTimeout();
       for (const c of cleanups) c();
     };
   }, [deliverToTab, startupRetryNonce]);
