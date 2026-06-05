@@ -80,7 +80,13 @@ jobs:
             patchelf
 
       - name: Install root deps
-        run: npm ci
+        shell: bash
+        run: |
+          if [ "${{ matrix.target.label }}" = "linux-arm64" ]; then
+            npm ci --ignore-scripts
+          else
+            npm ci
+          fi
 
       - name: Sync desktop version from tag
         run: node scripts/sync-desktop-version.mjs "${{ steps.tag.outputs.name }}"
@@ -146,7 +152,7 @@ jobs:
           projectPath: desktop
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: Jupiter ${{ steps.tag.outputs.name }}
-          releaseAssetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
+          assetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}
@@ -168,7 +174,7 @@ jobs:
           projectPath: desktop
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: Jupiter ${{ steps.tag.outputs.name }}
-          releaseAssetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
+          assetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}

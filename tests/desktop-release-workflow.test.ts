@@ -18,13 +18,20 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain('bundles: "--bundles dmg"');
     expect(releaseWorkflow).toContain('bundles: "--bundles nsis"');
     expect(releaseWorkflow).toContain(
-      "releaseAssetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]",
+      "assetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]",
     );
+    expect(releaseWorkflow).not.toContain("releaseAssetNamePattern");
   });
 
   it("verifies the bundled Node architecture for Linux packages", () => {
     expect(releaseWorkflow).toContain("Verify bundled Node matches host arch (Linux)");
     expect(releaseWorkflow).toContain("bundled_arch=");
+  });
+
+  it("skips root lifecycle scripts for Linux ARM64 to avoid native tree-sitter binding builds", () => {
+    expect(releaseWorkflow).toContain("shell: bash");
+    expect(releaseWorkflow).toContain('if [ "${{ matrix.target.label }}" = "linux-arm64" ]; then');
+    expect(releaseWorkflow).toContain("npm ci --ignore-scripts");
   });
 
   it("does not require Windows Authenticode signing for unsigned releases", () => {

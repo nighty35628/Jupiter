@@ -50,7 +50,7 @@ open /Applications/Jupiter.app
 
 ## Current Release / 当前版本
 
-**Jupiter Desktop 0.89.4**
+**Jupiter Desktop 0.89.5**
 
 ### 中文更新摘要
 
