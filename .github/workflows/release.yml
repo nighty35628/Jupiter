@@ -84,6 +84,7 @@ jobs:
         run: |
           if [ "${{ matrix.target.label }}" = "linux-arm64" ]; then
             npm ci --ignore-scripts
+            npm --prefix dashboard ci --ignore-scripts
           else
             npm ci
           fi

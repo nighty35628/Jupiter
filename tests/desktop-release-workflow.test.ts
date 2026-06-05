@@ -32,6 +32,7 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain("shell: bash");
     expect(releaseWorkflow).toContain('if [ "${{ matrix.target.label }}" = "linux-arm64" ]; then');
     expect(releaseWorkflow).toContain("npm ci --ignore-scripts");
+    expect(releaseWorkflow).toContain("npm --prefix dashboard ci --ignore-scripts");
   });
 
   it("does not require Windows Authenticode signing for unsigned releases", () => {
