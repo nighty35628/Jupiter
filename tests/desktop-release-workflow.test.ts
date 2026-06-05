@@ -1,9 +1,10 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 const linuxInstaller = readFileSync("install-linux.sh", "utf8");
 const readme = readFileSync("README.md", "utf8");
+const desktopReleaseNotesPath = ".github/release-notes/desktop-v0.89.6.md";
 
 describe("desktop release packaging", () => {
   it("publishes platform installers for the Jupiter desktop release", () => {
@@ -53,6 +54,19 @@ describe("desktop release packaging", () => {
   it("documents release triggering against the Jupiter remote", () => {
     expect(releaseWorkflow).toContain("git push jupiter desktop-vX.Y.Z");
     expect(releaseWorkflow).not.toContain("git push origin desktop-vX.Y.Z");
+  });
+
+  it("requires bilingual release notes before publishing a desktop release", () => {
+    expect(releaseWorkflow).toContain("release-notes:");
+    expect(releaseWorkflow).toContain("needs: bundle");
+    expect(releaseWorkflow).toContain(".github/release-notes/${TAG}.md");
+    expect(releaseWorkflow).toContain("gh release edit");
+    expect(releaseWorkflow).toContain("--notes-file");
+
+    expect(existsSync(desktopReleaseNotesPath)).toBe(true);
+    const releaseNotes = readFileSync(desktopReleaseNotesPath, "utf8");
+    expect(releaseNotes).toContain("## 中文");
+    expect(releaseNotes).toContain("## English");
   });
 });
 

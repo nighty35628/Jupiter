@@ -212,3 +212,36 @@ jobs:
           test -n "$node_bin"
           codesign -vvv --strict "$node_bin"
           codesign -d --entitlements :- "$node_bin" 2>&1 | grep -q "com.apple.security.inherit"
+
+  release-notes:
+    name: publish release notes
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish bilingual release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          notes=".github/release-notes/${TAG}.md"
+          if [ ! -f "$notes" ]; then
+            echo "Missing desktop release notes: $notes" >&2
+            echo "Add a bilingual notes file before pushing the desktop release tag." >&2
+            exit 1
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes"

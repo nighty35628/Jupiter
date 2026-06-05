@@ -110,6 +110,17 @@ For desktop UI development:
 npm --prefix desktop run dev -- --host 127.0.0.1
 ```
 
+## Release Checklist / 发布检查
+
+Before pushing a desktop release tag, add bilingual release notes at
+`.github/release-notes/desktop-vX.Y.Z.md`. The desktop release workflow fails if
+the notes file is missing, then publishes that file to the GitHub Release after
+all platform bundles finish.
+
+推送桌面端发布 tag 前，必须先新增双语发布说明：
+`.github/release-notes/desktop-vX.Y.Z.md`。如果缺少该文件，桌面端发布工作流会失败；
+所有平台安装包构建完成后，工作流会把这份说明写入 GitHub Release。
+
 ## License / 许可证
 
 MIT. Required source-only notice is kept in `src/legal/upstream-notice.ts`.
