@@ -70,6 +70,7 @@ function makeState(messages: ChatMessage[] = []): AppState {
       liveLogTokens: 0,
     },
     sessions: [],
+    externalImportSources: [],
     settings: null,
     qq: null,
     balance: null,
@@ -77,11 +78,16 @@ function makeState(messages: ChatMessage[] = []): AppState {
     mentionPreview: null,
     mcpSpecs: [],
     mcpBridged: false,
+    subagents: [],
     skills: [],
+    skillRoots: [],
     sessionFiles: [],
     memory: [],
+    memoryDetail: null,
+    sourceSearchResults: null,
     jobs: [],
     activeSkill: null,
+    sideChats: [],
     queuedSends: [],
     retryNonce: 0,
   };
@@ -105,6 +111,55 @@ describe("desktop incoming QQ/user message rendering", () => {
       clientId: "remote-42",
       turn: 2,
     });
+  });
+
+  it("renders model.final content when no streaming deltas arrived", () => {
+    const state = makeState([
+      { kind: "user", text: "hello", clientId: "c-1", turn: 1 },
+      { kind: "assistant", turn: 1, segments: [], pending: true },
+    ]);
+
+    const next = applyIncoming(state, {
+      type: "model.final",
+      id: 43,
+      ts: "2026-05-19T12:00:01Z",
+      turn: 1,
+      content: "done",
+      toolCalls: [],
+      usage: {},
+      costUsd: 0,
+    } as IncomingEvent);
+
+    const assistant = next.messages.at(-1);
+    expect(assistant?.kind).toBe("assistant");
+    if (assistant?.kind !== "assistant") return;
+    expect(assistant.pending).toBe(false);
+    expect(assistant.segments).toEqual([{ kind: "text", text: "done" }]);
+  });
+
+  it("renders model.final reasoning and content when no assistant shell exists yet", () => {
+    const state = makeState([{ kind: "user", text: "hello", clientId: "c-1", turn: 1 }]);
+
+    const next = applyIncoming(state, {
+      type: "model.final",
+      id: 44,
+      ts: "2026-05-19T12:00:02Z",
+      turn: 1,
+      content: "done",
+      reasoningContent: "thinking",
+      toolCalls: [],
+      usage: {},
+      costUsd: 0,
+    } as IncomingEvent);
+
+    const assistant = next.messages.at(-1);
+    expect(assistant?.kind).toBe("assistant");
+    if (assistant?.kind !== "assistant") return;
+    expect(assistant.pending).toBe(false);
+    expect(assistant.segments).toEqual([
+      { kind: "reasoning", text: "thinking" },
+      { kind: "text", text: "done" },
+    ]);
   });
 
   it("elides old heavy assistant segments during long live desktop sessions", () => {

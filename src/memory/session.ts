@@ -61,6 +61,16 @@ export interface SessionInfo {
 export interface SessionMeta {
   branch?: string;
   summary?: string;
+  /** Desktop/UI archive marker. This hides the session without renaming or rotating the transcript. */
+  archivedAt?: number;
+  /** Desktop/UI pin marker. Timestamp preserves deterministic pin ordering. */
+  pinnedAt?: number;
+  /** Last time the user opened/read this session in a UI surface. */
+  lastReadAt?: number;
+  /** Last time an assistant turn completed while this session was not active. */
+  lastAssistantCompletedAt?: number;
+  /** Manual unread override set by the user. Cleared by markSessionRead(). */
+  manualUnread?: boolean;
   totalCostUsd?: number;
   turnCount?: number;
   /** Absolute path of the workspace root the session was created/used in. */
@@ -376,6 +386,28 @@ export function patchSessionMeta(name: string, patch: Partial<SessionMeta>): Ses
     /* chmod not supported */
   }
   return next;
+}
+
+export function sessionIsUnread(meta: SessionMeta): boolean {
+  if (meta.manualUnread === true) return true;
+  const completed =
+    typeof meta.lastAssistantCompletedAt === "number" ? meta.lastAssistantCompletedAt : 0;
+  if (completed <= 0) return false;
+  const read = typeof meta.lastReadAt === "number" ? meta.lastReadAt : 0;
+  return completed > read;
+}
+
+export function markSessionRead(name: string, now = Date.now()): SessionMeta {
+  return patchSessionMeta(name, {
+    lastReadAt: now,
+    manualUnread: undefined,
+  });
+}
+
+export function markSessionUnread(name: string): SessionMeta {
+  return patchSessionMeta(name, {
+    manualUnread: true,
+  });
 }
 
 /** Renames the JSONL plus all known sidecars together; returns false if target already exists. */

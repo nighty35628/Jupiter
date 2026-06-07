@@ -153,13 +153,14 @@ describe("ContextPanel files", () => {
   });
   afterEach(cleanup);
 
-  it("shows the five-entry home panel by default without shell controls", () => {
+  it("shows the module home panel by default without shell controls", () => {
     renderPanel({ mode: undefined });
 
     expect(document.querySelector(".ctx")?.getAttribute("data-mode")).toBe(
       "home",
     );
     expect(screen.getByText("Files")).toBeTruthy();
+    expect(screen.getAllByText("Library").length).toBeGreaterThan(0);
     expect(screen.getByText("Side Chat")).toBeTruthy();
     expect(screen.getByText("Browser")).toBeTruthy();
     expect(screen.getByText("Review")).toBeTruthy();
@@ -180,6 +181,196 @@ describe("ContextPanel files", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Browser" }));
 
     expect(onModeChange).toHaveBeenCalledWith("browser");
+  });
+
+  it("shows library as a selectable workspace module", () => {
+    const onModeChange = vi.fn();
+    renderPanel({ mode: "files", onModeChange });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add panel" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Library" }));
+
+    expect(onModeChange).toHaveBeenCalledWith("library");
+  });
+
+  it("renders the library module summary", () => {
+    renderPanel({
+      mode: "library",
+      sessionFiles: [
+        { path: "src/new-file.ts", status: "m" },
+        { path: "docs/notes.md", status: "c" },
+      ],
+      memory: [
+        {
+          kind: "project_file",
+          path: "/repo/.jupiter/memory.md",
+          name: "memory.md",
+          description: "Project note",
+          scope: "project",
+        },
+      ],
+    });
+
+    expect(screen.getAllByText("Library").length).toBeGreaterThan(0);
+    expect(screen.getByText("Saved sources")).toBeTruthy();
+    expect(screen.getByText("0 items")).toBeTruthy();
+    expect(screen.queryByText("Workspace files")).toBeNull();
+    expect(screen.queryByText("Saved notes")).toBeNull();
+  });
+
+  it("searches sources from the library module", () => {
+    const onSourceSearch = vi.fn();
+    renderPanel({ mode: "library", onSourceSearch });
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Search web or saved sources…"),
+      { target: { value: "notebook lm" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(onSourceSearch).toHaveBeenCalledWith(
+      "notebook lm",
+      expect.any(Number),
+    );
+  });
+
+  it("keeps library stats focused on saved sources", () => {
+    renderPanel({ mode: "library" });
+
+    expect(screen.getByText("Saved sources")).toBeTruthy();
+    expect(screen.queryByText("Workspace files")).toBeNull();
+    expect(screen.queryByText("Saved notes")).toBeNull();
+  });
+
+  it("offers manual file import from the library", () => {
+    const onImportLibraryFiles = vi.fn();
+    renderPanel({ mode: "library", onImportLibraryFiles });
+
+    fireEvent.click(screen.getByRole("button", { name: "Import files" }));
+
+    expect(onImportLibraryFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds web search results to the library", () => {
+    const onAddLibrarySource = vi.fn();
+    renderPanel({
+      mode: "library",
+      onAddLibrarySource,
+      sourceSearch: {
+        type: "$source_search_results",
+        nonce: 1,
+        query: "NotebookLM",
+        results: [
+          {
+            kind: "web",
+            title: "NotebookLM",
+            url: "https://notebooklm.google/",
+            snippet: "AI notebook source grounding.",
+          },
+        ],
+      },
+    });
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Search web or saved sources…"),
+      { target: { value: "NotebookLM" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(onAddLibrarySource).toHaveBeenCalledWith({
+      kind: "web",
+      title: "NotebookLM",
+      url: "https://notebooklm.google/",
+      snippet: "AI notebook source grounding.",
+    });
+  });
+
+  it("opens saved web sources in the built-in browser", () => {
+    const onOpenWebSource = vi.fn();
+    renderPanel({
+      mode: "library",
+      onOpenWebSource,
+      librarySources: [
+        {
+          id: "web-1",
+          kind: "web",
+          title: "NotebookLM",
+          url: "https://notebooklm.google/",
+          snippet: "AI notebook source grounding.",
+          addedAt: 1,
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open source: NotebookLM" }));
+
+    expect(onOpenWebSource).toHaveBeenCalledWith("https://notebooklm.google/");
+  });
+
+  it("previews and reveals saved local file sources", () => {
+    const onPreviewFile = vi.fn();
+    const onRevealFileSource = vi.fn();
+    renderPanel({
+      mode: "library",
+      onPreviewFile,
+      onRevealFileSource,
+      librarySources: [
+        {
+          id: "file-1",
+          kind: "file",
+          title: "notes.md",
+          path: "docs/notes.md",
+          snippet: "docs/notes.md",
+          addedAt: 1,
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open source: notes.md" }));
+    expect(onPreviewFile).toHaveBeenCalledWith({ path: "docs/notes.md" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Show in folder: notes.md" }));
+    expect(onRevealFileSource).toHaveBeenCalledWith("docs/notes.md");
+  });
+
+  it("filters saved library sources while searching", () => {
+    renderPanel({
+      mode: "library",
+      sourceSearch: {
+        type: "$source_search_results",
+        nonce: 1,
+        query: "notebook",
+        results: [],
+      },
+      librarySources: [
+        {
+          id: "web-1",
+          kind: "web",
+          title: "NotebookLM",
+          url: "https://notebooklm.google/",
+          snippet: "AI notebook source grounding.",
+          addedAt: 1,
+        },
+        {
+          id: "web-2",
+          kind: "web",
+          title: "Unrelated Source",
+          url: "https://example.com/",
+          snippet: "Different topic.",
+          addedAt: 2,
+        },
+      ],
+    });
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Search web or saved sources…"),
+      { target: { value: "notebook" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(screen.getByText("NotebookLM")).toBeTruthy();
+    expect(screen.queryByText("Unrelated Source")).toBeNull();
   });
 
   it("sends a side chat message from the sidebar", () => {
@@ -275,6 +466,20 @@ describe("ContextPanel files", () => {
         .classList.contains("ctx-browser-native-host"),
     ).toBe(true);
     expect(screen.getByText("https://example.com/docs")).toBeTruthy();
+  });
+
+  it("returns to the source panel when closing a browser opened from library", () => {
+    const onModeChange = vi.fn();
+    renderPanel({
+      mode: "browser",
+      browserReturnMode: "library",
+      browserRequest: { id: 1, url: "https://example.com/docs" },
+      onModeChange,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    expect(onModeChange).toHaveBeenCalledWith("library");
   });
 
   it("opens local html file requests inside the browser panel", () => {
@@ -534,6 +739,24 @@ describe("ContextPanel files", () => {
     await waitFor(() =>
       expect(openPath).toHaveBeenCalledWith("/repo/src/new-file.ts"),
     );
+  });
+
+  it("adds a tracked file to the library from the files panel", () => {
+    const onAddLibrarySource = vi.fn();
+    renderPanel({ mode: "files", onAddLibrarySource });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Add to library: src/new-file.ts",
+      }),
+    );
+
+    expect(onAddLibrarySource).toHaveBeenCalledWith({
+      kind: "file",
+      title: "new-file.ts",
+      path: "src/new-file.ts",
+      snippet: "src/new-file.ts",
+    });
   });
 
   it("previews a tracked file when its row is clicked", () => {

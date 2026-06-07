@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Toast } from "../CommandPalette";
 import { setLang } from "../i18n";
-import { Composer } from "./composer";
+import { Composer, clipboardFileMentionPaths } from "./composer";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
@@ -68,6 +70,29 @@ describe("desktop permission mode copy", () => {
     expect(document.querySelectorAll(".composer-mode-option").length).toBe(3);
   });
 
+  it("renders the active permission mode with a dedicated icon", () => {
+    renderComposer({ editMode: "auto" });
+
+    const trigger = screen.getByRole("button", { name: "权限模式" });
+
+    expect(trigger.querySelector(".composer-permission-icon svg")).toBeTruthy();
+    expect(trigger.querySelector(".composer-permission-chev")).toBeTruthy();
+  });
+
+  it("uses a smaller icon-only permission trigger when the composer is narrow", () => {
+    const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+    const narrowRule =
+      css.match(
+        /@container composer \(max-width: 620px\) \{[\s\S]*?(?=@container composer \(max-width: 520px\))/,
+      )?.[0] ?? "";
+
+    expect(narrowRule).toContain("width: 26px;");
+    expect(narrowRule).toContain("height: 26px;");
+    expect(narrowRule).toContain(".composer-permission-label");
+    expect(narrowRule).toContain(".composer-permission-chev");
+    expect(narrowRule).toContain("display: none;");
+  });
+
   it("does not show a legacy YOLO badge in the full-control toast", () => {
     render(<Toast message={{ msg: "已切换到完全控制权限，所有操作将自动批准", yolo: true }} />);
 
@@ -103,5 +128,44 @@ describe("desktop Composer queued sends", () => {
     fireEvent.click(screen.getByRole("button", { name: "插队：再做那个" }));
 
     expect(onPrioritizeQueuedSend).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("desktop Composer source search", () => {
+  beforeEach(() => {
+    setLang("en");
+  });
+
+  it("opens the source search entry from the search button beside plus", () => {
+    const onMentionQuery = vi.fn();
+    const onOpenSourceSearch = vi.fn();
+    renderComposer({ onMentionQuery, onOpenSourceSearch });
+
+    fireEvent.click(screen.getByRole("button", { name: "Search sources" }));
+
+    expect(onOpenSourceSearch).toHaveBeenCalledTimes(1);
+    expect(onMentionQuery).not.toHaveBeenCalled();
+    expect(screen.queryByText("Mentions — files in the workspace")).toBeNull();
+  });
+});
+
+describe("desktop Composer clipboard files", () => {
+  it("extracts Finder-style file URLs as workspace-relative mentions", () => {
+    const paths = clipboardFileMentionPaths(
+      {
+        files: { length: 2 },
+        getData: (type: string) =>
+          type === "text/uri-list"
+            ? [
+                "# Finder comment",
+                "file:///repo/src/App.tsx",
+                "file:///repo/docs/hello%20world.md",
+              ].join("\n")
+            : "",
+      } as unknown as DataTransfer,
+      "/repo",
+    );
+
+    expect(paths).toEqual(["src/App.tsx", "docs/hello world.md"]);
   });
 });

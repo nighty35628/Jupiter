@@ -13,6 +13,7 @@ const PERSIST_KEY_BOTTOM = "jupiter.bottomHeight";
 export function useResizable(
   side: "side" | "ctx",
   collapsed: boolean,
+  activeWhenCollapsed = false,
 ): {
   width: number;
   onMouseDown: (e: React.MouseEvent) => void;
@@ -54,7 +55,7 @@ export function useResizable(
   }, []);
 
   useEffect(() => {
-    if (collapsed) return;
+    if (collapsed && !activeWhenCollapsed) return;
 
     const onMove = (e: MouseEvent) => {
       if (!draggingRef.current) return;
@@ -107,7 +108,7 @@ export function useResizable(
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [collapsed, side, persistKey, cssVar]);
+  }, [collapsed, activeWhenCollapsed, side, persistKey, cssVar]);
 
   return { width, onMouseDown };
 }

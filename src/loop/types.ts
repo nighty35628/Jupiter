@@ -28,6 +28,8 @@ export interface LoopEvent {
   content: string;
   severity?: EventSeverity;
   reasoningDelta?: string;
+  /** Full reasoning text available on assistant_final; deltas may be absent on some model paths. */
+  reasoningContent?: string;
   toolName?: string;
   /** Raw args JSON — needed by `jupiter diff` to explain why a tool was called. */
   toolArgs?: string;

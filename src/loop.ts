@@ -1028,6 +1028,7 @@ export class CacheFirstLoop {
         turn: this._turn,
         role: "assistant_final",
         content: assistantContent,
+        reasoningContent: reasoningContent || undefined,
         stats: turnStats,
         repair: report,
       };

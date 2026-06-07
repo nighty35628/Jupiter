@@ -32,8 +32,8 @@ describe("desktop composer Codex-style lower tools", () => {
     expect(cssRule(".composer-left-tools")).toContain("display: inline-flex");
     expect(cssRule(".composer-plus-btn")).toContain("width: 30px");
     expect(cssRule(".composer-plus-btn")).toContain("border-radius: 999px");
-    expect(cssRule(".composer-permission")).toContain("height: 30px");
-    expect(cssRule(".composer-permission")).toContain("max-width: 148px");
+    expect(cssRule(".composer-permission")).toContain("height: 28px");
+    expect(cssRule(".composer-permission")).toContain("max-width: 132px");
     expect(cssRule(".composer-foot .composer-busy-status")).toContain("border-radius: 999px");
     expect(css).toContain(".composer-plus-menu,\n.composer-mode-menu");
     expect(css).toContain("@container composer (max-width: 520px)");

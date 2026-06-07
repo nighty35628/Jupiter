@@ -88,10 +88,7 @@ export type RevisionRequiredEvent = {
   summary?: string;
 };
 
-export type RevisionVerdict =
-  | { type: "accepted" }
-  | { type: "rejected" }
-  | { type: "cancelled" };
+export type RevisionVerdict = { type: "accepted" } | { type: "rejected" } | { type: "cancelled" };
 
 export type StepCompletedEvent = {
   type: "$step_completed";
@@ -107,10 +104,14 @@ export type SessionsEvent = {
   type: "$sessions";
   items: {
     name: string;
+    path?: string;
     messageCount: number;
     mtime: string;
     summary?: string;
     workspace?: string;
+    archivedAt?: number;
+    pinnedAt?: number;
+    unread?: boolean;
     workspaceStatus?: "matched" | "legacy_missing_meta";
   }[];
 };
@@ -153,23 +154,70 @@ export type MentionPreviewEvent = {
   totalLines: number;
 };
 
+export type SourceSearchResult = {
+  kind: "web";
+  title: string;
+  url: string;
+  snippet: string;
+};
+
+export type SourceSearchResultsEvent = {
+  type: "$source_search_results";
+  nonce: number;
+  query: string;
+  results: SourceSearchResult[];
+  error?: string;
+};
+
+export type SourceIngestResultEvent = {
+  type: "$source_ingest_result";
+  nonce: number;
+  url: string;
+  title?: string;
+  text?: string;
+  truncated?: boolean;
+  fetchedAt?: number;
+  error?: string;
+};
+
+export type LibrarySource = {
+  id: string;
+  kind: "web" | "file";
+  title: string;
+  url?: string;
+  path?: string;
+  snippet?: string;
+  contentText?: string;
+  contentFetchedAt?: number;
+  contentTruncated?: boolean;
+  contentError?: string;
+  ingestStatus?: "pending" | "done" | "error";
+  addedAt: number;
+  updatedAt?: number;
+};
+
+export type LibrarySourcesEvent = {
+  type: "$library_sources";
+  workspaceDir: string;
+  sources: LibrarySource[];
+};
+
 export type TabOpenedEvent = {
   type: "$tab_opened";
   workspaceDir: string;
   /** True when the frontend should focus this tab (user-opened, or the restored focused tab). */
   active?: boolean;
+  /** True when the tab has an in-flight agent turn in the backend. */
+  busy?: boolean;
+  /** Session being restored into a newly opened tab; used to avoid focusing an empty shell before the snapshot arrives. */
+  restoringSession?: string;
 };
 
 export type TabClosedEvent = {
   type: "$tab_closed";
 };
 
-export type McpSpecStatus =
-  | "configured"
-  | "handshake"
-  | "connected"
-  | "failed"
-  | "disabled";
+export type McpSpecStatus = "configured" | "handshake" | "connected" | "failed" | "disabled";
 
 export type McpSpecInfo = {
   raw: string;
@@ -350,6 +398,8 @@ export type LoadedMessage =
 export type SessionLoadedEvent = {
   type: "$session_loaded";
   name: string;
+  /** True when this snapshot is rehydrating a session whose turn is still running. */
+  busy?: boolean;
   messages: LoadedMessage[];
   carryover: {
     totalCostUsd: number;
@@ -357,6 +407,10 @@ export type SessionLoadedEvent = {
     cacheMissTokens: number;
     totalCompletionTokens: number;
   };
+};
+
+export type SessionReconciledEvent = Omit<SessionLoadedEvent, "type"> & {
+  type: "$session_reconciled";
 };
 
 export type SessionEmptyEvent = {
@@ -598,6 +652,7 @@ export type IncomingEvent = { tabId?: string } & (
   | SessionImportSourcesEvent
   | SessionImportResultEvent
   | SessionLoadedEvent
+  | SessionReconciledEvent
   | SessionEmptyEvent
   | NeedsSetupEvent
   | SettingsEvent
@@ -609,6 +664,9 @@ export type IncomingEvent = { tabId?: string } & (
   | PlanClearedEvent
   | MentionResultsEvent
   | MentionPreviewEvent
+  | SourceSearchResultsEvent
+  | SourceIngestResultEvent
+  | LibrarySourcesEvent
   | TabOpenedEvent
   | TabClosedEvent
   | McpSpecsEvent
@@ -642,8 +700,21 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "revision_response"; id: number; response: RevisionVerdict }
   | { cmd: "session_list" }
   | { cmd: "session_delete"; name: string }
-  | { cmd: "session_load"; name: string }
+  | { cmd: "session_load"; name: string; openInNewTab?: boolean }
   | { cmd: "session_rename"; name: string; title: string }
+  | {
+      cmd: "session_patch_meta";
+      name: string;
+      patch: {
+        archivedAt?: number | null;
+        pinnedAt?: number | null;
+        lastReadAt?: number | null;
+        lastAssistantCompletedAt?: number | null;
+        manualUnread?: boolean | null;
+      };
+    }
+  | { cmd: "session_mark_read"; name: string }
+  | { cmd: "session_mark_unread"; name: string }
   | {
       cmd: "session_import";
       source: ExternalSessionSource;
@@ -656,7 +727,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "memory_refresh" }
   | { cmd: "memory_delete"; path: string }
   | ({ cmd: "memory_save" } & MemoryWriteInput)
-  | { cmd: "new_chat"; workspaceDir?: string }
+  | { cmd: "new_chat"; workspaceDir?: string; openInNewTab?: boolean }
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_get" }
   | ({ cmd: "settings_save" } & SettingsPatch)
@@ -667,6 +738,12 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "mention_query"; query: string; nonce: number }
   | { cmd: "mention_preview"; path: string; nonce: number }
   | { cmd: "mention_picked"; path: string }
+  | { cmd: "source_search"; query: string; nonce: number; topK?: number }
+  | { cmd: "source_ingest"; url: string; nonce: number; title?: string }
+  | { cmd: "library_list" }
+  | { cmd: "library_add"; source: Omit<LibrarySource, "id" | "addedAt" | "updatedAt"> }
+  | { cmd: "library_remove"; id: string }
+  | { cmd: "library_refresh"; id: string }
   | { cmd: "tab_open"; workspaceDir?: string }
   | { cmd: "tab_close" }
   | { cmd: "tab_activate"; tabId: string }

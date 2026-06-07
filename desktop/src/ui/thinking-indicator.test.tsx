@@ -36,4 +36,14 @@ describe("ThinkingBottomIndicator", () => {
     expect(indicatorRule).toBeTruthy();
     expect(indicatorRule).not.toMatch(/\banimation\s*:/);
   });
+
+  it("reserves enough footer height so the status pill is not clipped by the composer", () => {
+    const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+    const spacerRule = css.match(/\.thread-bottom-spacer\s*\{[^}]*\}/)?.[0];
+
+    expect(spacerRule).toBeTruthy();
+    expect(spacerRule).toMatch(/height:\s*5[0-9]px/);
+    expect(spacerRule).toMatch(/min-height:\s*5[0-9]px/);
+    expect(spacerRule).toMatch(/box-sizing:\s*border-box/);
+  });
 });

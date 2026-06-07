@@ -23,6 +23,9 @@ import {
   listSessions,
   listSessionsForWorkspace,
   loadSessionMessages,
+  loadSessionMeta,
+  markSessionRead,
+  markSessionUnread,
   normalizeWorkspace,
   patchSessionMeta,
   patchSessionWorkspaceIfMissing,
@@ -31,6 +34,7 @@ import {
   resolveSession,
   rewriteSession,
   sanitizeName,
+  sessionIsUnread,
   sessionPath,
   sessionsDir,
   timestampSuffix,
@@ -88,6 +92,40 @@ describe("session persistence", () => {
     expect(msgs.length).toBe(2);
     expect(msgs[0]).toEqual({ role: "user", content: "hi" });
     expect(msgs[1]).toEqual({ role: "assistant", content: "hello" });
+  });
+
+  it("persists sidebar session state in session metadata", () => {
+    appendSessionMessage("ui-state", { role: "user", content: "hi" });
+    patchSessionMeta("ui-state", {
+      workspace: "/repo",
+      archivedAt: 1_000,
+      pinnedAt: 2_000,
+      lastAssistantCompletedAt: 3_000,
+      lastReadAt: 2_500,
+    });
+
+    const [session] = listSessions();
+
+    expect(session?.meta.archivedAt).toBe(1_000);
+    expect(session?.meta.pinnedAt).toBe(2_000);
+    expect(sessionIsUnread(session!.meta)).toBe(true);
+  });
+
+  it("marks sessions read and unread through metadata helpers", () => {
+    appendSessionMessage("read-state", { role: "user", content: "hi" });
+    patchSessionMeta("read-state", {
+      lastAssistantCompletedAt: 4_000,
+      lastReadAt: 1_000,
+    });
+
+    const readMeta = markSessionRead("read-state", 4_500);
+    expect(readMeta.lastReadAt).toBe(4_500);
+    expect(readMeta.manualUnread).toBeUndefined();
+    expect(sessionIsUnread(readMeta)).toBe(false);
+
+    const unreadMeta = markSessionUnread("read-state");
+    expect(unreadMeta.manualUnread).toBe(true);
+    expect(sessionIsUnread(loadSessionMeta("read-state"))).toBe(true);
   });
 
   it("tolerates malformed lines (skips them)", () => {

@@ -264,6 +264,7 @@ export class Eventizer {
       usage,
       costUsd,
     };
+    if (ev.reasoningContent !== undefined) out.reasoningContent = ev.reasoningContent;
     if (ev.forcedSummary) out.forcedSummary = true;
     return out;
   }

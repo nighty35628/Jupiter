@@ -58,6 +58,7 @@ export async function* forceSummaryAfterIterLimit(
       turn: ctx.turn,
       role: "assistant_final",
       content: annotated,
+      reasoningContent: resp.reasoningContent || undefined,
       stats: summaryStats,
       forcedSummary: true,
     };

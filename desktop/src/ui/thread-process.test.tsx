@@ -81,6 +81,91 @@ describe("AssistantMsg process cards", () => {
     expect(screen.queryByText("first reasoning line")).toBeNull();
   });
 
+  it("opens streaming reasoning when process cards default open", () => {
+    render(
+      <AssistantMsg
+        {...baseProps}
+        pending
+        processCardsDefaultOpen
+        segments={[
+          {
+            kind: "reasoning",
+            text: "first reasoning line",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("first reasoning line")).toBeTruthy();
+  });
+
+  it("shows live assistant text after reasoning starts streaming content", () => {
+    const { rerender } = render(
+      <AssistantMsg
+        {...baseProps}
+        pending
+        segments={[
+          {
+            kind: "reasoning",
+            text: "first reasoning line",
+          },
+        ]}
+      />,
+    );
+
+    rerender(
+      <AssistantMsg
+        {...baseProps}
+        pending
+        segments={[
+          {
+            kind: "reasoning",
+            text: "first reasoning line",
+          },
+          {
+            kind: "text",
+            text: "live answer chunk",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("first reasoning line")).toBeNull();
+    expect(screen.getByText("live answer chunk")).toBeTruthy();
+  });
+
+  it("keeps reasoning collapsed after completion when process cards default collapsed", () => {
+    const { rerender } = render(
+      <AssistantMsg
+        {...baseProps}
+        pending
+        segments={[
+          {
+            kind: "reasoning",
+            text: "first reasoning line",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("first reasoning line")).toBeNull();
+
+    rerender(
+      <AssistantMsg
+        {...baseProps}
+        pending={false}
+        segments={[
+          {
+            kind: "reasoning",
+            text: "first reasoning line",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("first reasoning line")).toBeNull();
+  });
+
   it("collapses running shell output after completion when default is collapsed", () => {
     const { rerender } = render(
       <AssistantMsg

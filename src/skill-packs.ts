@@ -17,8 +17,9 @@ export const SKILL_PACKS_DIRNAME = "skill-packs";
 export const SKILL_PACKS_MANAGED_DIRNAME = "managed";
 export const SKILL_PACKS_BUNDLED_DIRNAME = "bundled";
 export const SKILL_PACK_REGISTRY_URL_ENV = "JUPITER_SKILL_PACK_REGISTRY_URL";
-export const DEFAULT_SKILL_PACK_REGISTRY_URL =
-  "https://github.com/nighty35628/Jupiter/releases/latest/download/skill-packs.json";
+export const CODEX_SKILL_PACK_REGISTRY_URL =
+  "https://api.github.com/repos/openai/skills/contents/skills/.curated?ref=main";
+export const DEFAULT_SKILL_PACK_REGISTRY_URL = CODEX_SKILL_PACK_REGISTRY_URL;
 
 const PACK_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const SAFE_RELATIVE_PATH = /^[^/\\](?:.*[^/\\])?$/;
@@ -30,6 +31,8 @@ export interface SkillPackVersion {
 
 export interface SkillPackManifestEntry extends SkillPackVersion {
   url: string;
+  source?: "github";
+  rootPath?: string;
   sha256?: string;
   description?: string;
   skills?: string[];
@@ -56,6 +59,8 @@ export interface SkillPackUpdateEntry {
   currentVersion: string | null;
   latestVersion: string;
   url: string;
+  source?: "github";
+  rootPath?: string;
   sha256?: string;
   description?: string;
   skills?: string[];
@@ -265,6 +270,8 @@ function parseManifest(value: unknown): SkillPackRegistryManifest | null {
       return null;
     }
     const item: SkillPackManifestEntry = { id: p.id, version: p.version, url: p.url };
+    if (p.source === "github") item.source = "github";
+    if (typeof p.rootPath === "string" && p.rootPath.trim()) item.rootPath = p.rootPath.trim();
     if (typeof p.sha256 === "string" && p.sha256.trim()) item.sha256 = p.sha256.trim();
     if (typeof p.description === "string" && p.description.trim()) {
       item.description = p.description.trim();
@@ -280,6 +287,44 @@ function parseManifest(value: unknown): SkillPackRegistryManifest | null {
       );
     }
     packs.push(item);
+  }
+  return { schema: 1, packs };
+}
+
+interface GitHubContentsItem {
+  name?: unknown;
+  path?: unknown;
+  sha?: unknown;
+  type?: unknown;
+  url?: unknown;
+  download_url?: unknown;
+}
+
+function parseGitHubSkillDirectoryManifest(value: unknown): SkillPackRegistryManifest | null {
+  if (!Array.isArray(value)) return null;
+  const packs: SkillPackManifestEntry[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as GitHubContentsItem;
+    if (
+      item.type !== "dir" ||
+      !isPackId(item.name) ||
+      typeof item.sha !== "string" ||
+      typeof item.url !== "string"
+    ) {
+      continue;
+    }
+    const rootPath =
+      typeof item.path === "string" && item.path.trim() ? item.path.trim() : item.name;
+    packs.push({
+      id: item.name,
+      version: item.sha,
+      url: item.url,
+      source: "github",
+      rootPath,
+      skills: [item.name],
+      keywords: ["codex", "openai"],
+    });
   }
   return { schema: 1, packs };
 }
@@ -319,8 +364,30 @@ function comparePackVersions(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
+function isUpdateAvailable(latestVersion: string, currentVersion: string | null): boolean {
+  if (!currentVersion) return true;
+  if (latestVersion === currentVersion) return false;
+  if (
+    /^\d+\.\d+\.\d+(?:-.+)?$/.test(latestVersion) &&
+    /^\d+\.\d+\.\d+(?:-.+)?$/.test(currentVersion)
+  ) {
+    return compareVersions(latestVersion, currentVersion) > 0;
+  }
+  return true;
+}
+
+function requestHeaders(accept: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept,
+    "User-Agent": "jupiter-skill-packs",
+  };
+  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
 async function readJson(url: string, fetchImpl: typeof fetch): Promise<JsonReadResult | null> {
-  const res = await fetchImpl(url, { headers: { accept: "application/json" } });
+  const res = await fetchImpl(url, { headers: requestHeaders("application/json") });
   if (!res.ok) return null;
   if (typeof res.text === "function") {
     const text = await res.text();
@@ -328,6 +395,12 @@ async function readJson(url: string, fetchImpl: typeof fetch): Promise<JsonReadR
   }
   const value = await res.json();
   return { text: JSON.stringify(value), value };
+}
+
+async function readText(url: string, fetchImpl: typeof fetch): Promise<string | null> {
+  const res = await fetchImpl(url, { headers: requestHeaders("text/plain") });
+  if (!res.ok || typeof res.text !== "function") return null;
+  return await res.text();
 }
 
 async function fetchManifest(
@@ -339,7 +412,7 @@ async function fetchManifest(
   try {
     const result = await readJson(url, fetchImpl);
     if (!result) return { ok: false, error: "skill pack update channel is unreachable" };
-    const manifest = parseManifest(result.value);
+    const manifest = parseManifest(result.value) ?? parseGitHubSkillDirectoryManifest(result.value);
     if (!manifest) return { ok: false, error: "skill pack manifest is invalid" };
     return { ok: true, manifest };
   } catch (err) {
@@ -361,11 +434,13 @@ export async function checkSkillPackUpdates(
       currentVersion,
       latestVersion: pack.version,
       url: pack.url,
+      source: pack.source,
+      rootPath: pack.rootPath,
       sha256: pack.sha256,
       description: pack.description,
       skills: pack.skills,
       keywords: pack.keywords,
-      updateAvailable: !currentVersion || comparePackVersions(pack.version, currentVersion) > 0,
+      updateAvailable: isUpdateAvailable(pack.version, currentVersion),
     };
   });
   return { ok: true, packs };
@@ -425,7 +500,7 @@ export async function searchSkillPacks(
         installed: currentVersion !== null,
         currentVersion,
         latestVersion: pack.version,
-        updateAvailable: !currentVersion || comparePackVersions(pack.version, currentVersion) > 0,
+        updateAvailable: isUpdateAvailable(pack.version, currentVersion),
         source: "channel",
         url: pack.url,
         sha256: pack.sha256,
@@ -495,6 +570,7 @@ async function fetchBundle(
   pack: SkillPackUpdateEntry,
   fetchImpl: typeof fetch,
 ): Promise<SkillPackBundle> {
+  if (pack.source === "github") return fetchGitHubSkillBundle(pack, fetchImpl);
   const result = await readJson(pack.url, fetchImpl);
   if (!result) throw new Error(`skill pack bundle is unreachable: ${pack.id}`);
   if (pack.sha256) {
@@ -508,6 +584,61 @@ async function fetchBundle(
     throw new Error(`skill pack bundle version mismatch: ${pack.id}`);
   }
   return bundle;
+}
+
+function relativeGitHubSkillFilePath(pack: SkillPackUpdateEntry, item: GitHubContentsItem): string {
+  const itemPath = typeof item.path === "string" ? item.path : "";
+  const rootPath = pack.rootPath ?? "";
+  if (rootPath && itemPath.startsWith(`${rootPath}/`)) {
+    return itemPath.slice(rootPath.length + 1);
+  }
+  if (typeof item.name === "string" && item.name) return item.name;
+  throw new Error(`invalid GitHub skill file entry for ${pack.id}`);
+}
+
+function parseGitHubContentsArray(value: unknown, packId: string): GitHubContentsItem[] {
+  if (!Array.isArray(value)) throw new Error(`GitHub skill directory is invalid: ${packId}`);
+  return value.filter((item): item is GitHubContentsItem =>
+    Boolean(item && typeof item === "object"),
+  );
+}
+
+async function collectGitHubSkillFiles(
+  pack: SkillPackUpdateEntry,
+  dirUrl: string,
+  fetchImpl: typeof fetch,
+  out: SkillPackBundleFile[],
+): Promise<void> {
+  const result = await readJson(dirUrl, fetchImpl);
+  if (!result) throw new Error(`GitHub skill directory is unreachable: ${pack.id}`);
+  for (const item of parseGitHubContentsArray(result.value, pack.id)) {
+    if (item.type === "dir") {
+      if (typeof item.url !== "string")
+        throw new Error(`GitHub skill subdirectory is invalid: ${pack.id}`);
+      await collectGitHubSkillFiles(pack, item.url, fetchImpl, out);
+      continue;
+    }
+    if (item.type !== "file") continue;
+    if (typeof item.download_url !== "string" || !item.download_url) {
+      throw new Error(`GitHub skill file has no download URL: ${pack.id}`);
+    }
+    const content = await readText(item.download_url, fetchImpl);
+    if (content === null) throw new Error(`GitHub skill file is unreachable: ${pack.id}`);
+    const relativePath = relativeGitHubSkillFilePath(pack, item);
+    out.push({ path: `skills/${pack.id}/${relativePath}`, content });
+  }
+}
+
+async function fetchGitHubSkillBundle(
+  pack: SkillPackUpdateEntry,
+  fetchImpl: typeof fetch,
+): Promise<SkillPackBundle> {
+  const files: SkillPackBundleFile[] = [];
+  await collectGitHubSkillFiles(pack, pack.url, fetchImpl, files);
+  if (!files.some((file) => file.path === `skills/${pack.id}/SKILL.md`)) {
+    throw new Error(`GitHub skill bundle is missing SKILL.md: ${pack.id}`);
+  }
+  return { schema: 1, id: pack.id, version: pack.latestVersion, files };
 }
 
 export async function installSkillPackUpdates(

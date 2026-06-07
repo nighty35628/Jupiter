@@ -41,6 +41,7 @@ import {
   readWindowExpanded,
   reduce,
   rollbackTargetForMessage,
+  shouldShowThinkingFooter,
   shouldShowSettingsChangeToast,
   toggleWindowExpanded,
 } from "./App";
@@ -71,6 +72,7 @@ function initialState(): Parameters<typeof reduce>[0] {
       liveLogTokens: 0,
     },
     sessions: [],
+    librarySources: [],
     externalImportSources: [],
     settings: null,
     qq: null,
@@ -85,6 +87,8 @@ function initialState(): Parameters<typeof reduce>[0] {
     sessionFiles: [],
     memory: [],
     memoryDetail: null,
+    sourceSearchResults: null,
+    sourceIngestResult: null,
     jobs: [],
     activeSkill: null,
     queuedSends: [],
@@ -335,13 +339,38 @@ describe("Desktop App reducer — usage", () => {
   });
 
   it("creates a pending assistant when a live delta arrives before turn started", () => {
-    const next = reduce(initialState(), {
-      t: "batch_delta",
-      items: [
-        { turn: 1, channel: "reasoning", text: "thinking" },
-        { turn: 1, channel: "reasoning", text: "..." },
-        { turn: 1, channel: "content", text: "hello" },
-      ],
+    let next = reduce(initialState(), {
+      t: "incoming",
+      event: {
+        type: "model.delta",
+        id: 1,
+        ts: "2026-06-06T00:00:00.000Z",
+        turn: 1,
+        channel: "reasoning",
+        text: "thinking",
+      },
+    });
+    next = reduce(next, {
+      t: "incoming",
+      event: {
+        type: "model.delta",
+        id: 2,
+        ts: "2026-06-06T00:00:00.000Z",
+        turn: 1,
+        channel: "reasoning",
+        text: "...",
+      },
+    });
+    next = reduce(next, {
+      t: "incoming",
+      event: {
+        type: "model.delta",
+        id: 3,
+        ts: "2026-06-06T00:00:00.000Z",
+        turn: 1,
+        channel: "content",
+        text: "hello",
+      },
     });
 
     expect(next.busy).toBe(true);
@@ -804,6 +833,224 @@ describe("desktop message rollback availability", () => {
       { kind: "user", turn: 2 },
       { kind: "assistant", turn: 2 },
     ]);
+  });
+
+  it("streams into the assistant after the current user when loaded turns collide", () => {
+    let state = reduce(initialState(), {
+      t: "incoming",
+      event: {
+        type: "$session_loaded",
+        name: "legacy-session",
+        messages: [
+          { kind: "user", text: "first" },
+          {
+            kind: "assistant",
+            turn: 1,
+            segments: [{ kind: "text", text: "old answer" }],
+            pending: false,
+          },
+          {
+            kind: "assistant",
+            turn: 2,
+            segments: [{ kind: "text", text: "legacy colliding answer" }],
+            pending: false,
+          },
+        ],
+        carryover: {
+          totalCostUsd: 0,
+          cacheHitTokens: 0,
+          cacheMissTokens: 0,
+          totalCompletionTokens: 0,
+        },
+      },
+    });
+
+    state = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "user.message",
+        id: 1,
+        ts: "2026-06-06T00:00:00.000Z",
+        turn: 2,
+        text: "new prompt",
+      },
+    });
+    state = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "model.turn.started",
+        id: 2,
+        ts: "2026-06-06T00:00:00.000Z",
+        turn: 2,
+        model: "deepseek-v4-flash",
+        reasoningEffort: "high",
+        prefixHash: "test-prefix",
+      },
+    });
+    state = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "model.delta",
+        id: 3,
+        ts: "2026-06-06T00:00:00.000Z",
+        turn: 2,
+        channel: "content",
+        text: "live answer",
+      },
+    });
+
+    const turnTwoAssistants = state.messages.filter(
+      (m) => m.kind === "assistant" && m.turn === 2,
+    );
+    expect(turnTwoAssistants).toHaveLength(2);
+    expect(turnTwoAssistants[0]).toMatchObject({
+      kind: "assistant",
+      segments: [{ kind: "text", text: "legacy colliding answer" }],
+      pending: false,
+    });
+    expect(turnTwoAssistants[1]).toMatchObject({
+      kind: "assistant",
+      segments: [{ kind: "text", text: "live answer" }],
+      pending: true,
+    });
+  });
+
+  it("reconciles the current session without dropping queued sends", () => {
+    const state = {
+      ...initialState(),
+      busy: true,
+      currentSession: "demo-session",
+      queuedSends: ["next task"],
+      messages: [
+        { kind: "user" as const, text: "hello", clientId: "c-1", turn: 1 },
+        { kind: "assistant" as const, turn: 1, segments: [], pending: true },
+      ],
+    };
+
+    const next = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "$session_reconciled",
+        name: "demo-session",
+        messages: [
+          { kind: "user", text: "hello" },
+          {
+            kind: "assistant",
+            turn: 1,
+            segments: [
+              { kind: "reasoning", text: "thinking" },
+              { kind: "text", text: "done" },
+            ],
+            pending: false,
+          },
+        ],
+        carryover: {
+          totalCostUsd: 0.01,
+          cacheHitTokens: 10,
+          cacheMissTokens: 5,
+          totalCompletionTokens: 3,
+        },
+      },
+    });
+
+    expect(next.busy).toBe(true);
+    expect(next.queuedSends).toEqual(["next task"]);
+    expect(next.messages).toMatchObject([
+      { kind: "user", turn: 1, text: "hello" },
+      {
+        kind: "assistant",
+        turn: 1,
+        pending: false,
+        segments: [
+          { kind: "reasoning", text: "thinking" },
+          { kind: "text", text: "done" },
+        ],
+      },
+    ]);
+    expect(next.usage.totalPromptTokens).toBe(15);
+  });
+
+  it("keeps live assistant content when a reconcile snapshot is older", () => {
+    const state = {
+      ...initialState(),
+      currentSession: "demo-session",
+      messages: [
+        { kind: "user" as const, text: "hello", clientId: "c-1", turn: 1 },
+        {
+          kind: "assistant" as const,
+          turn: 1,
+          pending: false,
+          segments: [{ kind: "text" as const, text: "live answer" }],
+        },
+      ],
+    };
+
+    const next = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "$session_reconciled",
+        name: "demo-session",
+        messages: [{ kind: "user", text: "hello" }],
+        carryover: {
+          totalCostUsd: 0.01,
+          cacheHitTokens: 10,
+          cacheMissTokens: 5,
+          totalCompletionTokens: 3,
+        },
+      },
+    });
+
+    expect(next.messages).toMatchObject([
+      { kind: "user", turn: 1, text: "hello" },
+      {
+        kind: "assistant",
+        turn: 1,
+        pending: false,
+        segments: [{ kind: "text", text: "live answer" }],
+      },
+    ]);
+    expect(next.usage.totalPromptTokens).toBe(15);
+  });
+
+  it("shows the thinking footer only until live assistant output starts", () => {
+    expect(shouldShowThinkingFooter([], true)).toBe(true);
+    expect(
+      shouldShowThinkingFooter(
+        [
+          { kind: "user", text: "hello", clientId: "c-1", turn: 1 },
+          { kind: "assistant", turn: 1, pending: true, segments: [] },
+        ],
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowThinkingFooter(
+        [
+          { kind: "user", text: "hello", clientId: "c-1", turn: 1 },
+          {
+            kind: "assistant",
+            turn: 1,
+            pending: true,
+            segments: [{ kind: "reasoning", text: "thinking" }],
+          },
+        ],
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      shouldShowThinkingFooter(
+        [
+          { kind: "user", text: "hello", clientId: "c-1", turn: 1 },
+          {
+            kind: "assistant",
+            turn: 1,
+            pending: true,
+            segments: [{ kind: "text", text: "answer" }],
+          },
+        ],
+        true,
+      ),
+    ).toBe(false);
   });
 });
 

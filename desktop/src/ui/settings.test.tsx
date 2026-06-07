@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -19,6 +20,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 beforeEach(() => {
@@ -129,6 +131,24 @@ describe("SettingsModal", () => {
     );
 
     expect(onOpenAbout).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the settings body scrollbar only while the user is scrolling", () => {
+    vi.useFakeTimers();
+    renderSettings();
+
+    const body = document.querySelector(".settings-body");
+    if (!(body instanceof HTMLElement)) throw new Error("missing settings body");
+
+    expect(body.getAttribute("data-scrolling")).toBeNull();
+    fireEvent.scroll(body);
+    expect(body.getAttribute("data-scrolling")).toBe("true");
+
+    act(() => {
+      vi.advanceTimersByTime(900);
+    });
+
+    expect(body.getAttribute("data-scrolling")).toBeNull();
   });
 
   it("saves the default process-card expansion setting", () => {

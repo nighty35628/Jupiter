@@ -1517,14 +1517,19 @@ describe("CacheFirstLoop (streaming) — tool_call_delta emission", () => {
     });
 
     const channels: Array<"reasoning" | "content"> = [];
+    let finalReasoning: string | undefined;
     for await (const ev of loop.step("hi")) {
       if (ev.role === "assistant_delta") {
         channels.push(ev.reasoningDelta ? "reasoning" : "content");
+      }
+      if (ev.role === "assistant_final") {
+        finalReasoning = ev.reasoningContent;
       }
       if (ev.role === "done") break;
     }
 
     expect(channels).toEqual(["reasoning", "reasoning", "content", "content"]);
+    expect(finalReasoning).toBe("I'm thinking");
   });
 
   it("does not emit a red error event when the API call is aborted mid-flight", async () => {

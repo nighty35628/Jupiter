@@ -4,8 +4,18 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { useBottomResizable, useResizable } from "./useResizable";
 
-function ResizeProbe({ collapsed = false }: { collapsed?: boolean }) {
-  const { width, onMouseDown } = useResizable("ctx", collapsed);
+function ResizeProbe({
+  collapsed = false,
+  activeWhenCollapsed = false,
+}: {
+  collapsed?: boolean;
+  activeWhenCollapsed?: boolean;
+}) {
+  const { width, onMouseDown } = useResizable(
+    "ctx",
+    collapsed,
+    activeWhenCollapsed,
+  );
   return (
     <div className="app" style={{ ["--ctx-width" as string]: `${width}px` }}>
       <button type="button" onMouseDown={onMouseDown}>
@@ -41,6 +51,17 @@ describe("useResizable", () => {
     fireEvent.mouseUp(window);
 
     expect(localStorage.getItem("jupiter.ctxWidth")).toBe("650");
+  });
+
+  it("can resize the right info panel while the normal context sidebar is collapsed", () => {
+    Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true });
+    render(<ResizeProbe collapsed activeWhenCollapsed />);
+
+    fireEvent.mouseDown(screen.getByRole("button", { name: "drag" }), { clientX: 500 });
+    fireEvent.mouseMove(window, { clientX: 380 });
+    fireEvent.mouseUp(window);
+
+    expect(localStorage.getItem("jupiter.ctxWidth")).toBe("440");
   });
 
   it("resizes the bottom panel height by dragging upward", () => {

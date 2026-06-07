@@ -366,7 +366,7 @@ export const AssistantMsg = memo(function AssistantMsg({
           <ReasoningCard
             key={`r-${i}`}
             text={s.text}
-            streaming={pending && i === segments.length - 1}
+            streaming={pending}
             defaultOpen={processCardsDefaultOpen}
           />,
         );

@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { Balance, Settings as SettingsType, UsageStats } from "../App";
 import { getLangLabel, getSupportedLangs, setLang, t, useLang } from "../i18n";
 import { I } from "../icons";
@@ -154,6 +154,18 @@ export function SettingsModal({
 }) {
   const [page, setPage] = useState<PageId>(initialPage ?? "general");
   const [qqConfigureOpen, setQQConfigureOpen] = useState(false);
+  const [settingsBodyScrolling, setSettingsBodyScrolling] = useState(false);
+  const settingsBodyScrollTimerRef = useRef<number | null>(null);
+  const markSettingsBodyScrolling = () => {
+    setSettingsBodyScrolling(true);
+    if (settingsBodyScrollTimerRef.current !== null) {
+      window.clearTimeout(settingsBodyScrollTimerRef.current);
+    }
+    settingsBodyScrollTimerRef.current = window.setTimeout(() => {
+      settingsBodyScrollTimerRef.current = null;
+      setSettingsBodyScrolling(false);
+    }, 800);
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -164,6 +176,13 @@ export function SettingsModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  useEffect(() => {
+    return () => {
+      if (settingsBodyScrollTimerRef.current !== null) {
+        window.clearTimeout(settingsBodyScrollTimerRef.current);
+      }
+    };
+  }, []);
   const currentMeta = PAGE_META.find((p) => p.id === page) ?? PAGE_META[0]!;
   return (
     <div className="settings-mask" onClick={onClose}>
@@ -205,7 +224,11 @@ export function SettingsModal({
               <I.x size={14} />
             </button>
           </div>
-          <div className="settings-body">
+          <div
+            className="settings-body"
+            data-scrolling={settingsBodyScrolling ? "true" : undefined}
+            onScroll={markSettingsBodyScrolling}
+          >
             {page === "general" && (
               <PageGeneral
                 settings={settings}

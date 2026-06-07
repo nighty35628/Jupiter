@@ -110,6 +110,24 @@ describe("Eventizer.consume", () => {
     expect(tcdOut).toEqual([]);
   });
 
+  it("carries final reasoning content for desktop transcript hydration", () => {
+    const e = new Eventizer();
+    const out = e.consume(
+      lev({
+        turn: 1,
+        role: "assistant_final",
+        content: "hello",
+        reasoningContent: "final reasoning",
+      }),
+      ctx,
+    );
+
+    const final = out.find((ev) => ev.type === "model.final") as
+      | { reasoningContent?: string }
+      | undefined;
+    expect(final?.reasoningContent).toBe("final reasoning");
+  });
+
   it("warning containing escalation language maps to policy.escalated", () => {
     const e = new Eventizer();
     e.consume(lev({ turn: 1 }), ctx);

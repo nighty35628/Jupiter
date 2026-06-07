@@ -5,9 +5,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSlash } from "../src/cli/ui/slash/dispatch.js";
 import {
+  DEFAULT_SKILL_PACK_REGISTRY_URL,
   checkSkillPackUpdates,
+  configuredSkillPackRegistryUrl,
   installSkillPackUpdates,
   managedSkillPackManifestPath,
+  searchSkillPacks,
   skillPackSkillRootsFromPackDirs,
 } from "../src/skill-packs.js";
 import { SkillStore } from "../src/skills.js";
@@ -21,9 +24,19 @@ function makeFetch(routes: Record<string, unknown>): typeof fetch {
     const url = String(input);
     const body = routes[url];
     if (body === undefined) {
-      return { ok: false, status: 404, json: async () => ({}) } as unknown as Response;
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+        text: async () => "",
+      } as unknown as Response;
     }
-    return { ok: true, status: 200, json: async () => body } as unknown as Response;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => (typeof body === "string" ? JSON.parse(body) : body),
+      text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+    } as unknown as Response;
   }) as typeof fetch;
 }
 
@@ -121,6 +134,136 @@ describe("skill pack update channel", () => {
 
   afterEach(() => {
     rmSync(home, { recursive: true, force: true });
+  });
+
+  it("uses Codex curated skills as the default skill-pack update channel", () => {
+    expect(DEFAULT_SKILL_PACK_REGISTRY_URL).toBe(
+      "https://api.github.com/repos/openai/skills/contents/skills/.curated?ref=main",
+    );
+    expect(configuredSkillPackRegistryUrl({})).toBe(DEFAULT_SKILL_PACK_REGISTRY_URL);
+  });
+
+  it("searches Codex GitHub curated skills without a Jupiter-managed manifest", async () => {
+    const registryUrl = DEFAULT_SKILL_PACK_REGISTRY_URL;
+    const docsUrl =
+      "https://api.github.test/repos/openai/skills/contents/skills/.curated/documents?ref=main";
+    const fetchImpl = makeFetch({
+      [registryUrl]: [
+        {
+          name: "documents",
+          path: "skills/.curated/documents",
+          type: "dir",
+          sha: "codex-docs-sha",
+          url: docsUrl,
+        },
+      ],
+    });
+
+    const result = await searchSkillPacks("documents skill", {
+      homeDir: home,
+      registryUrl,
+      fetchImpl,
+      bundledPacks: [],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.matches[0]).toMatchObject({
+      id: "documents",
+      installed: false,
+      latestVersion: "codex-docs-sha",
+      updateAvailable: true,
+      source: "channel",
+      url: docsUrl,
+    });
+  });
+
+  it("installs a Codex GitHub skill directory into managed skill packs", async () => {
+    const registryUrl = DEFAULT_SKILL_PACK_REGISTRY_URL;
+    const docsUrl =
+      "https://api.github.test/repos/openai/skills/contents/skills/.curated/documents?ref=main";
+    const scriptsUrl =
+      "https://api.github.test/repos/openai/skills/contents/skills/.curated/documents/scripts?ref=main";
+    const skillUrl =
+      "https://raw.github.test/openai/skills/main/skills/.curated/documents/SKILL.md";
+    const scriptUrl =
+      "https://raw.github.test/openai/skills/main/skills/.curated/documents/scripts/render.py";
+    const fetchImpl = makeFetch({
+      [registryUrl]: [
+        {
+          name: "documents",
+          path: "skills/.curated/documents",
+          type: "dir",
+          sha: "codex-docs-sha",
+          url: docsUrl,
+        },
+      ],
+      [docsUrl]: [
+        {
+          name: "SKILL.md",
+          path: "skills/.curated/documents/SKILL.md",
+          type: "file",
+          download_url: skillUrl,
+        },
+        {
+          name: "scripts",
+          path: "skills/.curated/documents/scripts",
+          type: "dir",
+          url: scriptsUrl,
+        },
+      ],
+      [scriptsUrl]: [
+        {
+          name: "render.py",
+          path: "skills/.curated/documents/scripts/render.py",
+          type: "file",
+          download_url: scriptUrl,
+        },
+      ],
+      [skillUrl]: "---\ndescription: Documents\n---\nCreate DOCX files.\n",
+      [scriptUrl]: "print('render')\n",
+    });
+
+    const installed = await installSkillPackUpdates({
+      homeDir: home,
+      registryUrl,
+      fetchImpl,
+      bundledPacks: [],
+      packIds: ["documents"],
+    });
+
+    expect(installed.ok).toBe(true);
+    expect(installed.installed).toEqual([{ id: "documents", version: "codex-docs-sha" }]);
+    expect(
+      readFileSync(
+        join(
+          home,
+          ".jupiter",
+          "skill-packs",
+          "managed",
+          "documents",
+          "skills",
+          "documents",
+          "SKILL.md",
+        ),
+        "utf8",
+      ),
+    ).toContain("Create DOCX files.");
+    expect(
+      readFileSync(
+        join(
+          home,
+          ".jupiter",
+          "skill-packs",
+          "managed",
+          "documents",
+          "skills",
+          "documents",
+          "scripts",
+          "render.py",
+        ),
+        "utf8",
+      ),
+    ).toContain("render");
   });
 
   it("checks manifest updates and installs a verified JSON bundle into managed skill packs", async () => {

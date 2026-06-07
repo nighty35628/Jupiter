@@ -22,6 +22,8 @@ import type {
   McpSpecInfo,
   MemoryDetail,
   MemoryEntryInfo,
+  SourceSearchResult,
+  SourceSearchResultsEvent,
   SubagentRunInfo,
 } from "../protocol";
 import { PanelErrorBoundary } from "./error-boundary";
@@ -31,12 +33,39 @@ import { NativeBrowserWebview } from "./native-browser-webview";
 export type ContextPanelMode =
   | "home"
   | "files"
+  | "library"
   | "sidechat"
   | "browser"
   | "review"
   | "terminal"
   | "preview";
 export type BrowserOpenRequest = { id: number; url: string };
+export type ContextPanelTab = {
+  id: string;
+  mode: Exclude<ContextPanelMode, "home">;
+  title?: string;
+  browserRequest?: BrowserOpenRequest | null;
+  filePreview?: FilePreview | null;
+  filePreviewLoading?: boolean;
+  filePreviewError?: string | null;
+  filePreviewPath?: string | null;
+};
+export type LibrarySource = {
+  id: string;
+  kind: "web" | "file";
+  title: string;
+  url?: string;
+  path?: string;
+  snippet?: string;
+  contentText?: string;
+  contentFetchedAt?: number;
+  contentTruncated?: boolean;
+  contentError?: string;
+  ingestNonce?: number;
+  ingestStatus?: "pending" | "done" | "error";
+  addedAt: number;
+};
+export type LibrarySourceInput = Omit<LibrarySource, "id" | "addedAt">;
 
 const CONTEXT_MAX_TOKENS = 1_000_000;
 const SIDEBAR_TERMINAL_ID = "sidebar";
@@ -208,6 +237,54 @@ export function ContextInfoPopover({
   );
 }
 
+function contextPanelModeTitle(mode: ContextPanelMode): string {
+  switch (mode) {
+    case "files":
+      return t("contextPanel.home.filesTitle");
+    case "library":
+      return t("contextPanel.home.libraryTitle");
+    case "sidechat":
+      return t("contextPanel.home.sidechatTitle");
+    case "browser":
+      return t("contextPanel.home.browserTitle");
+    case "review":
+      return t("contextPanel.home.reviewTitle");
+    case "terminal":
+      return t("contextPanel.home.terminalTitle");
+    case "preview":
+      return t("fileActions.previewTitle");
+    case "home":
+    default:
+      return t("contextPanel.infoTitle");
+  }
+}
+
+function contextPanelTabTitle(tab: ContextPanelTab): string {
+  return tab.title || contextPanelModeTitle(tab.mode);
+}
+
+function contextPanelModeIcon(mode: ContextPanelMode, size = 14): ReactNode {
+  switch (mode) {
+    case "files":
+      return <I.folder size={size} />;
+    case "library":
+      return <I.bookmark size={size} />;
+    case "sidechat":
+      return <I.search size={size} />;
+    case "browser":
+      return <I.globe size={size} />;
+    case "review":
+      return <I.diff size={size} />;
+    case "terminal":
+      return <I.terminal size={size} />;
+    case "preview":
+      return <I.file size={size} />;
+    case "home":
+    default:
+      return <I.layers size={size} />;
+  }
+}
+
 export function ContextPanel({
   settings,
   sessionFiles,
@@ -215,8 +292,13 @@ export function ContextPanel({
   filePreviewLoading = false,
   filePreviewError = null,
   filePreviewPath = null,
+  tabs = [],
+  activeTabId = null,
   mode,
   onModeChange,
+  onTabSelect,
+  onTabClose,
+  onNewTabMode,
   onCloseSidebar,
   onMentionQuery,
   onMentionPicked,
@@ -226,9 +308,19 @@ export function ContextPanel({
   sideChatDisabled = false,
   onSideChatSend,
   browserRequest,
+  browserReturnMode = null,
   onPreviewFile,
   visible = true,
   placement = "side",
+  librarySources = [],
+  librarySearchFocusNonce = 0,
+  sourceSearch = null,
+  onSourceSearch,
+  onAddLibrarySource,
+  onRemoveLibrarySource,
+  onImportLibraryFiles,
+  onOpenWebSource,
+  onRevealFileSource,
 }: {
   settings: Settings | null;
   usage: UsageStats;
@@ -238,12 +330,20 @@ export function ContextPanel({
   sessionFiles: SessionFile[];
   memory: MemoryEntryInfo[];
   memoryDetail: MemoryDetail | null;
+  librarySources?: LibrarySource[];
+  librarySearchFocusNonce?: number;
+  sourceSearch?: SourceSearchResultsEvent | null;
   selectedFilePreview?: FilePreview | null;
   filePreviewLoading?: boolean;
   filePreviewError?: string | null;
   filePreviewPath?: string | null;
+  tabs?: ContextPanelTab[];
+  activeTabId?: string | null;
   mode?: ContextPanelMode;
   onModeChange?: (mode: ContextPanelMode) => void;
+  onTabSelect?: (id: string) => void;
+  onTabClose?: (id: string) => void;
+  onNewTabMode?: (mode: Exclude<ContextPanelMode, "home">) => void;
   onCloseSidebar?: () => void;
   onMentionQuery?: (q: string, nonce: number) => void;
   onMentionPicked?: (path: string) => void;
@@ -253,31 +353,97 @@ export function ContextPanel({
   sideChatDisabled?: boolean;
   onSideChatSend?: (text: string) => void;
   browserRequest?: BrowserOpenRequest | null;
+  browserReturnMode?: ContextPanelMode | null;
   visible?: boolean;
   placement?: "side" | "bottom";
   onOpenSubagent: (sessionName: string) => void;
   onReadMemory: (path: string) => void;
+  onSourceSearch?: (query: string, nonce: number, topK?: number) => void;
+  onAddLibrarySource?: (source: LibrarySourceInput) => void;
+  onRemoveLibrarySource?: (id: string) => void;
+  onImportLibraryFiles?: () => void;
+  onOpenWebSource?: (url: string) => void;
+  onRevealFileSource?: (path: string) => void;
   onPreviewFile?: (target: FilePreviewTarget) => void;
 }) {
   useLang();
   const [localMode, setLocalMode] = useState<ContextPanelMode>("home");
-  const activeMode = mode ?? localMode;
+  const activeTab =
+    tabs.find((tab) => tab.id === activeTabId) ?? tabs[tabs.length - 1] ?? null;
+  const usingTabs = Boolean(activeTab);
+  const legacyMode: ContextPanelMode = mode ?? localMode;
+  const activeMode: ContextPanelMode = activeTab ? activeTab.mode : legacyMode;
   const setPanelMode = onModeChange ?? setLocalMode;
-  const previewPath = selectedFilePreview?.path ?? filePreviewPath;
+  const activeSelectedFilePreview = usingTabs
+    ? activeTab?.filePreview ?? null
+    : selectedFilePreview;
+  const activeFilePreviewLoading = usingTabs
+    ? Boolean(activeTab?.filePreviewLoading)
+    : filePreviewLoading;
+  const activeFilePreviewError = usingTabs
+    ? activeTab?.filePreviewError ?? null
+    : filePreviewError;
+  const activeFilePreviewPath = usingTabs
+    ? activeTab?.filePreview?.path ?? activeTab?.filePreviewPath ?? null
+    : filePreviewPath;
+  const activeBrowserRequest = usingTabs
+    ? activeTab?.browserRequest ?? null
+    : browserRequest;
+  const previewPath = activeSelectedFilePreview?.path ?? activeFilePreviewPath;
   const previewAvailable = Boolean(
-    previewPath || filePreviewLoading || filePreviewError,
+    previewPath || activeFilePreviewLoading || activeFilePreviewError,
   );
   useEffect(() => {
+    if (usingTabs) return;
     if (previewPath) setPanelMode("preview");
-  }, [previewPath, setPanelMode]);
+  }, [previewPath, setPanelMode, usingTabs]);
   const showPreview = previewAvailable && activeMode === "preview";
+  const openPanelMode = (nextMode: ContextPanelMode) => {
+    if (nextMode === "home") {
+      setPanelMode("home");
+      return;
+    }
+    if (onNewTabMode) {
+      onNewTabMode(nextMode);
+      return;
+    }
+    setPanelMode(nextMode);
+  };
   const closeTab = () => {
-    if (activeMode === "home") {
+    if (usingTabs && activeTab) {
+      onTabClose?.(activeTab.id);
+      return;
+    }
+    if (legacyMode === "home") {
       onCloseSidebar?.();
+      return;
+    }
+    if (
+      legacyMode === "browser" &&
+      browserReturnMode &&
+      browserReturnMode !== "browser"
+    ) {
+      setPanelMode(browserReturnMode);
       return;
     }
     setPanelMode("home");
   };
+  const activeTitle = activeTab
+    ? contextPanelTabTitle(activeTab)
+    : contextPanelModeTitle(showPreview ? "preview" : activeMode);
+  const activeIcon = contextPanelModeIcon(showPreview ? "preview" : activeMode);
+  const tabBar = (
+    <CtxTabBar
+      icon={activeIcon}
+      title={activeTitle}
+      tabs={tabs}
+      activeTabId={activeTab?.id ?? null}
+      onSelectTab={onTabSelect}
+      onCloseTab={onTabClose}
+      onClose={closeTab}
+      onSelectMode={openPanelMode}
+    />
+  );
   return (
     <aside
       className="ctx"
@@ -286,18 +452,16 @@ export function ContextPanel({
     >
       {showPreview ? (
         <div className="ctx-mode-shell">
-          <CtxTabBar
-            icon={<I.file size={14} />}
-            title={t("fileActions.previewTitle")}
-            onClose={closeTab}
-            onSelectMode={setPanelMode}
-          />
-          <PanelErrorBoundary key="preview" label="preview">
+          {tabBar}
+          <PanelErrorBoundary
+            key={activeTab?.id ?? "preview"}
+            label="preview"
+          >
             <FilePreviewPane
-              preview={selectedFilePreview ?? null}
-              loading={Boolean(filePreviewLoading)}
-              error={filePreviewError ?? null}
-              fallbackPath={filePreviewPath}
+              preview={activeSelectedFilePreview ?? null}
+              loading={Boolean(activeFilePreviewLoading)}
+              error={activeFilePreviewError ?? null}
+              fallbackPath={activeFilePreviewPath}
               workspaceDir={settings?.workspaceDir}
               editor={settings?.editor}
               onPreviewFile={onPreviewFile}
@@ -306,19 +470,14 @@ export function ContextPanel({
           </PanelErrorBoundary>
         </div>
       ) : (
-        <PanelErrorBoundary key={activeMode} label={activeMode}>
+        <PanelErrorBoundary key={activeTab?.id ?? activeMode} label={activeMode}>
           {activeMode === "home" ? (
             <div className="ctx-home-shell">
-              <CtxHome onSelect={setPanelMode} />
+              <CtxHome onSelect={openPanelMode} />
             </div>
           ) : activeMode === "files" ? (
             <div className="ctx-mode-shell">
-              <CtxTabBar
-                icon={<I.folder size={14} />}
-                title={t("contextPanel.home.filesTitle")}
-                onClose={closeTab}
-                onSelectMode={setPanelMode}
-              />
+              {tabBar}
               <CtxFiles
                 files={sessionFiles}
                 settings={settings}
@@ -327,16 +486,28 @@ export function ContextPanel({
                 onMentionQuery={onMentionQuery}
                 onMentionPicked={onMentionPicked}
                 mentionResults={mentionResults}
+                onAddLibrarySource={onAddLibrarySource}
+              />
+            </div>
+          ) : activeMode === "library" ? (
+            <div className="ctx-mode-shell">
+              {tabBar}
+              <CtxLibrary
+                sources={librarySources}
+                searchFocusNonce={librarySearchFocusNonce}
+                sourceSearch={sourceSearch}
+                onSourceSearch={onSourceSearch}
+                onAddSource={onAddLibrarySource}
+                onRemoveSource={onRemoveLibrarySource}
+                onImportFiles={onImportLibraryFiles}
+                onOpenWebSource={onOpenWebSource}
+                onRevealFileSource={onRevealFileSource}
+                onPreviewFile={onPreviewFile}
               />
             </div>
           ) : activeMode === "sidechat" ? (
             <div className="ctx-mode-shell">
-              <CtxTabBar
-                icon={<I.search size={14} />}
-                title={t("contextPanel.home.sidechatTitle")}
-                onClose={closeTab}
-                onSelectMode={setPanelMode}
-              />
+              {tabBar}
               <CtxSideChat
                 entries={sideChats}
                 busy={sideChatBusy}
@@ -346,39 +517,24 @@ export function ContextPanel({
             </div>
           ) : activeMode === "browser" ? (
             <div className="ctx-mode-shell">
-              <CtxTabBar
-                icon={<I.globe size={14} />}
-                title={t("contextPanel.home.browserTitle")}
-                onClose={closeTab}
-                onSelectMode={setPanelMode}
-              />
-              <CtxBrowser request={browserRequest} visible={visible} />
+              {tabBar}
+              <CtxBrowser request={activeBrowserRequest} visible={visible} />
             </div>
           ) : activeMode === "review" ? (
             <div className="ctx-mode-shell">
-              <CtxTabBar
-                icon={<I.diff size={14} />}
-                title={t("contextPanel.home.reviewTitle")}
-                onClose={closeTab}
-                onSelectMode={setPanelMode}
-              />
+              {tabBar}
               <CtxReview settings={settings} onPreviewFile={onPreviewFile} />
             </div>
           ) : activeMode === "terminal" ? (
             <div className="ctx-mode-shell">
-              <CtxTabBar
-                icon={<I.terminal size={14} />}
-                title={t("contextPanel.home.terminalTitle")}
-                onClose={closeTab}
-                onSelectMode={setPanelMode}
-              />
+              {tabBar}
               <CtxTerminal settings={settings} />
             </div>
           ) : (
             <CtxPlaceholder
               mode={activeMode}
               onClose={closeTab}
-              onSelectMode={setPanelMode}
+              onSelectMode={openPanelMode}
             />
           )}
         </PanelErrorBoundary>
@@ -1182,6 +1338,12 @@ function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
       shortcut: "⌘P",
     },
     {
+      mode: "library",
+      icon: <I.bookmark size={34} />,
+      title: t("contextPanel.home.libraryTitle"),
+      desc: t("contextPanel.home.libraryDesc"),
+    },
+    {
       mode: "sidechat",
       icon: <I.search size={34} />,
       title: t("contextPanel.home.sidechatTitle"),
@@ -1228,14 +1390,324 @@ function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
   );
 }
 
+function CtxLibrary({
+  sources,
+  searchFocusNonce,
+  sourceSearch,
+  onSourceSearch,
+  onAddSource,
+  onRemoveSource,
+  onImportFiles,
+  onOpenWebSource,
+  onRevealFileSource,
+  onPreviewFile,
+}: {
+  sources: LibrarySource[];
+  searchFocusNonce: number;
+  sourceSearch: SourceSearchResultsEvent | null;
+  onSourceSearch?: (query: string, nonce: number, topK?: number) => void;
+  onAddSource?: (source: LibrarySourceInput) => void;
+  onRemoveSource?: (id: string) => void;
+  onImportFiles?: () => void;
+  onOpenWebSource?: (url: string) => void;
+  onRevealFileSource?: (path: string) => void;
+  onPreviewFile?: (target: FilePreviewTarget) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [activeSearch, setActiveSearch] = useState<{
+    query: string;
+    nonce: number;
+  } | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchNonceRef = useRef(0);
+  const savedSourceCount = sources.length;
+  const activeQuery = activeSearch?.query.trim().toLowerCase() ?? "";
+  const matchingSavedSources = useMemo(() => {
+    if (!activeQuery) return sources;
+    return sources.filter((source) =>
+      [
+        source.title,
+        source.url ?? "",
+        source.path ?? "",
+        source.snippet ?? "",
+        source.contentText ?? "",
+        source.contentError ?? "",
+      ]
+        .join("\n")
+        .toLowerCase()
+        .includes(activeQuery),
+    );
+  }, [activeQuery, sources]);
+  const activeSearchResults =
+    activeSearch && sourceSearch?.nonce === activeSearch.nonce
+      ? sourceSearch
+      : null;
+  const webResults = activeSearchResults?.results ?? [];
+  const webPending = Boolean(
+    activeSearch && onSourceSearch && sourceSearch?.nonce !== activeSearch.nonce,
+  );
+  const addedSourceKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const source of sources) {
+      if (source.kind === "web" && source.url) keys.add(`web:${source.url}`);
+      if (source.kind === "file" && source.path) keys.add(`file:${source.path}`);
+    }
+    return keys;
+  }, [sources]);
+
+  useEffect(() => {
+    if (searchFocusNonce <= 0) return;
+    searchInputRef.current?.focus();
+  }, [searchFocusNonce]);
+
+  const runSearch = () => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    const nonce = ++searchNonceRef.current;
+    setActiveSearch({ query: trimmed, nonce });
+    onSourceSearch?.(trimmed, nonce);
+  };
+  const addWebResult = (result: SourceSearchResult) => {
+    onAddSource?.({
+      kind: "web",
+      title: result.title || result.url,
+      url: result.url,
+      snippet: result.snippet,
+    });
+  };
+  const openSource = (source: LibrarySource) => {
+    if (source.kind === "web" && source.url) {
+      onOpenWebSource?.(source.url);
+      return;
+    }
+    if (source.kind === "file" && source.path) {
+      onPreviewFile?.({ path: source.path });
+    }
+  };
+
+  return (
+    <div className="ctx-library">
+      <div className="ctx-library-head">
+        <div>
+          <div className="ctx-library-title">
+            {t("contextPanel.library.title")}
+          </div>
+          <div className="ctx-library-desc">
+            {t("contextPanel.library.desc")}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="ctx-library-import"
+          onClick={onImportFiles}
+          disabled={!onImportFiles}
+        >
+          <I.upload size={13} />
+          <span>{t("contextPanel.library.importFiles")}</span>
+        </button>
+      </div>
+
+      <div className="ctx-library-stats">
+        <div className="ctx-library-stat">
+          <span className="ctx-library-stat-icon">
+            <I.database size={16} />
+          </span>
+          <span className="ctx-library-stat-copy">
+            <span>{t("contextPanel.library.savedSources")}</span>
+            <strong>
+              {t("contextPanel.itemCount", { count: savedSourceCount })}
+            </strong>
+          </span>
+        </div>
+      </div>
+
+      <form
+        className="ctx-library-search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          runSearch();
+        }}
+      >
+        <label className="ctx-library-search-box">
+          <I.search size={14} />
+          <input
+            ref={searchInputRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t("contextPanel.library.searchPlaceholder")}
+          />
+        </label>
+        <button type="submit" disabled={!query.trim()}>
+          {t("contextPanel.library.searchButton")}
+        </button>
+      </form>
+
+      {activeSearch ? (
+        <div className="ctx-library-results">
+          <LibraryResultSection
+            title={t("contextPanel.library.webResults")}
+            pending={webPending}
+            error={activeSearchResults?.error}
+            empty={
+              !webPending &&
+              !activeSearchResults?.error &&
+              webResults.length === 0
+            }
+          >
+            {webResults.map((result) => {
+              const title = result.title || result.url;
+              const added = addedSourceKeys.has(`web:${result.url}`);
+              return (
+                <div className="ctx-library-result" key={result.url}>
+                  <span className="ctx-library-result-icon">
+                    <I.globe size={14} />
+                  </span>
+                  <button
+                    type="button"
+                    className="ctx-library-result-copy ctx-library-result-open"
+                    aria-label={t("contextPanel.library.openSource", {
+                      title,
+                    })}
+                    onClick={() => onOpenWebSource?.(result.url)}
+                  >
+                    <strong>{title}</strong>
+                    <span>{result.url}</span>
+                    {result.snippet ? <p>{result.snippet}</p> : null}
+                  </button>
+                  <div className="ctx-library-result-actions">
+                    <button
+                      type="button"
+                      disabled={added || !onAddSource}
+                      onClick={() => addWebResult(result)}
+                    >
+                      {added
+                        ? t("contextPanel.library.added")
+                        : t("contextPanel.library.addSource")}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </LibraryResultSection>
+        </div>
+      ) : sources.length === 0 ? (
+        <div className="ctx-library-empty">
+          <I.search size={24} />
+          <div>{t("contextPanel.library.addTitle")}</div>
+          <p>{t("contextPanel.library.addDesc")}</p>
+        </div>
+      ) : null}
+
+      {matchingSavedSources.length > 0 ? (
+        <div className="ctx-library-saved">
+          <div className="ctx-library-section-title">
+            {t("contextPanel.library.savedSources")}
+          </div>
+          <div className="ctx-library-saved-list">
+            {matchingSavedSources.map((source) => (
+              <div className="ctx-library-source" key={source.id}>
+                <span className="ctx-library-source-icon">
+                  {source.kind === "web" ? (
+                    <I.globe size={14} />
+                  ) : (
+                    <I.file size={14} />
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className="ctx-library-source-copy ctx-library-source-main"
+                  aria-label={t("contextPanel.library.openSource", {
+                    title: source.title,
+                  })}
+                  onClick={() => openSource(source)}
+                >
+                  <strong>{source.title}</strong>
+                  <span>{source.kind === "web" ? source.url : source.path}</span>
+                  {source.snippet ? <p>{source.snippet}</p> : null}
+                </button>
+                <div className="ctx-library-source-actions">
+                  {source.kind === "file" && source.path ? (
+                    <button
+                      type="button"
+                      aria-label={t("contextPanel.library.showInFolder", {
+                        title: source.title,
+                      })}
+                      title={t("contextPanel.library.showInFolder", {
+                        title: source.title,
+                      })}
+                      onClick={() => onRevealFileSource?.(source.path!)}
+                    >
+                      <I.folder size={13} />
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    aria-label={t("contextPanel.library.removeSource", {
+                      title: source.title,
+                    })}
+                    onClick={() => onRemoveSource?.(source.id)}
+                  >
+                    <I.x size={13} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function LibraryResultSection({
+  title,
+  pending,
+  error,
+  empty,
+  children,
+}: {
+  title: string;
+  pending: boolean;
+  error?: string;
+  empty?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="ctx-library-result-section">
+      <div className="ctx-library-section-title">{title}</div>
+      {pending ? (
+        <div className="ctx-library-status">{t("contextPanel.searching")}</div>
+      ) : error ? (
+        <div className="ctx-library-status" data-tone="error">
+          {t("contextPanel.library.searchError", { error })}
+        </div>
+      ) : empty ? (
+        <div className="ctx-library-status">
+          {t("contextPanel.library.noSearchResults")}
+        </div>
+      ) : (
+        <div className="ctx-library-result-list">{children}</div>
+      )}
+    </section>
+  );
+}
+
 function CtxTabBar({
   icon,
   title,
+  tabs = [],
+  activeTabId = null,
+  onSelectTab,
+  onCloseTab,
   onClose,
   onSelectMode,
 }: {
   icon: ReactNode;
   title: string;
+  tabs?: ContextPanelTab[];
+  activeTabId?: string | null;
+  onSelectTab?: (id: string) => void;
+  onCloseTab?: (id: string) => void;
   onClose: () => void;
   onSelectMode?: (mode: ContextPanelMode) => void;
 }) {
@@ -1249,6 +1721,11 @@ function CtxTabBar({
       mode: "files",
       icon: <I.folder size={13} />,
       title: t("contextPanel.home.filesTitle"),
+    },
+    {
+      mode: "library",
+      icon: <I.bookmark size={13} />,
+      title: t("contextPanel.home.libraryTitle"),
     },
     {
       mode: "sidechat",
@@ -1271,21 +1748,61 @@ function CtxTabBar({
       title: t("contextPanel.home.terminalTitle"),
     },
   ];
-  return (
-    <div className="ctx-tabs">
-      <div className="ctx-tab" data-active="true">
-        <span className="ctx-tab-icon">{icon}</span>
-        <span className="ctx-tab-title">{title}</span>
+  const renderTab = (tab: ContextPanelTab) => {
+    const tabTitle = contextPanelTabTitle(tab);
+    const active = tab.id === activeTabId;
+    return (
+      <div
+        key={tab.id}
+        className="ctx-tab"
+        data-active={active ? "true" : "false"}
+        data-clickable="true"
+        role="tab"
+        tabIndex={0}
+        aria-selected={active}
+        onClick={() => onSelectTab?.(tab.id)}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          onSelectTab?.(tab.id);
+        }}
+      >
+        <span className="ctx-tab-icon">{contextPanelModeIcon(tab.mode)}</span>
+        <span className="ctx-tab-title">{tabTitle}</span>
         <button
           type="button"
           className="ctx-tab-close"
-          aria-label={t("contextPanel.closeTab")}
+          aria-label={active ? t("contextPanel.closeTab") : `${t("contextPanel.closeTab")} ${tabTitle}`}
           title={t("contextPanel.closeTab")}
-          onClick={onClose}
+          onClick={(event) => {
+            event.stopPropagation();
+            onCloseTab?.(tab.id);
+          }}
         >
           <I.x size={12} />
         </button>
       </div>
+    );
+  };
+  return (
+    <div className="ctx-tabs">
+      {tabs.length > 0 ? (
+        tabs.map(renderTab)
+      ) : (
+        <div className="ctx-tab" data-active="true">
+          <span className="ctx-tab-icon">{icon}</span>
+          <span className="ctx-tab-title">{title}</span>
+          <button
+            type="button"
+            className="ctx-tab-close"
+            aria-label={t("contextPanel.closeTab")}
+            title={t("contextPanel.closeTab")}
+            onClick={onClose}
+          >
+            <I.x size={12} />
+          </button>
+        </div>
+      )}
       {onSelectMode ? (
         <div className="ctx-tab-add-wrap">
           <button
@@ -1337,6 +1854,12 @@ function CtxPlaceholder({
           title: t("contextPanel.home.sidechatTitle"),
           body: t("contextPanel.placeholder.sidechat"),
         }
+      : mode === "library"
+        ? {
+            icon: <I.bookmark size={18} />,
+            title: t("contextPanel.home.libraryTitle"),
+            body: t("contextPanel.placeholder.library"),
+          }
       : mode === "browser"
         ? {
             icon: <I.globe size={18} />,
@@ -1465,6 +1988,17 @@ function parseFileSearchResult(raw: string): FileSearchItem {
   };
 }
 
+function libraryFileSourceFromPath(path: string): LibrarySourceInput {
+  const normalized = path.replace(/\\/g, "/");
+  const title = normalized.split("/").filter(Boolean).pop() || normalized;
+  return {
+    kind: "file",
+    title,
+    path: normalized,
+    snippet: normalized,
+  };
+}
+
 function CtxFiles({
   files,
   settings,
@@ -1473,6 +2007,7 @@ function CtxFiles({
   onMentionQuery,
   onMentionPicked,
   mentionResults,
+  onAddLibrarySource,
   compact = false,
 }: {
   files: SessionFile[];
@@ -1482,6 +2017,7 @@ function CtxFiles({
   onMentionQuery?: (q: string, nonce: number) => void;
   onMentionPicked?: (path: string) => void;
   mentionResults?: { nonce: number; query: string; results: string[] } | null;
+  onAddLibrarySource?: (source: LibrarySourceInput) => void;
   compact?: boolean;
 }) {
   const tree = useMemo(() => buildSessionTree(files), [files]);
@@ -1525,6 +2061,9 @@ function CtxFiles({
     onMentionPicked?.(item.path);
     onPreviewFile?.({ path: item.path, line: item.line });
   };
+  const addFileToLibrary = (path: string) => {
+    onAddLibrarySource?.(libraryFileSourceFromPath(path));
+  };
   const renderFileNode = (n: Extract<TreeNode, { kind: "file" }>) => (
     <div
       className="node"
@@ -1562,6 +2101,19 @@ function CtxFiles({
             : t("contextPanel.fileInContext")
         }
       />
+      <button
+        type="button"
+        className="tree-action"
+        aria-label={t("contextPanel.library.addFileSource", { path: n.path })}
+        title={t("contextPanel.library.addFileSource", { path: n.path })}
+        disabled={!onAddLibrarySource}
+        onClick={(event) => {
+          event.stopPropagation();
+          addFileToLibrary(n.path);
+        }}
+      >
+        <I.plus size={12} />
+      </button>
       <button
         type="button"
         className="tree-action"
@@ -1663,6 +2215,23 @@ function CtxFiles({
                       </button>
                       {item.kind === "file" ? (
                         <>
+                          <button
+                            type="button"
+                            className="tree-action"
+                            aria-label={t("contextPanel.library.addFileSource", {
+                              path: item.path,
+                            })}
+                            title={t("contextPanel.library.addFileSource", {
+                              path: item.path,
+                            })}
+                            disabled={!onAddLibrarySource}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              addFileToLibrary(item.path);
+                            }}
+                          >
+                            <I.plus size={12} />
+                          </button>
                           <button
                             type="button"
                             className="tree-action"

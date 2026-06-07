@@ -27,9 +27,9 @@ type ModeEntry = { k: EditMode; label: TKey; icon: React.ReactNode; hint: TKey }
 const EFFORTS: readonly ReasoningEffort[] = ["low", "medium", "high", "max"];
 
 const MODE_INFO: ModeEntry[] = [
-  { k: "review", label: "editMode.review", icon: <I.shield size={11} />, hint: "editMode.reviewHint" },
-  { k: "auto", label: "editMode.auto", icon: <I.zap size={11} />, hint: "editMode.autoHint" },
-  { k: "yolo", label: "editMode.yolo", icon: <I.warn size={11} />, hint: "editMode.yoloHint" },
+  { k: "review", label: "editMode.review", icon: <I.shield size={12} />, hint: "editMode.reviewHint" },
+  { k: "auto", label: "editMode.auto", icon: <I.zap size={12} />, hint: "editMode.autoHint" },
+  { k: "yolo", label: "editMode.yolo", icon: <I.warn size={12} />, hint: "editMode.yoloHint" },
 ];
 
 export function ModeSwitch({
@@ -193,6 +193,80 @@ function guessImageExtension(mime: string): string {
   return slash >= 0 ? normalized.slice(slash + 1).replace(/[^a-z0-9]+/g, "") || "png" : "png";
 }
 
+function safeGetClipboardData(data: Pick<DataTransfer, "getData">, type: string): string {
+  try {
+    return data.getData(type) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function fileUrlToPath(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "file:") return null;
+    const decodedPath = decodeURIComponent(url.pathname);
+    if (url.hostname) return `//${url.hostname}${decodedPath}`;
+    return decodedPath.replace(/^\/([A-Za-z]:\/)/, "$1");
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeLocalPath(value: string): boolean {
+  return /^(\/|~\/|[A-Za-z]:[\\/]|\\\\)/.test(value.trim());
+}
+
+function normalizeMentionPath(picked: string, workspaceDir?: string): string {
+  const normalizedPicked = picked.replace(/\\/g, "/");
+  const normalizedWorkspace = workspaceDir?.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (
+    normalizedWorkspace &&
+    (normalizedPicked === normalizedWorkspace ||
+      normalizedPicked.startsWith(`${normalizedWorkspace}/`))
+  ) {
+    return normalizedPicked.slice(normalizedWorkspace.length).replace(/^\/+/, "") || ".";
+  }
+  return normalizedPicked;
+}
+
+export function clipboardFileMentionPaths(
+  data: Pick<DataTransfer, "files" | "getData">,
+  workspaceDir?: string,
+): string[] {
+  const rawPaths: string[] = [];
+  const uriList = safeGetClipboardData(data, "text/uri-list");
+  for (const line of uriList.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const path = fileUrlToPath(trimmed);
+    if (path) rawPaths.push(path);
+  }
+
+  if (rawPaths.length === 0 && data.files?.length) {
+    const plain = safeGetClipboardData(data, "text/plain");
+    const lines = plain
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length > 0 && lines.every((line) => line.startsWith("file://") || looksLikeLocalPath(line))) {
+      for (const line of lines) {
+        rawPaths.push(fileUrlToPath(line) ?? line);
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of rawPaths) {
+    const path = normalizeMentionPath(raw, workspaceDir);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    result.push(path);
+  }
+  return result;
+}
+
 export function Composer({
   draft,
   setDraft,
@@ -214,6 +288,7 @@ export function Composer({
   onMentionPreview,
   onMentionPicked,
   mentionResults,
+  onOpenSourceSearch,
   workspaceDir,
   queuedSends,
   onQueueWhileBusy,
@@ -243,6 +318,7 @@ export function Composer({
   onMentionPreview?: (path: string, nonce: number) => void;
   onMentionPicked?: (path: string) => void;
   mentionResults?: { nonce: number; query: string; results: string[] } | null;
+  onOpenSourceSearch?: () => void;
   workspaceDir?: string;
   /** Messages typed while busy=true; rendered as removable chips above the textarea and auto-drained FIFO on turn-complete. */
   queuedSends?: string[];
@@ -298,33 +374,40 @@ export function Composer({
     }
   }, [initialHistory, browseIdx]);
 
-  const insertMention = (picked: string) => {
-    const rel =
-      workspaceDir && picked.startsWith(workspaceDir)
-        ? picked.slice(workspaceDir.length).replace(/^[\\/]+/, "")
-        : picked;
+  const insertMentions = (pickedPaths: string[]) => {
+    const rels = pickedPaths
+      .map((picked) => normalizeMentionPath(picked, workspaceDir))
+      .filter(Boolean);
+    if (rels.length === 0) return;
     const range = activeRangeRef.current;
     if (range && range.sigil === "@") {
       const savedRange = { ...range };
       setDraft((current) => {
         const before = current.slice(0, savedRange.start);
         const after = current.slice(savedRange.end);
-        const insertion = `@${rel}`;
+        const insertion = rels.map((rel) => `@${rel}`).join(" ");
         const spacerBefore = before && !before.endsWith(" ") ? " " : "";
         const spacerAfter = after ? (after.startsWith(" ") ? "" : " ") : " ";
         return `${before}${spacerBefore}${insertion}${spacerAfter}${after}`;
       });
     } else {
+      const insertion = rels.map((rel) => `@${rel}`).join(" ");
       setDraft((current) =>
-        current ? `${current.replace(/\s+$/, "")} @${rel} ` : `@${rel} `,
+        current ? `${current.replace(/\s+$/, "")} ${insertion} ` : `${insertion} `,
       );
     }
     activeRangeRef.current = null;
-    setPickedChips((prev) => new Map(prev).set(rel, "at"));
-    onMentionPicked?.(rel);
+    setPickedChips((prev) => {
+      const next = new Map(prev);
+      for (const rel of rels) next.set(rel, "at");
+      return next;
+    });
+    for (const rel of rels) onMentionPicked?.(rel);
     setPopup(null);
     textareaRef.current?.focus();
   };
+
+  const insertMention = (picked: string) => insertMentions([picked]);
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -393,6 +476,12 @@ export function Composer({
   };
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const fileMentions = clipboardFileMentionPaths(e.clipboardData, workspaceDir);
+    if (fileMentions.length > 0) {
+      e.preventDefault();
+      insertMentions(fileMentions);
+      return;
+    }
     const items = Array.from(e.clipboardData?.items ?? []);
     const imageItem = items.find((item) => item.type.startsWith("image/"));
     if (!imageItem) return;
@@ -411,17 +500,35 @@ export function Composer({
     }
   };
 
+  const openPopupAtCursor = (sigil: "/" | "@") => {
+    const textarea = textareaRef.current;
+    const cursor = textarea?.selectionStart ?? draft.length;
+    activeRangeRef.current = { start: cursor, end: cursor, sigil, query: "" };
+    const nonce = ++nonceRef.current;
+    setPopup(
+      sigil === "/"
+        ? { kind: "slash", query: "" }
+        : { kind: "at", query: "", nonce },
+    );
+    textarea?.focus();
+  };
+
   const openSlashMenu = () => {
     setPlusMenuOpen(false);
-    setPopup({ kind: "slash", query: "" });
-    textareaRef.current?.focus();
+    openPopupAtCursor("/");
   };
 
   const openMentionMenu = () => {
     setPlusMenuOpen(false);
-    const nonce = ++nonceRef.current;
-    setPopup({ kind: "at", query: "", nonce });
-    textareaRef.current?.focus();
+    openPopupAtCursor("@");
+  };
+
+  const openSourceSearch = () => {
+    setPlusMenuOpen(false);
+    setModeMenuOpen(false);
+    setModelMenuOpen(false);
+    setPopup(null);
+    onOpenSourceSearch?.();
   };
 
   const slashItems = useMemo(() => {
@@ -486,6 +593,17 @@ export function Composer({
         }
       }
     } else if (popup) {
+      const active = activeRangeRef.current;
+      const expectedSigil = popup.kind === "slash" ? "/" : "@";
+      if (
+        active &&
+        active.sigil === expectedSigil &&
+        active.start === active.end &&
+        active.query === "" &&
+        cursorPos === active.start
+      ) {
+        return;
+      }
       activeRangeRef.current = null;
       setPopup(null);
     }
@@ -838,6 +956,15 @@ export function Composer({
                   </div>
                 ) : null}
               </div>
+              <button
+                type="button"
+                className="composer-plus-btn composer-source-search-btn"
+                title={t("composer.searchSources")}
+                aria-label={t("composer.searchSources")}
+                onClick={openSourceSearch}
+              >
+                <I.search size={15} />
+              </button>
 
               <PermissionModeMenu
                 mode={editMode}
@@ -973,9 +1100,9 @@ function PermissionModeMenu({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        {active.icon}
-        <span>{t(active.label)}</span>
-        <I.chev size={10} />
+        <span className="composer-permission-icon">{active.icon}</span>
+        <span className="composer-permission-label">{t(active.label)}</span>
+        <I.chev className="composer-permission-chev" size={9} />
       </button>
       {open ? (
         <div className="composer-mode-menu" onMouseDown={(e) => e.preventDefault()}>

@@ -1,67 +1,64 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  open as openDialog,
-  save as saveDialog,
-} from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   isPermissionGranted as isNotificationPermissionGranted,
   requestPermission as requestNotificationPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-} from "react";
-import {
-  DESKTOP_CLI_SLASH_COMMANDS,
-  isKnownDesktopCliSlash,
-  parseDesktopSlash,
-} from "./cli-slash";
-import {
-  CommandPalette,
-  Toast,
-  buildCommands,
-  useCommandPalette,
-} from "./CommandPalette";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { CommandPalette, Toast, buildCommands, useCommandPalette } from "./CommandPalette";
 import { WorkspaceProvider } from "./Markdown";
+import { type AbortDraftSource, nextAbortDraftCandidate, restoreAbortedDraft } from "./abort-draft";
+import { DESKTOP_CLI_SLASH_COMMANDS, isKnownDesktopCliSlash, parseDesktopSlash } from "./cli-slash";
 import {
-  nextAbortDraftCandidate,
-  restoreAbortedDraft,
-  type AbortDraftSource,
-} from "./abort-draft";
-import {
-  readFilePreview,
-  resolveWorkspacePath,
   type FilePreview,
   type FilePreviewTarget,
+  readFilePreview,
+  resolveWorkspacePath,
+  revealFileInFolder,
 } from "./file-preview";
-import {
-  getLang,
-  getLangLabel,
-  getSupportedLangs,
-  setLang,
-  t,
-  useLang,
-} from "./i18n";
+import { getLang, getLangLabel, getSupportedLangs, setLang, t, useLang } from "./i18n";
 import { I } from "./icons";
 import {
-  checkJupiterUpdate,
-  installJupiterUpdate,
-  type JupiterUpdate,
-} from "./update-policy";
-import { AppContextMenu } from "./ui/app-context-menu";
+  type ApprovalSnapshot,
+  deriveDesktopNotifications,
+  dispatchDesktopNotifications,
+  shouldShowCompletionToast,
+} from "./notifications";
+import { parseOneShotPlanCommand } from "./one-shot-plan";
+import type {
+  CheckpointVerdict,
+  ChoiceVerdict,
+  ConfirmationChoice,
+  ExternalSessionApp,
+  ExternalSessionSource,
+  IncomingEvent,
+  JobInfo,
+  LibrarySource,
+  McpSpecInfo,
+  MemoryDetail,
+  MemoryEntryInfo,
+  OutgoingCommand,
+  PlanVerdict,
+  RevisionVerdict,
+  SettingsPatch,
+  SkillInfo,
+  SkillRootInfo,
+  SourceIngestResultEvent,
+  SourceSearchResultsEvent,
+  SubagentEvent,
+  SubagentRunInfo,
+} from "./protocol";
+import type { QQDesktopSettingsState } from "./qq-settings";
 import {
+  type SlashSettingsCommand,
   buildSlashSettingsDescriptors,
   parseSlashSettingsCommand,
-  type SlashSettingsCommand,
 } from "./slash-settings";
-import { parseOneShotPlanCommand } from "./one-shot-plan";
 import {
   FONT_FAMILY,
   FONT_FAMILY_STACK,
@@ -79,60 +76,36 @@ import {
   isThemeStyle,
   themeForStyle,
 } from "./theme";
-import type {
-  CheckpointVerdict,
-  ChoiceVerdict,
-  ConfirmationChoice,
-  ExternalSessionApp,
-  ExternalSessionSource,
-  IncomingEvent,
-  JobInfo,
-  McpSpecInfo,
-  MemoryDetail,
-  MemoryEntryInfo,
-  OutgoingCommand,
-  PlanVerdict,
-  RevisionVerdict,
-  SettingsPatch,
-  SkillInfo,
-  SkillRootInfo,
-  SubagentEvent,
-  SubagentRunInfo,
-} from "./protocol";
-import { type QQDesktopSettingsState } from "./qq-settings";
+import { AboutModal } from "./ui/about";
+import { AppContextMenu } from "./ui/app-context-menu";
+import { parseEditResult } from "./ui/cards";
 import { Composer, type SlashCmd } from "./ui/composer";
-import {
-  ContextInfoPopover,
-  ContextPanel,
-  type BrowserOpenRequest,
-  type ContextPanelMode,
-} from "./ui/context-panel";
 import {
   nextContextInfoToggle,
   nextContextSidebarToggle,
   nextSideChatSend,
 } from "./ui/context-chrome";
+import {
+  type BrowserOpenRequest,
+  ContextInfoPopover,
+  ContextPanel,
+  type ContextPanelMode,
+  type ContextPanelTab,
+} from "./ui/context-panel";
 import { JobsPop } from "./ui/jobs-pop";
-import { useElapsed } from "./ui/live";
-import { AboutModal } from "./ui/about";
-import { SettingsModal, type PageId as SettingsPageId } from "./ui/settings";
 import { JumpBar } from "./ui/jump-bar";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { useElapsed } from "./ui/live";
+import { SettingsModal, type PageId as SettingsPageId } from "./ui/settings";
 import { Sidebar } from "./ui/sidebar";
+import { SourceSearchPopover } from "./ui/source-search-popover";
 import { Splash, shouldShowSplash } from "./ui/splash";
-import { SettingsStatusCard } from "./ui/statusbar";
-import { ThinkingBottomIndicator } from "./ui/thinking-indicator";
 import {
   StartupFailure,
-  coerceStartupFailure,
   type StartupFailureState,
+  coerceStartupFailure,
 } from "./ui/startup-failure";
-import {
-  dispatchDesktopNotifications,
-  deriveDesktopNotifications,
-  shouldShowCompletionToast,
-  type ApprovalSnapshot,
-} from "./notifications";
+import { SettingsStatusCard } from "./ui/statusbar";
+import { ThinkingBottomIndicator } from "./ui/thinking-indicator";
 import {
   ActivePlanTaskCard,
   AssistantMsg,
@@ -146,24 +119,20 @@ import {
   TurnDivider,
   UserMsg,
 } from "./ui/thread";
-import { WorkdirPop } from "./ui/workdir-pop";
-import { parseEditResult } from "./ui/cards";
-import { useAutoCollapse } from "./ui/useAutoCollapse";
-import { useBottomResizable, useResizable } from "./ui/useResizable";
-import { useDisableTextAssist } from "./ui/useDisableTextAssist";
 import { getThreadMaxWidth, getVisibleContextWidth } from "./ui/thread-layout";
 import { elideTranscriptMessages } from "./ui/transcript-elision";
+import { useAutoCollapse } from "./ui/useAutoCollapse";
+import { useDisableTextAssist } from "./ui/useDisableTextAssist";
+import { useBottomResizable, useResizable } from "./ui/useResizable";
 import {
   TRANSCRIPT_BOTTOM_THRESHOLD,
   followVirtuosoHeightChange,
   isScrollElementNearBottom,
   scrollVirtuosoToBottom,
 } from "./ui/virtuoso-scroll";
-import {
-  displayWorkspaceBasename,
-  displayWorkspacePath,
-} from "./workspace-display";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { WorkdirPop } from "./ui/workdir-pop";
+import { type JupiterUpdate, checkJupiterUpdate, installJupiterUpdate } from "./update-policy";
+import { displayWorkspaceBasename, displayWorkspacePath } from "./workspace-display";
 
 const RIGHT_SIDEBAR_COLLAPSE_WIDTH = 1120;
 const LEFT_SIDEBAR_COLLAPSE_WIDTH = 760;
@@ -175,15 +144,9 @@ const RESPONSIVE_STAGE = {
   NARROW: "narrow",
 } as const;
 
-export type SettingsToastKind =
-  | "model"
-  | "reasoningEffort"
-  | "editMode"
-  | "language";
+export type SettingsToastKind = "model" | "reasoningEffort" | "editMode" | "language";
 
-export function shouldShowSettingsChangeToast(
-  _kind: SettingsToastKind,
-): boolean {
+export function shouldShowSettingsChangeToast(_kind: SettingsToastKind): boolean {
   return false;
 }
 
@@ -322,10 +285,7 @@ type WindowControls = Pick<
   "isFullscreen" | "isMaximized" | "setFullscreen" | "toggleMaximize"
 >;
 
-export function readWindowExpanded(
-  win: WindowControls,
-  isMac: boolean,
-): Promise<boolean> {
+export function readWindowExpanded(win: WindowControls, isMac: boolean): Promise<boolean> {
   return isMac ? win.isFullscreen() : win.isMaximized();
 }
 
@@ -340,10 +300,14 @@ export function toggleWindowExpanded(
 
 export type SessionInfo = {
   name: string;
+  path?: string;
   messageCount: number;
   mtime: string;
   summary?: string;
   workspace?: string;
+  archivedAt?: number;
+  pinnedAt?: number;
+  unread?: boolean;
   workspaceStatus?: "matched" | "legacy_missing_meta";
 };
 
@@ -414,9 +378,7 @@ type MentionPreviewState = {
 
 export function pathToFileUrl(path: string): string {
   const normalized = path.replace(/\\/g, "/");
-  const absolute = /^[a-zA-Z]:\//.test(normalized)
-    ? `/${normalized}`
-    : normalized;
+  const absolute = /^[a-zA-Z]:\//.test(normalized) ? `/${normalized}` : normalized;
   const encoded = absolute
     .split("/")
     .map((part, index) => (index === 0 ? part : encodeURIComponent(part)))
@@ -455,6 +417,9 @@ type State = {
   sessionFiles: SessionFile[];
   memory: MemoryEntryInfo[];
   memoryDetail: MemoryDetail | null;
+  librarySources: LibrarySource[];
+  sourceSearchResults: SourceSearchResultsEvent | null;
+  sourceIngestResult: SourceIngestResultEvent | null;
   jobs: JobInfo[];
   /** Live "skill running" indicator — set when a `skill_run` RPC dispatches, cleared on `$turn_complete`. */
   activeSkill: SkillOrigin | null;
@@ -473,17 +438,162 @@ export type SessionFile = {
   status: "c" | "m";
 };
 
-type DeltaBatchItem = {
-  turn: number;
-  channel: "content" | "reasoning";
-  text: string;
-};
+type LibrarySourceInput = Omit<LibrarySource, "id" | "addedAt">;
+
+function libraryStorageKeyForWorkspace(workspaceDir?: string | null): string | null {
+  if (!workspaceDir) return null;
+  return `jupiter.library.sources:${workspaceDir}`;
+}
+
+function librarySourceIdentity(source: LibrarySourceInput | LibrarySource): string {
+  if (source.kind === "web") return `web:${source.url}`;
+  return `file:${source.path}`;
+}
+
+function filePathToLibrarySource(path: string): LibrarySourceInput {
+  const normalized = path.replace(/\\/g, "/");
+  const title = normalized.split("/").filter(Boolean).pop() || normalized;
+  return {
+    kind: "file",
+    title,
+    path: normalized,
+    snippet: normalized,
+  };
+}
+
+function titleFromBrowserUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "file:") {
+      return parsed.pathname.split("/").filter(Boolean).pop() || url;
+    }
+    return parsed.hostname || url;
+  } catch {
+    return url;
+  }
+}
+
+function fileUrlToPath(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "file:") return null;
+    const decodedPath = decodeURIComponent(url.pathname);
+    if (url.hostname) return `//${url.hostname}${decodedPath}`;
+    return decodedPath.replace(/^\/([A-Za-z]:\/)/, "$1");
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLibraryFilePath(path: string, workspaceDir?: string): string {
+  const normalizedPath = path.replace(/\\/g, "/");
+  const normalizedWorkspace = workspaceDir?.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (
+    normalizedWorkspace &&
+    (normalizedPath === normalizedWorkspace || normalizedPath.startsWith(`${normalizedWorkspace}/`))
+  ) {
+    return normalizedPath.slice(normalizedWorkspace.length).replace(/^\/+/, "") || ".";
+  }
+  return normalizedPath;
+}
+
+function stripLibraryFileReference(raw: string): string {
+  let value = raw.trim().replace(/^@/, "");
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'")) ||
+    (value.startsWith("`") && value.endsWith("`"))
+  ) {
+    value = value.slice(1, -1);
+  }
+  value = value.replace(/[),.;，。！？!?]+$/g, "");
+  value = fileUrlToPath(value) ?? value;
+  value = value.replace(/(?<!^[A-Za-z]):\d+$/g, "");
+  return value.trim();
+}
+
+function shouldAddLibraryFilesFromText(text: string): boolean {
+  const lower = text.toLowerCase();
+  const hasLibraryTarget =
+    lower.includes("library") ||
+    lower.includes("source") ||
+    text.includes("资料库") ||
+    text.includes("資料庫");
+  const hasAddIntent = /\b(add|save|import)\b/.test(lower) || /添加|加入|导入|導入|保存/.test(text);
+  return hasLibraryTarget && hasAddIntent;
+}
+
+function extractLibraryFileReferences(text: string, workspaceDir?: string): string[] {
+  if (!shouldAddLibraryFilesFromText(text)) return [];
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  const add = (raw: string) => {
+    const stripped = stripLibraryFileReference(raw);
+    if (!stripped || /^https?:\/\//i.test(stripped)) return;
+    const normalized = normalizeLibraryFilePath(stripped, workspaceDir);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    paths.push(normalized);
+  };
+
+  for (const match of text.matchAll(/(?:^|\s)@("[^"]+"|'[^']+'|`[^`]+`|[^\s]+)/g)) {
+    add(match[1] ?? "");
+  }
+  for (const match of text.matchAll(/file:\/\/[^\s]+/g)) {
+    add(match[0]);
+  }
+  return paths;
+}
+
+function parseLibrarySources(raw: string | null): LibrarySource[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is LibrarySource => {
+      if (!item || typeof item !== "object") return false;
+      const source = item as Partial<LibrarySource>;
+      if (typeof source.id !== "string") return false;
+      if (typeof source.title !== "string") return false;
+      if (typeof source.addedAt !== "number") return false;
+      if (source.kind === "web") return typeof source.url === "string";
+      if (source.kind === "file") return typeof source.path === "string";
+      return false;
+    });
+  } catch {
+    return [];
+  }
+}
+
+function tabBusyFromIncomingEvent(ev: IncomingEvent): boolean | null {
+  switch (ev.type) {
+    case "$tab_opened":
+      return ev.busy ?? null;
+    case "$session_loaded":
+      return ev.busy ?? false;
+    case "$session_empty":
+    case "$turn_complete":
+    case "$error":
+    case "error":
+      return false;
+    case "user.message":
+    case "model.turn.started":
+    case "model.delta":
+    case "model.final":
+    case "tool.preparing":
+    case "tool.intent":
+    case "tool.result":
+      return true;
+    default:
+      return null;
+  }
+}
 
 type Action =
   | { t: "send_user"; text: string; clientId: string; rollbackable?: boolean }
   | { t: "start_skill"; skill: SkillOrigin; args?: string; clientId: string }
   | { t: "incoming"; event: IncomingEvent }
-  | { t: "batch_delta"; items: DeltaBatchItem[] }
+  | { t: "set_busy"; busy: boolean }
   | { t: "rpc_exit"; code: number | null }
   | { t: "clear" }
   | { t: "resolve_confirm"; id: number }
@@ -530,9 +640,7 @@ function fallbackSkillDesc(skill: SkillInfo): string {
         ? t("app.skill.scope.global")
         : t("app.skill.scope.project");
   const runAs =
-    skill.runAs === "subagent"
-      ? t("app.skill.runAs.subagent")
-      : t("app.skill.runAs.inline");
+    skill.runAs === "subagent" ? t("app.skill.runAs.subagent") : t("app.skill.runAs.inline");
   return t("app.skill.generic", { scope, runAs });
 }
 
@@ -551,16 +659,12 @@ function isRollbackableUserMessage(
 }
 
 function isConversationTurnMessage(message: ChatMessage): boolean {
-  return (
-    isRollbackableUserMessage(message) ||
-    (message.kind === "assistant" && !message.pending)
-  );
+  return isRollbackableUserMessage(message) || (message.kind === "assistant" && !message.pending);
 }
 
 function latestConversationTurn(messages: ChatMessage[]): number {
   const lastTurn = messages.reduce((max, m) => {
-    if (isRollbackableUserMessage(m) || m.kind === "assistant")
-      return Math.max(max, m.turn);
+    if (isRollbackableUserMessage(m) || m.kind === "assistant") return Math.max(max, m.turn);
     return max;
   }, 0);
   return lastTurn;
@@ -570,10 +674,7 @@ function nextMessageTurn(messages: ChatMessage[]): number {
   return latestConversationTurn(messages) + 1;
 }
 
-export function chatMessageKey(
-  message: ChatMessage | undefined,
-  index: number,
-): string {
+export function chatMessageKey(message: ChatMessage | undefined, index: number): string {
   if (!message) return `missing-${index}`;
   switch (message.kind) {
     case "user":
@@ -589,17 +690,11 @@ export function chatMessageKey(
   }
 }
 
-export function canRollbackMessage(
-  messages: ChatMessage[],
-  index: number,
-  busy: boolean,
-): boolean {
+export function canRollbackMessage(messages: ChatMessage[], index: number, busy: boolean): boolean {
   if (busy || index < 0 || index >= messages.length - 1) return false;
   const message = messages[index];
-  if (!message || (message.kind !== "user" && message.kind !== "assistant"))
-    return false;
-  if (message.kind === "user" && !isRollbackableUserMessage(message))
-    return false;
+  if (!message || (message.kind !== "user" && message.kind !== "assistant")) return false;
+  if (message.kind === "user" && !isRollbackableUserMessage(message)) return false;
   if (message.kind === "assistant" && message.pending) return false;
   return messages.slice(index + 1).some(isConversationTurnMessage);
 }
@@ -609,10 +704,8 @@ export function rollbackTargetForMessage(
   index: number,
 ): { turn: number; role: "user" | "assistant" } | null {
   const message = messages[index];
-  if (!message || (message.kind !== "user" && message.kind !== "assistant"))
-    return null;
-  if (message.kind === "user" && !isRollbackableUserMessage(message))
-    return null;
+  if (!message || (message.kind !== "user" && message.kind !== "assistant")) return null;
+  if (message.kind === "user" && !isRollbackableUserMessage(message)) return null;
   if (message.kind === "assistant" && message.pending) return null;
 
   let turn = 0;
@@ -695,6 +788,12 @@ function reduceRaw(state: State, action: Action): State {
       };
     case "incoming":
       return applyIncoming(state, action.event);
+    case "set_busy":
+      return {
+        ...state,
+        busy: action.busy,
+        activeSkill: action.busy ? state.activeSkill : null,
+      };
     case "settings_patch":
       return state.settings
         ? {
@@ -705,56 +804,6 @@ function reduceRaw(state: State, action: Action): State {
             },
           }
         : state;
-    case "batch_delta": {
-      const collapsed: DeltaBatchItem[] = [];
-      for (const item of action.items) {
-        const last = collapsed[collapsed.length - 1];
-        if (last && last.turn === item.turn && last.channel === item.channel) {
-          last.text += item.text;
-        } else {
-          collapsed.push({ ...item });
-        }
-      }
-      const byTurn = new Map<number, DeltaBatchItem[]>();
-      for (const item of collapsed) {
-        const bucket = byTurn.get(item.turn) ?? [];
-        bucket.push(item);
-        byTurn.set(item.turn, bucket);
-      }
-      const seenAssistantTurns = new Set<number>();
-      const messages = state.messages.map((m) => {
-        if (m.kind !== "assistant") return m;
-        seenAssistantTurns.add(m.turn);
-        const relevant = byTurn.get(m.turn);
-        if (!relevant || relevant.length === 0) return m;
-        let segments = m.segments;
-        for (const it of relevant) {
-          segments = appendTextSegment(
-            segments,
-            it.channel === "content" ? "text" : "reasoning",
-            it.text,
-          );
-        }
-        return { ...m, segments };
-      });
-      for (const [turn, items] of byTurn) {
-        if (seenAssistantTurns.has(turn)) continue;
-        let segments: AssistantSegment[] = [];
-        for (const it of items) {
-          segments = appendTextSegment(
-            segments,
-            it.channel === "content" ? "text" : "reasoning",
-            it.text,
-          );
-        }
-        messages.push({ kind: "assistant", turn, segments, pending: true });
-      }
-      return {
-        ...state,
-        busy: collapsed.length > 0 ? true : state.busy,
-        messages,
-      };
-    }
     case "clear":
       return {
         ...state,
@@ -774,21 +823,20 @@ function reduceRaw(state: State, action: Action): State {
         activeSkill: null,
         queuedSends: [],
         sideChats: [],
+        librarySources: [],
+        sourceSearchResults: null,
+        sourceIngestResult: null,
         retryNonce: 0,
       };
     case "resolve_confirm":
       return {
         ...state,
-        pendingConfirms: state.pendingConfirms.filter(
-          (c) => c.id !== action.id,
-        ),
+        pendingConfirms: state.pendingConfirms.filter((c) => c.id !== action.id),
       };
     case "resolve_path_access":
       return {
         ...state,
-        pendingPathAccess: state.pendingPathAccess.filter(
-          (p) => p.id !== action.id,
-        ),
+        pendingPathAccess: state.pendingPathAccess.filter((p) => p.id !== action.id),
       };
     case "resolve_choice":
       return {
@@ -799,8 +847,7 @@ function reduceRaw(state: State, action: Action): State {
       const removed = state.pendingPlans.find((p) => p.id === action.id);
       let activePlan = state.activePlan;
       if (removed && action.verdict.type === "approve") {
-        const pendingSteps = (removed as PendingPlan & { steps?: PlanStep[] })
-          .steps;
+        const pendingSteps = (removed as PendingPlan & { steps?: PlanStep[] }).steps;
         activePlan = {
           plan: removed.plan,
           summary: removed.summary,
@@ -818,9 +865,7 @@ function reduceRaw(state: State, action: Action): State {
     case "resolve_checkpoint":
       return {
         ...state,
-        pendingCheckpoints: state.pendingCheckpoints.filter(
-          (c) => c.id !== action.id,
-        ),
+        pendingCheckpoints: state.pendingCheckpoints.filter((c) => c.id !== action.id),
       };
     case "resolve_revision": {
       const removed = state.pendingRevisions.find((r) => r.id === action.id);
@@ -835,9 +880,7 @@ function reduceRaw(state: State, action: Action): State {
       }
       return {
         ...state,
-        pendingRevisions: state.pendingRevisions.filter(
-          (r) => r.id !== action.id,
-        ),
+        pendingRevisions: state.pendingRevisions.filter((r) => r.id !== action.id),
         activePlan,
       };
     }
@@ -846,9 +889,7 @@ function reduceRaw(state: State, action: Action): State {
     case "dismiss_error":
       return {
         ...state,
-        messages: state.messages.filter(
-          (m) => !(m.kind === "error" && m.id === action.id),
-        ),
+        messages: state.messages.filter((m) => !(m.kind === "error" && m.id === action.id)),
       };
     case "mention_results":
       return { ...state, mentionResults: action.results };
@@ -866,10 +907,7 @@ function reduceRaw(state: State, action: Action): State {
       if (!picked || action.index <= 0) return state;
       return {
         ...state,
-        queuedSends: [
-          picked,
-          ...state.queuedSends.filter((_, i) => i !== action.index),
-        ],
+        queuedSends: [picked, ...state.queuedSends.filter((_, i) => i !== action.index)],
       };
     }
     case "shift_queued_send":
@@ -949,21 +987,15 @@ function DiffStats({ stats }: { stats: FileStats }) {
   const total = stats.entries.length;
   return (
     <div className="diff-stats">
-      <button
-        type="button"
-        className="diff-stats-head"
-        onClick={() => setOpen((v) => !v)}
-      >
+      <button type="button" className="diff-stats-head" onClick={() => setOpen((v) => !v)}>
         <span className="ico">
           <I.diff size={11} />
         </span>
         <span>
-          {total} {total === 1 ? "file" : "files"} changed · +{stats.totalAdded}{" "}
-          / −{stats.totalRemoved} {stats.totalRemoved === 1 ? "line" : "lines"}
+          {total} {total === 1 ? "file" : "files"} changed · +{stats.totalAdded} / −
+          {stats.totalRemoved} {stats.totalRemoved === 1 ? "line" : "lines"}
         </span>
-        <span className="chev">
-          {open ? <I.chev size={10} /> : <I.chevR size={10} />}
-        </span>
+        <span className="chev">{open ? <I.chev size={10} /> : <I.chevR size={10} />}</span>
       </button>
       {open ? (
         <div className="diff-stats-body">
@@ -972,9 +1004,7 @@ function DiffStats({ stats }: { stats: FileStats }) {
               <span className="fn">{e.filename}</span>
               <span className="counts">
                 <span className="add">+{e.added}</span>
-                {e.removed > 0 ? (
-                  <span className="rm"> / −{e.removed}</span>
-                ) : null}
+                {e.removed > 0 ? <span className="rm"> / −{e.removed}</span> : null}
               </span>
             </div>
           ))}
@@ -1010,10 +1040,7 @@ function extractToolFiles(name: string, args: string): SessionFile[] {
   return [];
 }
 
-function mergeSessionFiles(
-  existing: SessionFile[],
-  adds: SessionFile[],
-): SessionFile[] {
+function mergeSessionFiles(existing: SessionFile[], adds: SessionFile[]): SessionFile[] {
   if (adds.length === 0) return existing;
   const next = [...existing];
   const indexByPath = new Map<string, number>();
@@ -1062,8 +1089,241 @@ function appendTextSegment(
   return [...segments, { kind, text }];
 }
 
+function mergeFinalTextSegment(segments: AssistantSegment[], text: string): AssistantSegment[] {
+  if (!text) return segments;
+  let lastToolIndex = -1;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i]?.kind === "tool") {
+      lastToolIndex = i;
+      break;
+    }
+  }
+  for (let i = segments.length - 1; i > lastToolIndex; i--) {
+    const segment = segments[i];
+    if (segment?.kind !== "text") continue;
+    if (segment.text === text) return segments;
+    const next = [...segments];
+    next[i] = { ...segment, text };
+    return next;
+  }
+  return [...segments, { kind: "text", text }];
+}
+
+function mergeFinalReasoningSegment(
+  segments: AssistantSegment[],
+  text?: string,
+): AssistantSegment[] {
+  if (!text) return segments;
+  let lastToolIndex = -1;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i]?.kind === "tool") {
+      lastToolIndex = i;
+      break;
+    }
+  }
+  for (let i = lastToolIndex + 1; i < segments.length; i++) {
+    const segment = segments[i];
+    if (segment?.kind !== "reasoning") continue;
+    if (segment.text === text) return segments;
+    const next = [...segments];
+    next[i] = { ...segment, text };
+    return next;
+  }
+  let insertAt = segments.length;
+  for (let i = lastToolIndex + 1; i < segments.length; i++) {
+    if (segments[i]?.kind === "text") {
+      insertAt = i;
+      break;
+    }
+  }
+  return [...segments.slice(0, insertAt), { kind: "reasoning", text }, ...segments.slice(insertAt)];
+}
+
+function mergeFinalSegments(
+  segments: AssistantSegment[],
+  ev: { content: string; reasoningContent?: string },
+): AssistantSegment[] {
+  const withReasoning = mergeFinalReasoningSegment(segments, ev.reasoningContent);
+  return mergeFinalTextSegment(withReasoning, ev.content);
+}
+
+function sessionFilesForMessages(messages: ChatMessage[]): SessionFile[] {
+  let sessionFiles: SessionFile[] = [];
+  for (const m of messages) {
+    if (m.kind !== "assistant") continue;
+    for (const s of m.segments) {
+      if (s.kind !== "tool") continue;
+      sessionFiles = mergeSessionFiles(sessionFiles, extractToolFiles(s.name, s.args));
+    }
+  }
+  return sessionFiles;
+}
+
 export function applyIncoming(state: State, ev: IncomingEvent): State {
   return withElidedTranscript(applyIncomingRaw(state, ev));
+}
+
+type SessionSnapshotEvent = Extract<
+  IncomingEvent,
+  { type: "$session_loaded" | "$session_reconciled" }
+>;
+
+function applySessionSnapshot(
+  state: State,
+  ev: SessionSnapshotEvent,
+  opts: { resetUi: boolean },
+): State {
+  const sessionName = ev.name;
+  let loadedUserTurn = 0;
+  const loaded: ChatMessage[] = ev.messages.map((m, i) => {
+    if (m.kind === "user") {
+      loadedUserTurn += 1;
+      return {
+        kind: "user",
+        text: m.text,
+        clientId: `c-loaded-${i}`,
+        turn: loadedUserTurn,
+      };
+    }
+    const segments: AssistantSegment[] = m.segments.map((s) => {
+      if (s.kind === "tool") {
+        return {
+          kind: "tool",
+          callId: s.callId,
+          name: s.name,
+          args: s.args,
+          startedAt: 0,
+          result: s.result,
+          ok: s.ok,
+          durationMs: 0,
+        };
+      }
+      return s;
+    });
+    return { kind: "assistant", turn: m.turn, segments, pending: false };
+  });
+  const usage = {
+    ...zeroUsage(),
+    totalCostUsd: ev.carryover.totalCostUsd,
+    totalPromptTokens: ev.carryover.cacheHitTokens + ev.carryover.cacheMissTokens,
+    totalCompletionTokens: ev.carryover.totalCompletionTokens ?? 0,
+    cacheHitTokens: ev.carryover.cacheHitTokens,
+    cacheMissTokens: ev.carryover.cacheMissTokens,
+  };
+  if (!opts.resetUi) {
+    const nextMessages = shouldKeepCurrentMessagesForReconcile(state.messages, loaded)
+      ? state.messages
+      : loaded;
+    const sessionFiles = sessionFilesForMessages(nextMessages);
+    return {
+      ...state,
+      currentSession: sessionName,
+      messages: nextMessages,
+      usage,
+      sessionFiles,
+    };
+  }
+  const keepLiveMessages =
+    Boolean(ev.busy) && shouldKeepCurrentMessagesForReconcile(state.messages, loaded);
+  const nextMessages = keepLiveMessages ? state.messages : loaded;
+  return {
+    ...state,
+    busy: ev.busy ?? false,
+    currentSession: sessionName,
+    messages: nextMessages,
+    pendingConfirms: keepLiveMessages ? state.pendingConfirms : [],
+    pendingPathAccess: keepLiveMessages ? state.pendingPathAccess : [],
+    pendingChoices: keepLiveMessages ? state.pendingChoices : [],
+    pendingPlans: keepLiveMessages ? state.pendingPlans : [],
+    pendingCheckpoints: keepLiveMessages ? state.pendingCheckpoints : [],
+    pendingRevisions: keepLiveMessages ? state.pendingRevisions : [],
+    activePlan: keepLiveMessages ? state.activePlan : null,
+    usage,
+    sessionFiles: sessionFilesForMessages(nextMessages),
+    subagents: keepLiveMessages ? state.subagents : [],
+    activeSkill: ev.busy ? state.activeSkill : null,
+    queuedSends: keepLiveMessages ? state.queuedSends : [],
+    sideChats: keepLiveMessages ? state.sideChats : [],
+    retryNonce: keepLiveMessages ? state.retryNonce : 0,
+  };
+}
+
+function assistantTextLengthForTurn(messages: ChatMessage[], turn: number): number {
+  const assistant = [...messages].reverse().find((m) => m.kind === "assistant" && m.turn === turn);
+  if (!assistant || assistant.kind !== "assistant") return 0;
+  return assistant.segments.reduce((sum, segment) => {
+    if (segment.kind === "text" || segment.kind === "reasoning") return sum + segment.text.length;
+    if (segment.kind === "tool")
+      return sum + segment.args.length + (segment.result ? segment.result.length : 0);
+    return sum;
+  }, 0);
+}
+
+function latestAssistantTurn(messages: ChatMessage[]): number {
+  return messages.reduce((max, m) => (m.kind === "assistant" ? Math.max(max, m.turn) : max), 0);
+}
+
+function latestPendingAssistantTurn(messages: ChatMessage[]): number {
+  return messages.reduce(
+    (max, m) => (m.kind === "assistant" && m.pending ? Math.max(max, m.turn) : max),
+    0,
+  );
+}
+
+function latestUserIndexForTurn(messages: ChatMessage[], turn: number): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message?.kind === "user" && message.turn === turn) return i;
+  }
+  return -1;
+}
+
+function latestAssistantIndexForLiveTurn(messages: ChatMessage[], turn: number): number {
+  const userIndex = latestUserIndexForTurn(messages, turn);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message?.kind !== "assistant" || message.turn !== turn) continue;
+    if (userIndex >= 0 && i < userIndex) continue;
+    return i;
+  }
+  return -1;
+}
+
+function shouldKeepCurrentMessagesForReconcile(
+  current: ChatMessage[],
+  loaded: ChatMessage[],
+): boolean {
+  const currentTurn = latestConversationTurn(current);
+  const loadedTurn = latestConversationTurn(loaded);
+  if (loadedTurn < currentTurn) return true;
+
+  const currentAssistantTurn = latestAssistantTurn(current);
+  const loadedAssistantTurn = latestAssistantTurn(loaded);
+  const pendingAssistantTurn = latestPendingAssistantTurn(current);
+  if (pendingAssistantTurn > 0) {
+    if (loadedAssistantTurn < pendingAssistantTurn) return true;
+    return (
+      assistantTextLengthForTurn(loaded, pendingAssistantTurn) <=
+      assistantTextLengthForTurn(current, pendingAssistantTurn)
+    );
+  }
+  if (loadedAssistantTurn < currentAssistantTurn) return true;
+  return (
+    currentAssistantTurn > 0 &&
+    loadedAssistantTurn === currentAssistantTurn &&
+    assistantTextLengthForTurn(loaded, currentAssistantTurn) <
+      assistantTextLengthForTurn(current, currentAssistantTurn)
+  );
+}
+
+export function shouldShowThinkingFooter(messages: ChatMessage[], busy: boolean): boolean {
+  if (!busy) return false;
+  const pendingAssistant = [...messages].reverse().find((m) => m.kind === "assistant" && m.pending);
+  if (!pendingAssistant || pendingAssistant.kind !== "assistant") return true;
+  return !pendingAssistant.segments.some((segment) => {
+    if (segment.kind === "tool") return true;
+    return segment.text.trim().length > 0;
+  });
 }
 
 export function reduceSubagentRuns(
@@ -1072,11 +1332,7 @@ export function reduceSubagentRuns(
   currentSession?: string,
 ): SubagentRunInfo[] {
   if (!currentSession && ev.parentSession) return prev;
-  if (
-    currentSession &&
-    ev.parentSession &&
-    ev.parentSession !== currentSession
-  ) {
+  if (currentSession && ev.parentSession && ev.parentSession !== currentSession) {
     return prev;
   }
 
@@ -1230,9 +1486,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         ],
       };
     case "$plan_required": {
-      const steps = Array.isArray(ev.steps)
-        ? (ev.steps as PlanStep[])
-        : undefined;
+      const steps = Array.isArray(ev.steps) ? (ev.steps as PlanStep[]) : undefined;
       return {
         ...state,
         pendingPlans: [
@@ -1326,11 +1580,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "$subagent_event":
       return {
         ...state,
-        subagents: reduceSubagentRuns(
-          state.subagents,
-          ev,
-          state.currentSession,
-        ),
+        subagents: reduceSubagentRuns(state.subagents, ev, state.currentSession),
       };
     case "$skills":
       return { ...state, skills: ev.items, skillRoots: ev.roots ?? [] };
@@ -1349,13 +1599,18 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         ...state,
         memory: ev.entries,
         memoryDetail:
-          state.memoryDetail &&
-          ev.entries.some((entry) => entry.path === state.memoryDetail?.path)
+          state.memoryDetail && ev.entries.some((entry) => entry.path === state.memoryDetail?.path)
             ? state.memoryDetail
             : null,
       };
     case "$memory_detail":
       return { ...state, memoryDetail: ev.detail };
+    case "$source_search_results":
+      return { ...state, sourceSearchResults: ev };
+    case "$source_ingest_result":
+      return { ...state, sourceIngestResult: ev };
+    case "$library_sources":
+      return { ...state, librarySources: ev.sources };
     case "$jobs":
       return { ...state, jobs: ev.items };
     case "$balance":
@@ -1427,85 +1682,16 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
     }
     case "$session_loaded": {
-      const sessionName = ev.name;
-      let loadedUserTurn = 0;
-      const loaded: ChatMessage[] = ev.messages.map((m, i) => {
-        if (m.kind === "user") {
-          loadedUserTurn += 1;
-          return {
-            kind: "user",
-            text: m.text,
-            clientId: `c-loaded-${i}`,
-            turn: loadedUserTurn,
-          };
-        }
-        const segments: AssistantSegment[] = m.segments.map((s) => {
-          if (s.kind === "tool") {
-            return {
-              kind: "tool",
-              callId: s.callId,
-              name: s.name,
-              args: s.args,
-              startedAt: 0,
-              result: s.result,
-              ok: s.ok,
-              durationMs: 0,
-            };
-          }
-          return s;
-        });
-        return { kind: "assistant", turn: m.turn, segments, pending: false };
-      });
-      let sessionFiles: SessionFile[] = [];
-      for (const m of loaded) {
-        if (m.kind !== "assistant") continue;
-        for (const s of m.segments) {
-          if (s.kind !== "tool") continue;
-          // For replayed sessions we don't have tool.result ok-status here, but
-          // segments only survive into history if the call completed. Trust it.
-          sessionFiles = mergeSessionFiles(
-            sessionFiles,
-            extractToolFiles(s.name, s.args),
-          );
-        }
-      }
-      return {
-        ...state,
-        busy: false,
-        currentSession: sessionName,
-        messages: loaded,
-        pendingConfirms: [],
-        pendingPathAccess: [],
-        pendingChoices: [],
-        pendingPlans: [],
-        pendingCheckpoints: [],
-        pendingRevisions: [],
-        activePlan: null,
-        usage: {
-          ...zeroUsage(),
-          totalCostUsd: ev.carryover.totalCostUsd,
-          totalPromptTokens:
-            ev.carryover.cacheHitTokens + ev.carryover.cacheMissTokens,
-          totalCompletionTokens: ev.carryover.totalCompletionTokens ?? 0,
-          cacheHitTokens: ev.carryover.cacheHitTokens,
-          cacheMissTokens: ev.carryover.cacheMissTokens,
-        },
-        sessionFiles,
-        subagents: [],
-        activeSkill: null,
-        queuedSends: [],
-        sideChats: [],
-        retryNonce: 0,
-      };
+      return applySessionSnapshot(state, ev, { resetUi: true });
+    }
+    case "$session_reconciled": {
+      return applySessionSnapshot(state, ev, { resetUi: false });
     }
     case "$session_empty": {
       // The sidecar successfully ran loadSessionMessages but the jsonl is
       // empty / all-malformed. Without this, the click looks like a no-op
       // because the chat just re-renders empty. Issue #1179.
-      const sizeNote =
-        ev.sizeBytes === 0
-          ? "0 bytes"
-          : `${ev.sizeBytes} bytes, no valid entries`;
+      const sizeNote = ev.sizeBytes === 0 ? "0 bytes" : `${ev.sizeBytes} bytes, no valid entries`;
       return {
         ...state,
         messages: [
@@ -1552,9 +1738,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
     }
     case "model.turn.started":
-      if (
-        state.messages.some((m) => m.kind === "assistant" && m.turn === ev.turn)
-      ) {
+      if (latestAssistantIndexForLiveTurn(state.messages, ev.turn) >= 0) {
         return { ...state, model: ev.model };
       }
       return {
@@ -1566,10 +1750,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         ],
       };
     case "model.delta": {
-      // Walk backwards — streaming always targets the latest assistant message
-      for (let i = state.messages.length - 1; i >= 0; i--) {
-        const m = state.messages[i]!;
-        if (m.kind !== "assistant" || m.turn !== ev.turn) continue;
+      const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn);
+      if (assistantIndex >= 0) {
+        const m = state.messages[assistantIndex]!;
+        if (m.kind !== "assistant") return state;
         let updated = m;
         if (ev.channel === "content")
           updated = {
@@ -1582,12 +1766,11 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
             segments: appendTextSegment(m.segments, "reasoning", ev.text),
           };
         const next = [...state.messages];
-        next[i] = updated;
+        next[assistantIndex] = updated;
         return { ...state, messages: next };
       }
       let segments: AssistantSegment[] = [];
-      if (ev.channel === "content")
-        segments = appendTextSegment(segments, "text", ev.text);
+      if (ev.channel === "content") segments = appendTextSegment(segments, "text", ev.text);
       else if (ev.channel === "reasoning")
         segments = appendTextSegment(segments, "reasoning", ev.text);
       if (segments.length === 0) return state;
@@ -1603,17 +1786,14 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "model.final": {
       const u = ev.usage;
       const promptTokens =
-        u?.prompt_tokens ??
-        (u?.prompt_cache_hit_tokens ?? 0) + (u?.prompt_cache_miss_tokens ?? 0);
+        u?.prompt_tokens ?? (u?.prompt_cache_hit_tokens ?? 0) + (u?.prompt_cache_miss_tokens ?? 0);
       const callHit = u?.prompt_cache_hit_tokens ?? 0;
-      const callMiss =
-        u?.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - callHit);
+      const callMiss = u?.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - callHit);
       const hasCall = promptTokens > 0 || callHit > 0 || callMiss > 0;
       const usage: UsageStats = {
         totalCostUsd: state.usage.totalCostUsd + (ev.costUsd ?? 0),
         totalPromptTokens: state.usage.totalPromptTokens + promptTokens,
-        totalCompletionTokens:
-          state.usage.totalCompletionTokens + (u?.completion_tokens ?? 0),
+        totalCompletionTokens: state.usage.totalCompletionTokens + (u?.completion_tokens ?? 0),
         cacheHitTokens: state.usage.cacheHitTokens + callHit,
         cacheMissTokens: state.usage.cacheMissTokens + callMiss,
         lastCallCacheHit: hasCall ? callHit : state.usage.lastCallCacheHit,
@@ -1621,27 +1801,41 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         reservedTokens: state.usage.reservedTokens,
         liveLogTokens: state.usage.liveLogTokens,
       };
-      // Walk backwards to clear pending flag on the matching assistant
-      let settledPending = false;
-      for (let i = state.messages.length - 1; i >= 0; i--) {
-        const m = state.messages[i]!;
-        if (m.kind !== "assistant" || m.turn !== ev.turn) continue;
-        if (m.pending) {
-          const s = [...state.messages];
-          s[i] = { ...m, pending: false };
-          state = { ...state, messages: s };
+      let matchedAssistant = false;
+      const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn);
+      if (assistantIndex >= 0) {
+        const m = state.messages[assistantIndex]!;
+        if (m.kind !== "assistant") return state;
+        const segments = mergeFinalSegments(m.segments, ev);
+        if (m.pending || segments !== m.segments) {
+          const messages = [...state.messages];
+          messages[assistantIndex] = { ...m, segments, pending: false };
+          state = { ...state, messages };
         }
-        settledPending = true;
-        break;
+        matchedAssistant = true;
       }
-      return settledPending ? { ...state, usage } : { ...state, usage };
+      const finalSegments = mergeFinalSegments([], ev);
+      if (!matchedAssistant && finalSegments.length > 0) {
+        state = {
+          ...state,
+          messages: [
+            ...state.messages,
+            {
+              kind: "assistant",
+              turn: ev.turn,
+              segments: finalSegments,
+              pending: false,
+            },
+          ],
+        };
+      }
+      return { ...state, usage };
     }
     case "tool.preparing": {
       for (let i = state.messages.length - 1; i >= 0; i--) {
         const m = state.messages[i]!;
         if (m.kind !== "assistant" || m.turn !== ev.turn) continue;
-        if (m.segments.some((s) => s.kind === "tool" && s.callId === ev.callId))
-          return state;
+        if (m.segments.some((s) => s.kind === "tool" && s.callId === ev.callId)) return state;
         const next = [...state.messages];
         next[i] = {
           ...m,
@@ -1669,9 +1863,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       for (let i = state.messages.length - 1; i >= 0; i--) {
         const m = state.messages[i]!;
         if (m.kind !== "assistant" || m.turn !== ev.turn) continue;
-        const idx = m.segments.findIndex(
-          (s) => s.kind === "tool" && s.callId === ev.callId,
-        );
+        const idx = m.segments.findIndex((s) => s.kind === "tool" && s.callId === ev.callId);
         if (idx >= 0) {
           const segs = [...m.segments];
           if (segs[idx]?.kind === "tool")
@@ -1731,9 +1923,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return { ...state, retryText: ev.text, retryNonce: state.retryNonce + 1 };
     case "$btw_result":
       if (ev.clientId) {
-        const idx = state.sideChats.findIndex(
-          (item) => item.id === ev.clientId,
-        );
+        const idx = state.sideChats.findIndex((item) => item.id === ev.clientId);
         if (idx >= 0) {
           const sideChats = [...state.sideChats];
           sideChats[idx] = {
@@ -1748,10 +1938,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         busy: false,
-        messages: [
-          ...state.messages,
-          { kind: "status", text: `≫ btw\n${ev.answer}` },
-        ],
+        messages: [...state.messages, { kind: "status", text: `≫ btw\n${ev.answer}` }],
       };
     case "status":
       return state;
@@ -1775,10 +1962,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
   }
 }
 
-function formatConversationMarkdown(
-  messages: ChatMessage[],
-  userLabel: string,
-): string {
+function formatConversationMarkdown(messages: ChatMessage[], userLabel: string): string {
   return messages
     .map((m) => {
       if (m.kind === "user") return `### ${userLabel}\n\n${m.text}`;
@@ -1823,11 +2007,32 @@ function defaultExportFilename(session: string): string {
 type TabAction = Action;
 type TabDispatcher = (action: TabAction) => void;
 
+type TabRuntimeSnapshot = {
+  currentSession?: string;
+  busy: boolean;
+  sessions: SessionInfo[];
+  importSources: ExternalSessionApp[];
+  workspaceDir?: string;
+  recentWorkspaces: string[];
+  model?: string;
+  hasMessages: boolean;
+  contextInfoOpen: boolean;
+};
+
+type TabRuntimeControls = {
+  clearAbortDraft: () => void;
+  openSettingsCard: () => void;
+  openCommandPalette: () => void;
+};
+
 interface TabRuntimeProps {
   tabId: string;
   active: boolean;
   currency: "CNY" | "USD";
   registerDispatch: (tabId: string, d: TabDispatcher | null) => void;
+  sendRpcToTab: (tabId: string, cmd: OutgoingCommand) => void;
+  onRuntimeSnapshot: (tabId: string, snapshot: TabRuntimeSnapshot) => void;
+  registerRuntimeControls: (tabId: string, controls: TabRuntimeControls | null) => void;
   onNewTab: () => void;
   onCloseTab: () => void;
   canCloseTab: boolean;
@@ -1847,25 +2052,25 @@ interface TabRuntimeProps {
   bottomCollapsed: boolean;
   sideWidth: number;
   ctxWidth: number;
-  bottomHeight: number;
-  viewportWidth: number;
-  onSideResizeDown: (e: React.MouseEvent) => void;
   onCtxResizeDown: (e: React.MouseEvent) => void;
   onBottomResizeDown: (e: React.MouseEvent) => void;
   onToggleSide: () => void;
   onToggleCtx: () => void;
   onToggleBottom: () => void;
   onToggleCurrency: () => void;
-  tabsList: { id: string; workspaceDir?: string }[];
+  tabsList: TabMeta[];
   activeTabId: string;
   setActiveTabId: (id: string) => void;
 }
 
-function TabRuntime({
+function TabRuntimeInner({
   tabId,
   active,
   currency,
   registerDispatch,
+  sendRpcToTab,
+  onRuntimeSnapshot,
+  registerRuntimeControls,
   onNewTab,
   onCloseTab,
   canCloseTab,
@@ -1885,9 +2090,6 @@ function TabRuntime({
   bottomCollapsed,
   sideWidth,
   ctxWidth,
-  bottomHeight,
-  viewportWidth,
-  onSideResizeDown,
   onCtxResizeDown,
   onBottomResizeDown,
   onToggleSide,
@@ -1926,6 +2128,9 @@ function TabRuntime({
     sessionFiles: [],
     memory: [],
     memoryDetail: null,
+    librarySources: [],
+    sourceSearchResults: null,
+    sourceIngestResult: null,
     jobs: [],
     activeSkill: null,
     queuedSends: [],
@@ -1942,46 +2147,39 @@ function TabRuntime({
     loading: boolean;
     error: string | null;
   }>({ target: null, preview: null, loading: false, error: null });
-  const [contextPanelMode, setContextPanelMode] =
-    useState<ContextPanelMode>("home");
-  const [browserRequest, setBrowserRequest] =
-    useState<BrowserOpenRequest | null>(null);
-  const [contextInfoOpen, setContextInfoOpen] = useState(false);
-  const threadMaxWidth = getThreadMaxWidth({
-    viewportWidth,
-    visibleSide: sideCollapsed ? 0 : sideWidth,
-    visibleCtx: getVisibleContextWidth({
-      ctxCollapsed,
-      contextInfoOpen,
-      ctxWidth,
-    }),
-  });
-  const [toast, setToast] = useState<{ msg: string; yolo?: boolean } | null>(
-    null,
+  const [contextTabState, setContextTabState] = useState<{
+    tabs: ContextPanelTab[];
+    activeId: string | null;
+    history: string[];
+  }>({ tabs: [], activeId: null, history: [] });
+  const libraryStorageKey = useMemo(
+    () => libraryStorageKeyForWorkspace(state.settings?.workspaceDir),
+    [state.settings?.workspaceDir],
   );
+  const librarySources = state.librarySources;
+  const [librarySearchFocusNonce] = useState(0);
+  const [sourceSearchOpen, setSourceSearchOpen] = useState(false);
+  const [contextInfoOpen, setContextInfoOpen] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; yolo?: boolean } | null>(null);
   const [splashOn, setSplashOn] = useState<boolean>(() => shouldShowSplash());
   const [wdOpen, setWdOpen] = useState(false);
   const [wdAnchor, setWdAnchor] = useState<
     { top?: number; bottom?: number; left: number } | undefined
   >(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const contextTabIdRef = useRef(0);
   const browserRequestIdRef = useRef(0);
+  const migratedLibraryStorageKeysRef = useRef<Set<string>>(new Set());
   const threadRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const virtuosoScrollerRef = useRef<HTMLElement | null>(null);
-  const [virtuosoScroller, setVirtuosoScroller] = useState<HTMLElement | null>(
-    null,
-  );
-  const setTranscriptScroller = useCallback(
-    (node: HTMLElement | Window | null) => {
-      const element = node instanceof HTMLElement ? node : null;
-      virtuosoScrollerRef.current = element;
-      setVirtuosoScroller((current) =>
-        current === element ? current : element,
-      );
-    },
-    [],
-  );
+  const optimisticBusyRef = useRef(false);
+  const [virtuosoScroller, setVirtuosoScroller] = useState<HTMLElement | null>(null);
+  const setTranscriptScroller = useCallback((node: HTMLElement | Window | null) => {
+    const element = node instanceof HTMLElement ? node : null;
+    virtuosoScrollerRef.current = element;
+    setVirtuosoScroller((current) => (current === element ? current : element));
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPageId>("general");
   const [settingsCardOpen, setSettingsCardOpen] = useState(false);
@@ -2003,22 +2201,139 @@ function TabRuntime({
       type: "clear",
     });
   }, []);
-  const recordAbortDraft = useCallback(
-    (source: AbortDraftSource, text: string) => {
-      abortDraftRef.current = nextAbortDraftCandidate(abortDraftRef.current, {
-        type: "record",
-        source,
-        text,
-      });
-    },
-    [],
-  );
+  const recordAbortDraft = useCallback((source: AbortDraftSource, text: string) => {
+    abortDraftRef.current = nextAbortDraftCandidate(abortDraftRef.current, {
+      type: "record",
+      source,
+      text,
+    });
+  }, []);
   const openSettingsAt = useCallback((page: SettingsPageId = "general") => {
     setSettingsPage(page);
     setSettingsCardOpen(false);
     setSettingsOpen(true);
   }, []);
   const palette = useCommandPalette(active);
+  const setPaletteOpen = palette.setOpen;
+  useEffect(() => {
+    registerRuntimeControls(tabId, {
+      clearAbortDraft,
+      openSettingsCard: () => setSettingsCardOpen((open) => !open),
+      openCommandPalette: () => setPaletteOpen(true),
+    });
+    return () => registerRuntimeControls(tabId, null);
+  }, [clearAbortDraft, registerRuntimeControls, setPaletteOpen, tabId]);
+  useEffect(() => {
+    onRuntimeSnapshot(tabId, {
+      currentSession: state.currentSession,
+      busy: state.busy,
+      sessions: state.sessions,
+      importSources: state.externalImportSources,
+      workspaceDir: state.settings?.workspaceDir,
+      recentWorkspaces: state.settings?.recentWorkspaces ?? [],
+      model: state.settings?.model ?? state.model,
+      hasMessages: state.messages.length > 0,
+      contextInfoOpen,
+    });
+  }, [
+    contextInfoOpen,
+    onRuntimeSnapshot,
+    state.busy,
+    state.currentSession,
+    state.externalImportSources,
+    state.messages.length,
+    state.model,
+    state.sessions,
+    state.settings?.model,
+    state.settings?.recentWorkspaces,
+    state.settings?.workspaceDir,
+    tabId,
+  ]);
+  const activeContextTab = useMemo(
+    () => contextTabState.tabs.find((tab) => tab.id === contextTabState.activeId) ?? null,
+    [contextTabState.activeId, contextTabState.tabs],
+  );
+  const ensureContextPanelVisible = useCallback(() => {
+    if (bottomCollapsed && ctxCollapsed) onToggleCtx();
+  }, [bottomCollapsed, ctxCollapsed, onToggleCtx]);
+  const activateContextTab = useCallback((id: string) => {
+    setContextTabState((current) => {
+      if (!current.tabs.some((tab) => tab.id === id)) return current;
+      return {
+        ...current,
+        activeId: id,
+        history: [...current.history.filter((item) => item !== id), id],
+      };
+    });
+  }, []);
+  const openContextTab = useCallback((tab: Omit<ContextPanelTab, "id">) => {
+    contextTabIdRef.current += 1;
+    const id = `ctx-${contextTabIdRef.current}`;
+    setContextTabState((current) => ({
+      tabs: [...current.tabs, { ...tab, id }],
+      activeId: id,
+      history: [...current.history.filter((item) => item !== id), id],
+    }));
+    return id;
+  }, []);
+  const openContextPanelMode = useCallback(
+    (mode: ContextPanelMode) => {
+      setContextInfoOpen(false);
+      if (mode === "home") {
+        setContextTabState({ tabs: [], activeId: null, history: [] });
+        return;
+      }
+      ensureContextPanelVisible();
+      if (
+        mode === "files" ||
+        mode === "library" ||
+        mode === "sidechat" ||
+        mode === "review" ||
+        mode === "terminal"
+      ) {
+        const existing = contextTabState.tabs.find((tab) => tab.mode === mode);
+        if (existing) {
+          activateContextTab(existing.id);
+          return;
+        }
+      }
+      openContextTab({ mode });
+    },
+    [activateContextTab, contextTabState.tabs, ensureContextPanelVisible, openContextTab],
+  );
+  const selectContextTab = useCallback(
+    (id: string) => {
+      activateContextTab(id);
+    },
+    [activateContextTab],
+  );
+  const closeContextTab = useCallback((id: string) => {
+    setContextTabState((current) => {
+      const closingIndex = current.tabs.findIndex((tab) => tab.id === id);
+      if (closingIndex < 0) return current;
+      const tabs = current.tabs.filter((tab) => tab.id !== id);
+      const remainingIds = new Set(tabs.map((tab) => tab.id));
+      const history = current.history.filter((item) => item !== id && remainingIds.has(item));
+      if (current.activeId !== id) {
+        return {
+          tabs,
+          history,
+          activeId: tabs.some((tab) => tab.id === current.activeId)
+            ? current.activeId
+            : (tabs[tabs.length - 1]?.id ?? null),
+        };
+      }
+      const previousActiveId = history[history.length - 1] ?? null;
+      const fallbackActive =
+        tabs[Math.min(closingIndex, tabs.length - 1)] ?? tabs[closingIndex - 1] ?? null;
+      const activeId = previousActiveId ?? fallbackActive?.id ?? null;
+      return {
+        tabs,
+        activeId,
+        history: activeId ? [...history.filter((item) => item !== activeId), activeId] : [],
+      };
+    });
+  }, []);
 
   useEffect(() => {
     registerDispatch(tabId, dispatch);
@@ -2026,23 +2341,79 @@ function TabRuntime({
   }, [tabId, registerDispatch]);
 
   const sendRpc = useCallback(
-    (cmd: OutgoingCommand) => {
-      const payload = { tabId, ...cmd };
-      invoke("rpc_send", { line: JSON.stringify(payload) }).catch((err) =>
-        console.error(`${cmd.cmd} failed`, err),
-      );
-    },
-    [tabId],
+    (cmd: OutgoingCommand) => sendRpcToTab(tabId, cmd),
+    [sendRpcToTab, tabId],
   );
+  useEffect(() => {
+    if (state.settings?.workspaceDir) sendRpc({ cmd: "library_list" });
+  }, [sendRpc, state.settings?.workspaceDir]);
+  useEffect(() => {
+    if (!libraryStorageKey || migratedLibraryStorageKeysRef.current.has(libraryStorageKey)) return;
+    migratedLibraryStorageKeysRef.current.add(libraryStorageKey);
+    const legacySources = parseLibrarySources(localStorage.getItem(libraryStorageKey));
+    for (const source of legacySources) {
+      const { id: _id, addedAt: _addedAt, updatedAt: _updatedAt, ...input } = source;
+      sendRpc({ cmd: "library_add", source: input });
+    }
+  }, [libraryStorageKey, sendRpc]);
+  const addLibrarySource = useCallback(
+    (source: LibrarySourceInput) => {
+      const identity = librarySourceIdentity(source);
+      if (librarySources.some((item) => librarySourceIdentity(item) === identity)) return;
+      sendRpc({ cmd: "library_add", source });
+    },
+    [librarySources, sendRpc],
+  );
+  const importLibraryFiles = useCallback(() => {
+    void (async () => {
+      const selected = await openDialog({
+        multiple: true,
+        directory: false,
+      });
+      const paths = Array.isArray(selected)
+        ? selected
+        : typeof selected === "string"
+          ? [selected]
+          : [];
+      for (const path of paths) {
+        addLibrarySource(
+          filePathToLibrarySource(normalizeLibraryFilePath(path, state.settings?.workspaceDir)),
+        );
+      }
+    })().catch((err) => {
+      console.error("library file import failed", err);
+    });
+  }, [addLibrarySource, state.settings?.workspaceDir]);
+  const addLibraryFilesFromMessage = useCallback(
+    (text: string) => {
+      for (const path of extractLibraryFileReferences(text, state.settings?.workspaceDir)) {
+        addLibrarySource(filePathToLibrarySource(path));
+      }
+    },
+    [addLibrarySource, state.settings?.workspaceDir],
+  );
+  const removeLibrarySource = useCallback(
+    (id: string) => {
+      sendRpc({ cmd: "library_remove", id });
+    },
+    [sendRpc],
+  );
+  const searchLibrarySources = useCallback(
+    (query: string, nonce: number, topK = 6) =>
+      sendRpc({ cmd: "source_search", query, nonce, topK }),
+    [sendRpc],
+  );
+  const markOptimisticBusy = useCallback(() => {
+    optimisticBusyRef.current = true;
+  }, []);
+  const isTabBusy = useCallback(() => state.busy || optimisticBusyRef.current, [state.busy]);
 
   const queryMentions = useCallback(
-    (query: string, nonce: number) =>
-      sendRpc({ cmd: "mention_query", query, nonce }),
+    (query: string, nonce: number) => sendRpc({ cmd: "mention_query", query, nonce }),
     [sendRpc],
   );
   const previewMention = useCallback(
-    (path: string, nonce: number) =>
-      sendRpc({ cmd: "mention_preview", path, nonce }),
+    (path: string, nonce: number) => sendRpc({ cmd: "mention_preview", path, nonce }),
     [sendRpc],
   );
   const markMentionPicked = useCallback(
@@ -2052,58 +2423,92 @@ function TabRuntime({
   const previewFile = useCallback(
     (target: FilePreviewTarget) => {
       const workspaceDir = state.settings?.workspaceDir;
-      const targetKey = `${target.path}:${target.line ?? ""}`;
-      if (bottomCollapsed) {
-        if (ctxCollapsed) onToggleCtx();
-      }
-      setContextPanelMode("preview");
+      ensureContextPanelVisible();
+      setContextInfoOpen(false);
+      const tabId = openContextTab({
+        mode: "preview",
+        title: target.path.split(/[\\/]/).filter(Boolean).pop() || target.path,
+        filePreview: null,
+        filePreviewLoading: true,
+        filePreviewError: null,
+        filePreviewPath: target.path,
+      });
       setFilePreview({ target, preview: null, loading: true, error: null });
       void readFilePreview(target.path, workspaceDir).then(
         (preview) => {
-          setFilePreview((current) => {
-            const currentKey = current.target
-              ? `${current.target.path}:${current.target.line ?? ""}`
-              : "";
-            if (currentKey !== targetKey) return current;
-            return { target, preview, loading: false, error: null };
-          });
+          setContextTabState((current) => ({
+            ...current,
+            tabs: current.tabs.map((tab) =>
+              tab.id === tabId
+                ? {
+                    ...tab,
+                    title: preview.name || tab.title,
+                    filePreview: preview,
+                    filePreviewLoading: false,
+                    filePreviewError: null,
+                    filePreviewPath: target.path,
+                  }
+                : tab,
+            ),
+          }));
+          setFilePreview({ target, preview, loading: false, error: null });
         },
         (err) => {
-          setFilePreview((current) => {
-            const currentKey = current.target
-              ? `${current.target.path}:${current.target.line ?? ""}`
-              : "";
-            if (currentKey !== targetKey) return current;
-            return {
-              target,
-              preview: null,
-              loading: false,
-              error: err instanceof Error ? err.message : String(err),
-            };
+          const message = err instanceof Error ? err.message : String(err);
+          setContextTabState((current) => ({
+            ...current,
+            tabs: current.tabs.map((tab) =>
+              tab.id === tabId
+                ? {
+                    ...tab,
+                    filePreview: null,
+                    filePreviewLoading: false,
+                    filePreviewError: message,
+                    filePreviewPath: target.path,
+                  }
+                : tab,
+            ),
+          }));
+          setFilePreview({
+            target,
+            preview: null,
+            loading: false,
+            error: message,
           });
         },
       );
     },
-    [bottomCollapsed, ctxCollapsed, onToggleCtx, state.settings?.workspaceDir],
+    [ensureContextPanelVisible, openContextTab, state.settings?.workspaceDir],
   );
   const openBrowserUrl = useCallback(
     (url: string) => {
-      if (bottomCollapsed) {
-        if (ctxCollapsed) onToggleCtx();
-      }
+      ensureContextPanelVisible();
       setContextInfoOpen(false);
-      setContextPanelMode("browser");
       browserRequestIdRef.current += 1;
-      setBrowserRequest({ id: browserRequestIdRef.current, url });
+      const request: BrowserOpenRequest = { id: browserRequestIdRef.current, url };
+      openContextTab({
+        mode: "browser",
+        title: titleFromBrowserUrl(url),
+        browserRequest: request,
+      });
     },
-    [bottomCollapsed, ctxCollapsed, onToggleCtx],
+    [ensureContextPanelVisible, openContextTab],
   );
+  const revealLibraryFileSource = useCallback(
+    (path: string) => {
+      void revealFileInFolder(path, state.settings?.workspaceDir).catch((err) =>
+        console.error("reveal library source failed", err),
+      );
+    },
+    [state.settings?.workspaceDir],
+  );
+  const openLibrarySearch = useCallback(() => {
+    setContextInfoOpen(false);
+    setSourceSearchOpen(true);
+  }, []);
   const openHtmlFileInBrowser = useCallback(
     (target: FilePreviewTarget) => {
-      const absPath = resolveWorkspacePath(
-        target.path,
-        state.settings?.workspaceDir,
-      );
+      const absPath = resolveWorkspacePath(target.path, state.settings?.workspaceDir);
       openBrowserUrl(pathToFileUrl(absPath));
     },
     [openBrowserUrl, state.settings?.workspaceDir],
@@ -2115,9 +2520,9 @@ function TabRuntime({
       loading: false,
       error: null,
     });
-    setContextPanelMode("home");
+    setContextTabState({ tabs: [], activeId: null, history: [] });
     setContextInfoOpen(false);
-    setBrowserRequest(null);
+    setSourceSearchOpen(false);
   }, [state.currentSession, state.settings?.workspaceDir]);
   const showContextInfo = useCallback(() => {
     const next = nextContextInfoToggle({
@@ -2127,19 +2532,13 @@ function TabRuntime({
     if (next.collapseSidebar) onToggleCtx();
     if (next.infoOpen && !bottomCollapsed) onToggleBottom();
     setContextInfoOpen(next.infoOpen);
-  }, [
-    bottomCollapsed,
-    contextInfoOpen,
-    ctxCollapsed,
-    onToggleBottom,
-    onToggleCtx,
-  ]);
+  }, [bottomCollapsed, contextInfoOpen, ctxCollapsed, onToggleBottom, onToggleCtx]);
   const toggleContextPanel = useCallback(() => {
     const next = nextContextSidebarToggle({
       infoOpen: contextInfoOpen,
       sidebarCollapsed: ctxCollapsed,
     });
-    if (next.panelMode) setContextPanelMode(next.panelMode);
+    if (next.panelMode) openContextPanelMode(next.panelMode);
     setContextInfoOpen(next.infoOpen);
     if (ctxCollapsed && !bottomCollapsed) onToggleBottom();
     onToggleCtx();
@@ -2147,6 +2546,7 @@ function TabRuntime({
     bottomCollapsed,
     contextInfoOpen,
     ctxCollapsed,
+    openContextPanelMode,
     onToggleBottom,
     onToggleCtx,
   ]);
@@ -2169,18 +2569,9 @@ function TabRuntime({
     },
     [saveSettings],
   );
-  const loadQQSettings = useCallback(
-    () => sendRpc({ cmd: "qq_status_get" }),
-    [sendRpc],
-  );
-  const connectQQ = useCallback(
-    () => sendRpc({ cmd: "qq_connect" }),
-    [sendRpc],
-  );
-  const disconnectQQ = useCallback(
-    () => sendRpc({ cmd: "qq_disconnect" }),
-    [sendRpc],
-  );
+  const loadQQSettings = useCallback(() => sendRpc({ cmd: "qq_status_get" }), [sendRpc]);
+  const connectQQ = useCallback(() => sendRpc({ cmd: "qq_connect" }), [sendRpc]);
+  const disconnectQQ = useCallback(() => sendRpc({ cmd: "qq_disconnect" }), [sendRpc]);
   const saveQQConfig = useCallback(
     (patch: { appId?: string; appSecret?: string; sandbox: boolean }) =>
       sendRpc({ cmd: "qq_config_save", ...patch }),
@@ -2206,10 +2597,7 @@ function TabRuntime({
     (name: string) => sendRpc({ cmd: "mcp_specs_disable", name }),
     [sendRpc],
   );
-  const reconnectMcpSpecs = useCallback(
-    () => sendRpc({ cmd: "mcp_specs_reconnect" }),
-    [sendRpc],
-  );
+  const reconnectMcpSpecs = useCallback(() => sendRpc({ cmd: "mcp_specs_reconnect" }), [sendRpc]);
   const addSkillPath = useCallback(
     (path: string) => sendRpc({ cmd: "skill_path_add", path }),
     [sendRpc],
@@ -2219,8 +2607,7 @@ function TabRuntime({
     [sendRpc],
   );
   const createSkill = useCallback(
-    (name: string, scope: "project" | "global") =>
-      sendRpc({ cmd: "skill_create", name, scope }),
+    (name: string, scope: "project" | "global") => sendRpc({ cmd: "skill_create", name, scope }),
     [sendRpc],
   );
   const setSkillModel = useCallback(
@@ -2231,9 +2618,9 @@ function TabRuntime({
   const newChat = useCallback(() => {
     clearAbortDraft();
     setOneShotPlanArmed(false);
-    sendRpc({ cmd: "new_chat" });
-    if (!state.busy) dispatch({ t: "clear" });
-  }, [clearAbortDraft, sendRpc, state.busy]);
+    sendRpc({ cmd: "new_chat", openInNewTab: isTabBusy() });
+    if (!isTabBusy()) dispatch({ t: "clear" });
+  }, [clearAbortDraft, isTabBusy, sendRpc]);
 
   const pickWorkspace = useCallback(async () => {
     try {
@@ -2252,13 +2639,10 @@ function TabRuntime({
     }
   }, [clearAbortDraft, saveSettings, state.settings?.workspaceDir]);
 
-  const flashToast = useCallback(
-    (msg: string, opts?: { yolo?: boolean; duration?: number }) => {
-      setToast({ msg, yolo: opts?.yolo });
-      window.setTimeout(() => setToast(null), opts?.duration ?? 1600);
-    },
-    [],
-  );
+  const flashToast = useCallback((msg: string, opts?: { yolo?: boolean; duration?: number }) => {
+    setToast({ msg, yolo: opts?.yolo });
+    window.setTimeout(() => setToast(null), opts?.duration ?? 1600);
+  }, []);
 
   const applyReasoningEffort = useCallback(
     (reasoningEffort: Settings["reasoningEffort"]) => {
@@ -2276,9 +2660,7 @@ function TabRuntime({
       if (mode === "yolo" && shouldShowSettingsChangeToast("editMode")) {
         flashToast(t("app.yolo.toast"), { yolo: true, duration: 3000 });
       } else if (shouldShowSettingsChangeToast("editMode")) {
-        flashToast(
-          t("app.toast.modeSwitched", { mode: t(`editMode.${mode}` as any) }),
-        );
+        flashToast(t("app.toast.modeSwitched", { mode: t(`editMode.${mode}` as any) }));
       }
     },
     [applySettingsPatch, flashToast],
@@ -2314,10 +2696,7 @@ function TabRuntime({
         const handle = await webview.onDragDropEvent((event) => {
           if (!dropActiveRef.current) return;
           if (event.payload.type === "enter") {
-            document.body.style.setProperty(
-              "--drop-overlay-label",
-              `"${t("dragDrop.overlay")}"`,
-            );
+            document.body.style.setProperty("--drop-overlay-label", `"${t("dragDrop.overlay")}"`);
             document.body.dataset.dragOver = "1";
             return;
           }
@@ -2389,8 +2768,7 @@ function TabRuntime({
           setOneShotPlanArmed(false);
           dispatch({
             t: "push_status",
-            text:
-              getLang() === "zh-CN" ? "▸ /plan 已取消。" : "▸ /plan cancelled.",
+            text: getLang() === "zh-CN" ? "▸ /plan 已取消。" : "▸ /plan cancelled.",
           });
           if (!override) setDraft("");
           return;
@@ -2399,6 +2777,7 @@ function TabRuntime({
         const clientId = `plan-${Date.now()}`;
         setOneShotPlanArmed(false);
         recordAbortDraft("user_input", oneShotPlanCommand.text);
+        markOptimisticBusy();
         dispatch({ t: "send_user", text: oneShotPlanCommand.text, clientId });
         sendRpc({
           cmd: "user_input",
@@ -2426,6 +2805,7 @@ function TabRuntime({
         }
         const clientId = `btw-${Date.now()}`;
         recordAbortDraft("btw", text);
+        markOptimisticBusy();
         dispatch({ t: "send_user", text, clientId, rollbackable: false });
         sendRpc({ cmd: "btw", text: question });
         if (!override) setDraft("");
@@ -2437,6 +2817,7 @@ function TabRuntime({
         if (isKnownDesktopCliSlash(slash.cmd)) {
           const clientId = `slash-${Date.now()}`;
           recordAbortDraft("user_input", text);
+          markOptimisticBusy();
           dispatch({ t: "send_user", text, clientId, rollbackable: false });
           sendRpc({ cmd: "slash", text, clientId });
           if (!override) setDraft("");
@@ -2462,6 +2843,7 @@ function TabRuntime({
           const clientId = `skill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const trimmedArgs = args?.trim() ?? "";
           recordAbortDraft("skill_run", text);
+          markOptimisticBusy();
           dispatch({
             t: "start_skill",
             skill: { name: skill.name, runAs: skill.runAs },
@@ -2480,7 +2862,9 @@ function TabRuntime({
       const clientId = `c-${Date.now()}`;
       const planOneShot = oneShotPlanArmed;
       if (planOneShot) setOneShotPlanArmed(false);
+      addLibraryFilesFromMessage(text);
       recordAbortDraft("user_input", text);
+      markOptimisticBusy();
       dispatch({ t: "send_user", text, clientId });
       sendRpc({ cmd: "user_input", text, clientId, planOneShot });
       if (!override) setDraft("");
@@ -2492,6 +2876,8 @@ function TabRuntime({
       state.skills,
       sendRpc,
       recordAbortDraft,
+      markOptimisticBusy,
+      addLibraryFilesFromMessage,
       applySlashSettingsCommand,
       openSettingsAt,
       oneShotPlanArmed,
@@ -2508,6 +2894,15 @@ function TabRuntime({
     }
     sendRpc({ cmd: "abort" });
   }, [clearAbortDraft, draft, sendRpc]);
+
+  const prioritizeQueuedSend = useCallback(
+    (index: number) => {
+      if (!state.queuedSends[index]) return;
+      dispatch({ t: "prioritize_queued_send", index });
+      if (state.busy) sendRpc({ cmd: "abort" });
+    },
+    [sendRpc, state.busy, state.queuedSends],
+  );
 
   useEffect(() => {
     if (!state.busy) clearAbortDraft();
@@ -2646,6 +3041,10 @@ function TabRuntime({
     state.pendingRevisions,
   ]);
 
+  useEffect(() => {
+    if (!state.busy) optimisticBusyRef.current = false;
+  }, [state.busy]);
+
   const resolveConfirm = useCallback(
     (id: number, response: ConfirmationChoice) => {
       sendRpc({ cmd: "confirm_response", id, response });
@@ -2662,8 +3061,7 @@ function TabRuntime({
     [resolveConfirm],
   );
   const onAlwaysAllowConfirm = useCallback(
-    (id: number, prefix: string) =>
-      resolveConfirm(id, { type: "always_allow", prefix }),
+    (id: number, prefix: string) => resolveConfirm(id, { type: "always_allow", prefix }),
     [resolveConfirm],
   );
   const resolvePathAccess = useCallback(
@@ -2714,11 +3112,7 @@ function TabRuntime({
   const requestTranscriptFollow = useCallback(
     (smooth = false, followUpFrames = 8) => {
       if (!transcriptFollowRef.current) return false;
-      const didScroll = scrollVirtuosoToBottom(
-        virtuosoRef,
-        messageItems.length,
-        smooth,
-      );
+      const didScroll = scrollVirtuosoToBottom(virtuosoRef, messageItems.length, smooth);
       if (!didScroll) return false;
       setShowJumpButton(false);
       cancelScheduledTranscriptFollow();
@@ -2736,10 +3130,7 @@ function TabRuntime({
     },
     [cancelScheduledTranscriptFollow, messageItems.length],
   );
-  useEffect(
-    () => cancelScheduledTranscriptFollow,
-    [cancelScheduledTranscriptFollow],
-  );
+  useEffect(() => cancelScheduledTranscriptFollow, [cancelScheduledTranscriptFollow]);
   useEffect(() => {
     transcriptFollowRef.current = true;
     setShowJumpButton(false);
@@ -2818,9 +3209,7 @@ function TabRuntime({
   useEffect(() => {
     if (wasTranscriptBusyRef.current !== state.busy) {
       transcriptFollowRef.current = true;
-      const id = window.requestAnimationFrame(() =>
-        requestTranscriptFollow(true, 8),
-      );
+      const id = window.requestAnimationFrame(() => requestTranscriptFollow(true, 8));
       wasTranscriptBusyRef.current = state.busy;
       return () => window.cancelAnimationFrame(id);
     }
@@ -2847,9 +3236,7 @@ function TabRuntime({
 
   useEffect(() => {
     if (!transcriptFollowRef.current || messageItems.length === 0) return;
-    const id = window.requestAnimationFrame(() =>
-      requestTranscriptFollow(false, 6),
-    );
+    const id = window.requestAnimationFrame(() => requestTranscriptFollow(false, 6));
     return () => window.cancelAnimationFrame(id);
   }, [
     ctxCollapsed,
@@ -2937,11 +3324,9 @@ function TabRuntime({
         setJobsOpen((v) => !v);
       } else if (e.key === "Escape" && state.busy) {
         const target = e.target as HTMLElement | null;
-        if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA")
-          return;
+        if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
         // A modal is open — let its own Esc handler close it (#1670).
-        if (settingsOpen || settingsCardOpen || aboutOpen || jobsOpen || wdOpen)
-          return;
+        if (settingsOpen || settingsCardOpen || aboutOpen || jobsOpen || wdOpen) return;
         e.preventDefault();
         abort();
       } else if (e.key === "Enter" && !mod && !e.shiftKey && !e.altKey) {
@@ -2952,14 +3337,11 @@ function TabRuntime({
         const target = e.target as HTMLElement | null;
         if (
           target?.isContentEditable ||
-          target?.closest(
-            'input, textarea, button, select, a, [role="button"], [role="link"]',
-          )
+          target?.closest('input, textarea, button, select, a, [role="button"], [role="link"]')
         ) {
           return;
         }
-        if (settingsOpen || settingsCardOpen || aboutOpen || jobsOpen || wdOpen)
-          return;
+        if (settingsOpen || settingsCardOpen || aboutOpen || jobsOpen || wdOpen) return;
         // Enter grants the pending authorization prompt (run once), matching the
         // TUI where Enter confirms the highlighted choice (#1962).
         const confirm = state.pendingConfirms.at(-1);
@@ -3007,9 +3389,7 @@ function TabRuntime({
     about: () => setAboutOpen(true),
     abort,
     copyLast: () => {
-      const last = [...state.messages]
-        .reverse()
-        .find((m) => m.kind === "assistant");
+      const last = [...state.messages].reverse().find((m) => m.kind === "assistant");
       if (!last || last.kind !== "assistant") return;
       const text = last.segments
         .filter((s): s is { kind: "text"; text: string } => s.kind === "text")
@@ -3068,14 +3448,10 @@ function TabRuntime({
       cmd: "/copy",
       desc: t("app.cmd.copyLast"),
       run: () => {
-        const last = [...state.messages]
-          .reverse()
-          .find((m) => m.kind === "assistant");
+        const last = [...state.messages].reverse().find((m) => m.kind === "assistant");
         if (last?.kind === "assistant") {
           const text = last.segments
-            .filter(
-              (s): s is { kind: "text"; text: string } => s.kind === "text",
-            )
+            .filter((s): s is { kind: "text"; text: string } => s.kind === "text")
             .map((s) => s.text)
             .join("\n\n");
           if (text) {
@@ -3117,8 +3493,7 @@ function TabRuntime({
       desc: t("app.cmd.toggleLang"),
       run: () => {
         const langs = getSupportedLangs();
-        const next =
-          langs[(langs.indexOf(getLang()) + 1) % langs.length] ?? "en";
+        const next = langs[(langs.indexOf(getLang()) + 1) % langs.length] ?? "en";
         setLang(next);
         const langName = getLangLabel(next);
         if (shouldShowSettingsChangeToast("language")) {
@@ -3166,9 +3541,7 @@ function TabRuntime({
       },
     })),
   ];
-  const slashCommandNames = new Set(
-    slashCommands.map((command) => command.cmd.replace(/^\//, "")),
-  );
+  const slashCommandNames = new Set(slashCommands.map((command) => command.cmd.replace(/^\//, "")));
   const cliSlashCommands: SlashCmd[] = DESKTOP_CLI_SLASH_COMMANDS.filter(
     (spec) => !slashCommandNames.has(spec.cmd),
   ).map((spec) => ({
@@ -3194,13 +3567,10 @@ function TabRuntime({
     const firstUser = state.messages.find((m) => m.kind === "user");
     if (firstUser && firstUser.kind === "user") {
       const cleaned = firstUser.text.replace(/\s+/g, " ").trim();
-      if (cleaned)
-        return cleaned.length > 60 ? `${cleaned.slice(0, 60)}…` : cleaned;
+      if (cleaned) return cleaned.length > 60 ? `${cleaned.slice(0, 60)}…` : cleaned;
     }
     if (state.currentSession) {
-      const m = state.currentSession.match(
-        /^desktop-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/,
-      );
+      const m = state.currentSession.match(/^desktop-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/);
       if (m)
         return t("app.session.format", {
           month: m[2],
@@ -3255,9 +3625,7 @@ function TabRuntime({
             <div className="thread-inner">
               <PlanBanner
                 plan={state.activePlan!}
-                onDismiss={
-                  state.busy ? undefined : () => dispatch({ t: "dismiss_plan" })
-                }
+                onDismiss={state.busy ? undefined : () => dispatch({ t: "dismiss_plan" })}
               />
               <ActivePlanTaskCard plan={state.activePlan!} />
             </div>
@@ -3265,11 +3633,11 @@ function TabRuntime({
         : undefined,
       Footer: () => (
         <div className="thread-bottom-spacer">
-          <ThinkingBottomIndicator active={state.busy} />
+          <ThinkingBottomIndicator active={shouldShowThinkingFooter(state.messages, state.busy)} />
         </div>
       ),
     }),
-    [state.activePlan, state.busy],
+    [state.activePlan, state.busy, state.messages],
   );
 
   return (
@@ -3282,103 +3650,48 @@ function TabRuntime({
         onOpenHtmlFile: openHtmlFileInBrowser,
       }}
     >
-      <div
-        className="app"
-        data-theme={theme}
-        data-theme-style={themeStyle}
-        data-side-collapsed={sideCollapsed}
-        data-ctx-collapsed={ctxCollapsed}
-        data-bottom-collapsed={bottomCollapsed}
-        data-context-info-open={contextInfoOpen}
-        style={{
-          display: active ? undefined : "none",
-          ["--side-width" as string]: sideCollapsed ? "0px" : `${sideWidth}px`,
-          ["--ctx-width" as string]:
-            ctxCollapsed && !contextInfoOpen ? "0px" : `${ctxWidth}px`,
-          ["--bottom-height" as string]: bottomCollapsed
-            ? "0px"
-            : `${bottomHeight}px`,
-          ["--thread-max-width" as string]: `${threadMaxWidth}px`,
-          ["--composer-max-width" as string]: `${threadMaxWidth}px`,
-        }}
-      >
-        <TitleBar
-          session={session}
-          model={state.settings?.model}
-          sideOn={!sideCollapsed}
-          ctxOn={!ctxCollapsed}
-          contextInfoOn={contextInfoOpen}
-          bottomBarOn={!bottomCollapsed}
-          onToggleSide={onToggleSide}
-          onToggleCtx={toggleContextPanel}
-          onShowContextInfo={showContextInfo}
-          onToggleBottomBar={toggleBottomPanel}
-          onOpenCommands={() => palette.setOpen(true)}
-          onOpenSettings={() => openSettingsAt("general")}
-          onCopy={conversationCopy}
-          onExport={exportConversation}
-          onClear={clearConversation}
-          hasMessages={state.messages.length > 0}
-        />
+      <>
+        {active ? (
+          <>
+            <TitleBar
+              session={session}
+              model={state.settings?.model}
+              sideOn={!sideCollapsed}
+              ctxOn={!ctxCollapsed}
+              contextInfoOn={contextInfoOpen}
+              bottomBarOn={!bottomCollapsed}
+              onToggleSide={onToggleSide}
+              onToggleCtx={toggleContextPanel}
+              onShowContextInfo={showContextInfo}
+              onToggleBottomBar={toggleBottomPanel}
+              onOpenCommands={() => palette.setOpen(true)}
+              onOpenSettings={() => openSettingsAt("general")}
+              onCopy={conversationCopy}
+              onExport={exportConversation}
+              onClear={clearConversation}
+              hasMessages={state.messages.length > 0}
+            />
 
-        <TabBar
-          tabs={tabsList}
-          activeId={activeTabId}
-          setActive={setActiveTabId}
-          onClose={(id) => {
-            if (tabsList.length <= 1) return;
-            invoke("rpc_send", {
-              line: JSON.stringify({ cmd: "tab_close", tabId: id }),
-            }).catch((err) => console.error("tab_close failed", err));
-          }}
-          onNew={onNewTab}
-          singleTab={tabsList.length <= 1}
-        />
-
-        <Sidebar
-          sessions={state.sessions}
-          importSources={state.externalImportSources}
-          activeName={state.currentSession}
-          workspaceDir={state.settings?.workspaceDir}
-          recentWorkspaces={state.settings?.recentWorkspaces ?? []}
-          onNewChat={(workspaceDir) => {
-            clearAbortDraft();
-            sendRpc({ cmd: "new_chat", workspaceDir });
-          }}
-          onLoadSession={(name) => {
-            clearAbortDraft();
-            sendRpc({ cmd: "session_load", name });
-          }}
-          onDeleteSession={(name) => sendRpc({ cmd: "session_delete", name })}
-          onRenameSession={(name, title) =>
-            sendRpc({ cmd: "session_rename", name, title })
-          }
-          onRefreshImportSources={() => sendRpc({ cmd: "session_import_scan" })}
-          onImportDetectedSessions={(sources: ExternalSessionSource[]) =>
-            sendRpc({ cmd: "session_import_bulk", sources })
-          }
-          onImportSession={({ source, path, name }) =>
-            sendRpc({
-              cmd: "session_import",
-              source,
-              path,
-              ...(name ? { name } : {}),
-            })
-          }
-          onOpenSettings={() => setSettingsCardOpen((open) => !open)}
-          onOpenCommands={() => palette.setOpen(true)}
-        />
-
-        {!sideCollapsed ? (
-          <div
-            className="resize-handle"
-            data-side="left"
-            data-dragging={undefined}
-            onMouseDown={onSideResizeDown}
-          />
+            <TabBar
+              tabs={tabsList}
+              activeId={activeTabId}
+              setActive={setActiveTabId}
+              onClose={(id) => {
+                if (tabsList.length <= 1) return;
+                invoke("rpc_send", {
+                  line: JSON.stringify({ cmd: "tab_close", tabId: id }),
+                }).catch((err) => console.error("tab_close failed", err));
+              }}
+              onNew={onNewTab}
+              singleTab={tabsList.length <= 1}
+            />
+          </>
         ) : null}
 
-        <main className="main" style={{ position: "relative" }}>
+        <main
+          className="main"
+          style={{ display: active ? undefined : "none", position: "relative" }}
+        >
           <JumpBar messages={state.messages} threadEl={threadRef.current} />
           {state.needsSetup ? (
             <NeedsSetupView
@@ -3404,9 +3717,7 @@ function TabRuntime({
                         const trimmed = text.trim();
                         if (trimmed.startsWith("/")) {
                           const cmd = trimmed.split(/\s+/)[0] ?? "";
-                          const match = allSlashCommands.find(
-                            (s) => s.cmd === cmd,
-                          );
+                          const match = allSlashCommands.find((s) => s.cmd === cmd);
                           if (match) {
                             match.run();
                             return;
@@ -3423,10 +3734,8 @@ function TabRuntime({
                     ref={virtuosoRef}
                     scrollerRef={setTranscriptScroller}
                     style={{ height: "100%" }}
-                    totalCount={messageItems.length}
-                    computeItemKey={(index) =>
-                      chatMessageKey(messageItems[index], index)
-                    }
+                    data={messageItems}
+                    computeItemKey={(index, item) => chatMessageKey(item, index)}
                     atBottomThreshold={TRANSCRIPT_BOTTOM_THRESHOLD}
                     followOutput={"auto"}
                     atBottomStateChange={handleTranscriptBottomState}
@@ -3441,18 +3750,15 @@ function TabRuntime({
                       if (didFollow) setShowJumpButton(false);
                     }}
                     components={threadVirtuosoComponents}
-                    itemContent={(index) => {
-                      const m = state.messages[index]!;
+                    itemContent={(index, m) => {
+                      if (!m) return null;
                       if (m.kind === "user") {
                         const rollbackAvailable = canRollbackMessage(
                           state.messages,
                           index,
                           state.busy,
                         );
-                        const rollbackTarget = rollbackTargetForMessage(
-                          state.messages,
-                          index,
-                        );
+                        const rollbackTarget = rollbackTargetForMessage(state.messages, index);
                         return (
                           <div className="thread-inner" data-turn={m.turn}>
                             <TurnDivider label={`turn ${m.turn}`} />
@@ -3463,10 +3769,7 @@ function TabRuntime({
                               rollbackAvailable={rollbackAvailable}
                               onRollback={() => {
                                 if (rollbackTarget)
-                                  rollbackToMessage(
-                                    rollbackTarget.turn,
-                                    rollbackTarget.role,
-                                  );
+                                  rollbackToMessage(rollbackTarget.turn, rollbackTarget.role);
                               }}
                             />
                           </div>
@@ -3478,13 +3781,8 @@ function TabRuntime({
                           index,
                           state.busy,
                         );
-                        const stats = !m.pending
-                          ? countFileStats(m.segments)
-                          : null;
-                        const rollbackTarget = rollbackTargetForMessage(
-                          state.messages,
-                          index,
-                        );
+                        const stats = !m.pending ? countFileStats(m.segments) : null;
+                        const rollbackTarget = rollbackTargetForMessage(state.messages, index);
                         return (
                           <div className="thread-inner">
                             <AssistantMsg
@@ -3498,10 +3796,7 @@ function TabRuntime({
                               rollbackAvailable={rollbackAvailable}
                               onRollback={() => {
                                 if (rollbackTarget)
-                                  rollbackToMessage(
-                                    rollbackTarget.turn,
-                                    rollbackTarget.role,
-                                  );
+                                  rollbackToMessage(rollbackTarget.turn, rollbackTarget.role);
                               }}
                               processCardsDefaultOpen={
                                 state.settings?.processCardsDefaultOpen ?? false
@@ -3548,12 +3843,8 @@ function TabRuntime({
                     <CheckpointApprovalCard
                       key={`cp-${c.id}`}
                       c={c}
-                      onContinue={() =>
-                        resolveCheckpoint(c.id, { type: "continue" })
-                      }
-                      onRevise={() =>
-                        resolveCheckpoint(c.id, { type: "revise" })
-                      }
+                      onContinue={() => resolveCheckpoint(c.id, { type: "continue" })}
+                      onRevise={() => resolveCheckpoint(c.id, { type: "revise" })}
                       onStop={() => resolveCheckpoint(c.id, { type: "stop" })}
                     />
                   ))}
@@ -3561,12 +3852,8 @@ function TabRuntime({
                     <RevisionApprovalCard
                       key={`rv-${r.id}`}
                       r={r}
-                      onAccept={() =>
-                        resolveRevision(r.id, { type: "accepted" })
-                      }
-                      onReject={() =>
-                        resolveRevision(r.id, { type: "rejected" })
-                      }
+                      onAccept={() => resolveRevision(r.id, { type: "accepted" })}
+                      onReject={() => resolveRevision(r.id, { type: "rejected" })}
                     />
                   ))}
                   {state.pendingConfirms.map((c) => (
@@ -3584,9 +3871,7 @@ function TabRuntime({
                     <PathAccessApprovalCard
                       key={`pa-${p.id}`}
                       prompt={p.prompt}
-                      onAllow={() =>
-                        resolvePathAccess(p.id, { type: "run_once" })
-                      }
+                      onAllow={() => resolvePathAccess(p.id, { type: "run_once" })}
                       onAlwaysAllow={(prefix) =>
                         resolvePathAccess(p.id, {
                           type: "always_allow",
@@ -3600,9 +3885,7 @@ function TabRuntime({
                     <ChoiceApprovalCard
                       key={`ch-${c.id}`}
                       c={c}
-                      onPick={(optionId) =>
-                        resolveChoice(c.id, { type: "pick", optionId })
-                      }
+                      onPick={(optionId) => resolveChoice(c.id, { type: "pick", optionId })}
                       onCancel={() => resolveChoice(c.id, { type: "cancel" })}
                     />
                   ))}
@@ -3654,17 +3937,14 @@ function TabRuntime({
                 onMentionPreview={previewMention}
                 onMentionPicked={markMentionPicked}
                 mentionResults={state.mentionResults}
+                onOpenSourceSearch={openLibrarySearch}
                 queuedSends={state.queuedSends}
                 onQueueWhileBusy={(text) => {
                   dispatch({ t: "enqueue_send", text });
                   setDraft("");
                 }}
-                onDequeueSend={(index) =>
-                  dispatch({ t: "dequeue_send", index })
-                }
-                onPrioritizeQueuedSend={(index) =>
-                  dispatch({ t: "prioritize_queued_send", index })
-                }
+                onDequeueSend={(index) => dispatch({ t: "dequeue_send", index })}
+                onPrioritizeQueuedSend={prioritizeQueuedSend}
                 initialHistory={state.settings?.promptHistory}
                 onHistoryPush={(entry) => {
                   // Use saveSettings (RPC only, no local state patch) so the
@@ -3675,225 +3955,247 @@ function TabRuntime({
                   saveSettings({ promptHistory: [entry] });
                 }}
               />
+              <SourceSearchPopover
+                open={sourceSearchOpen}
+                sources={librarySources}
+                sourceSearch={state.sourceSearchResults}
+                onClose={() => setSourceSearchOpen(false)}
+                onSourceSearch={searchLibrarySources}
+                onAddSource={addLibrarySource}
+                onOpenWebSource={openBrowserUrl}
+                onPreviewFileSource={(path) => previewFile({ path })}
+                onRevealFileSource={revealLibraryFileSource}
+              />
             </>
           )}
         </main>
 
-        {(!ctxCollapsed || contextInfoOpen) && bottomCollapsed ? (
-          <div
-            className="resize-handle"
-            data-side="right"
-            data-dragging={undefined}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label={t("app.resizeContextSidebar")}
-            title={t("app.resizeContextSidebar")}
-            tabIndex={0}
-            onMouseDown={onCtxResizeDown}
-          />
+        {active ? (
+          <>
+            {(!ctxCollapsed || contextInfoOpen) && bottomCollapsed ? (
+              <div
+                className="resize-handle"
+                data-side="right"
+                data-dragging={undefined}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t("app.resizeContextSidebar")}
+                title={t("app.resizeContextSidebar")}
+                tabIndex={0}
+                onMouseDown={onCtxResizeDown}
+              />
+            ) : null}
+            {!bottomCollapsed ? (
+              <div
+                className="resize-handle"
+                data-side="bottom"
+                data-dragging={undefined}
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label={t("app.resizeBottomBar")}
+                title={t("app.resizeBottomBar")}
+                tabIndex={0}
+                onMouseDown={onBottomResizeDown}
+              />
+            ) : null}
+            <ContextPanel
+              settings={state.settings}
+              usage={state.usage}
+              mcpSpecs={state.mcpSpecs}
+              mcpBridged={state.mcpBridged}
+              subagents={state.subagents}
+              sessionFiles={state.sessionFiles}
+              memory={state.memory}
+              memoryDetail={state.memoryDetail}
+              librarySources={librarySources}
+              librarySearchFocusNonce={librarySearchFocusNonce}
+              sourceSearch={state.sourceSearchResults}
+              selectedFilePreview={filePreview.preview}
+              filePreviewLoading={filePreview.loading}
+              filePreviewError={filePreview.error}
+              filePreviewPath={filePreview.target?.path ?? null}
+              tabs={contextTabState.tabs}
+              activeTabId={contextTabState.activeId}
+              onTabSelect={selectContextTab}
+              onTabClose={closeContextTab}
+              onNewTabMode={openContextPanelMode}
+              onCloseSidebar={() => {
+                if (!bottomCollapsed) {
+                  toggleBottomPanel();
+                  return;
+                }
+                if (!ctxCollapsed) onToggleCtx();
+              }}
+              onMentionQuery={queryMentions}
+              onMentionPicked={markMentionPicked}
+              mentionResults={state.mentionResults}
+              sideChats={state.sideChats}
+              sideChatBusy={state.sideChats.some((entry) => entry.status === "pending")}
+              sideChatDisabled={!state.ready}
+              onSideChatSend={sendSideChat}
+              visible={bottomCollapsed ? !ctxCollapsed && !contextInfoOpen : !bottomCollapsed}
+              placement={bottomCollapsed ? "side" : "bottom"}
+              onOpenSubagent={(name) => {
+                clearAbortDraft();
+                sendRpc({ cmd: "session_load", name, openInNewTab: isTabBusy() });
+              }}
+              onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
+              onSourceSearch={searchLibrarySources}
+              onAddLibrarySource={addLibrarySource}
+              onRemoveLibrarySource={removeLibrarySource}
+              onImportLibraryFiles={importLibraryFiles}
+              onOpenWebSource={openBrowserUrl}
+              onRevealFileSource={revealLibraryFileSource}
+              onPreviewFile={previewFile}
+            />
+            <ContextInfoPopover
+              open={contextInfoOpen}
+              settings={state.settings}
+              usage={state.usage}
+              mcpSpecs={state.mcpSpecs}
+              mcpBridged={state.mcpBridged}
+              subagents={state.subagents}
+              sessionFiles={state.sessionFiles}
+              memory={state.memory}
+              memoryDetail={state.memoryDetail}
+              activePath={
+                activeContextTab?.filePreview?.path ??
+                activeContextTab?.filePreviewPath ??
+                filePreview.preview?.path ??
+                filePreview.target?.path ??
+                null
+              }
+              onOpenSubagent={(name) => {
+                clearAbortDraft();
+                sendRpc({ cmd: "session_load", name, openInNewTab: isTabBusy() });
+              }}
+              onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
+              onPreviewFile={previewFile}
+            />
+
+            {settingsCardOpen ? (
+              <SettingsStatusCard
+                balance={state.balance}
+                usage={state.usage}
+                currency={currency}
+                theme={theme}
+                themeStyle={themeStyle}
+                jobs={state.jobs}
+                jobsOpen={jobsOpen}
+                onToggleJobs={() => {
+                  setJobsOpen((v) => !v);
+                  setSettingsCardOpen(false);
+                }}
+                onSetThemeStyle={onSetThemeStyle}
+                onToggleTheme={onToggleTheme}
+                onToggleCurrency={onToggleCurrency}
+                onOpenSettings={() => openSettingsAt("general")}
+                onClose={() => setSettingsCardOpen(false)}
+              />
+            ) : null}
+
+            <CommandPalette
+              open={palette.open}
+              onClose={() => palette.setOpen(false)}
+              commands={commands}
+            />
+
+            <WorkdirPop
+              open={wdOpen}
+              onClose={() => setWdOpen(false)}
+              recent={state.settings?.recentWorkspaces ?? []}
+              current={state.settings?.workspaceDir}
+              anchor={wdAnchor}
+              onPick={(path) => {
+                clearAbortDraft();
+                saveSettings({ workspaceDir: path });
+              }}
+              onBrowse={pickWorkspace}
+              onRemoveRecent={(path) => {
+                const nextRecent = (state.settings?.recentWorkspaces ?? []).filter(
+                  (p) => p !== path,
+                );
+                applySettingsPatch({ recentWorkspaces: nextRecent });
+              }}
+            />
+
+            {aboutOpen ? <AboutModal onClose={() => setAboutOpen(false)} /> : null}
+
+            {settingsOpen && state.settings ? (
+              <SettingsModal
+                settings={state.settings}
+                balance={state.balance}
+                usage={state.usage}
+                currency={currency}
+                theme={theme}
+                themeStyle={themeStyle}
+                onSetTheme={onSetTheme}
+                onSetThemeStyle={onSetThemeStyle}
+                fontScale={fontScale}
+                onSetFontScale={onSetFontScale}
+                fontFamily={fontFamily}
+                onSetFontFamily={onSetFontFamily}
+                customFontFamily={customFontFamily}
+                onSetCustomFontFamily={onSetCustomFontFamily}
+                initialPage={settingsPage}
+                mcpSpecs={state.mcpSpecs}
+                mcpBridged={state.mcpBridged}
+                skills={state.skills}
+                skillRoots={state.skillRoots}
+                memory={state.memory}
+                memoryDetail={state.memoryDetail}
+                qq={state.qq}
+                onClose={() => setSettingsOpen(false)}
+                onSave={applySettingsPatch}
+                onSaveApiKey={saveApiKey}
+                onLoadQQ={loadQQSettings}
+                onConnectQQ={connectQQ}
+                onDisconnectQQ={disconnectQQ}
+                onSaveQQConfig={saveQQConfig}
+                onOpenQQApplyLink={() =>
+                  openUrl("https://q.qq.com/qqbot/openclaw/login.html").catch(() => undefined)
+                }
+                onPickWorkspace={pickWorkspace}
+                onAddMcpSpec={addMcpSpec}
+                onRemoveMcpSpec={removeMcpSpec}
+                onEnableMcpSpec={enableMcpSpec}
+                onDisableMcpSpec={disableMcpSpec}
+                onReconnectMcpSpecs={reconnectMcpSpecs}
+                onAddSkillPath={addSkillPath}
+                onRemoveSkillPath={removeSkillPath}
+                onCreateSkill={createSkill}
+                onSetSkillModel={setSkillModel}
+                onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
+                onRefreshMemory={() => sendRpc({ cmd: "memory_refresh" })}
+                onDeleteMemory={(path) => sendRpc({ cmd: "memory_delete", path })}
+                onSaveMemory={(input) => sendRpc({ cmd: "memory_save", ...input })}
+                onOpenAbout={() => {
+                  setSettingsOpen(false);
+                  setAboutOpen(true);
+                }}
+              />
+            ) : null}
+
+            <JobsPop
+              open={jobsOpen}
+              onClose={() => setJobsOpen(false)}
+              jobs={state.jobs}
+              onStop={(jobId) => sendRpc({ cmd: "jobs_stop", jobId })}
+              onStopAll={() => sendRpc({ cmd: "jobs_stop_all" })}
+            />
+
+            <Toast message={toast} />
+
+            <AppContextMenu
+              workspaceDir={state.settings?.workspaceDir}
+              editor={state.settings?.editor}
+              onPreviewFile={previewFile}
+            />
+
+            {splashOn ? <Splash onDone={() => setSplashOn(false)} /> : null}
+          </>
         ) : null}
-        {!bottomCollapsed ? (
-          <div
-            className="resize-handle"
-            data-side="bottom"
-            data-dragging={undefined}
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label={t("app.resizeBottomBar")}
-            title={t("app.resizeBottomBar")}
-            tabIndex={0}
-            onMouseDown={onBottomResizeDown}
-          />
-        ) : null}
-        <ContextPanel
-          settings={state.settings}
-          usage={state.usage}
-          mcpSpecs={state.mcpSpecs}
-          mcpBridged={state.mcpBridged}
-          subagents={state.subagents}
-          sessionFiles={state.sessionFiles}
-          memory={state.memory}
-          memoryDetail={state.memoryDetail}
-          selectedFilePreview={filePreview.preview}
-          filePreviewLoading={filePreview.loading}
-          filePreviewError={filePreview.error}
-          filePreviewPath={filePreview.target?.path ?? null}
-          mode={contextPanelMode}
-          onModeChange={setContextPanelMode}
-          onCloseSidebar={() => {
-            if (!bottomCollapsed) {
-              toggleBottomPanel();
-              return;
-            }
-            if (!ctxCollapsed) onToggleCtx();
-          }}
-          onMentionQuery={queryMentions}
-          onMentionPicked={markMentionPicked}
-          mentionResults={state.mentionResults}
-          sideChats={state.sideChats}
-          sideChatBusy={state.sideChats.some(
-            (entry) => entry.status === "pending",
-          )}
-          sideChatDisabled={!state.ready}
-          onSideChatSend={sendSideChat}
-          browserRequest={browserRequest}
-          visible={
-            bottomCollapsed
-              ? !ctxCollapsed && !contextInfoOpen
-              : !bottomCollapsed
-          }
-          placement={bottomCollapsed ? "side" : "bottom"}
-          onOpenSubagent={(name) => {
-            clearAbortDraft();
-            sendRpc({ cmd: "session_load", name });
-          }}
-          onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
-          onPreviewFile={previewFile}
-        />
-        <ContextInfoPopover
-          open={contextInfoOpen}
-          settings={state.settings}
-          usage={state.usage}
-          mcpSpecs={state.mcpSpecs}
-          mcpBridged={state.mcpBridged}
-          subagents={state.subagents}
-          sessionFiles={state.sessionFiles}
-          memory={state.memory}
-          memoryDetail={state.memoryDetail}
-          activePath={
-            filePreview.preview?.path ?? filePreview.target?.path ?? null
-          }
-          onOpenSubagent={(name) => {
-            clearAbortDraft();
-            sendRpc({ cmd: "session_load", name });
-          }}
-          onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
-          onPreviewFile={previewFile}
-        />
-
-        {settingsCardOpen ? (
-          <SettingsStatusCard
-            balance={state.balance}
-            usage={state.usage}
-            currency={currency}
-            theme={theme}
-            themeStyle={themeStyle}
-            jobs={state.jobs}
-            jobsOpen={jobsOpen}
-            onToggleJobs={() => {
-              setJobsOpen((v) => !v);
-              setSettingsCardOpen(false);
-            }}
-            onSetThemeStyle={onSetThemeStyle}
-            onToggleTheme={onToggleTheme}
-            onToggleCurrency={onToggleCurrency}
-            onOpenSettings={() => openSettingsAt("general")}
-            onClose={() => setSettingsCardOpen(false)}
-          />
-        ) : null}
-
-        <CommandPalette
-          open={palette.open}
-          onClose={() => palette.setOpen(false)}
-          commands={commands}
-        />
-
-        <WorkdirPop
-          open={wdOpen}
-          onClose={() => setWdOpen(false)}
-          recent={state.settings?.recentWorkspaces ?? []}
-          current={state.settings?.workspaceDir}
-          anchor={wdAnchor}
-          onPick={(path) => {
-            clearAbortDraft();
-            saveSettings({ workspaceDir: path });
-          }}
-          onBrowse={pickWorkspace}
-          onRemoveRecent={(path) => {
-            const nextRecent = (state.settings?.recentWorkspaces ?? []).filter(
-              (p) => p !== path,
-            );
-            applySettingsPatch({ recentWorkspaces: nextRecent });
-          }}
-        />
-
-        {aboutOpen ? <AboutModal onClose={() => setAboutOpen(false)} /> : null}
-
-        {settingsOpen && state.settings ? (
-          <SettingsModal
-            settings={state.settings}
-            balance={state.balance}
-            usage={state.usage}
-            currency={currency}
-            theme={theme}
-            themeStyle={themeStyle}
-            onSetTheme={onSetTheme}
-            onSetThemeStyle={onSetThemeStyle}
-            fontScale={fontScale}
-            onSetFontScale={onSetFontScale}
-            fontFamily={fontFamily}
-            onSetFontFamily={onSetFontFamily}
-            customFontFamily={customFontFamily}
-            onSetCustomFontFamily={onSetCustomFontFamily}
-            initialPage={settingsPage}
-            mcpSpecs={state.mcpSpecs}
-            mcpBridged={state.mcpBridged}
-            skills={state.skills}
-            skillRoots={state.skillRoots}
-            memory={state.memory}
-            memoryDetail={state.memoryDetail}
-            qq={state.qq}
-            onClose={() => setSettingsOpen(false)}
-            onSave={applySettingsPatch}
-            onSaveApiKey={saveApiKey}
-            onLoadQQ={loadQQSettings}
-            onConnectQQ={connectQQ}
-            onDisconnectQQ={disconnectQQ}
-            onSaveQQConfig={saveQQConfig}
-            onOpenQQApplyLink={() =>
-              openUrl("https://q.qq.com/qqbot/openclaw/login.html").catch(
-                () => undefined,
-              )
-            }
-            onPickWorkspace={pickWorkspace}
-            onAddMcpSpec={addMcpSpec}
-            onRemoveMcpSpec={removeMcpSpec}
-            onEnableMcpSpec={enableMcpSpec}
-            onDisableMcpSpec={disableMcpSpec}
-            onReconnectMcpSpecs={reconnectMcpSpecs}
-            onAddSkillPath={addSkillPath}
-            onRemoveSkillPath={removeSkillPath}
-            onCreateSkill={createSkill}
-            onSetSkillModel={setSkillModel}
-            onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
-            onRefreshMemory={() => sendRpc({ cmd: "memory_refresh" })}
-            onDeleteMemory={(path) => sendRpc({ cmd: "memory_delete", path })}
-            onSaveMemory={(input) => sendRpc({ cmd: "memory_save", ...input })}
-            onOpenAbout={() => {
-              setSettingsOpen(false);
-              setAboutOpen(true);
-            }}
-          />
-        ) : null}
-
-        <JobsPop
-          open={jobsOpen}
-          onClose={() => setJobsOpen(false)}
-          jobs={state.jobs}
-          onStop={(jobId) => sendRpc({ cmd: "jobs_stop", jobId })}
-          onStopAll={() => sendRpc({ cmd: "jobs_stop_all" })}
-        />
-
-        <Toast message={toast} />
-
-        <AppContextMenu
-          workspaceDir={state.settings?.workspaceDir}
-          editor={state.settings?.editor}
-          onPreviewFile={previewFile}
-        />
-
-        {splashOn ? <Splash onDone={() => setSplashOn(false)} /> : null}
-      </div>
+      </>
     </WorkspaceProvider>
   );
 }
@@ -3969,6 +4271,22 @@ function WinClose() {
   );
 }
 
+export function shouldSkipInactiveTabRuntimeRender(
+  prev: { tabId: string; active: boolean },
+  next: { tabId: string; active: boolean },
+): boolean {
+  if (prev.tabId !== next.tabId) return false;
+  if (prev.active !== next.active) return false;
+  if (prev.active || next.active) return false;
+  return true;
+}
+
+function areTabRuntimePropsEqual(prev: TabRuntimeProps, next: TabRuntimeProps): boolean {
+  return shouldSkipInactiveTabRuntimeRender(prev, next);
+}
+
+const TabRuntime = memo(TabRuntimeInner, areTabRuntimePropsEqual);
+
 function TitleBar({
   session,
   model,
@@ -4041,10 +4359,7 @@ function TitleBar({
   useEffect(() => {
     if (!menuOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (
-        moreWrapRef.current &&
-        !moreWrapRef.current.contains(e.target as Node)
-      )
+      if (moreWrapRef.current && !moreWrapRef.current.contains(e.target as Node))
         setMenuOpen(false);
     };
     window.addEventListener("mousedown", onDown);
@@ -4231,11 +4546,7 @@ function TitleBar({
             <button
               type="button"
               className="win-ctrl"
-              title={
-                isMaximized
-                  ? t("app.titlebar.restore")
-                  : t("app.titlebar.maximize")
-              }
+              title={isMaximized ? t("app.titlebar.restore") : t("app.titlebar.maximize")}
               onMouseDown={(e) => {
                 e.stopPropagation();
                 void toggleWindowExpanded(win, false, isMaximized);
@@ -4269,7 +4580,7 @@ function TabBar({
   onNew,
   singleTab,
 }: {
-  tabs: { id: string; workspaceDir?: string }[];
+  tabs: TabMeta[];
   activeId: string;
   setActive: (id: string) => void;
   onClose: (id: string) => void;
@@ -4290,7 +4601,7 @@ function TabBar({
             onClick={() => setActive(t.id)}
             title={displayWorkspacePath(ws, label)}
           >
-            <span className="dot" data-state="running" />
+            <span className="dot" data-state={t.busy ? "running" : "idle"} />
             <span className="label">{label}</span>
             {!singleTab ? (
               <span
@@ -4306,11 +4617,7 @@ function TabBar({
           </div>
         );
       })}
-      <div
-        className="tab newtab"
-        title={t("app.tab.newTabTitle")}
-        onClick={onNew}
-      >
+      <div className="tab newtab" title={t("app.tab.newTabTitle")} onClick={onNew}>
         <I.plus size={12} />
         <span className="newtab-label">{t("app.tab.newTab")}</span>
       </div>
@@ -4340,10 +4647,7 @@ function MainHead({
   useEffect(() => {
     if (!exportMenuOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (
-        exportMenuRef.current &&
-        !exportMenuRef.current.contains(e.target as Node)
-      ) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
         setExportMenuOpen(false);
       }
     };
@@ -4455,9 +4759,7 @@ function EmptyState({
     recentSuggestions.length > 0
       ? [
           ...recentSuggestions,
-          ...fallbackSuggestions.filter(
-            (item) => !recentSuggestions.includes(item),
-          ),
+          ...fallbackSuggestions.filter((item) => !recentSuggestions.includes(item)),
         ].slice(0, 4)
       : fallbackSuggestions;
   const wsLabel = workspaceDir ? displayWorkspaceBasename(workspaceDir) : null;
@@ -4477,12 +4779,7 @@ function EmptyState({
       </div>
       <div className="empty-suggestions">
         {suggestions.map((s) => (
-          <button
-            key={s}
-            type="button"
-            className="empty-suggestion"
-            onClick={() => onPick(s)}
-          >
+          <button key={s} type="button" className="empty-suggestion" onClick={() => onPick(s)}>
             {s}
           </button>
         ))}
@@ -4514,9 +4811,7 @@ export function NeedsSetupView({
         gap: 18,
       }}
     >
-      <div style={{ fontSize: 18, fontWeight: 600 }}>
-        {t("app.setup.welcome")}
-      </div>
+      <div style={{ fontSize: 18, fontWeight: 600 }}>{t("app.setup.welcome")}</div>
       <div
         style={{
           fontSize: 12.5,
@@ -4569,9 +4864,7 @@ export function NeedsSetupView({
         >
           <I.info size={15} style={{ marginTop: 1, flex: "0 0 auto" }} />
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div
-              style={{ fontSize: 12.5, fontWeight: 650, color: "var(--fg)" }}
-            >
+            <div style={{ fontSize: 12.5, fontWeight: 650, color: "var(--fg)" }}>
               {t("app.setup.apiKeyHintTitle")}
             </div>
             <div style={{ fontSize: 12, lineHeight: 1.5, marginTop: 3 }}>
@@ -4581,9 +4874,7 @@ export function NeedsSetupView({
               type="button"
               className="btn ghost"
               style={{ marginTop: 7, padding: "4px 0", height: "auto" }}
-              onClick={() =>
-                openUrl(DEEPSEEK_API_KEYS_URL).catch(() => undefined)
-              }
+              onClick={() => openUrl(DEEPSEEK_API_KEYS_URL).catch(() => undefined)}
               aria-label={t("app.setup.openApiKeysAria")}
             >
               <I.link size={13} />
@@ -4661,18 +4952,10 @@ function UpdateOverlay({
           ) : null}
         </div>
         <div className="prog">
-          <button
-            type="button"
-            onClick={onInstall}
-            disabled={status === "installing"}
-          >
+          <button type="button" onClick={onInstall} disabled={status === "installing"}>
             {t("app.update.install")}
           </button>
-          <button
-            type="button"
-            onClick={onDismiss}
-            disabled={status === "installing"}
-          >
+          <button type="button" onClick={onDismiss} disabled={status === "installing"}>
             {t("app.update.later")}
           </button>
         </div>
@@ -4693,26 +4976,24 @@ type TabMeta = { id: string; workspaceDir?: string; busy?: boolean };
 export function App() {
   const [tabs, setTabs] = useState<TabMeta[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>("");
-  const [startupFailure, setStartupFailure] =
-    useState<StartupFailureState | null>(null);
+  const [startupFailure, setStartupFailure] = useState<StartupFailureState | null>(null);
   const [startupRetryNonce, setStartupRetryNonce] = useState(0);
+  const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, TabRuntimeSnapshot>>({});
+  const [sidebarSessions, setSidebarSessions] = useState<SessionInfo[]>([]);
+  const [sidebarImportSources, setSidebarImportSources] = useState<ExternalSessionApp[]>([]);
   const dispatchersRef = useRef<Map<string, TabDispatcher>>(new Map());
   const pendingEventsRef = useRef<Map<string, TabAction[]>>(new Map());
-  const pendingDeltasRef = useRef<Map<string, DeltaBatchItem[]>>(new Map());
-  const rafScheduledRef = useRef(false);
-  const deltaFlushTimeoutRef = useRef<number | null>(null);
+  const runtimeControlsRef = useRef<Map<string, TabRuntimeControls>>(new Map());
+  const rpcSendQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
   const startupStderrRef = useRef<string[]>([]);
   const tabsRef = useRef<TabMeta[]>([]);
+  const pendingRestoredFocusRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
 
-  const [pendingUpdate, setPendingUpdate] = useState<JupiterUpdate | null>(
-    null,
-  );
-  const [updateStatus, setUpdateStatus] = useState<
-    "idle" | "installing" | "error"
-  >("idle");
+  const [pendingUpdate, setPendingUpdate] = useState<JupiterUpdate | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "installing" | "error">("idle");
   const [updateProgress, setUpdateProgress] = useState<{
     downloaded: number;
     total: number | null;
@@ -4731,9 +5012,7 @@ export function App() {
     const style = localStorage.getItem("jupiter.themeStyle");
     if (isThemeStyle(style)) return style;
     const storedTheme = localStorage.getItem("jupiter.theme");
-    return defaultStyleForTheme(
-      isTheme(storedTheme) ? storedTheme : THEME.LIGHT,
-    );
+    return defaultStyleForTheme(isTheme(storedTheme) ? storedTheme : THEME.LIGHT);
   });
   const [fontScale, setFontScale] = useState<FontScale>(() => {
     const v = localStorage.getItem("jupiter.fontScale");
@@ -4764,14 +5043,8 @@ export function App() {
     requireCollapsed: requireBottomCollapsed,
   } = useAutoCollapse("jupiter.bottomCollapsed", true);
 
-  const { width: sideWidth, onMouseDown: onSideResizeDown } = useResizable(
-    "side",
-    sideCollapsed,
-  );
-  const { width: ctxWidth, onMouseDown: onCtxResizeDown } = useResizable(
-    "ctx",
-    ctxCollapsed,
-  );
+  const { width: sideWidth, onMouseDown: onSideResizeDown } = useResizable("side", sideCollapsed);
+  const { width: ctxWidth, onMouseDown: onCtxResizeDown } = useResizable("ctx", ctxCollapsed, true);
   const { height: bottomHeight, onMouseDown: onBottomResizeDown } =
     useBottomResizable(bottomCollapsed);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -4802,8 +5075,7 @@ export function App() {
       } else if (next === RESPONSIVE_STAGE.COMPACT) {
         // Only force ctx collapse when entering compact from wider — coming
         // from narrow, the user may have manually opened ctx and we keep that.
-        if (prev === null || prev === RESPONSIVE_STAGE.WIDE)
-          requireCtxCollapsed();
+        if (prev === null || prev === RESPONSIVE_STAGE.WIDE) requireCtxCollapsed();
         requireBottomCollapsed();
         releaseSideCollapsed();
       } else {
@@ -4834,10 +5106,7 @@ export function App() {
 
   useEffect(() => {
     // Chromium webview supports `zoom`; scales every px-based size without touching CSS rules.
-    document.documentElement.style.setProperty(
-      "zoom",
-      String(FONT_SCALE_ZOOM[fontScale]),
-    );
+    document.documentElement.style.setProperty("zoom", String(FONT_SCALE_ZOOM[fontScale]));
     localStorage.setItem("jupiter.fontScale", fontScale);
   }, [fontScale]);
 
@@ -4865,25 +5134,76 @@ export function App() {
     const dispatch = dispatchersRef.current.get(tabId);
     if (dispatch) {
       dispatch(action);
+      return true;
     } else {
       const buf = pendingEventsRef.current.get(tabId) ?? [];
       buf.push(action);
       pendingEventsRef.current.set(tabId, buf);
+      return false;
     }
   }, []);
 
-  const registerDispatch = useCallback(
-    (tabId: string, d: TabDispatcher | null) => {
-      if (d) {
-        dispatchersRef.current.set(tabId, d);
-        const buf = pendingEventsRef.current.get(tabId);
-        if (buf && buf.length > 0) {
-          for (const action of buf) d(action);
-          pendingEventsRef.current.delete(tabId);
-        }
-      } else {
-        dispatchersRef.current.delete(tabId);
+  const registerDispatch = useCallback((tabId: string, d: TabDispatcher | null) => {
+    if (d) {
+      dispatchersRef.current.set(tabId, d);
+      const buf = pendingEventsRef.current.get(tabId);
+      let drainedBufferedEvents = false;
+      if (buf && buf.length > 0) {
+        for (const action of buf) d(action);
+        pendingEventsRef.current.delete(tabId);
+        drainedBufferedEvents = true;
       }
+      if (drainedBufferedEvents && pendingRestoredFocusRef.current.delete(tabId)) {
+        setActiveTabId(tabId);
+      }
+    } else {
+      dispatchersRef.current.delete(tabId);
+    }
+  }, []);
+
+  const sendRpcToTab = useCallback((tabId: string, cmd: OutgoingCommand) => {
+    if (!tabId) return;
+    const payload = { tabId, ...cmd };
+    const line = JSON.stringify(payload);
+    const write = (): Promise<void> =>
+      invoke("rpc_send", { line })
+        .then(() => undefined)
+        .catch((err) => {
+          console.error(`${cmd.cmd} failed`, err);
+        });
+    const current = rpcSendQueuesRef.current.get(tabId) ?? Promise.resolve();
+    const next = current.then(write, write);
+    rpcSendQueuesRef.current.set(
+      tabId,
+      next.catch(() => {}),
+    );
+  }, []);
+
+  const onRuntimeSnapshot = useCallback((tabId: string, snapshot: TabRuntimeSnapshot) => {
+    setRuntimeSnapshots((prev) => {
+      const current = prev[tabId];
+      if (
+        current &&
+        current.currentSession === snapshot.currentSession &&
+        current.busy === snapshot.busy &&
+        current.sessions === snapshot.sessions &&
+        current.importSources === snapshot.importSources &&
+        current.workspaceDir === snapshot.workspaceDir &&
+        current.recentWorkspaces === snapshot.recentWorkspaces &&
+        current.model === snapshot.model &&
+        current.hasMessages === snapshot.hasMessages &&
+        current.contextInfoOpen === snapshot.contextInfoOpen
+      ) {
+        return prev;
+      }
+      return { ...prev, [tabId]: snapshot };
+    });
+  }, []);
+
+  const registerRuntimeControls = useCallback(
+    (tabId: string, controls: TabRuntimeControls | null) => {
+      if (controls) runtimeControlsRef.current.set(tabId, controls);
+      else runtimeControlsRef.current.delete(tabId);
     },
     [],
   );
@@ -4923,9 +5243,7 @@ export function App() {
             p ? { ...p, downloaded: p.downloaded + evt.data.chunkLength } : p,
           );
         } else if (evt.event === "Finished") {
-          setUpdateProgress((p) =>
-            p ? { ...p, downloaded: p.total ?? p.downloaded } : p,
-          );
+          setUpdateProgress((p) => (p ? { ...p, downloaded: p.total ?? p.downloaded } : p));
         }
       });
     } catch (err) {
@@ -4938,35 +5256,6 @@ export function App() {
     let cancelled = false;
     const cleanups: Array<() => void> = [];
 
-    const clearDeltaFlushTimeout = () => {
-      if (deltaFlushTimeoutRef.current === null) return;
-      window.clearTimeout(deltaFlushTimeoutRef.current);
-      deltaFlushTimeoutRef.current = null;
-    };
-    const flushDeltas = () => {
-      rafScheduledRef.current = false;
-      clearDeltaFlushTimeout();
-      if (cancelled) return;
-      for (const [tabId, items] of pendingDeltasRef.current) {
-        if (items.length === 0) continue;
-        deliverToTab(tabId, { t: "batch_delta", items });
-        pendingDeltasRef.current.set(tabId, []);
-      }
-    };
-    const scheduleFlush = () => {
-      if (rafScheduledRef.current || cancelled) return;
-      rafScheduledRef.current = true;
-      window.requestAnimationFrame(flushDeltas);
-      deltaFlushTimeoutRef.current = window.setTimeout(flushDeltas, 50);
-    };
-    const flushTabDeltas = (tabId: string) => {
-      const bucket = pendingDeltasRef.current.get(tabId);
-      if (bucket && bucket.length > 0) {
-        deliverToTab(tabId, { t: "batch_delta", items: bucket });
-        pendingDeltasRef.current.set(tabId, []);
-      }
-    };
-
     const setup = async () => {
       startupStderrRef.current = [];
       setStartupFailure(null);
@@ -4977,15 +5266,39 @@ export function App() {
             const tabId = ev.tabId;
 
             if (ev.type === "$tab_opened" && tabId) {
+              const delayRestoredFocus = Boolean(ev.active && ev.restoringSession);
+              if (delayRestoredFocus) {
+                pendingRestoredFocusRef.current.add(tabId);
+              }
               setTabs((prev) =>
                 prev.some((t) => t.id === tabId)
-                  ? prev
-                  : [...prev, { id: tabId, workspaceDir: ev.workspaceDir }],
+                  ? prev.map((t) =>
+                      t.id === tabId
+                        ? {
+                            ...t,
+                            workspaceDir: ev.workspaceDir,
+                            busy: ev.busy ?? t.busy,
+                          }
+                        : t,
+                    )
+                  : [
+                      ...prev,
+                      {
+                        id: tabId,
+                        workspaceDir: ev.workspaceDir,
+                        busy: ev.busy,
+                      },
+                    ],
               );
+              if (ev.busy !== undefined) {
+                deliverToTab(tabId, { t: "set_busy", busy: ev.busy });
+              }
               // Focus the tab the backend marked active (user-opened, or the
               // restored focused tab); otherwise keep focus, but make sure
               // *some* tab is active during a multi-tab restore.
-              setActiveTabId((prev) => (ev.active || !prev ? tabId : prev));
+              setActiveTabId((prev) =>
+                ev.active || !prev ? (delayRestoredFocus && prev ? prev : tabId) : prev,
+              );
               return;
             }
             if (ev.type === "$tab_closed" && tabId) {
@@ -4995,32 +5308,43 @@ export function App() {
                 const remaining = tabsRef.current.filter((t) => t.id !== tabId);
                 return remaining[0]?.id ?? "";
               });
+              setRuntimeSnapshots((prev) => {
+                if (!(tabId in prev)) return prev;
+                const next = { ...prev };
+                delete next[tabId];
+                return next;
+              });
               dispatchersRef.current.delete(tabId);
               pendingEventsRef.current.delete(tabId);
-              pendingDeltasRef.current.delete(tabId);
+              runtimeControlsRef.current.delete(tabId);
+              rpcSendQueuesRef.current.delete(tabId);
               return;
-            }
-
-            if (ev.type === "model.delta" && tabId) {
-              if (ev.channel === "content" || ev.channel === "reasoning") {
-                const bucket = pendingDeltasRef.current.get(tabId) ?? [];
-                bucket.push({
-                  turn: ev.turn,
-                  channel: ev.channel,
-                  text: ev.text,
-                });
-                pendingDeltasRef.current.set(tabId, bucket);
-                scheduleFlush();
-                return;
-              }
             }
 
             if (ev.type === "$settings" && tabId) {
               setTabs((prev) =>
-                prev.map((t) =>
-                  t.id === tabId ? { ...t, workspaceDir: ev.workspaceDir } : t,
-                ),
+                prev.map((t) => (t.id === tabId ? { ...t, workspaceDir: ev.workspaceDir } : t)),
               );
+            }
+
+            if (ev.type === "$sessions") {
+              setSidebarSessions(ev.items);
+            }
+
+            if (ev.type === "$session_import_sources") {
+              setSidebarImportSources(ev.apps);
+            }
+
+            if (ev.type === "$sessions" || ev.type === "$session_import_sources") {
+              const ids = new Set([
+                ...(tabId ? [tabId] : []),
+                ...tabsRef.current.map((t) => t.id),
+                ...dispatchersRef.current.keys(),
+              ]);
+              for (const id of ids) {
+                deliverToTab(id, { t: "incoming", event: ev });
+              }
+              return;
             }
 
             if (ev.type === "$jobs") {
@@ -5032,7 +5356,10 @@ export function App() {
 
             const target = tabId;
             if (target) {
-              flushTabDeltas(target);
+              const busy = tabBusyFromIncomingEvent(ev);
+              if (busy !== null) {
+                setTabs((prev) => prev.map((t) => (t.id === target ? { ...t, busy } : t)));
+              }
               if (ev.type === "$mention_results") {
                 deliverToTab(target, {
                   t: "mention_results",
@@ -5056,17 +5383,22 @@ export function App() {
                 });
                 return;
               }
-              deliverToTab(target, { t: "incoming", event: ev });
+              const delivered = deliverToTab(target, { t: "incoming", event: ev });
+              if (
+                ev.type === "$session_loaded" &&
+                pendingRestoredFocusRef.current.has(target) &&
+                delivered
+              ) {
+                pendingRestoredFocusRef.current.delete(target);
+                setActiveTabId(target);
+              }
             }
           } catch {
             console.error("bad rpc:event line", e.payload.data);
           }
         }),
         listen<{ data: string }>("rpc:stderr", (e) => {
-          startupStderrRef.current = [
-            ...startupStderrRef.current,
-            e.payload.data,
-          ].slice(-12);
+          startupStderrRef.current = [...startupStderrRef.current, e.payload.data].slice(-12);
           setStartupFailure((prev) =>
             prev
               ? coerceStartupFailure(
@@ -5078,8 +5410,6 @@ export function App() {
           console.warn("[jupiter stderr]", e.payload.data);
         }),
         listen<{ code: number | null }>("rpc:exit", (e) => {
-          for (const tabId of dispatchersRef.current.keys())
-            flushTabDeltas(tabId);
           if (dispatchersRef.current.size === 0) {
             setStartupFailure(
               coerceStartupFailure(
@@ -5110,9 +5440,7 @@ export function App() {
         }
       } catch (err) {
         if (!cancelled) {
-          setStartupFailure(
-            coerceStartupFailure(err, startupStderrRef.current),
-          );
+          setStartupFailure(coerceStartupFailure(err, startupStderrRef.current));
           console.error("rpc_spawn failed", err);
         }
       }
@@ -5120,7 +5448,6 @@ export function App() {
     void setup();
     return () => {
       cancelled = true;
-      clearDeltaFlushTimeout();
       for (const c of cleanups) c();
     };
   }, [deliverToTab, startupRetryNonce]);
@@ -5134,8 +5461,8 @@ export function App() {
   }, [activeTabId]);
 
   const openTab = useCallback(() => {
-    invoke("rpc_send", { line: JSON.stringify({ cmd: "tab_open" }) }).catch(
-      (err) => console.error("tab_open failed", err),
+    invoke("rpc_send", { line: JSON.stringify({ cmd: "tab_open" }) }).catch((err) =>
+      console.error("tab_open failed", err),
     );
   }, []);
 
@@ -5155,21 +5482,14 @@ export function App() {
       if (mod && (e.key === "t" || e.key === "T")) {
         e.preventDefault();
         openTab();
-      } else if (
-        mod &&
-        (e.key === "w" || e.key === "W") &&
-        activeTabId &&
-        tabs.length > 1
-      ) {
+      } else if (mod && (e.key === "w" || e.key === "W") && activeTabId && tabs.length > 1) {
         e.preventDefault();
         closeTab(activeTabId);
       } else if (mod && e.key === "Tab") {
         if (tabs.length <= 1) return;
         e.preventDefault();
         const idx = tabs.findIndex((t) => t.id === activeTabId);
-        const next = e.shiftKey
-          ? (idx - 1 + tabs.length) % tabs.length
-          : (idx + 1) % tabs.length;
+        const next = e.shiftKey ? (idx - 1 + tabs.length) % tabs.length : (idx + 1) % tabs.length;
         const target = tabs[next];
         if (target) setActiveTabId(target.id);
       } else if (mod && (e.key === "b" || e.key === "B")) {
@@ -5204,61 +5524,166 @@ export function App() {
     setCurrency((c) => {
       const next = c === "CNY" ? "USD" : "CNY";
       localStorage.setItem("jupiter.currency", next);
-      window.dispatchEvent(
-        new CustomEvent("jupiter:currency", { detail: next }),
-      );
+      window.dispatchEvent(new CustomEvent("jupiter:currency", { detail: next }));
       return next;
     });
   }, []);
 
+  const activeTabMeta = tabs.find((tab) => tab.id === activeTabId);
+  const activeRuntimeSnapshot = activeTabId ? runtimeSnapshots[activeTabId] : undefined;
+  const activeContextInfoOpen = activeRuntimeSnapshot?.contextInfoOpen ?? false;
+  const activeBusy = Boolean(activeRuntimeSnapshot?.busy || activeTabMeta?.busy);
+  const activeWorkspaceDir = activeRuntimeSnapshot?.workspaceDir ?? activeTabMeta?.workspaceDir;
+  const activeRecentWorkspaces = activeRuntimeSnapshot?.recentWorkspaces ?? [];
+  const sidebarSessionActivity = useMemo(() => {
+    const activity: Record<string, { busy: boolean }> = {};
+    for (const snapshot of Object.values(runtimeSnapshots)) {
+      if (!snapshot.currentSession || !snapshot.busy) continue;
+      activity[snapshot.currentSession] = { busy: true };
+    }
+    return activity;
+  }, [runtimeSnapshots]);
+  const shellThreadMaxWidth = getThreadMaxWidth({
+    viewportWidth,
+    visibleSide: sideCollapsed ? 0 : sideWidth,
+    visibleCtx: getVisibleContextWidth({
+      ctxCollapsed,
+      contextInfoOpen: activeContextInfoOpen,
+      ctxWidth,
+    }),
+  });
+
   if (startupFailure && tabs.length === 0) {
-    return (
-      <StartupFailure details={startupFailure.details} onRetry={retryStartup} />
-    );
+    return <StartupFailure details={startupFailure.details} onRetry={retryStartup} />;
   }
 
   return (
     <>
-      {tabs.map((t) => (
-        <TabRuntime
-          key={t.id}
-          tabId={t.id}
-          active={t.id === activeTabId}
-          currency={currency}
-          registerDispatch={registerDispatch}
-          onNewTab={openTab}
-          onCloseTab={() => closeTab(t.id)}
-          canCloseTab={tabs.length > 1}
-          theme={theme}
-          themeStyle={themeStyle}
-          onSetTheme={onSetTheme}
-          onSetThemeStyle={onSetThemeStyle}
-          onToggleTheme={onToggleTheme}
-          fontScale={fontScale}
-          onSetFontScale={setFontScale}
-          fontFamily={fontFamily}
-          onSetFontFamily={setFontFamily}
-          customFontFamily={customFontFamily}
-          onSetCustomFontFamily={setCustomFontFamily}
-          sideCollapsed={sideCollapsed}
-          ctxCollapsed={ctxCollapsed}
-          bottomCollapsed={bottomCollapsed}
-          sideWidth={sideWidth}
-          ctxWidth={ctxWidth}
-          bottomHeight={bottomHeight}
-          viewportWidth={viewportWidth}
-          onSideResizeDown={onSideResizeDown}
-          onCtxResizeDown={onCtxResizeDown}
-          onBottomResizeDown={onBottomResizeDown}
-          onToggleSide={onToggleSide}
-          onToggleCtx={onToggleCtx}
-          onToggleBottom={onToggleBottom}
-          onToggleCurrency={onToggleCurrency}
-          tabsList={tabs}
-          activeTabId={activeTabId}
-          setActiveTabId={setActiveTabId}
-        />
-      ))}
+      {tabs.length > 0 ? (
+        <div
+          className="app"
+          data-theme={theme}
+          data-theme-style={themeStyle}
+          data-side-collapsed={sideCollapsed}
+          data-ctx-collapsed={ctxCollapsed}
+          data-bottom-collapsed={bottomCollapsed}
+          data-context-info-open={activeContextInfoOpen}
+          style={{
+            ["--side-width" as string]: sideCollapsed ? "0px" : `${sideWidth}px`,
+            ["--ctx-width" as string]:
+              ctxCollapsed && !activeContextInfoOpen ? "0px" : `${ctxWidth}px`,
+            ["--bottom-height" as string]: bottomCollapsed ? "0px" : `${bottomHeight}px`,
+            ["--thread-max-width" as string]: `${shellThreadMaxWidth}px`,
+            ["--composer-max-width" as string]: `${shellThreadMaxWidth}px`,
+          }}
+        >
+          <Sidebar
+            sessions={sidebarSessions}
+            sessionActivity={sidebarSessionActivity}
+            importSources={sidebarImportSources}
+            activeName={activeRuntimeSnapshot?.currentSession}
+            workspaceDir={activeWorkspaceDir}
+            recentWorkspaces={activeRecentWorkspaces}
+            onNewChat={(workspaceDir) => {
+              runtimeControlsRef.current.get(activeTabId)?.clearAbortDraft();
+              sendRpcToTab(activeTabId, {
+                cmd: "new_chat",
+                workspaceDir,
+                openInNewTab: activeBusy,
+              });
+            }}
+            onLoadSession={(name) => {
+              runtimeControlsRef.current.get(activeTabId)?.clearAbortDraft();
+              sendRpcToTab(activeTabId, { cmd: "session_mark_read", name });
+              sendRpcToTab(activeTabId, {
+                cmd: "session_load",
+                name,
+                openInNewTab: activeBusy,
+              });
+            }}
+            onDeleteSession={(name) => sendRpcToTab(activeTabId, { cmd: "session_delete", name })}
+            onRenameSession={(name, title) =>
+              sendRpcToTab(activeTabId, { cmd: "session_rename", name, title })
+            }
+            onPatchSessionMeta={(name, patch) =>
+              sendRpcToTab(activeTabId, { cmd: "session_patch_meta", name, patch })
+            }
+            onMarkSessionRead={(name) =>
+              sendRpcToTab(activeTabId, { cmd: "session_mark_read", name })
+            }
+            onMarkSessionUnread={(name) =>
+              sendRpcToTab(activeTabId, { cmd: "session_mark_unread", name })
+            }
+            onRefreshImportSources={() => sendRpcToTab(activeTabId, { cmd: "session_import_scan" })}
+            onImportDetectedSessions={(sources: ExternalSessionSource[]) =>
+              sendRpcToTab(activeTabId, {
+                cmd: "session_import_bulk",
+                sources,
+              })
+            }
+            onImportSession={({ source, path, name }) =>
+              sendRpcToTab(activeTabId, {
+                cmd: "session_import",
+                source,
+                path,
+                ...(name ? { name } : {}),
+              })
+            }
+            onOpenSettings={() => runtimeControlsRef.current.get(activeTabId)?.openSettingsCard()}
+            onOpenCommands={() => runtimeControlsRef.current.get(activeTabId)?.openCommandPalette()}
+          />
+
+          {!sideCollapsed ? (
+            <div
+              className="resize-handle"
+              data-side="left"
+              data-dragging={undefined}
+              onMouseDown={onSideResizeDown}
+            />
+          ) : null}
+
+          {tabs.map((t) => (
+            <TabRuntime
+              key={t.id}
+              tabId={t.id}
+              active={t.id === activeTabId}
+              currency={currency}
+              registerDispatch={registerDispatch}
+              sendRpcToTab={sendRpcToTab}
+              onRuntimeSnapshot={onRuntimeSnapshot}
+              registerRuntimeControls={registerRuntimeControls}
+              onNewTab={openTab}
+              onCloseTab={() => closeTab(t.id)}
+              canCloseTab={tabs.length > 1}
+              theme={theme}
+              themeStyle={themeStyle}
+              onSetTheme={onSetTheme}
+              onSetThemeStyle={onSetThemeStyle}
+              onToggleTheme={onToggleTheme}
+              fontScale={fontScale}
+              onSetFontScale={setFontScale}
+              fontFamily={fontFamily}
+              onSetFontFamily={setFontFamily}
+              customFontFamily={customFontFamily}
+              onSetCustomFontFamily={setCustomFontFamily}
+              sideCollapsed={sideCollapsed}
+              ctxCollapsed={ctxCollapsed}
+              bottomCollapsed={bottomCollapsed}
+              sideWidth={sideWidth}
+              ctxWidth={ctxWidth}
+              onCtxResizeDown={onCtxResizeDown}
+              onBottomResizeDown={onBottomResizeDown}
+              onToggleSide={onToggleSide}
+              onToggleCtx={onToggleCtx}
+              onToggleBottom={onToggleBottom}
+              onToggleCurrency={onToggleCurrency}
+              tabsList={tabs}
+              activeTabId={activeTabId}
+              setActiveTabId={setActiveTabId}
+            />
+          ))}
+        </div>
+      ) : null}
       {pendingUpdate ? (
         <UpdateOverlay
           version={pendingUpdate.version}

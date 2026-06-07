@@ -62,6 +62,7 @@ import {
   normalizeMcpConfig,
   pushRecentWorkspace,
   readConfig,
+  webSearchEndpoint as readWebSearchEndpoint,
   webSearchEngine as readWebSearchEngine,
   saveApiKey,
   saveBaseUrl,
@@ -102,6 +103,13 @@ import {
   pauseGate,
 } from "../../core/pause-gate.js";
 import { autoResolveVerdict } from "../../core/pause-policy.js";
+import {
+  type LibrarySource,
+  addLibrarySourceForWorkspace,
+  listLibrarySourcesForWorkspace,
+  removeLibrarySourceForWorkspace,
+  updateLibrarySourceContentForWorkspace,
+} from "../../desktop/library-store.js";
 import { augmentProcessPath } from "../../desktop/login-shell-path.js";
 import {
   type MemoryEntryDetail,
@@ -150,8 +158,11 @@ import {
   listSessions,
   loadSessionMessages,
   loadSessionMeta,
+  markSessionRead,
+  markSessionUnread,
   patchSessionMeta,
   patchSessionWorkspaceIfMissing,
+  sessionIsUnread,
   sessionPath,
   timestampSuffix,
 } from "../../memory/session.js";
@@ -166,6 +177,7 @@ import { SkillStore, skillDisplayDescription } from "../../skills.js";
 import { countTokensBounded } from "../../tokenizer.js";
 import type { ChoiceOption } from "../../tools/choice.js";
 import type { SubagentEvent, SubagentSink } from "../../tools/subagent.js";
+import { webFetch, webSearch } from "../../tools/web.js";
 import type { ChatMessage } from "../../types.js";
 import { VERSION } from "../../version.js";
 import {
@@ -203,8 +215,21 @@ type InMessage = { tabId?: string } & (
   | { cmd: "revision_response"; id: number; response: RevisionVerdict }
   | { cmd: "session_list" }
   | { cmd: "session_delete"; name: string }
-  | { cmd: "session_load"; name: string }
+  | { cmd: "session_load"; name: string; openInNewTab?: boolean }
   | { cmd: "session_rename"; name: string; title: string }
+  | {
+      cmd: "session_patch_meta";
+      name: string;
+      patch: {
+        archivedAt?: number | null;
+        pinnedAt?: number | null;
+        lastReadAt?: number | null;
+        lastAssistantCompletedAt?: number | null;
+        manualUnread?: boolean | null;
+      };
+    }
+  | { cmd: "session_mark_read"; name: string }
+  | { cmd: "session_mark_unread"; name: string }
   | {
       cmd: "session_import";
       source: ExternalSessionSource;
@@ -217,7 +242,13 @@ type InMessage = { tabId?: string } & (
   | { cmd: "memory_refresh" }
   | { cmd: "memory_delete"; path: string }
   | ({ cmd: "memory_save" } & MemoryWriteRequest)
-  | { cmd: "new_chat"; workspaceDir?: string }
+  | { cmd: "source_search"; query: string; nonce: number; topK?: number }
+  | { cmd: "source_ingest"; url: string; nonce: number; title?: string }
+  | { cmd: "library_list" }
+  | { cmd: "library_add"; source: Omit<LibrarySource, "id" | "addedAt" | "updatedAt"> }
+  | { cmd: "library_remove"; id: string }
+  | { cmd: "library_refresh"; id: string }
+  | { cmd: "new_chat"; workspaceDir?: string; openInNewTab?: boolean }
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_get" }
   | {
@@ -384,9 +415,14 @@ interface SessionsEvent {
   type: "$sessions";
   items: {
     name: string;
+    path?: string;
     messageCount: number;
     mtime: string;
     summary?: string;
+    workspace?: string;
+    archivedAt?: number;
+    pinnedAt?: number;
+    unread?: boolean;
     workspaceStatus?: "matched" | "legacy_missing_meta";
   }[];
 }
@@ -418,11 +454,45 @@ interface MentionPreviewEvent {
   totalLines: number;
 }
 
+interface SourceSearchResultsEvent {
+  type: "$source_search_results";
+  nonce: number;
+  query: string;
+  results: Array<{
+    kind: "web";
+    title: string;
+    url: string;
+    snippet: string;
+  }>;
+  error?: string;
+}
+
+interface SourceIngestResultEvent {
+  type: "$source_ingest_result";
+  nonce: number;
+  url: string;
+  title?: string;
+  text?: string;
+  truncated?: boolean;
+  fetchedAt?: number;
+  error?: string;
+}
+
+interface LibrarySourcesEvent {
+  type: "$library_sources";
+  workspaceDir: string;
+  sources: LibrarySource[];
+}
+
 interface TabOpenedEvent {
   type: "$tab_opened";
   workspaceDir: string;
   /** True when the frontend should focus this tab (user-opened, or the restored focused tab). */
   active?: boolean;
+  /** True when this tab has an in-flight agent turn. */
+  busy?: boolean;
+  /** Session being restored into this newly opened tab. */
+  restoringSession?: string;
 }
 
 interface TabClosedEvent {
@@ -453,6 +523,8 @@ type LoadedMessage =
 interface SessionLoadedEvent {
   type: "$session_loaded";
   name: string;
+  /** True when this snapshot belongs to a tab that is still running. */
+  busy?: boolean;
   messages: LoadedMessage[];
   carryover: {
     totalCostUsd: number;
@@ -460,6 +532,10 @@ interface SessionLoadedEvent {
     cacheMissTokens: number;
     totalCompletionTokens: number;
   };
+}
+
+interface SessionReconciledEvent extends Omit<SessionLoadedEvent, "type"> {
+  type: "$session_reconciled";
 }
 
 interface SessionEmptyEvent {
@@ -669,6 +745,7 @@ type EmittableEvent =
   | SessionImportSourcesEvent
   | SessionImportResultEvent
   | SessionLoadedEvent
+  | SessionReconciledEvent
   | SessionEmptyEvent
   | NeedsSetupEvent
   | SettingsEvent
@@ -676,6 +753,9 @@ type EmittableEvent =
   | BalanceEvent
   | MentionResultsEvent
   | MentionPreviewEvent
+  | SourceSearchResultsEvent
+  | SourceIngestResultEvent
+  | LibrarySourcesEvent
   | RetryResultEvent
   | BtwResultEvent
   | TabOpenedEvent
@@ -781,17 +861,19 @@ function elideLoadedMessages(messages: LoadedMessage[]): LoadedMessage[] {
 
 export function buildLoadedMessages(records: ChatMessage[]): LoadedMessage[] {
   const out: LoadedMessage[] = [];
-  let turn = 0;
+  let userTurn = 0;
+  let orphanAssistantTurn = 0;
   let pendingAssistantIdx = -1;
   for (const rec of records) {
     if (rec.role === "system") continue;
     if (rec.role === "user") {
+      userTurn++;
       out.push({ kind: "user", text: rec.content ?? "" });
       pendingAssistantIdx = -1;
       continue;
     }
     if (rec.role === "assistant") {
-      turn++;
+      const turn = userTurn > 0 ? userTurn : ++orphanAssistantTurn;
       const segments: LoadedSegment[] = [];
       if (rec.reasoning_content) segments.push({ kind: "reasoning", text: rec.reasoning_content });
       if (rec.content) segments.push({ kind: "text", text: rec.content });
@@ -807,8 +889,17 @@ export function buildLoadedMessages(records: ChatMessage[]): LoadedMessage[] {
           });
         }
       }
-      out.push({ kind: "assistant", turn, segments, pending: false });
-      pendingAssistantIdx = out.length - 1;
+      const pendingAssistant = out[pendingAssistantIdx];
+      if (
+        userTurn > 0 &&
+        pendingAssistant?.kind === "assistant" &&
+        pendingAssistant.turn === turn
+      ) {
+        pendingAssistant.segments.push(...segments);
+      } else {
+        out.push({ kind: "assistant", turn, segments, pending: false });
+        pendingAssistantIdx = out.length - 1;
+      }
       continue;
     }
     if (rec.role === "tool") {
@@ -930,10 +1021,14 @@ function emitSessions(tab: Tab): void {
       .filter((s) => !isInternalSessionName(s.name))
       .map((s) => ({
         name: s.name,
+        path: s.path,
         messageCount: s.messageCount,
         mtime: s.mtime.toISOString(),
         summary: s.meta.summary,
         workspace: repairRetiredSessionWorkspace(s.name, s.meta.workspace, tab.rootDir),
+        archivedAt: s.meta.archivedAt,
+        pinnedAt: s.meta.pinnedAt,
+        unread: sessionIsUnread(s.meta),
         workspaceStatus: s.workspaceStatus,
       }));
     emit({ type: "$sessions", items }, tab.id);
@@ -988,6 +1083,7 @@ function loadSessionIntoTab(
     {
       type: "$session_loaded",
       name,
+      busy: Boolean(tab.aborter),
       messages: loadedMessages,
       carryover: {
         totalCostUsd: meta.totalCostUsd ?? 0,
@@ -1002,28 +1098,38 @@ function loadSessionIntoTab(
   if (backfilledWorkspace) emitSessions(tab);
 }
 
-function emitCurrentSessionLoaded(tab: Tab): void {
+function currentSessionSnapshot(
+  tab: Tab,
+  type: "$session_loaded" | "$session_reconciled",
+): SessionLoadedEvent | SessionReconciledEvent {
   const meta = loadSessionMeta(tab.currentSession);
-  emit(
-    {
-      type: "$session_loaded",
-      name: tab.currentSession,
-      messages: buildLoadedMessages(loadSessionMessages(tab.currentSession)),
-      carryover: {
-        totalCostUsd: meta.totalCostUsd ?? 0,
-        cacheHitTokens: meta.cacheHitTokens ?? 0,
-        cacheMissTokens: meta.cacheMissTokens ?? 0,
-        totalCompletionTokens: meta.totalCompletionTokens ?? 0,
-      },
+  return {
+    type,
+    name: tab.currentSession,
+    busy: Boolean(tab.aborter),
+    messages: buildLoadedMessages(loadSessionMessages(tab.currentSession)),
+    carryover: {
+      totalCostUsd: meta.totalCostUsd ?? 0,
+      cacheHitTokens: meta.cacheHitTokens ?? 0,
+      cacheMissTokens: meta.cacheMissTokens ?? 0,
+      totalCompletionTokens: meta.totalCompletionTokens ?? 0,
     },
-    tab.id,
-  );
+  };
+}
+
+function emitCurrentSessionLoaded(tab: Tab): void {
+  emit(currentSessionSnapshot(tab, "$session_loaded"), tab.id);
+}
+
+function emitCurrentSessionReconciled(tab: Tab): void {
+  emit(currentSessionSnapshot(tab, "$session_reconciled"), tab.id);
 }
 
 function emptySessionLoadedEvent(name: string): SessionLoadedEvent {
   return {
     type: "$session_loaded",
     name,
+    busy: false,
     messages: [],
     carryover: {
       totalCostUsd: 0,
@@ -1098,6 +1204,27 @@ function emitMemory(tab: Tab): void {
       {
         type: "$error",
         message: `memory_get failed: ${(err as Error).message}`,
+      },
+      tab.id,
+    );
+  }
+}
+
+function emitLibrary(tab: Tab): void {
+  try {
+    emit(
+      {
+        type: "$library_sources",
+        workspaceDir: tab.rootDir,
+        sources: listLibrarySourcesForWorkspace(tab.rootDir),
+      },
+      tab.id,
+    );
+  } catch (err) {
+    emit(
+      {
+        type: "$error",
+        message: `library_list failed: ${(err as Error).message}`,
       },
       tab.id,
     );
@@ -2689,6 +2816,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               );
             });
           }
+          patchSessionMeta(tab.currentSession, {
+            lastAssistantCompletedAt: Date.now(),
+          });
+          emitCurrentSessionReconciled(tab);
           emit({ type: "$turn_complete" }, tab.id);
           if (tab.planTotalSteps > 0 && tab.completedStepIds.size >= tab.planTotalSteps) {
             tab.completedStepIds.clear();
@@ -3137,6 +3268,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         type: "$tab_opened",
         workspaceDir: tab.rootDir,
         active: restore?.active,
+        busy: Boolean(tab.aborter),
+        restoringSession: restore?.session,
       },
       tab.id,
     );
@@ -3145,6 +3278,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     emitMcpSpecs(tab);
     emitSkills(tab);
     emitMemory(tab);
+    emitLibrary(tab);
     emitQQSettings(tab);
     if (restoredMessages) {
       const meta = loadSessionMeta(tab.currentSession);
@@ -3152,6 +3286,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         {
           type: "$session_loaded",
           name: tab.currentSession,
+          busy: Boolean(tab.aborter),
           messages: restoredMessages,
           carryover: {
             totalCostUsd: meta.totalCostUsd ?? 0,
@@ -3184,16 +3319,30 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         type: "$tab_opened",
         workspaceDir: tab.rootDir,
         active: true,
+        busy: Boolean(tab.aborter),
       },
       tab.id,
     );
   }
 
+  function findOpenSessionTab(session: string, workspaceDir?: string): Tab | undefined {
+    const candidates = Array.from(tabs.values()).filter((t) => t.currentSession === session);
+    if (candidates.length === 0) return undefined;
+    if (!workspaceDir) return candidates[0];
+    const targetDir = resolveDesktopRoot(workspaceDir);
+    return candidates.find((t) => resolve(t.rootDir) === resolve(targetDir)) ?? candidates[0];
+  }
+
+  function focusExistingSessionTab(session: string, workspaceDir?: string): boolean {
+    const existing = findOpenSessionTab(session, workspaceDir);
+    if (!existing) return false;
+    focusTab(existing);
+    return true;
+  }
+
   function openSessionInFocusedTab(workspaceDir: string, session: string): Tab {
     const targetDir = resolveDesktopRoot(workspaceDir);
-    const existing = Array.from(tabs.values()).find(
-      (t) => t.currentSession === session && resolve(t.rootDir) === resolve(targetDir),
-    );
+    const existing = findOpenSessionTab(session, targetDir);
     if (existing) {
       focusTab(existing);
       return existing;
@@ -3244,7 +3393,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   }
 
   const rl = createInterface({ input: stdin });
-  rl.on("line", (line) => {
+  rl.on("line", async (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
     let msg: InMessage;
@@ -3364,6 +3513,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             type: "$tab_opened",
             workspaceDir: t.rootDir,
             active: t.id === lastActiveTabId,
+            busy: Boolean(t.aborter),
           },
           t.id,
         );
@@ -3372,6 +3522,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitMcpSpecs(t);
         emitSkills(t);
         emitMemory(t);
+        emitLibrary(t);
         emitQQSettings(t);
         if (!hasKey) emit({ type: "$needs_setup", reason: "no_api_key" }, t.id);
         else if (t.toolset) emit({ type: "$ready" }, t.id);
@@ -3386,6 +3537,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               {
                 type: "$session_loaded",
                 name: t.currentSession,
+                busy: Boolean(t.aborter),
                 messages: msgs,
                 carryover: {
                   totalCostUsd: meta.totalCostUsd ?? 0,
@@ -3640,6 +3792,39 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       }
       return;
     }
+    if (msg.cmd === "session_patch_meta") {
+      try {
+        const patch: Parameters<typeof patchSessionMeta>[1] = {};
+        if ("archivedAt" in msg.patch) patch.archivedAt = msg.patch.archivedAt ?? undefined;
+        if ("pinnedAt" in msg.patch) patch.pinnedAt = msg.patch.pinnedAt ?? undefined;
+        if ("lastReadAt" in msg.patch) patch.lastReadAt = msg.patch.lastReadAt ?? undefined;
+        if ("lastAssistantCompletedAt" in msg.patch) {
+          patch.lastAssistantCompletedAt = msg.patch.lastAssistantCompletedAt ?? undefined;
+        }
+        if ("manualUnread" in msg.patch) patch.manualUnread = msg.patch.manualUnread ?? undefined;
+        patchSessionMeta(msg.name, patch);
+        emitSessions(tab);
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `session_patch_meta failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "session_mark_read") {
+      markSessionRead(msg.name);
+      emitSessions(tab);
+      return;
+    }
+    if (msg.cmd === "session_mark_unread") {
+      markSessionUnread(msg.name);
+      emitSessions(tab);
+      return;
+    }
     if (msg.cmd === "session_import") {
       try {
         const result = importExternalSession({
@@ -3728,7 +3913,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         );
         const targetWorkspace =
           typeof workspace === "string" ? resolveDesktopRoot(workspace) : tab.rootDir;
-        if (tab.aborter) {
+        if (focusExistingSessionTab(msg.name, targetWorkspace)) return;
+        if (msg.openInNewTab || tab.aborter) {
           openSessionInFocusedTab(targetWorkspace, msg.name);
           return;
         }
@@ -3809,8 +3995,202 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       }
       return;
     }
+    if (msg.cmd === "source_search") {
+      const query = msg.query.trim();
+      if (!query) {
+        emit(
+          {
+            type: "$source_search_results",
+            nonce: msg.nonce,
+            query: msg.query,
+            results: [],
+          },
+          tab.id,
+        );
+        return;
+      }
+      try {
+        const engine = readWebSearchEngine();
+        const endpoint = readWebSearchEndpoint();
+        const results = await webSearch(query, {
+          topK: Math.max(1, Math.min(30, msg.topK ?? 6)),
+          engine,
+          endpoint,
+        });
+        emit(
+          {
+            type: "$source_search_results",
+            nonce: msg.nonce,
+            query,
+            results: results
+              .filter((result) => result.url.trim().length > 0)
+              .map((result) => ({
+                kind: "web" as const,
+                title: result.title,
+                url: result.url,
+                snippet: result.snippet,
+              })),
+          },
+          tab.id,
+        );
+      } catch (err) {
+        emit(
+          {
+            type: "$source_search_results",
+            nonce: msg.nonce,
+            query,
+            results: [],
+            error: err instanceof Error ? err.message : String(err),
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "source_ingest") {
+      const url = msg.url.trim();
+      if (!url) {
+        emit(
+          {
+            type: "$source_ingest_result",
+            nonce: msg.nonce,
+            url: msg.url,
+            title: msg.title,
+            fetchedAt: Date.now(),
+            error: "Empty URL",
+          },
+          tab.id,
+        );
+        return;
+      }
+      try {
+        const page = await webFetch(url, { maxChars: 64_000 });
+        emit(
+          {
+            type: "$source_ingest_result",
+            nonce: msg.nonce,
+            url: page.url,
+            title: page.title || msg.title,
+            text: page.text,
+            truncated: page.truncated,
+            fetchedAt: Date.now(),
+          },
+          tab.id,
+        );
+      } catch (err) {
+        emit(
+          {
+            type: "$source_ingest_result",
+            nonce: msg.nonce,
+            url,
+            title: msg.title,
+            fetchedAt: Date.now(),
+            error: err instanceof Error ? err.message : String(err),
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "library_list") {
+      emitLibrary(tab);
+      return;
+    }
+    if (msg.cmd === "library_add") {
+      try {
+        const input =
+          msg.source.kind === "web" && msg.source.url
+            ? { ...msg.source, ingestStatus: "pending" as const }
+            : msg.source;
+        const saved = addLibrarySourceForWorkspace(tab.rootDir, input);
+        emitLibrary(tab);
+        if (saved.kind === "web" && saved.url && !saved.contentText) {
+          try {
+            const page = await webFetch(saved.url, { maxChars: 64_000 });
+            updateLibrarySourceContentForWorkspace(tab.rootDir, saved.id, {
+              contentText: page.text,
+              contentFetchedAt: Date.now(),
+              contentTruncated: page.truncated,
+              contentError: undefined,
+              ingestStatus: "done",
+            });
+          } catch (err) {
+            updateLibrarySourceContentForWorkspace(tab.rootDir, saved.id, {
+              contentFetchedAt: Date.now(),
+              contentError: err instanceof Error ? err.message : String(err),
+              ingestStatus: "error",
+            });
+          }
+          emitLibrary(tab);
+        }
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `library_add failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "library_remove") {
+      try {
+        removeLibrarySourceForWorkspace(tab.rootDir, msg.id);
+        emitLibrary(tab);
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `library_remove failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "library_refresh") {
+      try {
+        const source = listLibrarySourcesForWorkspace(tab.rootDir).find(
+          (item) => item.id === msg.id,
+        );
+        if (source?.kind === "web" && source.url) {
+          try {
+            updateLibrarySourceContentForWorkspace(tab.rootDir, source.id, {
+              ingestStatus: "pending",
+              contentError: undefined,
+            });
+            emitLibrary(tab);
+            const page = await webFetch(source.url, { maxChars: 64_000 });
+            updateLibrarySourceContentForWorkspace(tab.rootDir, source.id, {
+              contentText: page.text,
+              contentFetchedAt: Date.now(),
+              contentTruncated: page.truncated,
+              contentError: undefined,
+              ingestStatus: "done",
+            });
+          } catch (err) {
+            updateLibrarySourceContentForWorkspace(tab.rootDir, source.id, {
+              contentFetchedAt: Date.now(),
+              contentError: err instanceof Error ? err.message : String(err),
+              ingestStatus: "error",
+            });
+          }
+        }
+        emitLibrary(tab);
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `library_refresh failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
     if (msg.cmd === "new_chat") {
-      if (tab.aborter) {
+      if (msg.openInNewTab || tab.aborter) {
         openNewChatInFocusedTab(msg.workspaceDir !== undefined ? msg.workspaceDir : tab.rootDir);
         return;
       }
