@@ -3,6 +3,45 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.89.6] — 2026-06-07
+
+### 中文
+
+**长会话与侧栏状态后端化。** 运行中的对话在切换后可以恢复流式内容、思考过程和停止按钮状态；
+侧栏会话状态从前端 localStorage 迁移到 session meta，置顶、归档、已读/未读和完成时间在跨窗口、
+切换会话和重启后保持一致。侧栏对话右键菜单补齐置顶、重命名、归档、标记未读、复制会话信息等常用操作。
+
+**轻量资料库。** 新增面向工作区的资料库：网页搜索结果、本地文件和手动导入可以保存为资料源。
+资料源按工作区持久化到 `~/.jupiter/library/`，网页内容会通过后端抓取、正文提取并写入本地内容文件。
+资料库添加入口改为独立搜索浮窗，支持渐进式加载、内置浏览器打开网页结果，以及本地资料的打开/在文件夹中显示操作。
+
+**搜索与 Skills。** 资料库搜索入口复用设置里的搜索引擎配置，避免桌面端搜索和全局设置不一致。
+内置 Superpowers skill pack，并加入 Jupiter 工具适配说明，让计划、调试、TDD、验证等流程更贴合 Jupiter。
+
+**文档与发布说明。** README 更新为当前桌面能力说明，Release notes 保持中英双语；旧 README 快照归档到
+`history/readme/`，方便回看之前的项目说明。
+
+### English
+
+**Long-running sessions and backend-backed sidebar state.** Running conversations can now restore live content,
+reasoning, and stop-button state after switching away and back. Sidebar session state moved from frontend
+localStorage into session metadata, so pinned, archived, read/unread, and completion timestamps stay consistent
+across windows, session switches, and restarts. Conversation context menus now include pin, rename, archive,
+mark unread, copy session info, and related actions.
+
+**Lightweight workspace library.** Added a workspace library for saving web search results, local files, and
+manual imports as reusable sources. Sources are persisted per workspace under `~/.jupiter/library/`, while web
+content is fetched, extracted, and written to local content files. The add flow now uses a dedicated search
+popover with progressive loading, in-app browser opening for web results, and open/reveal actions for local
+sources.
+
+**Search and Skills.** The library search entry now reuses the configured search engine, keeping desktop search
+aligned with settings. The bundled Superpowers skill pack now includes Jupiter-specific tool guidance for
+planning, debugging, TDD, and verification workflows.
+
+**Docs and release notes.** README now describes the current desktop capabilities, release notes stay bilingual,
+and older README snapshots are archived under `history/readme/`.
+
 ## [0.89.3] — 2026-06-04
 
 ### 中文
