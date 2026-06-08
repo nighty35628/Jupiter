@@ -53,6 +53,51 @@ function seedTurns(loop: CacheFirstLoop, pairs: Array<{ user: string; assistant:
 }
 
 describe("ContextManager fold preserves skill-pin bodies", () => {
+  it("manual compaction uses a smaller tail than automatic pressure-based compaction", async () => {
+    const client = makeClient([{ content: "manual summary for older turns." }]);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+    });
+    const pad = "manual compact padding text ".repeat(300);
+    const pairs = Array.from({ length: 20 }, (_, i) => ({
+      user: `question ${i} ${pad}`,
+      assistant: `answer ${i} ${pad}`,
+    }));
+    seedTurns(loop, pairs);
+
+    const automatic = await loop.compactHistory();
+    expect(automatic.folded).toBe(false);
+
+    const manual = await loop.manualCompactHistory();
+    expect(manual.folded).toBe(true);
+    expect(manual.beforeMessages).toBe(40);
+    expect(manual.afterMessages).toBeLessThan(manual.beforeMessages);
+  });
+
+  it("manual compaction is not cancelled by a stale turn abort signal", async () => {
+    const client = makeClient([{ content: "manual summary after stale abort." }]);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+    });
+    const pad = "manual compact stale abort padding ".repeat(300);
+    seedTurns(
+      loop,
+      Array.from({ length: 20 }, (_, i) => ({
+        user: `question ${i} ${pad}`,
+        assistant: `answer ${i} ${pad}`,
+      })),
+    );
+    loop.abort();
+
+    const manual = await loop.manualCompactHistory();
+    expect(manual.folded).toBe(true);
+    expect(manual.reason).toBeUndefined();
+  });
+
   it("re-attaches a pinned skill body verbatim after summarization", async () => {
     const client = makeClient([{ content: "earlier turns discussed auth and billing." }]);
     const loop = new CacheFirstLoop({

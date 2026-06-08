@@ -8,7 +8,16 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import {
+  type ReactNode,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { CommandPalette, Toast, buildCommands, useCommandPalette } from "./CommandPalette";
 import { WorkspaceProvider } from "./Markdown";
@@ -17,10 +26,13 @@ import { DESKTOP_CLI_SLASH_COMMANDS, isKnownDesktopCliSlash, parseDesktopSlash }
 import {
   type FilePreview,
   type FilePreviewTarget,
+  pathToFileUrl,
   readFilePreview,
   resolveWorkspacePath,
   revealFileInFolder,
 } from "./file-preview";
+export { pathToFileUrl } from "./file-preview";
+import type { FeishuDesktopSettingsState } from "./feishu-settings";
 import { getLang, getLangLabel, getSupportedLangs, setLang, t, useLang } from "./i18n";
 import { I } from "./icons";
 import {
@@ -307,6 +319,7 @@ export type SessionInfo = {
   workspace?: string;
   archivedAt?: number;
   pinnedAt?: number;
+  unread?: boolean;
   workspaceStatus?: "matched" | "legacy_missing_meta";
 };
 
@@ -375,16 +388,6 @@ type MentionPreviewState = {
   totalLines: number;
 };
 
-export function pathToFileUrl(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  const absolute = /^[a-zA-Z]:\//.test(normalized) ? `/${normalized}` : normalized;
-  const encoded = absolute
-    .split("/")
-    .map((part, index) => (index === 0 ? part : encodeURIComponent(part)))
-    .join("/");
-  return `file://${encoded}`;
-}
-
 type State = {
   ready: boolean;
   needsSetup: boolean;
@@ -405,6 +408,7 @@ type State = {
   externalImportSources: ExternalSessionApp[];
   settings: Settings | null;
   qq: QQDesktopSettingsState | null;
+  feishu: FeishuDesktopSettingsState | null;
   balance: Balance | null;
   mentionResults: MentionResults | null;
   mentionPreview: MentionPreviewState | null;
@@ -1322,7 +1326,8 @@ export function shouldShowThinkingFooter(messages: ChatMessage[], busy: boolean)
   if (!pendingAssistant || pendingAssistant.kind !== "assistant") return true;
   return !pendingAssistant.segments.some((segment) => {
     if (segment.kind === "tool") return true;
-    return segment.text.trim().length > 0;
+    if (segment.kind === "text") return segment.text.trim().length > 0;
+    return false;
   });
 }
 
@@ -1596,6 +1601,44 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       }
       return { ...state, usage: next };
     }
+    case "$compact_result": {
+      const compactStats =
+        typeof ev.totalTokens === "number" && typeof ev.tailBudget === "number"
+          ? ` ${t("app.compact.stats", {
+              total: ev.totalTokens.toLocaleString(),
+              budget: ev.tailBudget.toLocaleString(),
+            })}`
+          : "";
+      const compactNoopReason =
+        ev.reason === "empty"
+          ? t("app.compact.noopEmpty")
+          : ev.reason === "already-small"
+            ? t("app.compact.noopAlreadySmall")
+            : ev.reason === "tail-boundary-missing"
+              ? t("app.compact.noopTailBoundary")
+              : ev.reason === "insufficient-savings"
+                ? t("app.compact.noopInsufficientSavings")
+                : ev.reason === "summary-empty"
+                  ? t("app.compact.noopSummaryEmpty")
+                  : t("app.compact.noopUnknown");
+      const text = ev.folded
+        ? t("app.compact.done", {
+            before: ev.beforeMessages,
+            after: ev.afterMessages,
+            chars: ev.summaryChars.toLocaleString(),
+          })
+        : `${compactNoopReason}${compactStats}`;
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          {
+            kind: "status",
+            text,
+          },
+        ],
+      };
+    }
     case "$memory":
       return {
         ...state,
@@ -1638,6 +1681,20 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           lastError: ev.lastError,
           appIdPreview: ev.appIdPreview,
           access: ev.access,
+        },
+      };
+    case "$feishu_settings":
+      return {
+        ...state,
+        feishu: {
+          appId: ev.appId,
+          appSecret: ev.appSecret,
+          enabled: ev.enabled,
+          configured: ev.configured,
+          requireMentionInGroup: ev.requireMentionInGroup,
+          runtimeState: ev.runtimeState,
+          lastError: ev.lastError,
+          appIdPreview: ev.appIdPreview,
         },
       };
     case "$settings": {
@@ -1943,7 +2000,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         messages: [...state.messages, { kind: "status", text: `≫ btw\n${ev.answer}` }],
       };
     case "status":
-      return state;
+      return {
+        ...state,
+        messages: [...state.messages, { kind: "status", text: ev.text }],
+      };
     case "warning":
       // High-severity only — eventize already drops "low". Inline divider only.
       if (ev.severity !== "high") return state;
@@ -2121,6 +2181,7 @@ function TabRuntimeInner({
     externalImportSources: [],
     settings: null,
     qq: null,
+    feishu: null,
     balance: null,
     mentionResults: null,
     mentionPreview: null,
@@ -2165,7 +2226,6 @@ function TabRuntimeInner({
   const [sourceSearchOpen, setSourceSearchOpen] = useState(false);
   const [contextInfoOpen, setContextInfoOpen] = useState(false);
   const [toast, setToast] = useState<{ msg: string; yolo?: boolean } | null>(null);
-  const [splashOn, setSplashOn] = useState<boolean>(() => shouldShowSplash());
   const [wdOpen, setWdOpen] = useState(false);
   const [wdAnchor, setWdAnchor] = useState<
     { top?: number; bottom?: number; left: number } | undefined
@@ -2582,6 +2642,14 @@ function TabRuntimeInner({
       sendRpc({ cmd: "qq_config_save", ...patch }),
     [sendRpc],
   );
+  const loadFeishuSettings = useCallback(() => sendRpc({ cmd: "feishu_status_get" }), [sendRpc]);
+  const connectFeishu = useCallback(() => sendRpc({ cmd: "feishu_connect" }), [sendRpc]);
+  const disconnectFeishu = useCallback(() => sendRpc({ cmd: "feishu_disconnect" }), [sendRpc]);
+  const saveFeishuConfig = useCallback(
+    (patch: { appId?: string; appSecret?: string; requireMentionInGroup?: boolean }) =>
+      sendRpc({ cmd: "feishu_config_save", ...patch }),
+    [sendRpc],
+  );
   const saveApiKey = useCallback(
     (key: string) => sendRpc({ cmd: "setup_save_key", key }),
     [sendRpc],
@@ -2817,6 +2885,13 @@ function TabRuntimeInner({
         return;
       }
 
+      if (/^\/compact(?:\s|$)/.test(text)) {
+        dispatch({ t: "push_status", text: t("app.compact.starting") });
+        sendRpc({ cmd: "compact_history" });
+        if (!override) setDraft("");
+        return;
+      }
+
       const slash = parseDesktopSlash(text);
       if (slash) {
         if (isKnownDesktopCliSlash(slash.cmd)) {
@@ -2864,6 +2939,7 @@ function TabRuntimeInner({
           return;
         }
       }
+
       const clientId = `c-${Date.now()}`;
       const planOneShot = oneShotPlanArmed;
       if (planOneShot) setOneShotPlanArmed(false);
@@ -3298,7 +3374,8 @@ function TabRuntimeInner({
   useEffect(() => {
     if (!active) return;
     loadQQSettings();
-  }, [active, loadQQSettings]);
+    loadFeishuSettings();
+  }, [active, loadQQSettings, loadFeishuSettings]);
 
   useEffect(() => {
     // Every TabRuntime stays mounted (display:none on inactive), so each registers its own keydown — without this gate Cmd+N would fire newChat() in every tab and wipe the inactive ones' sessions.
@@ -3514,7 +3591,10 @@ function TabRuntimeInner({
     {
       cmd: "/compact",
       desc: t("app.cmd.compact"),
-      run: () => sendRpc({ cmd: "compact_history" }),
+      run: () => {
+        dispatch({ t: "push_status", text: t("app.compact.starting") });
+        sendRpc({ cmd: "compact_history" });
+      },
     },
     {
       cmd: "/retry",
@@ -3588,6 +3668,87 @@ function TabRuntimeInner({
       ? t("app.session.new", { workspace: workspaceLabel })
       : workspaceLabel;
   })();
+
+  const openWorkspacePickerFromComposer = (anchor: {
+    top?: number;
+    bottom?: number;
+    left: number;
+  }) => {
+    setWdAnchor(anchor);
+    setWdOpen(true);
+  };
+
+  const handleEmptySuggestion = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed.startsWith("/")) {
+      const cmd = trimmed.split(/\s+/)[0] ?? "";
+      const match = allSlashCommands.find((s) => s.cmd === cmd);
+      if (match) {
+        match.run();
+        return;
+      }
+    }
+    send(text);
+  };
+
+  const renderComposer = (variant: "default" | "hero" = "default") => (
+    <Composer
+      draft={draft}
+      setDraft={setDraft}
+      onSend={() => send()}
+      onAbort={abort}
+      disabled={!state.ready}
+      busy={state.busy}
+      busyLabel={
+        state.busy
+          ? state.activeSkill
+            ? `Skill · ${state.activeSkill.name}`
+            : "Reasoning"
+          : undefined
+      }
+      busyElapsedMs={elapsed}
+      textareaRef={composerRef}
+      modelLabel={state.settings?.model ?? "deepseek-v4-flash"}
+      reasoningEffort={state.settings?.reasoningEffort ?? "high"}
+      onModelChange={(model) => {
+        applySettingsPatch({ model });
+        if (shouldShowSettingsChangeToast("model")) {
+          flashToast(t("app.toast.modelSwitched", { model }));
+        }
+      }}
+      onEffortChange={applyReasoningEffort}
+      editMode={state.settings?.editMode ?? "review"}
+      onEditModeChange={applyEditMode}
+      workspaceDir={state.settings?.workspaceDir}
+      slashCommands={allSlashCommands}
+      onMentionQuery={queryMentions}
+      onMentionPreview={previewMention}
+      onMentionPicked={markMentionPicked}
+      mentionResults={state.mentionResults}
+      onOpenSourceSearch={openLibrarySearch}
+      variant={variant}
+      workspacePickerLabel={variant === "hero" ? workspaceLabel : undefined}
+      onOpenWorkspacePicker={
+        variant === "hero" ? openWorkspacePickerFromComposer : undefined
+      }
+      queuedSends={state.queuedSends}
+      onQueueWhileBusy={(text) => {
+        dispatch({ t: "enqueue_send", text });
+        setDraft("");
+      }}
+      onDequeueSend={(index) => dispatch({ t: "dequeue_send", index })}
+      onPrioritizeQueuedSend={prioritizeQueuedSend}
+      initialHistory={state.settings?.promptHistory}
+      onHistoryPush={(entry) => {
+        // Use saveSettings (RPC only, no local state patch) so the
+        // sentinel [entry] is never written into state.settings and
+        // historyRef is not transiently reset. The backend merges
+        // against the freshly-loaded persisted list and re-emits
+        // $settings with the merged result (#2051).
+        saveSettings({ promptHistory: [entry] });
+      }}
+    />
+  );
 
   const exportConversation = useCallback(async () => {
     const userLabel = t("app.exportUserLabel");
@@ -3697,7 +3858,7 @@ function TabRuntimeInner({
           className="main"
           style={{ display: active ? undefined : "none", position: "relative" }}
         >
-          <JumpBar messages={state.messages} threadEl={threadRef.current} />
+          <JumpBar messages={state.messages} virtuosoRef={virtuosoRef} />
           {state.needsSetup ? (
             <NeedsSetupView
               workspaceDir={state.settings?.workspaceDir}
@@ -3718,20 +3879,10 @@ function TabRuntimeInner({
                 {state.messages.length === 0 ? (
                   <div className="thread-inner thread-inner--standalone">
                     <EmptyState
-                      onPick={(text) => {
-                        const trimmed = text.trim();
-                        if (trimmed.startsWith("/")) {
-                          const cmd = trimmed.split(/\s+/)[0] ?? "";
-                          const match = allSlashCommands.find((s) => s.cmd === cmd);
-                          if (match) {
-                            match.run();
-                            return;
-                          }
-                        }
-                        send(text);
-                      }}
+                      onPick={handleEmptySuggestion}
                       workspaceDir={state.settings?.workspaceDir}
                       promptHistory={state.settings?.promptHistory}
+                      composer={renderComposer("hero")}
                     />
                   </div>
                 ) : (
@@ -3808,6 +3959,35 @@ function TabRuntimeInner({
                               }
                             />
                             {stats ? <DiffStats stats={stats} /> : null}
+                          </div>
+                        );
+                      }
+                      if (m.kind === "status") {
+                        return (
+                          <div className="thread-inner">
+                            <div className="sys-event-row">
+                              <span className="line" />
+                              <span className="label">{m.text}</span>
+                              <span className="line" />
+                            </div>
+                          </div>
+                        );
+                      }
+                      if (m.kind === "warning") {
+                        return (
+                          <div className="thread-inner">
+                            <div className="warning-card" data-severity={m.severity}>
+                              {m.text}
+                            </div>
+                          </div>
+                        );
+                      }
+                      if (m.kind === "error") {
+                        return (
+                          <div className="thread-inner">
+                            <div className="error-card">
+                              <span>{m.message}</span>
+                            </div>
                           </div>
                         );
                       }
@@ -3909,57 +4089,7 @@ function TabRuntimeInner({
                 </div>
               ) : null}
 
-              <Composer
-                draft={draft}
-                setDraft={setDraft}
-                onSend={() => send()}
-                onAbort={abort}
-                disabled={!state.ready}
-                busy={state.busy}
-                busyLabel={
-                  state.busy
-                    ? state.activeSkill
-                      ? `Skill · ${state.activeSkill.name}`
-                      : "Reasoning"
-                    : undefined
-                }
-                busyElapsedMs={elapsed}
-                textareaRef={composerRef}
-                modelLabel={state.settings?.model ?? "deepseek-v4-flash"}
-                reasoningEffort={state.settings?.reasoningEffort ?? "high"}
-                onModelChange={(model) => {
-                  applySettingsPatch({ model });
-                  if (shouldShowSettingsChangeToast("model")) {
-                    flashToast(t("app.toast.modelSwitched", { model }));
-                  }
-                }}
-                onEffortChange={applyReasoningEffort}
-                editMode={state.settings?.editMode ?? "review"}
-                onEditModeChange={applyEditMode}
-                workspaceDir={state.settings?.workspaceDir}
-                slashCommands={allSlashCommands}
-                onMentionQuery={queryMentions}
-                onMentionPreview={previewMention}
-                onMentionPicked={markMentionPicked}
-                mentionResults={state.mentionResults}
-                onOpenSourceSearch={openLibrarySearch}
-                queuedSends={state.queuedSends}
-                onQueueWhileBusy={(text) => {
-                  dispatch({ t: "enqueue_send", text });
-                  setDraft("");
-                }}
-                onDequeueSend={(index) => dispatch({ t: "dequeue_send", index })}
-                onPrioritizeQueuedSend={prioritizeQueuedSend}
-                initialHistory={state.settings?.promptHistory}
-                onHistoryPush={(entry) => {
-                  // Use saveSettings (RPC only, no local state patch) so the
-                  // sentinel [entry] is never written into state.settings and
-                  // historyRef is not transiently reset. The backend merges
-                  // against the freshly-loaded persisted list and re-emits
-                  // $settings with the merged result (#2051).
-                  saveSettings({ promptHistory: [entry] });
-                }}
-              />
+              {state.messages.length > 0 ? renderComposer() : null}
               <SourceSearchPopover
                 open={sourceSearchOpen}
                 sources={librarySources}
@@ -4052,6 +4182,7 @@ function TabRuntimeInner({
               onOpenWebSource={openBrowserUrl}
               onRevealFileSource={revealLibraryFileSource}
               onPreviewFile={previewFile}
+              onOpenHtmlFile={openHtmlFileInBrowser}
             />
             <ContextInfoPopover
               open={contextInfoOpen}
@@ -4151,6 +4282,7 @@ function TabRuntimeInner({
                 memoryDetail={state.memoryDetail}
                 archivedSessions={state.archivedSessions}
                 qq={state.qq}
+                feishu={state.feishu}
                 onClose={() => setSettingsOpen(false)}
                 onSave={applySettingsPatch}
                 onSaveApiKey={saveApiKey}
@@ -4160,6 +4292,13 @@ function TabRuntimeInner({
                 onSaveQQConfig={saveQQConfig}
                 onOpenQQApplyLink={() =>
                   openUrl("https://q.qq.com/qqbot/openclaw/login.html").catch(() => undefined)
+                }
+                onLoadFeishu={loadFeishuSettings}
+                onConnectFeishu={connectFeishu}
+                onDisconnectFeishu={disconnectFeishu}
+                onSaveFeishuConfig={saveFeishuConfig}
+                onOpenFeishuApplyLink={() =>
+                  openUrl("https://open.feishu.cn/app").catch(() => undefined)
                 }
                 onPickWorkspace={pickWorkspace}
                 onAddMcpSpec={addMcpSpec}
@@ -4179,7 +4318,9 @@ function TabRuntimeInner({
                 onRestoreArchivedSession={(name) =>
                   sendRpc({ cmd: "session_restore_archived", name })
                 }
-                onDeleteArchivedSession={(name) => sendRpc({ cmd: "session_delete_archived", name })}
+                onDeleteArchivedSession={(name) =>
+                  sendRpc({ cmd: "session_delete_archived", name })
+                }
                 onOpenAbout={() => {
                   setSettingsOpen(false);
                   setAboutOpen(true);
@@ -4201,9 +4342,8 @@ function TabRuntimeInner({
               workspaceDir={state.settings?.workspaceDir}
               editor={state.settings?.editor}
               onPreviewFile={previewFile}
+              onOpenHtmlFile={openHtmlFileInBrowser}
             />
-
-            {splashOn ? <Splash onDone={() => setSplashOn(false)} /> : null}
           </>
         ) : null}
       </>
@@ -4747,10 +4887,12 @@ function EmptyState({
   onPick,
   workspaceDir,
   promptHistory,
+  composer,
 }: {
   onPick: (text: string) => void;
   workspaceDir?: string;
   promptHistory?: string[];
+  composer: ReactNode;
 }) {
   useLang();
   const fallbackSuggestions = [
@@ -4788,6 +4930,7 @@ function EmptyState({
           t("app.empty.selectWorkspace")
         )}
       </div>
+      {composer}
       <div className="empty-suggestions">
         {suggestions.map((s) => (
           <button key={s} type="button" className="empty-suggestion" onClick={() => onPick(s)}>
@@ -4987,6 +5130,7 @@ type TabMeta = { id: string; workspaceDir?: string; busy?: boolean };
 export function App() {
   const [tabs, setTabs] = useState<TabMeta[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>("");
+  const [splashOn, setSplashOn] = useState<boolean>(() => shouldShowSplash());
   const [startupFailure, setStartupFailure] = useState<StartupFailureState | null>(null);
   const [startupRetryNonce, setStartupRetryNonce] = useState(0);
   const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, TabRuntimeSnapshot>>({});
@@ -5622,9 +5766,13 @@ export function App() {
             onPatchSessionMeta={(name, patch) =>
               sendRpcToTab(activeTabId, { cmd: "session_patch_meta", name, patch })
             }
-            onArchiveSession={(name) =>
-              sendRpcToTab(activeTabId, { cmd: "session_archive", name })
+            onMarkSessionRead={(name) =>
+              sendRpcToTab(activeTabId, { cmd: "session_mark_read", name })
             }
+            onMarkSessionUnread={(name) =>
+              sendRpcToTab(activeTabId, { cmd: "session_mark_unread", name })
+            }
+            onArchiveSession={(name) => sendRpcToTab(activeTabId, { cmd: "session_archive", name })}
             onArchiveSessions={(names) =>
               sendRpcToTab(activeTabId, { cmd: "session_archive_many", names })
             }
@@ -5705,6 +5853,7 @@ export function App() {
           ))}
         </div>
       ) : null}
+      {tabs.length > 0 && splashOn ? <Splash onDone={() => setSplashOn(false)} /> : null}
       {pendingUpdate ? (
         <UpdateOverlay
           version={pendingUpdate.version}

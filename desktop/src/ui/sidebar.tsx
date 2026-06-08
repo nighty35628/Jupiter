@@ -31,6 +31,9 @@ type WorkspaceGroup = {
 type SessionActivity = Record<string, { busy?: boolean }>;
 type SessionMetaPatch = {
   pinnedAt?: number | null;
+  lastReadAt?: number | null;
+  lastAssistantCompletedAt?: number | null;
+  manualUnread?: boolean | null;
 };
 
 type PendingDelete = {
@@ -187,6 +190,8 @@ export function Sidebar({
   onDeleteSession,
   onRenameSession,
   onPatchSessionMeta = () => {},
+  onMarkSessionRead = () => {},
+  onMarkSessionUnread = () => {},
   onArchiveSession = () => {},
   onArchiveSessions = () => {},
   onRefreshImportSources,
@@ -208,6 +213,8 @@ export function Sidebar({
   onDeleteSession: (name: string) => void;
   onRenameSession: (name: string, title: string) => void;
   onPatchSessionMeta?: (name: string, patch: SessionMetaPatch) => void;
+  onMarkSessionRead?: (name: string) => void;
+  onMarkSessionUnread?: (name: string) => void;
   onArchiveSession?: (name: string) => void;
   onArchiveSessions?: (names: string[]) => void;
   onRefreshImportSources: () => void;
@@ -226,7 +233,6 @@ export function Sidebar({
   const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuTarget | null>(null);
   const [pendingWorkspaceRename, setPendingWorkspaceRename] =
     useState<PendingWorkspaceRename | null>(null);
-  const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [sidebarMenuOpen, setSidebarMenuOpen] = useState(false);
   const [sortModeMenuOpen, setSortModeMenuOpen] = useState(false);
   const [workspaceSortMenuOpen, setWorkspaceSortMenuOpen] = useState(false);
@@ -249,13 +255,10 @@ export function Sidebar({
     {},
   );
   const [now, setNow] = useState(() => Date.now());
-  const newMenuRef = useRef<HTMLDivElement>(null);
   const sidebarMenuRef = useRef<HTMLDivElement>(null);
+  const previousBusySessionsRef = useRef<Set<string>>(new Set());
+  const previousActiveNameRef = useRef<string | undefined>(undefined);
   const removedWorkspaceSet = useMemo(() => new Set(removedWorkspaces), [removedWorkspaces]);
-  const workspaceOptions = useMemo(() => {
-    const values = [workspaceDir, ...recentWorkspaces].filter((p): p is string => Boolean(p));
-    return Array.from(new Set(values)).filter((p) => p === workspaceDir || !removedWorkspaceSet.has(p));
-  }, [recentWorkspaces, removedWorkspaceSet, workspaceDir]);
   const busySessionSet = useMemo(() => {
     const names = Object.entries(sessionActivity)
       .filter(([, activity]) => Boolean(activity.busy))
@@ -402,6 +405,11 @@ export function Sidebar({
     onArchiveSessions(group.sessions.map((session) => session.name));
   };
 
+  const toggleSessionUnread = (session: SessionInfo) => {
+    if (session.unread) onMarkSessionRead(session.name);
+    else onMarkSessionUnread(session.name);
+  };
+
   const renameWorkspace = (key: string, value: string) => {
     const nextValue = value.trim().slice(0, RENAME_MAX_CHARS);
     setWorkspaceAliases((prev) => {
@@ -453,6 +461,23 @@ export function Sidebar({
   }, []);
 
   useEffect(() => {
+    const previous = previousBusySessionsRef.current;
+    const completed = Array.from(previous).filter((name) => !busySessionSet.has(name));
+    const unreadCompleted = completed.filter((name) => name !== activeName);
+    const completedAt = Date.now();
+    for (const name of unreadCompleted) {
+      onPatchSessionMeta(name, { lastAssistantCompletedAt: completedAt });
+    }
+    previousBusySessionsRef.current = new Set(busySessionSet);
+  }, [activeName, busySessionSet, onPatchSessionMeta]);
+
+  useEffect(() => {
+    if (!activeName || previousActiveNameRef.current === activeName) return;
+    previousActiveNameRef.current = activeName;
+    onMarkSessionRead(activeName);
+  }, [activeName, onMarkSessionRead]);
+
+  useEffect(() => {
     if (!pendingDelete && !pendingImport && !sessionMenu && !workspaceMenu && !pendingWorkspaceRename) {
       return;
     }
@@ -478,22 +503,6 @@ export function Sidebar({
       window.removeEventListener("keydown", onKey);
     };
   }, [pendingDelete, pendingImport, pendingWorkspaceRename, sessionMenu, workspaceMenu]);
-
-  useEffect(() => {
-    if (!newMenuOpen) return;
-    const onMouseDown = (e: MouseEvent) => {
-      if (!newMenuRef.current?.contains(e.target as Node)) setNewMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setNewMenuOpen(false);
-    };
-    window.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [newMenuOpen]);
 
   useEffect(() => {
     if (!sidebarMenuOpen) return;
@@ -556,6 +565,7 @@ export function Sidebar({
     const active = s.name === activeName;
     const pinnedSession = Boolean(s.pinnedAt);
     const busySession = busySessionSet.has(s.name);
+    const unreadSession = Boolean(s.unread) && !active;
     const mtime = Date.parse(s.mtime);
     const updated = Number.isFinite(mtime) ? relative(now - mtime) : s.mtime;
     const editing = editingName === s.name;
@@ -575,7 +585,8 @@ export function Sidebar({
         data-active={active}
         data-busy={busySession || undefined}
         data-editing={editing || undefined}
-        data-has-state={busySession || undefined}
+        data-has-state={busySession || unreadSession || undefined}
+        data-unread={unreadSession || undefined}
         onClick={
           editing
             ? undefined
@@ -583,6 +594,7 @@ export function Sidebar({
                 // Skip the round-trip when clicking the already-loaded
                 // session — a reload would clear live in-turn state (#1653).
                 if (s.name === activeName) return;
+                onMarkSessionRead(s.name);
                 onLoadSession(s.name);
               }
         }
@@ -594,6 +606,7 @@ export function Sidebar({
         onKeyDown={(e) => {
           if (editing) return;
           if (e.key === "Enter" && s.name !== activeName) {
+            onMarkSessionRead(s.name);
             onLoadSession(s.name);
           }
           if ((e.shiftKey && e.key === "F10") || e.key === "ContextMenu") {
@@ -640,9 +653,13 @@ export function Sidebar({
             <span className="time">{updated}</span>
           </span>
         </div>
-        {editing || !busySession ? null : (
+        {editing || (!busySession && !unreadSession) ? null : (
           <span className="session-state" aria-hidden="true">
-            <span className="session-busy-spinner" />
+            {busySession ? (
+              <span className="session-busy-spinner" />
+            ) : (
+              <span className="session-state-dot" />
+            )}
           </span>
         )}
         {editing ? null : (
@@ -929,52 +946,11 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="side-head">
-        <div className="new-chat-wrap" ref={newMenuRef}>
-          <button type="button" className="new-btn" onClick={() => setNewMenuOpen((v) => !v)}>
+        <div className="new-chat-wrap">
+          <button type="button" className="new-btn" onClick={() => onNewChat()}>
             <I.plus size={14} />
             <span>{t("sidebarPanel.newChat")}</span>
-            <I.chev size={12} />
           </button>
-          {newMenuOpen ? (
-            <div className="new-chat-menu">
-              {workspaceOptions.map((path) => (
-                <button
-                  type="button"
-                  className="new-chat-option"
-                  key={path}
-                  onClick={() => {
-                    onNewChat(path);
-                    setNewMenuOpen(false);
-                  }}
-                  title={displayWorkspacePath(path, path)}
-                >
-                  <span className="ico">
-                    <I.folder size={12} />
-                  </span>
-                  <span>
-                    <span className="main">{displayWorkspaceBasename(path, path)}</span>
-                    <span className="sub">{displayWorkspacePath(path, path)}</span>
-                  </span>
-                </button>
-              ))}
-              <button
-                type="button"
-                className="new-chat-option"
-                onClick={async () => {
-                  const picked = await openFileDialog({ directory: true, multiple: false }).catch(
-                    () => null,
-                  );
-                  if (typeof picked === "string") onNewChat(picked);
-                  setNewMenuOpen(false);
-                }}
-              >
-                <span className="ico">
-                  <I.plus size={12} />
-                </span>
-                <span>{t("sidebarPanel.browseWorkspace")}</span>
-              </button>
-            </div>
-          ) : null}
         </div>
         <button
           type="button"
@@ -1036,6 +1012,7 @@ export function Sidebar({
         <SessionContextMenu
           target={sessionMenu}
           pinned={Boolean(sessionMenu.session.pinnedAt)}
+          unread={Boolean(sessionMenu.session.unread)}
           onArchive={() => {
             archiveSession(sessionMenu.session);
             setSessionMenu(null);
@@ -1069,6 +1046,10 @@ export function Sidebar({
           }}
           onTogglePin={() => {
             toggleSessionPin(sessionMenu.session);
+            setSessionMenu(null);
+          }}
+          onToggleUnread={() => {
+            toggleSessionUnread(sessionMenu.session);
             setSessionMenu(null);
           }}
         />
@@ -1162,6 +1143,7 @@ function positionFloatingPanel(
 function SessionContextMenu({
   target,
   pinned,
+  unread,
   onArchive,
   onCopySessionId,
   onCopyWorkspacePath,
@@ -1169,9 +1151,11 @@ function SessionContextMenu({
   onRename,
   onReveal,
   onTogglePin,
+  onToggleUnread,
 }: {
   target: SessionMenuTarget;
   pinned: boolean;
+  unread: boolean;
   onArchive: () => void;
   onCopySessionId: () => void;
   onCopyWorkspacePath: () => void;
@@ -1179,6 +1163,7 @@ function SessionContextMenu({
   onRename: () => void;
   onReveal: () => void;
   onTogglePin: () => void;
+  onToggleUnread: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number }>({
@@ -1235,6 +1220,11 @@ function SessionContextMenu({
         <I.archive size={13} />,
         t("sidebarPanel.archiveConversation"),
         onArchive,
+      )}
+      {item(
+        <I.circle size={13} />,
+        unread ? t("sidebarPanel.markRead") : t("sidebarPanel.markUnread"),
+        onToggleUnread,
       )}
       <div className="session-menu-divider" />
       {item(<I.folder size={13} />, t("sidebarPanel.showInFolder"), onReveal, {

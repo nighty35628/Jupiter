@@ -54,6 +54,11 @@ export const I = {
       <path d="m5 12 5 5L20 7" />
     </Ic>
   ),
+  circle: (p: IconProps) => (
+    <Ic {...p}>
+      <circle cx="12" cy="12" r="7" />
+    </Ic>
+  ),
   x: (p: IconProps) => (
     <Ic {...p}>
       <path d="M6 6l12 12M18 6 6 18" />

@@ -109,6 +109,7 @@ export type SessionListItem = {
   workspace?: string;
   archivedAt?: number;
   pinnedAt?: number;
+  unread?: boolean;
   workspaceStatus?: "matched" | "legacy_missing_meta";
 };
 
@@ -493,6 +494,18 @@ export type QQSettingsEvent = {
   access: string;
 };
 
+export type FeishuSettingsEvent = {
+  type: "$feishu_settings";
+  appId?: string;
+  appSecret?: string;
+  enabled: boolean;
+  configured: boolean;
+  requireMentionInGroup: boolean;
+  runtimeState: "disconnected" | "connecting" | "connected" | "failed";
+  lastError?: string;
+  appIdPreview?: string;
+};
+
 export type BalanceInfoItem = {
   currency: string;
   total: number;
@@ -542,6 +555,12 @@ export type QQConfigPatch = {
   appId?: string;
   appSecret?: string;
   sandbox: boolean;
+};
+
+export type FeishuConfigPatch = {
+  appId?: string;
+  appSecret?: string;
+  requireMentionInGroup?: boolean;
 };
 
 export type UserMessageEvent = {
@@ -628,6 +647,32 @@ export type StatusEvent = {
   text: string;
 };
 
+export type CompactResultEvent =
+  | {
+      type: "$compact_result";
+      folded: true;
+      beforeMessages: number;
+      afterMessages: number;
+      summaryChars: number;
+      reason?: string;
+      totalTokens?: number;
+      headTokens?: number;
+      tailTokens?: number;
+      tailBudget?: number;
+    }
+  | {
+      type: "$compact_result";
+      folded: false;
+      beforeMessages: number;
+      afterMessages: number;
+      summaryChars: number;
+      reason?: string;
+      totalTokens?: number;
+      headTokens?: number;
+      tailTokens?: number;
+      tailBudget?: number;
+    };
+
 export type WarningEvent = {
   type: "warning";
   id: number;
@@ -664,6 +709,7 @@ export type IncomingEvent = { tabId?: string } & (
   | NeedsSetupEvent
   | SettingsEvent
   | QQSettingsEvent
+  | FeishuSettingsEvent
   | BalanceEvent
   | CheckpointRequiredEvent
   | RevisionRequiredEvent
@@ -690,6 +736,7 @@ export type IncomingEvent = { tabId?: string } & (
   | ToolPreparingEvent
   | ToolIntentEvent
   | ToolResultEvent
+  | CompactResultEvent
   | StatusEvent
   | WarningEvent
   | KernelErrorEvent
@@ -747,6 +794,10 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "qq_connect" }
   | { cmd: "qq_disconnect" }
   | ({ cmd: "qq_config_save" } & QQConfigPatch)
+  | { cmd: "feishu_status_get" }
+  | { cmd: "feishu_connect" }
+  | { cmd: "feishu_disconnect" }
+  | ({ cmd: "feishu_config_save" } & FeishuConfigPatch)
   | { cmd: "mention_query"; query: string; nonce: number }
   | { cmd: "mention_preview"; path: string; nonce: number }
   | { cmd: "mention_picked"; path: string }

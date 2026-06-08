@@ -10,7 +10,11 @@ import {
   truncateForModelByTokens,
 } from "./mcp/registry.js";
 
-import { ContextManager, TURN_START_FOLD_THRESHOLD } from "./context-manager.js";
+import {
+  ContextManager,
+  MANUAL_COMPACT_KEEP_RECENT_TOKENS,
+  TURN_START_FOLD_THRESHOLD,
+} from "./context-manager.js";
 import { InflightSet } from "./core/inflight.js";
 import { t } from "./i18n/index.js";
 import { dispatchToolCallsChunked } from "./loop/dispatch.js";
@@ -315,13 +319,41 @@ export class CacheFirstLoop {
   }
 
   /** Replace older turns with one summary message; keep tail within keepRecentTokens budget. */
-  async compactHistory(opts?: { keepRecentTokens?: number }): Promise<{
+  async compactHistory(opts?: {
+    keepRecentTokens?: number;
+    requireTailBoundary?: boolean;
+    signal?: AbortSignal;
+  }): Promise<{
     folded: boolean;
     beforeMessages: number;
     afterMessages: number;
     summaryChars: number;
+    reason?: string;
+    totalTokens?: number;
+    headTokens?: number;
+    tailTokens?: number;
+    tailBudget?: number;
   }> {
     return this.context.fold(this.model, opts);
+  }
+
+  /** User-triggered compaction should shrink ordinary long sessions, not wait for model-window pressure. */
+  async manualCompactHistory(): Promise<{
+    folded: boolean;
+    beforeMessages: number;
+    afterMessages: number;
+    summaryChars: number;
+    reason?: string;
+    totalTokens?: number;
+    headTokens?: number;
+    tailTokens?: number;
+    tailBudget?: number;
+  }> {
+    const manualSignal = new AbortController().signal;
+    return this.compactHistory({
+      keepRecentTokens: MANUAL_COMPACT_KEEP_RECENT_TOKENS,
+      signal: manualSignal,
+    });
   }
 
   /** Real-time token count of the current log — forwarded to Desktop for meter refresh. */

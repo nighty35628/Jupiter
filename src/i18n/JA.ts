@@ -1077,7 +1077,7 @@ export const JA: TranslationSchema = {
       contextInfo: "context: ~{total} / {max} ({pct}%) · system {sys} · tools {tools} · log {log}",
       compactStarting: "▸ 古いターンをサマリーに折りたたみ中…",
       compactNoop:
-        "▸ 折りたたむものがありません — ログが既に小さいか、最近のターンのみで予算を超えています。",
+        "▸ 折りたたむものがありません — このチャットは手動圧縮のしきい値未満か、直近部分だけで大きすぎます。",
       compactDone:
         "▸ {before} メッセージ → {after} に折りたたみ（サマリー {chars} 文字）。続行します。",
       compactFailed: "▸ 折りたたみに失敗しました: {reason}",

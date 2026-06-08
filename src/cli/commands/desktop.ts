@@ -42,6 +42,7 @@ import {
   loadEditor,
   loadEndpoint,
   loadExaApiKey,
+  loadFeishuConfig,
   loadMaxIterPerTurn,
   loadMemoryConfirmWrites,
   loadMemoryGlobalEnabled,
@@ -70,6 +71,7 @@ import {
   saveDesktopOpenTabs,
   saveEditMode,
   saveEditor,
+  saveFeishuConfig,
   saveMemoryConfirmWrites,
   saveMemoryGlobalEnabled,
   saveModel,
@@ -104,6 +106,11 @@ import {
 } from "../../core/pause-gate.js";
 import { autoResolveVerdict } from "../../core/pause-policy.js";
 import {
+  feishuRemoteCommandBypassesBusy,
+  feishuRemoteDesktopHelpText,
+  parseFeishuRemoteDesktopCommand,
+} from "../../desktop/feishu-remote-commands.js";
+import {
   type LibrarySource,
   addLibrarySourceForWorkspace,
   listLibrarySourcesForWorkspace,
@@ -120,6 +127,7 @@ import {
   readMemoryEntryDetail,
   saveStructuredMemoryForWorkspace,
 } from "../../desktop/memory-browser.js";
+import { classifyDesktopNaturalCommandIntent } from "../../desktop/natural-command-intent.js";
 import { buildOneShotPlanPrompt } from "../../desktop/one-shot-plan.js";
 import { classifyDesktopQQIngress } from "../../desktop/qq-ingress.js";
 import {
@@ -143,7 +151,9 @@ import {
   takeQQPendingInteraction,
 } from "../../desktop/qq-turn-routing.js";
 import { loadDotenv } from "../../env.js";
+import { FeishuChannel } from "../../feishu/channel.js";
 import { type ResolvedHook, formatHookOutcomeMessage, loadHooks, runHooks } from "../../hooks.js";
+import { t } from "../../i18n/index.js";
 import {
   CacheFirstLoop,
   DeepSeekClient,
@@ -167,6 +177,7 @@ import {
   patchSessionMeta,
   patchSessionWorkspaceIfMissing,
   restoreArchivedSession,
+  sessionIsUnread,
   sessionPath,
   timestampSuffix,
 } from "../../memory/session.js";
@@ -307,6 +318,15 @@ type InMessage = { tabId?: string } & (
       appSecret?: string;
       sandbox: boolean;
     }
+  | { cmd: "feishu_connect" }
+  | { cmd: "feishu_disconnect" }
+  | { cmd: "feishu_status_get" }
+  | {
+      cmd: "feishu_config_save";
+      appId?: string;
+      appSecret?: string;
+      requireMentionInGroup?: boolean;
+    }
   | { cmd: "mention_query"; query: string; nonce: number }
   | { cmd: "mention_preview"; path: string; nonce: number }
   | { cmd: "mention_picked"; path: string }
@@ -397,6 +417,18 @@ interface QQSettingsEvent {
   access: string;
 }
 
+interface FeishuSettingsEvent {
+  type: "$feishu_settings";
+  appId?: string;
+  appSecret?: string;
+  enabled: boolean;
+  configured: boolean;
+  requireMentionInGroup: boolean;
+  runtimeState: "disconnected" | "connecting" | "connected" | "failed";
+  lastError?: string;
+  appIdPreview?: string;
+}
+
 interface BalanceInfoItem {
   currency: string;
   total: number;
@@ -429,6 +461,7 @@ type SessionListItem = {
   workspace?: string;
   archivedAt?: number;
   pinnedAt?: number;
+  unread?: boolean;
   workspaceStatus?: "matched" | "legacy_missing_meta";
 };
 
@@ -740,6 +773,19 @@ type DesktopSubagentEvent = {
   toolReadChars?: number;
 };
 
+type CompactResultEvent = {
+  type: "$compact_result";
+  folded: boolean;
+  beforeMessages: number;
+  afterMessages: number;
+  summaryChars: number;
+  reason?: string;
+  totalTokens?: number;
+  headTokens?: number;
+  tailTokens?: number;
+  tailBudget?: number;
+};
+
 /** Direct fd write — bypasses Node's stream layer (and its piped-output
  *  block buffering) so every JSON line reaches Rust the moment it's
  *  produced, not whenever the next 8 KB flushes. */
@@ -766,6 +812,7 @@ type EmittableEvent =
   | NeedsSetupEvent
   | SettingsEvent
   | QQSettingsEvent
+  | FeishuSettingsEvent
   | BalanceEvent
   | MentionResultsEvent
   | MentionPreviewEvent
@@ -778,6 +825,7 @@ type EmittableEvent =
   | TabClosedEvent
   | McpSpecsEvent
   | DesktopSubagentEvent
+  | CompactResultEvent
   | SkillsEvent
   | CtxBreakdownEvent
   | MemoryEvent
@@ -1041,6 +1089,7 @@ function toSessionListItem(s: ReturnType<typeof listSessions>[number], tab: Tab)
     workspace: repairRetiredSessionWorkspace(s.name, s.meta.workspace, tab.rootDir),
     archivedAt: s.meta.archivedAt,
     pinnedAt: s.meta.pinnedAt,
+    unread: sessionIsUnread(s.meta),
     workspaceStatus: s.workspaceStatus,
   };
 }
@@ -1295,6 +1344,24 @@ function emitCtxBreakdown(tab: Tab): void {
     }
   }
   emit({ type: "$ctx_breakdown", reservedTokens: sys + tools, logTokens }, tab.id);
+}
+
+function emitCompactResult(tab: Tab, result: Omit<CompactResultEvent, "type">): void {
+  emit(
+    {
+      type: "$compact_result",
+      folded: result.folded,
+      beforeMessages: result.beforeMessages,
+      afterMessages: result.afterMessages,
+      summaryChars: result.summaryChars,
+      reason: result.reason,
+      totalTokens: result.totalTokens,
+      headTokens: result.headTokens,
+      tailTokens: result.tailTokens,
+      tailBudget: result.tailBudget,
+    },
+    tab.id,
+  );
 }
 
 function emitSkills(tab: Tab): void {
@@ -1878,6 +1945,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     routing: createQQTurnRoutingState(),
   };
 
+  const feishuRuntime = {
+    channel: null as FeishuChannel | null,
+    runtimeState: "disconnected" as "disconnected" | "connecting" | "connected" | "failed",
+    lastError: undefined as string | undefined,
+    routing: createQQTurnRoutingState(),
+  };
+
   function currentQqSettings(): QQSettingsEvent {
     const base = loadDesktopQQState();
     return {
@@ -1885,6 +1959,25 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       ...base,
       runtimeState: qqRuntime.runtimeState,
       lastError: qqRuntime.lastError,
+    };
+  }
+
+  function currentFeishuSettings(): FeishuSettingsEvent {
+    const config = loadFeishuConfig();
+    return {
+      type: "$feishu_settings",
+      appId: config.appId,
+      appSecret: config.appSecret,
+      enabled: config.enabled === true,
+      configured: Boolean(config.appId && config.appSecret),
+      requireMentionInGroup: config.requireMentionInGroup,
+      runtimeState: feishuRuntime.runtimeState,
+      lastError: feishuRuntime.lastError,
+      appIdPreview: config.appId
+        ? config.appId.length > 8
+          ? `${config.appId.slice(0, 8)}...`
+          : config.appId
+        : undefined,
     };
   }
 
@@ -1896,6 +1989,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     for (const tab of tabs.values()) emit(currentQqSettings(), tab.id);
   }
 
+  function broadcastFeishuSettings(): void {
+    for (const tab of tabs.values()) emit(currentFeishuSettings(), tab.id);
+  }
+
+  function emitFeishuSettings(tab: Tab): void {
+    emit(currentFeishuSettings(), tab.id);
+  }
+
   function setQQRuntimeState(
     runtimeState: "disconnected" | "connecting" | "connected" | "failed",
     lastError?: string,
@@ -1905,6 +2006,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     desktopQqRuntimeSnapshot.runtimeState = runtimeState;
     desktopQqRuntimeSnapshot.lastError = lastError;
     broadcastQQSettings();
+  }
+
+  function setFeishuRuntimeState(
+    runtimeState: "disconnected" | "connecting" | "connected" | "failed",
+    lastError?: string,
+  ): void {
+    feishuRuntime.runtimeState = runtimeState;
+    feishuRuntime.lastError = lastError;
+    broadcastFeishuSettings();
   }
 
   function sendQQInfo(message: string, tabOverride?: Tab): void {
@@ -1919,6 +2029,25 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           {
             type: "$error",
             message: `qq send failed: ${(err as Error).message}`,
+          },
+          active.id,
+        );
+      }
+    });
+  }
+
+  function sendFeishuInfo(message: string, tabOverride?: Tab): void {
+    const tab = tabOverride ?? activeDesktopTab();
+    if (tab) {
+      emitStatus(tab, message);
+    }
+    void feishuRuntime.channel?.sendResponse(message).catch((err) => {
+      const active = activeDesktopTab();
+      if (active) {
+        emit(
+          {
+            type: "$error",
+            message: `feishu send failed: ${(err as Error).message}`,
           },
           active.id,
         );
@@ -1944,6 +2073,23 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   }
 
   function emitQQNotice(message: string, tabOverride?: Tab): void {
+    const tab = tabOverride ?? activeDesktopTab();
+    if (tab) {
+      emit(
+        {
+          type: "warning",
+          id: Date.now(),
+          ts: new Date().toISOString(),
+          turn: 0,
+          text: message,
+          severity: "high",
+        },
+        tab.id,
+      );
+    }
+  }
+
+  function emitFeishuNotice(message: string, tabOverride?: Tab): void {
     const tab = tabOverride ?? activeDesktopTab();
     if (tab) {
       emit(
@@ -2191,8 +2337,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           return true;
         }
         void tab.runtime.loop
-          .compactHistory()
-          .then(() => {
+          .manualCompactHistory()
+          .then((result) => {
+            if (result.folded) emitCurrentSessionLoaded(tab);
+            emitCompactResult(tab, result);
             emitCtxBreakdown(tab);
             sendQQInfo("Compacted the current desktop conversation history.", tab);
           })
@@ -2362,8 +2510,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       .trim();
   }
 
-  function handleQQPauseReply(tab: Tab, text: string): boolean {
-    const pending = takeQQPendingInteraction(qqRuntime.routing, tab.id);
+  function handleRemotePauseReply(
+    routing: ReturnType<typeof createQQTurnRoutingState>,
+    tab: Tab,
+    text: string,
+  ): boolean {
+    const pending = takeQQPendingInteraction(routing, tab.id);
     if (!pending) return false;
     const followup = stripFollowupPrefix(text);
     const interaction = pending;
@@ -2439,15 +2591,24 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
   }
 
-  function handleQQPauseRequest(tab: Tab, kind: string, payload: Record<string, unknown>): void {
-    if (!qqRuntime.channel || !shouldRouteQQForTab(qqRuntime.routing, tab.id)) return;
-    let qqMessage = "";
+  function handleQQPauseReply(tab: Tab, text: string): boolean {
+    return handleRemotePauseReply(qqRuntime.routing, tab, text);
+  }
+
+  function handleFeishuPauseReply(tab: Tab, text: string): boolean {
+    return handleRemotePauseReply(feishuRuntime.routing, tab, text);
+  }
+
+  function formatRemotePauseRequest(
+    tab: Tab,
+    kind: string,
+    payload: Record<string, unknown>,
+  ): string {
     switch (kind) {
       case "run_command":
       case "run_background": {
         const p = payload as { command: string };
-        qqMessage = `Need confirmation\n\nCommand: \`${p.command}\`\n\nReply with:\n1. Run once\n2. Always allow\n3. Deny`;
-        break;
+        return `Need confirmation\n\nCommand: \`${p.command}\`\n\nReply with:\n1. Run once\n2. Always allow\n3. Deny`;
       }
       case "path_access": {
         const p = payload as {
@@ -2456,25 +2617,21 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           toolName: string;
         };
         const intentText = p.intent === "read" ? "Read" : "Write";
-        qqMessage = `Need file access confirmation\n\nAction: ${intentText}\nPath: ${p.path}\nTool: ${p.toolName}\n\nReply with:\n1. Run once\n2. Always allow\n3. Deny`;
-        break;
+        return `Need file access confirmation\n\nAction: ${intentText}\nPath: ${p.path}\nTool: ${p.toolName}\n\nReply with:\n1. Run once\n2. Always allow\n3. Deny`;
       }
       case "plan_proposed": {
         const p = payload as { plan: string };
-        qqMessage = `Plan confirmation\n\n${p.plan}\n\nReply with:\n1. Approve\n2. Refine\n3. Cancel`;
-        break;
+        return `Plan confirmation\n\n${p.plan}\n\nReply with:\n1. Approve\n2. Refine\n3. Cancel`;
       }
       case "plan_checkpoint": {
         const p = payload as { title?: string; result: string };
-        qqMessage = `Step complete (${tab.completedStepIds.size}/${tab.planTotalSteps})\n\n${
+        return `Step complete (${tab.completedStepIds.size}/${tab.planTotalSteps})\n\n${
           p.title ? `Step: ${p.title}\n` : ""
         }Result: ${p.result}\n\nReply with:\n1. Continue\n2. Revise\n3. Stop`;
-        break;
       }
       case "plan_revision": {
         const p = payload as { reason: string };
-        qqMessage = `Plan revision proposed\n\n${p.reason}\n\nReply with:\n1. Accept\n2. Reject\n3. Cancel`;
-        break;
+        return `Plan revision proposed\n\n${p.reason}\n\nReply with:\n1. Accept\n2. Reject\n3. Cancel`;
       }
       case "choice": {
         const p = payload as {
@@ -2483,12 +2640,17 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           allowCustom: boolean;
         };
         const optionsList = p.options.map((opt, idx) => `${idx + 1}. ${opt.title}`).join("\n");
-        qqMessage = `Please choose\n\n${p.question}\n\nOptions:\n${optionsList}${
+        return `Please choose\n\n${p.question}\n\nOptions:\n${optionsList}${
           p.allowCustom ? "\n\n(You can also reply with custom text.)" : ""
         }`;
-        break;
       }
     }
+    return "";
+  }
+
+  function handleQQPauseRequest(tab: Tab, kind: string, payload: Record<string, unknown>): void {
+    if (!qqRuntime.channel || !shouldRouteQQForTab(qqRuntime.routing, tab.id)) return;
+    const qqMessage = formatRemotePauseRequest(tab, kind, payload);
     if (qqMessage) {
       void qqRuntime.channel.sendResponse(qqMessage).catch((err) => {
         emit(
@@ -2499,6 +2661,183 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           tab.id,
         );
       });
+    }
+  }
+
+  function handleFeishuPauseRequest(
+    tab: Tab,
+    kind: string,
+    payload: Record<string, unknown>,
+  ): void {
+    if (!feishuRuntime.channel || !shouldRouteQQForTab(feishuRuntime.routing, tab.id)) return;
+    const message = formatRemotePauseRequest(tab, kind, payload);
+    if (message) {
+      void feishuRuntime.channel.sendResponse(message).catch((err) => {
+        emit(
+          {
+            type: "$error",
+            message: `feishu send failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      });
+    }
+  }
+
+  function stripRemoteChannelPrefix(text: string): string {
+    return text.replace(/^\[(?:Feishu|QQ)]\s*/i, "").trim();
+  }
+
+  function remoteSessionCandidates(tab: Tab): SessionListItem[] {
+    migrateLegacyArchivedSessions();
+    return listSessions()
+      .filter((s) => !isInternalSessionName(s.name))
+      .map((s) => toSessionListItem(s, tab))
+      .filter((s) => !s.archivedAt);
+  }
+
+  function formatRemoteSessionList(tab: Tab, limit = 10): string {
+    const items = remoteSessionCandidates(tab).slice(0, limit);
+    if (items.length === 0) return "No saved desktop sessions.";
+    const rows = items.map((item, index) => {
+      const title = item.summary?.trim() || item.name;
+      const marker = item.name === tab.currentSession ? "*" : " ";
+      const workspace = item.workspace ? ` · ${item.workspace}` : "";
+      return `${index + 1}. ${marker} ${title}\n   ${item.name}${workspace}`;
+    });
+    return ["Desktop sessions:", ...rows, "", "Use /session switch <number|session-name>."].join(
+      "\n",
+    );
+  }
+
+  function resolveRemoteSessionTarget(tab: Tab, target: string): SessionListItem | null {
+    const items = remoteSessionCandidates(tab);
+    const index = Number.parseInt(target, 10);
+    if (Number.isInteger(index) && String(index) === target.trim() && index >= 1) {
+      return items[index - 1] ?? null;
+    }
+    return (
+      items.find((item) => item.name === target) ??
+      items.find((item) => item.summary?.trim() === target.trim()) ??
+      null
+    );
+  }
+
+  function remoteWorkspaceCandidates(tab: Tab): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const add = (path: string | undefined) => {
+      if (!path) return;
+      const resolved = resolveDesktopRoot(path);
+      if (seen.has(resolved)) return;
+      seen.add(resolved);
+      out.push(resolved);
+    };
+    add(tab.rootDir);
+    for (const path of loadRecentWorkspaces()) add(path);
+    for (const openTab of tabs.values()) add(openTab.rootDir);
+    return out;
+  }
+
+  function formatRemoteWorkspaceList(tab: Tab, limit = 10): string {
+    const items = remoteWorkspaceCandidates(tab).slice(0, limit);
+    if (items.length === 0) return "No known workspaces.";
+    const rows = items.map((path, index) => {
+      const marker = resolve(path) === resolve(tab.rootDir) ? "*" : " ";
+      return `${index + 1}. ${marker} ${path}`;
+    });
+    return ["Desktop workspaces:", ...rows, "", "Use /workspace switch <number|path>."].join("\n");
+  }
+
+  function resolveRemoteWorkspaceTarget(tab: Tab, target: string): string | null {
+    const items = remoteWorkspaceCandidates(tab);
+    const index = Number.parseInt(target, 10);
+    if (Number.isInteger(index) && String(index) === target.trim() && index >= 1) {
+      return items[index - 1] ?? null;
+    }
+    return target.trim() || null;
+  }
+
+  function handleFeishuRemoteDesktopCommand(tab: Tab, text: string): boolean {
+    const cmd = parseFeishuRemoteDesktopCommand(text);
+    if (!cmd) return false;
+    if (tab.aborter && !feishuRemoteCommandBypassesBusy(cmd)) {
+      sendFeishuInfo("Session is busy. Wait for the current turn before switching context.", tab);
+      return true;
+    }
+
+    switch (cmd.kind) {
+      case "help":
+        sendFeishuInfo(feishuRemoteDesktopHelpText(), tab);
+        return true;
+      case "status":
+        sendFeishuInfo(
+          [
+            `Feishu: ${feishuRuntime.runtimeState}`,
+            `Workspace: ${tab.rootDir}`,
+            `Session: ${tab.currentSession || "(none)"}`,
+            `Model: ${tab.currentModel}`,
+            `Busy: ${tab.aborter ? "yes" : "no"}`,
+          ].join("\n"),
+          tab,
+        );
+        return true;
+      case "session_list":
+        sendFeishuInfo(formatRemoteSessionList(tab), tab);
+        return true;
+      case "session_switch": {
+        const hit = resolveRemoteSessionTarget(tab, cmd.target);
+        if (!hit) {
+          sendFeishuInfo(
+            `Session not found: ${cmd.target}\n\n${formatRemoteSessionList(tab)}`,
+            tab,
+          );
+          return true;
+        }
+        const workspace = repairRetiredSessionWorkspace(
+          hit.name,
+          loadSessionMeta(hit.name).workspace,
+          defaultDesktopRoot(),
+        );
+        const targetWorkspace =
+          typeof workspace === "string" ? resolveDesktopRoot(workspace) : tab.rootDir;
+        const load = () =>
+          loadSessionIntoTab(tab, hit.name, {
+            abortTurn,
+            cancelPendingGates,
+            persistOpenTabs,
+          });
+        if (resolve(targetWorkspace) !== resolve(tab.rootDir)) {
+          void switchWorkspace(tab, targetWorkspace).then(() => {
+            load();
+            sendFeishuInfo(`Switched to session: ${hit.summary || hit.name}`, tab);
+          });
+        } else {
+          load();
+          sendFeishuInfo(`Switched to session: ${hit.summary || hit.name}`, tab);
+        }
+        return true;
+      }
+      case "session_new":
+        startNewChatInTab(tab);
+        sendFeishuInfo("Started a new desktop session in the current workspace.", tab);
+        return true;
+      case "workspace_list":
+        sendFeishuInfo(formatRemoteWorkspaceList(tab), tab);
+        return true;
+      case "workspace_switch": {
+        const target = resolveRemoteWorkspaceTarget(tab, cmd.target);
+        if (!target) {
+          sendFeishuInfo(`Workspace not found: ${cmd.target}`, tab);
+          return true;
+        }
+        void switchWorkspace(tab, target).then(() => {
+          sendFeishuInfo(`Switched workspace to: ${resolveDesktopRoot(target)}`, tab);
+        });
+        return true;
+      }
+      default:
+        return false;
     }
   }
 
@@ -2583,6 +2922,93 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     if (shouldDisable) setDesktopQQEnabled(false);
     setQQRuntimeState("disconnected");
+  }
+
+  async function startDesktopFeishu(shouldPersistEnabled = true): Promise<void> {
+    const current = loadFeishuConfig();
+    if (!(current.appId && current.appSecret)) {
+      throw new Error("Feishu App ID and App Secret are required.");
+    }
+    if (feishuRuntime.channel) {
+      setFeishuRuntimeState("connected");
+      return;
+    }
+    setFeishuRuntimeState("connecting");
+    const channel = new FeishuChannel({
+      config: current,
+      onSubmitMessage: (text) => {
+        const tab = activeDesktopTab();
+        if (!tab) return;
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        const remoteText = stripRemoteChannelPrefix(trimmed);
+        if (handleFeishuRemoteDesktopCommand(tab, remoteText)) return;
+        const decision = classifyDesktopQQIngress({
+          hasPendingInteraction: hasQQPendingInteraction(feishuRuntime.routing, tab.id),
+          isBusy: !!tab.aborter,
+        });
+        if (decision === "pause_reply") {
+          handleFeishuPauseReply(tab, remoteText);
+          return;
+        }
+        if (decision === "busy") {
+          void channel
+            .sendResponse(
+              "Session is busy. Wait for the current turn or reply to the pending prompt.",
+            )
+            .catch(() => undefined);
+          return;
+        }
+        emit(
+          {
+            type: "user.message",
+            id: Date.now(),
+            ts: new Date().toISOString(),
+            turn: 0,
+            text: trimmed,
+          },
+          tab.id,
+        );
+        void runTurn(tab, trimmed, false, undefined, { fromFeishu: true });
+      },
+      onError: (message) => {
+        const tab = activeDesktopTab();
+        setFeishuRuntimeState("failed", message);
+        if (tab) emit({ type: "$error", message: `Feishu: ${message}` }, tab.id);
+      },
+      onInfo: (message) => emitFeishuNotice(`Feishu: ${message}`),
+    });
+    try {
+      await channel.start();
+      feishuRuntime.channel = channel;
+      if (shouldPersistEnabled) saveFeishuConfig({ ...current, enabled: true });
+      setFeishuRuntimeState("connected");
+    } catch (err) {
+      await channel.stop().catch(() => undefined);
+      feishuRuntime.channel = null;
+      if (shouldPersistEnabled) saveFeishuConfig({ ...current, enabled: false });
+      setFeishuRuntimeState("failed", (err as Error).message);
+      throw err;
+    }
+  }
+
+  async function stopDesktopFeishu(shouldDisable = true): Promise<void> {
+    const channel = feishuRuntime.channel;
+    feishuRuntime.channel = null;
+    clearQQTurnRouting(feishuRuntime.routing);
+    if (channel) {
+      try {
+        await channel.stop();
+      } catch (err) {
+        setFeishuRuntimeState("failed", (err as Error).message);
+        throw err;
+      }
+    }
+    if (shouldDisable) {
+      const current = loadFeishuConfig();
+      saveFeishuConfig({ ...current, enabled: false });
+    }
+    setFeishuRuntimeState("disconnected");
   }
 
   /** Synchronous tab construction — no I/O. All cheap, disk-only events (`$settings`, `$sessions`, `$memory`, `$skills`, `$mcp_specs`) can fire against this immediately. The heavy bits (`buildCodeToolset`, MCP probes, runtime construction) happen in `initTabToolset` so the UI shell paints without waiting for them. */
@@ -2762,7 +3188,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     text: string,
     fromQQ = false,
     clientId?: string,
-    opts: { planOneShot?: boolean } = {},
+    opts: { planOneShot?: boolean; fromFeishu?: boolean } = {},
   ): Promise<void> {
     if (!tab.runtime) return;
     const rt = tab.runtime;
@@ -2770,7 +3196,31 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.currentTurnEditEntry = null;
     tab.aborter = new AbortController();
     if (opts.planOneShot) beginOneShotPlanGuard(tab);
+    const fromFeishu = opts.fromFeishu === true;
     if (fromQQ) markQQTurnStarted(qqRuntime.routing, tab.id);
+    if (fromFeishu) markQQTurnStarted(feishuRuntime.routing, tab.id);
+    if (fromQQ && qqRuntime.channel && shouldRouteQQForTab(qqRuntime.routing, tab.id)) {
+      void qqRuntime.channel.sendTurnReceipt().catch((err) => {
+        emit(
+          {
+            type: "$error",
+            message: `qq turn receipt failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      });
+    }
+    if (fromFeishu && feishuRuntime.channel && shouldRouteQQForTab(feishuRuntime.routing, tab.id)) {
+      void feishuRuntime.channel.sendTurnReceipt().catch((err) => {
+        emit(
+          {
+            type: "$error",
+            message: `feishu turn receipt failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      });
+    }
     let lastAssistantText = "";
     if (tab.currentSession) {
       const existing = loadSessionMeta(tab.currentSession).summary;
@@ -2798,6 +3248,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         tab.aborter = null;
         emit({ type: "$turn_complete" }, tab.id);
         if (fromQQ) markQQTurnFinished(qqRuntime.routing, tab.id);
+        if (fromFeishu) markQQTurnFinished(feishuRuntime.routing, tab.id);
         return;
       }
     }
@@ -2853,6 +3304,22 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               );
             });
           }
+          if (
+            fromFeishu &&
+            lastAssistantText &&
+            feishuRuntime.channel &&
+            shouldRouteQQForTab(feishuRuntime.routing, tab.id)
+          ) {
+            await feishuRuntime.channel.sendResponse(lastAssistantText).catch((err) => {
+              emit(
+                {
+                  type: "$error",
+                  message: `feishu send failed: ${(err as Error).message}`,
+                },
+                tab.id,
+              );
+            });
+          }
           patchSessionMeta(tab.currentSession, {
             lastAssistantCompletedAt: Date.now(),
           });
@@ -2883,6 +3350,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           }
         }
         if (fromQQ) markQQTurnFinished(qqRuntime.routing, tab.id);
+        if (fromFeishu) markQQTurnFinished(feishuRuntime.routing, tab.id);
         tab.switching = false;
       }
     });
@@ -3061,6 +3529,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     await stopDesktopQQ(false).catch(() => undefined);
+    await stopDesktopFeishu(false).catch(() => undefined);
     await Promise.allSettled(
       [...tabs.values()].map((t) => t.toolset?.jobs.shutdown(1500) ?? Promise.resolve()),
     );
@@ -3114,7 +3583,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         timeoutSec?: number;
         waitSec?: number;
       };
-      if (tab) setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+      if (tab) {
+        setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+      }
       emit(
         {
           type: "$confirm_required",
@@ -3129,7 +3601,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         },
         tabId,
       );
-      if (tab) handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      if (tab) {
+        handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      }
       return;
     }
     if (req.kind === "path_access") {
@@ -3140,7 +3615,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         sandboxRoot: string;
         allowPrefix: string;
       };
-      if (tab) setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+      if (tab) {
+        setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+      }
       emit(
         {
           type: "$path_access_required",
@@ -3158,7 +3636,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         },
         tabId,
       );
-      if (tab) handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      if (tab) {
+        handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      }
       return;
     }
     if (req.kind === "choice") {
@@ -3167,7 +3648,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         options: ChoiceOption[];
         allowCustom: boolean;
       };
-      if (tab) setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+      if (tab) {
+        setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+      }
       emit(
         {
           type: "$choice_required",
@@ -3178,7 +3662,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         },
         tabId,
       );
-      if (tab) handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      if (tab) {
+        handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      }
       return;
     }
     if (req.kind === "plan_proposed") {
@@ -3192,6 +3679,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         tab.planTotalSteps = payload.steps?.length ?? 0;
         if (tab.oneShotPlanActive) tab.oneShotPlanGateIds.add(req.id);
         setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
       }
       emit(
         {
@@ -3203,7 +3691,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         },
         tabId,
       );
-      if (tab) handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      if (tab) {
+        handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      }
       return;
     }
     if (req.kind === "plan_checkpoint") {
@@ -3216,6 +3707,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         tab.completedStepIds.add(payload.stepId);
         setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
       }
       emit(
         {
@@ -3240,7 +3732,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         },
         tabId,
       );
-      if (tab) handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      if (tab) {
+        handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      }
       return;
     }
     if (req.kind === "plan_revision") {
@@ -3249,7 +3744,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         remainingSteps: PlanStepLite[];
         summary?: string;
       };
-      if (tab) setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+      if (tab) {
+        setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+      }
       emit(
         {
           type: "$revision_required",
@@ -3260,7 +3758,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         },
         tabId,
       );
-      if (tab) handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      if (tab) {
+        handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+      }
       return;
     }
     // Unknown PauseKind — `never` makes a new kind without a handler a compile
@@ -3427,6 +3928,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     void startDesktopQQ(false).catch(() => undefined);
   } else {
     broadcastQQSettings();
+  }
+  const feishuConfig = loadFeishuConfig();
+  if (feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
+    void startDesktopFeishu(false).catch(() => undefined);
+  } else {
+    broadcastFeishuSettings();
   }
 
   const rl = createInterface({ input: stdin });
@@ -4533,6 +5040,91 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       }
       return;
     }
+    if (msg.cmd === "feishu_config_save") {
+      try {
+        const current = loadFeishuConfig();
+        saveFeishuConfig({
+          ...current,
+          appId: msg.appId?.trim() || undefined,
+          appSecret: msg.appSecret?.trim() || undefined,
+          requireMentionInGroup: msg.requireMentionInGroup ?? current.requireMentionInGroup,
+        });
+        emitFeishuSettings(tab);
+        emitStatus(tab, "Feishu settings saved");
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `feishu_config_save failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "feishu_status_get") {
+      emitFeishuSettings(tab);
+      return;
+    }
+    if (msg.cmd === "feishu_connect") {
+      try {
+        emitStatus(tab, "Feishu connecting");
+        void startDesktopFeishu(true).then(
+          () => {
+            emitStatus(tab, "Feishu connected");
+            emitFeishuSettings(tab);
+          },
+          (err) => {
+            emit(
+              {
+                type: "$error",
+                message: `feishu_connect failed: ${(err as Error).message}`,
+              },
+              tab.id,
+            );
+            emitFeishuSettings(tab);
+          },
+        );
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `feishu_connect failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "feishu_disconnect") {
+      try {
+        void stopDesktopFeishu(true).then(
+          () => {
+            emitStatus(tab, "Feishu disabled");
+            emitFeishuSettings(tab);
+          },
+          (err) => {
+            emit(
+              {
+                type: "$error",
+                message: `feishu_disconnect failed: ${(err as Error).message}`,
+              },
+              tab.id,
+            );
+            emitFeishuSettings(tab);
+          },
+        );
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `feishu_disconnect failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
     if (msg.cmd === "mention_query") {
       const nonce = msg.nonce;
       const query = msg.query;
@@ -4650,8 +5242,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     if (msg.cmd === "compact_history") {
       if (!tab.runtime) return;
       void tab.runtime.loop
-        .compactHistory()
-        .then(() => emitCtxBreakdown(tab))
+        .manualCompactHistory()
+        .then((result) => {
+          if (result.folded) emitCurrentSessionLoaded(tab);
+          emitCompactResult(tab, result);
+          emitCtxBreakdown(tab);
+        })
         .catch((err: Error) => {
           emit({ type: "$error", message: `/compact failed: ${err.message}` }, tab.id);
         });
@@ -4707,6 +5303,28 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         );
         finishDesktopCommand(tab);
         return;
+      }
+      if (!msg.planOneShot && !msg.text.trim().startsWith("/")) {
+        const intent = await classifyDesktopNaturalCommandIntent(tab.runtime.loop.client, {
+          model: tab.runtime.loop.model,
+          text: msg.text,
+        });
+        if (intent.command === "compact_history") {
+          emitCurrentSessionLoaded(tab);
+          emitStatus(tab, t("handlers.observability.compactStarting"));
+          void tab.runtime.loop
+            .manualCompactHistory()
+            .then((result) => {
+              if (result.folded) emitCurrentSessionLoaded(tab);
+              emitCompactResult(tab, result);
+              emitCtxBreakdown(tab);
+            })
+            .catch((err: Error) => {
+              emit({ type: "$error", message: `/compact failed: ${err.message}` }, tab.id);
+            })
+            .finally(() => finishDesktopCommand(tab));
+          return;
+        }
       }
       void runTurn(tab, msg.text, false, msg.clientId, {
         planOneShot: msg.planOneShot === true,

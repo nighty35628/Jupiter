@@ -1037,7 +1037,7 @@ describe("desktop message rollback availability", () => {
         ],
         true,
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldShowThinkingFooter(
         [

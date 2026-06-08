@@ -28,6 +28,35 @@ afterEach(() => {
 });
 
 describe("desktop Sidebar workspace grouping", () => {
+  it("opens a blank chat directly from the new chat button without showing workspace choices", () => {
+    const onNewChat = vi.fn();
+    render(
+      <Sidebar
+        sessions={[]}
+        importSources={[]}
+        activeName="desktop-current"
+        workspaceDir="/tmp/11"
+        recentWorkspaces={["/tmp/11", "/tmp/other"]}
+        onNewChat={onNewChat}
+        onLoadSession={vi.fn()}
+        onDeleteSession={vi.fn()}
+        onRenameSession={vi.fn()}
+        onRefreshImportSources={vi.fn()}
+        onImportDetectedSessions={vi.fn()}
+        onImportSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onOpenCommands={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /New chat|新建会话|新規チャット/ }));
+
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+    expect(onNewChat).toHaveBeenCalledWith();
+    expect(document.querySelector(".new-chat-menu")).toBeNull();
+    expect(screen.queryByText("/tmp/other")).toBeNull();
+  });
+
   it("does not fallback untagged sessions to the current workspace", () => {
     render(
       <Sidebar
@@ -303,7 +332,9 @@ describe("desktop Sidebar workspace grouping", () => {
     expect(
       screen.getByRole("menuitem", { name: /Archive conversation|归档会话|会話をアーカイブ/ }),
     ).toBeTruthy();
-    expect(screen.queryByRole("menuitem", { name: /Mark unread|标记为未读|未読にする/ })).toBeNull();
+    expect(
+      screen.getByRole("menuitem", { name: /Mark unread|标记为未读|未読にする/ }),
+    ).toBeTruthy();
     expect(
       screen.getByRole("menuitem", { name: /Show in folder|在文件夹中显示|フォルダーで表示/ }),
     ).toBeTruthy();
@@ -357,7 +388,9 @@ describe("desktop Sidebar workspace grouping", () => {
     expect(onArchiveSession).toHaveBeenCalledWith("desktop-alpha");
   });
 
-  it("does not expose unread actions or unread row state", () => {
+  it("exposes unread actions and unread row state", () => {
+    const onMarkSessionRead = vi.fn();
+    const onMarkSessionUnread = vi.fn();
     render(
       <Sidebar
         sessions={[
@@ -366,6 +399,7 @@ describe("desktop Sidebar workspace grouping", () => {
             messageCount: 1,
             mtime: new Date("2026-05-31T12:00:00Z").toISOString(),
             summary: "Alpha chat",
+            unread: true,
             workspace: "/tmp/Alpha",
           },
         ]}
@@ -377,6 +411,8 @@ describe("desktop Sidebar workspace grouping", () => {
         onLoadSession={vi.fn()}
         onDeleteSession={vi.fn()}
         onRenameSession={vi.fn()}
+        onMarkSessionRead={onMarkSessionRead}
+        onMarkSessionUnread={onMarkSessionUnread}
         onRefreshImportSources={vi.fn()}
         onImportDetectedSessions={vi.fn()}
         onImportSession={vi.fn()}
@@ -388,8 +424,12 @@ describe("desktop Sidebar workspace grouping", () => {
     const row = screen.getByTitle(/Alpha chat/);
     fireEvent.contextMenu(row, { clientX: 42, clientY: 64 });
 
-    expect(screen.queryByRole("menuitem", { name: /Mark unread|标记为未读|未読にする/ })).toBeNull();
-    expect(row.closest(".session-item")?.getAttribute("data-unread")).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Mark read|标记为已读|既読にする/ }));
+
+    expect(row.closest(".session-item")?.getAttribute("data-unread")).toBe("true");
+    expect(row.closest(".session-item")?.querySelector(".session-state-dot")).toBeTruthy();
+    expect(onMarkSessionRead).toHaveBeenCalledWith("desktop-alpha");
+    expect(onMarkSessionUnread).not.toHaveBeenCalled();
   });
 
   it("shows a right-edge spinner while a session is busy", () => {
@@ -426,9 +466,10 @@ describe("desktop Sidebar workspace grouping", () => {
     expect(row?.querySelector(".session-state-dot")).toBeNull();
   });
 
-  it("does not mark completed busy sessions unread", () => {
+  it("marks completed busy sessions unread", () => {
     const onLoadSession = vi.fn();
     const onPatchSessionMeta = vi.fn();
+    const onMarkSessionRead = vi.fn();
     const sessions = [
       {
         name: "desktop-alpha",
@@ -459,6 +500,7 @@ describe("desktop Sidebar workspace grouping", () => {
         onDeleteSession={vi.fn()}
         onRenameSession={vi.fn()}
         onPatchSessionMeta={onPatchSessionMeta}
+        onMarkSessionRead={onMarkSessionRead}
         onRefreshImportSources={vi.fn()}
         onImportDetectedSessions={vi.fn()}
         onImportSession={vi.fn()}
@@ -483,6 +525,40 @@ describe("desktop Sidebar workspace grouping", () => {
         onDeleteSession={vi.fn()}
         onRenameSession={vi.fn()}
         onPatchSessionMeta={onPatchSessionMeta}
+        onMarkSessionRead={onMarkSessionRead}
+        onRefreshImportSources={vi.fn()}
+        onImportDetectedSessions={vi.fn()}
+        onImportSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onOpenCommands={vi.fn()}
+      />,
+    );
+
+    expect(onPatchSessionMeta).toHaveBeenCalledWith("desktop-beta", {
+      lastAssistantCompletedAt: expect.any(Number),
+    });
+    onMarkSessionRead.mockClear();
+
+    rerender(
+      <Sidebar
+        sessions={[
+          sessions[0]!,
+          {
+            ...sessions[1]!,
+            unread: true,
+          },
+        ]}
+        sessionActivity={{}}
+        importSources={[]}
+        activeName="desktop-alpha"
+        workspaceDir="/tmp/Alpha"
+        recentWorkspaces={["/tmp/Alpha", "/tmp/Beta"]}
+        onNewChat={vi.fn()}
+        onLoadSession={onLoadSession}
+        onDeleteSession={vi.fn()}
+        onRenameSession={vi.fn()}
+        onPatchSessionMeta={onPatchSessionMeta}
+        onMarkSessionRead={onMarkSessionRead}
         onRefreshImportSources={vi.fn()}
         onImportDetectedSessions={vi.fn()}
         onImportSession={vi.fn()}
@@ -492,11 +568,11 @@ describe("desktop Sidebar workspace grouping", () => {
     );
 
     const betaRow = screen.getByTitle(/Beta chat/).closest(".session-item");
-    expect(onPatchSessionMeta).not.toHaveBeenCalled();
-    expect(betaRow?.getAttribute("data-unread")).toBeNull();
-    expect(betaRow?.querySelector(".session-state-dot")).toBeNull();
+    expect(betaRow?.getAttribute("data-unread")).toBe("true");
+    expect(betaRow?.querySelector(".session-state-dot")).toBeTruthy();
 
     fireEvent.click(screen.getByTitle(/Beta chat/));
+    expect(onMarkSessionRead).toHaveBeenCalledWith("desktop-beta");
     expect(onLoadSession).toHaveBeenCalledWith("desktop-beta");
   });
 

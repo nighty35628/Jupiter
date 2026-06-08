@@ -1079,7 +1079,7 @@ export const de: TranslationSchema = {
         "Kontext: ~{total} von {max} ({pct}%) · System {sys} · Tools {tools} · Log {log}",
       compactStarting: "▸ falte ältere Turns in eine Zusammenfassung...",
       compactNoop:
-        "▸ nichts zu falten — Log bereits klein oder aktuelle Turns allein überschreiten das Budget.",
+        "▸ nichts zu falten — dieser Chat liegt unter der manuellen Kompaktierungsschwelle oder der aktuelle Abschnitt ist bereits zu groß.",
       compactDone:
         "▸ {before} Nachrichten → {after} gefaltet (Zusammenfassung {chars} Zeichen). Fahre fort.",
       compactFailed: "▸ Falten fehlgeschlagen: {reason}",

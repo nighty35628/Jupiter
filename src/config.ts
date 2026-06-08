@@ -129,6 +129,17 @@ export interface QQBotConfig {
   allowlist?: string[];
 }
 
+export interface FeishuBotConfig {
+  appId?: string;
+  appSecret?: string;
+  enabled?: boolean;
+  /**
+   * Group chats only route into Jupiter when the incoming event includes an @
+   * mention. Direct messages are always accepted. Default true.
+   */
+  requireMentionInGroup?: boolean;
+}
+
 export interface TelegramBotConfig {
   botToken?: string;
   enabled?: boolean;
@@ -317,6 +328,7 @@ export interface JupiterConfig {
   };
   /** QQ Bot configuration */
   qq?: QQBotConfig;
+  feishu?: FeishuBotConfig;
   telegram?: TelegramBotConfig;
 }
 
@@ -1720,6 +1732,46 @@ export function saveQQConfig(cfg: LoadedQQConfig, path: string = defaultConfigPa
     enabled: cfg.enabled,
     ownerOpenId,
     allowlist,
+  };
+  writeConfig(rootCfg, path);
+}
+
+export interface LoadedFeishuConfig {
+  appId?: string;
+  appSecret?: string;
+  enabled?: boolean;
+  requireMentionInGroup: boolean;
+}
+
+function boolFromEnv(value: string | undefined): boolean | undefined {
+  if (value === "1" || value?.toLowerCase() === "true") return true;
+  if (value === "0" || value?.toLowerCase() === "false") return false;
+  return undefined;
+}
+
+export function loadFeishuConfig(path: string = defaultConfigPath()): LoadedFeishuConfig {
+  const fromCfg = readConfig(path).feishu ?? {};
+  return {
+    appId: process.env.FEISHU_APP_ID ?? fromCfg.appId,
+    appSecret: process.env.FEISHU_APP_SECRET ?? fromCfg.appSecret,
+    enabled: fromCfg.enabled === true,
+    requireMentionInGroup:
+      boolFromEnv(process.env.FEISHU_REQUIRE_MENTION_IN_GROUP) ??
+      fromCfg.requireMentionInGroup ??
+      true,
+  };
+}
+
+export function saveFeishuConfig(
+  cfg: Partial<LoadedFeishuConfig>,
+  path: string = defaultConfigPath(),
+): void {
+  const rootCfg = readConfig(path);
+  rootCfg.feishu = {
+    appId: cfg.appId,
+    appSecret: cfg.appSecret,
+    enabled: cfg.enabled,
+    requireMentionInGroup: cfg.requireMentionInGroup,
   };
   writeConfig(rootCfg, path);
 }

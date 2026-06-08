@@ -289,6 +289,9 @@ export function Composer({
   onMentionPicked,
   mentionResults,
   onOpenSourceSearch,
+  variant = "default",
+  workspacePickerLabel,
+  onOpenWorkspacePicker,
   workspaceDir,
   queuedSends,
   onQueueWhileBusy,
@@ -319,6 +322,9 @@ export function Composer({
   onMentionPicked?: (path: string) => void;
   mentionResults?: { nonce: number; query: string; results: string[] } | null;
   onOpenSourceSearch?: () => void;
+  variant?: "default" | "hero";
+  workspacePickerLabel?: string;
+  onOpenWorkspacePicker?: (anchor: { top?: number; bottom?: number; left: number }) => void;
   workspaceDir?: string;
   /** Messages typed while busy=true; rendered as removable chips above the textarea and auto-drained FIFO on turn-complete. */
   queuedSends?: string[];
@@ -804,7 +810,7 @@ export function Composer({
   };
 
   return (
-    <div className="composer-wrap">
+    <div className={`composer-wrap${variant === "hero" ? " composer-wrap--hero" : ""}`}>
       <div className="composer-inner">
         {queuedSends && queuedSends.length > 0 ? (
           <div className="composer-queued">
@@ -886,6 +892,30 @@ export function Composer({
 
           <div className="composer-foot">
             <div className="composer-left-tools">
+              {onOpenWorkspacePicker ? (
+                <button
+                  type="button"
+                  className="composer-workspace-btn"
+                  title={t("composer.switchWorkspace")}
+                  aria-label={t("composer.switchWorkspaceWithName", {
+                    workspace: workspacePickerLabel ?? "Jupiter",
+                  })}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    onOpenWorkspacePicker({
+                      bottom: Math.max(12, window.innerHeight - rect.top + 8),
+                      left: Math.max(12, Math.min(rect.left, window.innerWidth - 372)),
+                    });
+                    setPlusMenuOpen(false);
+                    setModeMenuOpen(false);
+                    setModelMenuOpen(false);
+                  }}
+                >
+                  <I.folder size={13} />
+                  <span>{workspacePickerLabel ?? "Jupiter"}</span>
+                  <I.chev size={10} />
+                </button>
+              ) : null}
               <div className="composer-plus-wrap" ref={plusWrapRef}>
                 <button
                   type="button"

@@ -1031,7 +1031,7 @@ export const zhCN: TranslationSchema = {
     observability: {
       contextInfo: "上下文：~{total} / {max}（{pct}%）· 系统 {sys} · 工具 {tools} · 日志 {log}",
       compactStarting: "▸ 正在折叠旧轮次为摘要…",
-      compactNoop: "▸ 无需折叠 — 日志已足够小，或最近轮次本身已超过预算。",
+      compactNoop: "▸ 无需折叠 — 当前对话短于手动压缩阈值，或最近内容本身太大。",
       compactDone: "▸ 已折叠 {before} 条消息 → {after}（摘要 {chars} 字符）。继续。",
       compactFailed: "▸ 折叠失败：{reason}",
       costNoTurn: "尚无轮次 — `/cost` 显示最近一轮的 token + 花费明细。",

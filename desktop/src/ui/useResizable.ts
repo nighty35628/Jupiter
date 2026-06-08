@@ -9,6 +9,7 @@ const CSS_VAR = { side: "--side-width", ctx: "--ctx-width" } as const;
 const PERSIST_KEY_SIDE = "jupiter.sideWidth";
 const PERSIST_KEY_CTX = "jupiter.ctxWidth";
 const PERSIST_KEY_BOTTOM = "jupiter.bottomHeight";
+const DEFAULT_SIDEBAR_WIDTH = 254;
 
 export function useResizable(
   side: "side" | "ctx",
@@ -19,7 +20,7 @@ export function useResizable(
   onMouseDown: (e: React.MouseEvent) => void;
 } {
   const persistKey = side === "side" ? PERSIST_KEY_SIDE : PERSIST_KEY_CTX;
-  const defaultWidth = side === "side" ? 244 : 320;
+  const defaultWidth = DEFAULT_SIDEBAR_WIDTH;
 
   const [width, setWidth] = useState(() => {
     try {

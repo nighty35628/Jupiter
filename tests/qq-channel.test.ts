@@ -203,6 +203,30 @@ describe("QQChannel.sendResponse", () => {
     );
     expect(onError.mock.calls[1]?.[0]).toContain("chunk 2/3 failed");
   });
+
+  it("can acknowledge a turn without leaving a stale typing state", async () => {
+    const bot = { sendPrivateMessage: vi.fn().mockResolvedValue(undefined) };
+    const channel = new QQChannel({ onSubmitMessage: () => undefined }) as QQChannel & {
+      bot: typeof bot;
+      qqUserId: string;
+      qqMessageId: string;
+      nextOutboundMsgSeq: number;
+    };
+    channel.bot = bot;
+    channel.qqUserId = "user-openid";
+    channel.qqMessageId = "msg-id";
+    channel.nextOutboundMsgSeq = 5;
+
+    await channel.sendTurnReceipt();
+
+    expect(bot.sendPrivateMessage).toHaveBeenCalledWith(
+      "user-openid",
+      "Jupiter 已收到请求，开始处理。",
+      "msg-id",
+      5,
+      false,
+    );
+  });
 });
 
 describe("QQChannel inbound messaging", () => {

@@ -37,6 +37,10 @@ export const FORCE_SUMMARY_THRESHOLD = 0.8;
 export const TURN_START_FOLD_THRESHOLD = 0.9;
 /** Hard deadline for semantic fold summaries so a hung request cannot stall the turn loop. */
 export const HISTORY_FOLD_SUMMARY_TIMEOUT_MS = 15_000;
+/** Manual /compact keeps a much smaller tail than automatic model-window compaction.
+ *  Automatic folding is driven by context pressure; manual folding is an explicit
+ *  user request to shrink the current session now. */
+export const MANUAL_COMPACT_KEEP_RECENT_TOKENS = 16_000;
 /** Prepended to fold summary content so the model knows it's a synthesized recap.
  *  Re-export of the shared constant so existing imports keep resolving. */
 export const HISTORY_FOLD_MARKER = COMPACTION_SUMMARY_MARKER;
@@ -78,6 +82,16 @@ export interface FoldResult {
   beforeMessages: number;
   afterMessages: number;
   summaryChars: number;
+  reason?:
+    | "empty"
+    | "already-small"
+    | "tail-boundary-missing"
+    | "insufficient-savings"
+    | "summary-empty";
+  totalTokens?: number;
+  headTokens?: number;
+  tailTokens?: number;
+  tailBudget?: number;
 }
 
 function buildFoldSummaryInstruction(pinnedSkillNames: string[]): string {
@@ -174,7 +188,7 @@ export class ContextManager {
 
   async fold(
     model: string,
-    opts?: { keepRecentTokens?: number; requireTailBoundary?: boolean },
+    opts?: { keepRecentTokens?: number; requireTailBoundary?: boolean; signal?: AbortSignal },
   ): Promise<FoldResult> {
     const ctxMax = resolveContextTokens(model);
     const tailBudget = opts?.keepRecentTokens ?? Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION);
@@ -185,7 +199,7 @@ export class ContextManager {
       afterMessages: all.length,
       summaryChars: 0,
     };
-    if (all.length === 0) return noop;
+    if (all.length === 0) return { ...noop, reason: "empty", tailBudget };
 
     // Per-message token cost includes tool_calls JSON; otherwise heavy tool-call
     // arguments slip through the tail-budget check and the boundary slides past
@@ -206,20 +220,56 @@ export class ContextManager {
       cumTokens += tokenCounts[i]!;
       if (all[i]!.role === "user") boundary = i;
     }
-    if (boundary <= 0) return noop;
+    if (boundary <= 0) {
+      return {
+        ...noop,
+        reason: "already-small",
+        totalTokens,
+        headTokens: 0,
+        tailTokens: cumTokens,
+        tailBudget,
+      };
+    }
     // Preflight-only: refuse when no user landed in tail — the active tool turn
     // would be wiped. Default fold path (post-response) tolerates empty tail so
     // cache-aligned summary tests still exercise the "summarize all" shape.
-    if (opts?.requireTailBoundary && boundary >= all.length) return noop;
+    if (opts?.requireTailBoundary && boundary >= all.length) {
+      return {
+        ...noop,
+        reason: "tail-boundary-missing",
+        totalTokens,
+        headTokens: totalTokens,
+        tailTokens: cumTokens,
+        tailBudget,
+      };
+    }
 
     const head = all.slice(0, boundary);
     const tail = all.slice(boundary);
     const headTokens = totalTokens - cumTokens;
-    if (headTokens < totalTokens * HISTORY_FOLD_MIN_SAVINGS_FRACTION) return noop;
+    if (headTokens < totalTokens * HISTORY_FOLD_MIN_SAVINGS_FRACTION) {
+      return {
+        ...noop,
+        reason: "insufficient-savings",
+        totalTokens,
+        headTokens,
+        tailTokens: cumTokens,
+        tailBudget,
+      };
+    }
 
     const { names: pinnedNames, bodies: pinnedBodies } = collectPinnedSkills(head);
-    const summary = await this.summarizeForFold(head, pinnedNames);
-    if (!summary.content) return noop;
+    const summary = await this.summarizeForFold(head, pinnedNames, opts?.signal);
+    if (!summary.content) {
+      return {
+        ...noop,
+        reason: "summary-empty",
+        totalTokens,
+        headTokens,
+        tailTokens: cumTokens,
+        tailBudget,
+      };
+    }
 
     const memoTail =
       pinnedBodies.length > 0 ? `\n\n${SKILL_PIN_MEMO_HEADER}\n\n${pinnedBodies.join("\n\n")}` : "";
@@ -247,6 +297,10 @@ export class ContextManager {
       beforeMessages: all.length,
       afterMessages: replacement.length,
       summaryChars: summary.content.length,
+      totalTokens,
+      headTokens,
+      tailTokens: cumTokens,
+      tailBudget,
     };
   }
 
@@ -270,6 +324,7 @@ export class ContextManager {
   private async summarizeForFold(
     messagesToSummarize: ChatMessage[],
     pinnedSkillNames: string[],
+    signal?: AbortSignal,
   ): Promise<{ content: string; reasoningContent: string }> {
     const summaryModel = "deepseek-v4-flash";
     const healed = healLoadedMessages(messagesToSummarize, DEFAULT_MAX_RESULT_CHARS).messages;
@@ -283,7 +338,7 @@ export class ContextManager {
       ...healed,
       { role: "user", content: instruction },
     ];
-    const turnSignal = this.deps.getAbortSignal();
+    const turnSignal = signal ?? this.deps.getAbortSignal();
     const foldCtrl = new AbortController();
     let cleanupAbort = (): void => {};
     let timeout: ReturnType<typeof setTimeout> | undefined;

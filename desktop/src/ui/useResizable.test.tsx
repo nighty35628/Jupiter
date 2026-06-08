@@ -5,22 +5,26 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useBottomResizable, useResizable } from "./useResizable";
 
 function ResizeProbe({
+  side = "ctx",
   collapsed = false,
   activeWhenCollapsed = false,
 }: {
+  side?: "side" | "ctx";
   collapsed?: boolean;
   activeWhenCollapsed?: boolean;
 }) {
   const { width, onMouseDown } = useResizable(
-    "ctx",
+    side,
     collapsed,
     activeWhenCollapsed,
   );
+  const widthVar = side === "side" ? "--side-width" : "--ctx-width";
   return (
-    <div className="app" style={{ ["--ctx-width" as string]: `${width}px` }}>
+    <div className="app" style={{ [widthVar as string]: `${width}px` }}>
       <button type="button" onMouseDown={onMouseDown}>
         drag
       </button>
+      <span data-testid="width">{width}</span>
     </div>
   );
 }
@@ -42,6 +46,14 @@ describe("useResizable", () => {
     document.body.innerHTML = "";
   });
 
+  it("uses matching default widths for the left and right sidebars", () => {
+    const { rerender } = render(<ResizeProbe side="side" />);
+    expect(screen.getByTestId("width").textContent).toBe("254");
+
+    rerender(<ResizeProbe side="ctx" />);
+    expect(screen.getByTestId("width").textContent).toBe("254");
+  });
+
   it("allows the right sidebar to grow beyond forty percent of the viewport", () => {
     Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true });
     render(<ResizeProbe />);
@@ -61,7 +73,7 @@ describe("useResizable", () => {
     fireEvent.mouseMove(window, { clientX: 380 });
     fireEvent.mouseUp(window);
 
-    expect(localStorage.getItem("jupiter.ctxWidth")).toBe("440");
+    expect(localStorage.getItem("jupiter.ctxWidth")).toBe("374");
   });
 
   it("resizes the bottom panel height by dragging upward", () => {

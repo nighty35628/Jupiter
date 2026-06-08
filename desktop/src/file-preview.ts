@@ -32,6 +32,32 @@ export function resolveWorkspacePath(path: string, workspaceDir: string | undefi
   return `${trimmed}${sep}${relative}`;
 }
 
+export function isHtmlFilePath(path: string): boolean {
+  return /\.html?$/i.test(path.split(/[?#]/)[0] ?? path);
+}
+
+export function pathToFileUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const absolute = /^[a-zA-Z]:\//.test(normalized) ? `/${normalized}` : normalized;
+  const encoded = absolute
+    .split("/")
+    .map((part, index) => (index === 0 ? part : encodeURIComponent(part)))
+    .join("/");
+  return `file://${encoded}`;
+}
+
+export function fileUrlToPath(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "file:") return null;
+    const path = decodeURIComponent(parsed.pathname);
+    if (/^\/[a-zA-Z]:\//.test(path)) return path.slice(1);
+    return path;
+  } catch {
+    return null;
+  }
+}
+
 export function firstPreviewLine(line?: string): number | undefined {
   if (!line) return undefined;
   const parsed = Number.parseInt(line.split(/[:-]/)[0] ?? line, 10);

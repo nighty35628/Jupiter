@@ -1,6 +1,11 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { FilePreviewTarget } from "../file-preview";
-import { openDefaultFile, openFileWithApp, revealFileInFolder } from "../file-preview";
+import {
+  isHtmlFilePath,
+  openDefaultFile,
+  openFileWithApp,
+  revealFileInFolder,
+} from "../file-preview";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
 import { FloatingLayer } from "./floating-layer";
@@ -45,6 +50,7 @@ export function FileActionMenu({
   workspaceDir,
   editor,
   onPreviewFile,
+  onOpenHtmlFile,
   onClose,
 }: {
   anchor: Anchor;
@@ -53,6 +59,7 @@ export function FileActionMenu({
   workspaceDir?: string;
   editor?: string;
   onPreviewFile?: (target: FilePreviewTarget) => void;
+  onOpenHtmlFile?: (target: FilePreviewTarget) => void;
   onClose: () => void;
 }) {
   useLang();
@@ -73,6 +80,11 @@ export function FileActionMenu({
     onClose();
   };
   const openDefault = () => {
+    if (isHtmlFilePath(path) && onOpenHtmlFile) {
+      onOpenHtmlFile({ path, line });
+      onClose();
+      return;
+    }
     void openDefaultFile(path, workspaceDir);
     onClose();
   };

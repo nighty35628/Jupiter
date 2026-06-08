@@ -88,6 +88,8 @@ export const en = {
     commandPalette: "command palette",
     addContext: "Add context",
     searchSources: "Search sources",
+    switchWorkspace: "Switch workspace",
+    switchWorkspaceWithName: "Switch workspace: {workspace}",
     insertFile: "Insert file (@ mention)",
     insertImage: "Insert image (@ mention)",
     switchModel: "Switch model",
@@ -127,8 +129,7 @@ export const en = {
     themeDarkDesc: "default · low-light",
     themeLightDesc: "high-contrast · daytime",
     themeStyle: "Style",
-    themeStyleHint:
-      "Choose the visual palette for the selected light or dark mode.",
+    themeStyleHint: "Choose the visual palette for the selected light or dark mode.",
     themeStyleGraphite: "Graphite",
     themeStyleGraphiteDesc: "Neutral dark gray for long work sessions.",
     themeStyleSandstone: "Mist",
@@ -136,8 +137,7 @@ export const en = {
     themeStylePorcelain: "Porcelain",
     themeStylePorcelainDesc: "Default Codex-like clean light palette.",
     themeStyleMidnight: "Ink",
-    themeStyleMidnightDesc:
-      "Near-black night palette with muted green accents.",
+    themeStyleMidnightDesc: "Near-black night palette with muted green accents.",
     fontScale: "Font scale",
     fontScaleHint: "Scales the whole UI; pick larger for high-DPI screens.",
     fontScaleSmall: "small",
@@ -158,8 +158,7 @@ export const en = {
     effortHighDesc: "faster, less thinking",
     effortMaxDesc: "deeper reasoning, slower",
     editMode: "Permission mode",
-    editModeHint:
-      "Controls how Jupiter is allowed to run tools, edit files, and execute commands.",
+    editModeHint: "Controls how Jupiter is allowed to run tools, edit files, and execute commands.",
     editModeReview: "Ask first",
     editModeAuto: "Auto approve",
     editModeYolo: "Full control",
@@ -176,38 +175,30 @@ export const en = {
     expanded: "expanded",
     collapsed: "collapsed",
     desktopCloseBehavior: "Window close",
-    desktopCloseBehaviorHint:
-      "Close quits by default. Hide to tray keeps running sessions alive.",
+    desktopCloseBehaviorHint: "Close quits by default. Hide to tray keeps running sessions alive.",
     closeToQuit: "quit",
     closeToTray: "hide to tray",
     editModeReviewDesc: "Ask before edits or commands",
     editModeAutoDesc: "Auto-approve routine edits; ask for sensitive commands",
-    editModeYoloDesc:
-      "Full-control permission; run all tools automatically, use carefully",
+    editModeYoloDesc: "Full-control permission; run all tools automatically, use carefully",
     budget: "Budget cap",
     budgetHint: "USD per session. Empty = no cap.",
     budgetPlaceholder: "no cap",
     webSearchEngine: "search engine",
     webSearchEngineBing: "bing — default, works from CN without proxy",
     webSearchEngineBingIntl: "bing-intl — international index via www.bing.com",
-    webSearchEngineSearxng:
-      "searxng — self-hosted (set endpoint via /se searxng <url>)",
-    webSearchEngineMetaso:
-      "metaso — 100/day free (CN-friendly, free key at metaso.cn)",
+    webSearchEngineSearxng: "searxng — self-hosted (set endpoint via /se searxng <url>)",
+    webSearchEngineMetaso: "metaso — 100/day free (CN-friendly, free key at metaso.cn)",
     webSearchEngineBaidu:
       "baidu — Baidu AI Search, 1500/mo free in Baidu docs (set BAIDU_API_KEY or QIANFAN_API_KEY)",
     webSearchEngineTavily: "tavily — 1000/mo free (set TAVILY_API_KEY)",
-    webSearchEnginePerplexity:
-      "perplexity — AI-native (set PERPLEXITY_API_KEY)",
+    webSearchEnginePerplexity: "perplexity — AI-native (set PERPLEXITY_API_KEY)",
     webSearchEngineExa: "exa — AI-native 1000/mo free (set EXA_API_KEY)",
-    webSearchEngineBrave:
-      "brave — independent index, 2000/mo free (set BRAVE_SEARCH_API_KEY)",
-    webSearchEngineOllama:
-      "ollama — Ollama cloud web search (set OLLAMA_API_KEY)",
+    webSearchEngineBrave: "brave — independent index, 2000/mo free (set BRAVE_SEARCH_API_KEY)",
+    webSearchEngineOllama: "ollama — Ollama cloud web search (set OLLAMA_API_KEY)",
     webSearchEngineNote: "applies to the next web_search call",
     webSearchEndpoint: "SearXNG endpoint",
-    webSearchEndpointHint:
-      "Base URL of your SearXNG instance. Defaults to http://localhost:8080.",
+    webSearchEndpointHint: "Base URL of your SearXNG instance. Defaults to http://localhost:8080.",
     webSearchApiKeySignup: "(get key)",
     webSearchApiKeyClear: "Clear",
     webSearchApiKey: {
@@ -220,8 +211,7 @@ export const en = {
       ollama: "Ollama API key",
     },
     baseUrl: "DeepSeek base URL",
-    baseUrlHint:
-      "Override only if using a proxy. Empty = official endpoint. Restart required.",
+    baseUrlHint: "Override only if using a proxy. Empty = official endpoint. Restart required.",
     workspace: "Workspace",
     workspaceHint:
       "Root dir agent tools operate inside. Switching saves to config and reloads tools.",
@@ -250,7 +240,7 @@ export const en = {
     pageRulesLabel: "Permissions",
     pageRulesDesc: "Choose how Jupiter asks before running tools",
     pageMcpLabel: "Integrations",
-    pageMcpDesc: "DeepSeek API, web search, QQ channel, and MCP tool servers",
+    pageMcpDesc: "DeepSeek API, web search, QQ/Feishu channels, and MCP tool servers",
     pageSkillsLabel: "Skills",
     pageSkillsDesc: "Reusable prompt sets for / commands",
     pageMemoryLabel: "Rules and memory",
@@ -264,8 +254,7 @@ export const en = {
     pageShortcutsLabel: "Shortcuts",
     pageShortcutsDesc: "Keyboard shortcuts overview",
     archivesTitle: "Archived conversations",
-    archivesHint:
-      "Archived conversations are stored separately from the active sidebar list.",
+    archivesHint: "Archived conversations are stored separately from the active sidebar list.",
     archivesRefresh: "Refresh",
     archivesEmpty: "No archived conversations",
     archivesRestore: "Restore",
@@ -315,6 +304,29 @@ export const en = {
     qqApplyAction: "Open apply page",
     qqSave: "Save",
     qqSaveAndConnect: "Save and connect",
+    feishuSection: "Feishu Channel",
+    feishuTitle: "Feishu bot integration",
+    feishuConnected: "Connected",
+    feishuConnecting: "Connecting",
+    feishuEnabled: "Enabled",
+    feishuFailed: "Failed",
+    feishuDisconnected: "Disconnected",
+    feishuSummaryMissing: "Credentials not configured yet",
+    feishuSummaryDetail: "{appId} · {mode}",
+    feishuConfigure: "Configure…",
+    feishuConfigureTitle: "Configure Feishu Channel",
+    feishuConfigureHint: "Use a Feishu self-built app bot to receive and reply to messages.",
+    feishuBack: "Back",
+    feishuAppId: "App ID",
+    feishuAppSecret: "App Secret",
+    feishuGroupPolicy: "Group policy",
+    feishuGroupPolicyHint: "Direct messages always route in; groups default to @mention only.",
+    feishuGroupMentionRequired: "@mention only",
+    feishuGroupAllMessages: "All group messages",
+    feishuApplyLabel: "Feishu Open Platform",
+    feishuApplyAction: "Open app console",
+    feishuSave: "Save",
+    feishuSaveAndConnect: "Save and connect",
     mcpSection: "Configured",
     currentWorkspace: "Current workspace",
     notSelected: "(not selected)",
@@ -322,8 +334,7 @@ export const en = {
     // model descriptions
     defaultModelCurrent: "Default model · currently {model}",
     modelCustom: "Custom model id",
-    modelCustomHint:
-      "Any OpenAI-compatible id your endpoint serves (vLLM, Ollama, Together, …).",
+    modelCustomHint: "Any OpenAI-compatible id your endpoint serves (vLLM, Ollama, Together, …).",
     modelCustomActive: "Currently running on a custom id: {model}",
     contextTokensLabel: "Context window size",
     contextTokensHint:
@@ -352,8 +363,7 @@ export const en = {
     parseError: "Parse failed: {error}",
     mcpAddSection: "Add server",
     mcpSpecLabel: "Spec string",
-    mcpSpecFormat:
-      "Format: <code>name=command args</code> or <code>name=https://host/sse</code>",
+    mcpSpecFormat: "Format: <code>name=command args</code> or <code>name=https://host/sse</code>",
     mcpAdd: "Add",
     // Skills
     skillRoots: "Skill roots",
@@ -369,8 +379,7 @@ export const en = {
     subagentModelDefault: "default",
     subagentModelFlash: "flash",
     subagentModelPro: "pro",
-    subagentModelHint:
-      "Model used when this skill spawns its isolated subagent",
+    subagentModelHint: "Model used when this skill spawns its isolated subagent",
     // Memory
     memorySection: "Rules and memory",
     memoryDesc:
@@ -443,8 +452,7 @@ export const en = {
     shortcutSettings: "Settings",
   },
   modal: {
-    planFeedbackPlaceholder:
-      "What problems does the plan have? What needs to be improved?",
+    planFeedbackPlaceholder: "What problems does the plan have? What needs to be improved?",
     choiceCustomPlaceholder: "Where can the plan be further refined?",
   },
   plan: {
@@ -470,10 +478,8 @@ export const en = {
     yoloDesc: "full-control permission, all tools run automatically",
     planHint: "Read-only mode · all writes and commands are blocked",
     reviewHint: "Careful mode · ask before running tools",
-    autoHint:
-      "Trusted mode · routine actions auto-approve, sensitive actions still ask",
-    yoloHint:
-      "Full-control permission · all tools run automatically, use carefully",
+    autoHint: "Trusted mode · routine actions auto-approve, sensitive actions still ask",
+    yoloHint: "Full-control permission · all tools run automatically, use carefully",
   },
   markdown: {
     filePillTitle: "click to preview · right-click for actions",
@@ -503,8 +509,7 @@ export const en = {
     continue: "Continue",
     revise: "Revise…",
     stop: "Stop",
-    revisePlaceholder:
-      "What needs to change before the next step? (leave blank to just continue)",
+    revisePlaceholder: "What needs to change before the next step? (leave blank to just continue)",
     sendRevise: "Send revision",
   },
   revision: {
@@ -539,8 +544,7 @@ export const en = {
       copyLast: "Copy last reply",
       switchModel: "Switch model",
       searchEngine: "Configure web search engine + API keys",
-      skill:
-        "List and manage user skills (project + custom + global + builtin)",
+      skill: "List and manage user skills (project + custom + global + builtin)",
       setMode: "Set mode to {mode}",
       setEffort: "Set reasoning effort to {effort}",
       toggleTheme: "Toggle theme",
@@ -552,6 +556,20 @@ export const en = {
       compact: "Fold older turns into a summary (save context)",
       retry: "Truncate and resend your last message",
       btw: "Ask a side question (never added to context)",
+    },
+    compact: {
+      starting: "▸ folding older turns into a summary…",
+      noop: "▸ nothing to fold — this chat is below the manual compaction threshold, or the recent tail is already too large.",
+      noopEmpty: "▸ nothing to fold — this session has no compactable history.",
+      noopAlreadySmall:
+        "▸ nothing to fold — this session is below the manual compaction threshold.",
+      noopTailBoundary: "▸ nothing to fold — the recent context has no safe user-turn boundary.",
+      noopInsufficientSavings: "▸ nothing to fold — too little history would be removed.",
+      noopSummaryEmpty: "▸ fold did not complete — the summary request returned no content.",
+      noopUnknown: "▸ nothing to fold — no specific reason was returned.",
+      stats: "Current log is ~{total} tokens; manual tail budget is {budget} tokens.",
+      done: "▸ folded {before} messages → {after} (summary {chars} chars). Continuing.",
+      failed: "▸ fold failed: {reason}",
     },
     skill: {
       generic: "{scope} skill · {runAs}",
@@ -570,11 +588,9 @@ export const en = {
       bannerBold: "auto-approved",
       banner2: " without asking.",
       switchBack: "Switch to Ask first",
-      toast:
-        "Switched to full-control permission; all operations will be auto-approved",
+      toast: "Switched to full-control permission; all operations will be auto-approved",
     },
-    btwUsage:
-      "▸ /btw <question> — ask a side question without polluting the conversation context.",
+    btwUsage: "▸ /btw <question> — ask a side question without polluting the conversation context.",
     errorLabel: "Error",
     warningLabel: "Warning",
     dismissError: "Dismiss",
@@ -584,8 +600,7 @@ export const en = {
     splashSubtitle: "DeepSeek Agents",
     connecting: "Connecting to Jupiter core…",
     startupFailedTitle: "Jupiter could not start",
-    startupFailedMessage:
-      "The desktop backend failed before opening a workspace.",
+    startupFailedMessage: "The desktop backend failed before opening a workspace.",
     startupFailedRetry: "Retry",
     startupFailedUnknown: "Unknown startup error",
     langZH: "Chinese",
@@ -621,9 +636,9 @@ export const en = {
       abort: "Stop",
     },
     empty: {
-      welcome: "Welcome to Jupiter",
-      currentWorkspace: "Current workspace: ",
-      selectWorkspace: "Select a workspace from the top bar first",
+      welcome: "What should we do in Jupiter today?",
+      currentWorkspace: "Working in ",
+      selectWorkspace: "Choose a workspace from the composer",
       suggestion0: "Check the current repo status",
       suggestion1: "Explain this project structure",
       suggestion2: "Find the next verifiable task",
@@ -767,16 +782,11 @@ export const en = {
       terminalDesc: "Start interactive shell",
     },
     placeholder: {
-      sidechat:
-        "Side Chat is reserved here; the interface is ready for the next step.",
-      library:
-        "Library is reserved here; the interface is ready for the next step.",
-      browser:
-        "Browser is reserved here; the interface is ready for the next step.",
-      review:
-        "Review is reserved here; the interface is ready for the next step.",
-      terminal:
-        "Terminal is reserved here; the interface is ready for the next step.",
+      sidechat: "Side Chat is reserved here; the interface is ready for the next step.",
+      library: "Library is reserved here; the interface is ready for the next step.",
+      browser: "Browser is reserved here; the interface is ready for the next step.",
+      review: "Review is reserved here; the interface is ready for the next step.",
+      terminal: "Terminal is reserved here; the interface is ready for the next step.",
     },
     terminal: {
       inputLabel: "Terminal command",
@@ -815,10 +825,8 @@ export const en = {
       emptyBody: "Enter a URL above to browse in the sidebar.",
       invalidUrl: "Enter a valid http or https URL.",
       nativeError: "Could not create the native browser view.",
-      nativeHint:
-        "Uses a native webview, so it is not limited by iframe embedding rules.",
-      embedHint:
-        "Some websites block embedded browsing. Use Open if the page stays blank.",
+      nativeHint: "Uses a native webview, so it is not limited by iframe embedding rules.",
+      embedHint: "Some websites block embedded browsing. Use Open if the page stays blank.",
     },
     review: {
       refresh: "Refresh changes",
@@ -828,8 +836,7 @@ export const en = {
       changedFiles: "Changed files",
       noChanges: "No code changes.",
       diffTitle: "Diff",
-      noDiff:
-        "No tracked diff. Untracked files may need to be opened from the file list.",
+      noDiff: "No tracked diff. Untracked files may need to be opened from the file list.",
       status: {
         modified: "M",
         added: "A",
@@ -870,8 +877,7 @@ export const en = {
       memorySources: "Saved notes",
       savedSources: "Saved sources",
       addTitle: "Add sources",
-      addDesc:
-        "Search the web or import local files, then add sources to the library.",
+      addDesc: "Search the web or import local files, then add sources to the library.",
       searchPlaceholder: "Search web or saved sources…",
       searchButton: "Search",
       webResults: "Web results",
@@ -943,8 +949,7 @@ export const en = {
     previewLoading: "Loading preview…",
     previewError: "Could not preview this file: {message}",
     previewUnsupported: "No inline preview for this file type.",
-    previewOpenHint:
-      "Use the menu to open it with the default app or another application.",
+    previewOpenHint: "Use the menu to open it with the default app or another application.",
     bytes: "{count} bytes",
     truncated: "truncated",
   },
@@ -990,8 +995,7 @@ export const en = {
     noSessions: "No sessions yet",
     noMatches: "No matches",
     unassignedWorkspace: "Unfiled",
-    unassignedWorkspaceDetail:
-      "Legacy session; opening it files it under the current workspace",
+    unassignedWorkspaceDetail: "Legacy session; opening it files it under the current workspace",
     messageCount: "{count} messages",
     deleteSession: "Delete session",
     sessionActions: "Session actions",
@@ -1024,8 +1028,7 @@ export const en = {
     importSessionCount: "{count} sessions · imports all",
     importNotFound: "No local sessions found",
     importPrivacyHint: "Your existing app settings are not changed.",
-    importResult:
-      "Imported {imported} session(s), skipped {skipped}, failed {failed}.",
+    importResult: "Imported {imported} session(s), skipped {skipped}, failed {failed}.",
     continue: "Continue",
     refresh: "Refresh",
     importSource: "Source",

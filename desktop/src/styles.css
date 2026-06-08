@@ -53,8 +53,7 @@ body[data-drag-over="1"]::after {
 
 :root {
   --font-sans: "Geist", system-ui, sans-serif;
-  --font-mono:
-    "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", monospace;
   --mono: var(--font-mono);
   --font-size-body: 13.5px;
@@ -253,8 +252,8 @@ button:disabled {
 /* ---------- APP SHELL ---------- */
 
 .app {
-  --side-width: 264px;
-  --ctx-width: 348px;
+  --side-width: 254px;
+  --ctx-width: 254px;
   --bottom-height: 0px;
   --context-surface-ease: cubic-bezier(0.2, 0.9, 0.2, 1);
   position: relative;
@@ -268,9 +267,8 @@ button:disabled {
     "side   bottom  bottom";
   height: 100%;
   background: var(--bg);
-  transition:
-    grid-template-columns 230ms var(--context-surface-ease),
-    grid-template-rows 230ms var(--context-surface-ease);
+  transition: grid-template-columns 230ms var(--context-surface-ease), grid-template-rows 230ms
+    var(--context-surface-ease);
 }
 .app[data-dragging="true"] {
   transition: none;
@@ -466,8 +464,7 @@ html[data-platform="macos"] .app {
   display: grid;
   place-items: center;
   padding: 32px;
-  background:
-    radial-gradient(circle at top, var(--accent-soft), transparent 36%),
+  background: radial-gradient(circle at top, var(--accent-soft), transparent 36%),
     linear-gradient(180deg, transparent, oklch(0% 0 0 / 0.04));
 }
 
@@ -857,66 +854,6 @@ html[data-platform="macos"] .titlebar .tb-left {
   background: var(--accent);
   color: oklch(99% 0 0);
   box-shadow: var(--shadow-sm);
-}
-.side-head .new-btn > svg:last-child {
-  margin-left: auto;
-}
-.new-chat-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  width: min(280px, calc(100vw - 32px));
-  max-height: min(420px, 70vh);
-  overflow: auto;
-  z-index: 70;
-  padding: 5px;
-  border-radius: 10px;
-  border: 1px solid var(--border-strong);
-  background: var(--card);
-  box-shadow: var(--shadow-lg);
-}
-.new-chat-option {
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 24px 1fr;
-  gap: 9px;
-  align-items: center;
-  padding: 7px 8px;
-  border-radius: 7px;
-  color: var(--fg-2);
-  text-align: left;
-}
-.new-chat-option:hover {
-  background: var(--panel);
-  color: var(--fg);
-}
-.new-chat-option .ico {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--panel-2);
-  color: var(--muted);
-}
-.new-chat-option .main,
-.new-chat-option .sub {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.new-chat-option .main {
-  font-size: 13px;
-  font-weight: 550;
-}
-.new-chat-option .sub {
-  margin-top: 1px;
-  font-size: 11px;
-  color: var(--muted);
 }
 .side-head .new-btn:hover {
   background: var(--accent-strong);
@@ -1487,10 +1424,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   color: var(--muted);
   cursor: pointer;
   opacity: 0;
-  transition:
-    opacity 120ms,
-    background 120ms,
-    color 120ms;
+  transition: opacity 120ms, background 120ms, color 120ms;
 }
 .workspace-menu-btn[data-pinned="true"] {
   opacity: 1;
@@ -1607,6 +1541,13 @@ html[data-platform="macos"] .titlebar .tb-left {
   border-top-color: var(--accent);
   animation: spin 0.8s linear infinite;
 }
+.session-state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 16%, transparent);
+}
 .session-item .body .meta {
   display: flex;
   align-items: center;
@@ -1654,10 +1595,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   color: var(--muted);
   cursor: pointer;
   opacity: 0;
-  transition:
-    opacity 120ms,
-    background 120ms,
-    color 120ms;
+  transition: opacity 120ms, background 120ms, color 120ms;
 }
 .session-item .rename-btn {
   position: absolute;
@@ -1674,10 +1612,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   color: var(--muted);
   cursor: pointer;
   opacity: 0;
-  transition:
-    opacity 120ms,
-    background 120ms,
-    color 120ms;
+  transition: opacity 120ms, background 120ms, color 120ms;
 }
 .session-item .pin-btn {
   position: absolute;
@@ -1694,10 +1629,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   color: var(--muted);
   cursor: pointer;
   opacity: 0;
-  transition:
-    opacity 120ms,
-    background 120ms,
-    color 120ms;
+  transition: opacity 120ms, background 120ms, color 120ms;
 }
 .session-item .pin-btn[data-pinned="true"] {
   opacity: 1;
@@ -1899,9 +1831,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
-  transition:
-    background 0.12s ease,
-    color 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .session-delete-popover button.cancel {
   background: transparent;
@@ -2068,10 +1998,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   background: color-mix(in oklch, var(--border-strong) 58%, var(--panel));
   position: relative;
   box-shadow: inset 0 1px 2px color-mix(in oklch, var(--shadow) 14%, transparent);
-  transition:
-    background 0.16s ease,
-    border-color 0.16s ease,
-    box-shadow 0.16s ease;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
 }
 .session-import-popover .switch::after {
   content: "";
@@ -2082,19 +2009,15 @@ html[data-platform="macos"] .titlebar .tb-left {
   height: 20px;
   border-radius: 50%;
   background: oklch(99% 0 0);
-  box-shadow:
-    0 1px 2px color-mix(in oklch, var(--shadow) 18%, transparent),
-    0 0 0 1px color-mix(in oklch, var(--border) 40%, transparent);
-  transition:
-    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 0.16s ease;
+  box-shadow: 0 1px 2px color-mix(in oklch, var(--shadow) 18%, transparent), 0 0 0 1px
+    color-mix(in oklch, var(--border) 40%, transparent);
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.16s ease;
 }
 .session-import-popover .switch[data-on="true"] {
   background: var(--accent);
   border-color: color-mix(in oklch, var(--accent) 78%, var(--border));
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklch, white 16%, transparent),
-    0 4px 12px color-mix(in oklch, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, white 16%, transparent), 0 4px 12px
+    color-mix(in oklch, var(--accent) 18%, transparent);
 }
 .session-import-popover .switch[data-on="true"]::after {
   transform: translateX(18px);
@@ -2626,9 +2549,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   border: 2px solid transparent;
   background-color: var(--border);
   border-radius: 999px;
-  transition:
-    border-width 150ms,
-    background-color 200ms;
+  transition: border-width 150ms, background-color 200ms;
 }
 .thread::-webkit-scrollbar-thumb:hover {
   border-width: 0;
@@ -2681,13 +2602,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
     #000 84%,
     transparent 100%
   );
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0%,
-    #000 16%,
-    #000 84%,
-    transparent 100%
-  );
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 16%, #000 84%, transparent 100%);
 }
 .jump-scroll::-webkit-scrollbar {
   display: none;
@@ -2699,6 +2614,11 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   justify-content: flex-end;
   width: 32px;
   min-height: 14px;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -2706,9 +2626,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   height: 3px;
   border-radius: 2px;
   background: var(--border-strong);
-  transition:
-    background 200ms,
-    width 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: background 200ms, width 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .jump-dot[data-d="0"] {
   background: var(--accent);
@@ -2758,9 +2676,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   color: var(--fg);
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  transition:
-    opacity 0.15s,
-    transform 0.15s;
+  transition: opacity 0.15s, transform 0.15s;
   opacity: 0.9;
 }
 .thread-jump-bottom:hover {
@@ -2814,6 +2730,26 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 60ch;
+}
+
+.warning-card,
+.error-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: color-mix(in oklch, var(--panel) 92%, var(--warning) 8%);
+  font-size: 12px;
+}
+
+.warning-card[data-severity="high"],
+.error-card {
+  background: color-mix(in oklch, var(--panel) 90%, var(--danger) 10%);
+  border-color: color-mix(in oklch, var(--danger) 28%, var(--border));
 }
 
 .tool-group {
@@ -3129,9 +3065,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 .diff-stats {
   padding: 2px 18px 2px 0;
   font-size: 11px;
-  font-family:
-    Geist Mono,
-    monospace;
+  font-family: Geist Mono, monospace;
 }
 .diff-stats-head {
   display: inline-flex;
@@ -3195,9 +3129,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   background: var(--panel-2);
   font-family: "Geist Mono", monospace;
   font-variant-ligatures: none;
-  font-feature-settings:
-    "liga" 0,
-    "calt" 0;
+  font-feature-settings: "liga" 0, "calt" 0;
   font-size: 13px;
   line-height: 1.62;
   overflow-x: auto;
@@ -3268,9 +3200,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   padding: 22px 16px 14px;
   font-family: "Geist Mono", monospace;
   font-variant-ligatures: none;
-  font-feature-settings:
-    "liga" 0,
-    "calt" 0;
+  font-feature-settings: "liga" 0, "calt" 0;
   font-size: 13px;
   line-height: 1.62;
   overflow-x: auto;
@@ -3315,9 +3245,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   cursor: pointer;
   vertical-align: baseline;
   text-decoration: none;
-  transition:
-    background 0.12s,
-    color 0.12s;
+  transition: background 0.12s, color 0.12s;
   white-space: nowrap;
 }
 .file-pill:hover {
@@ -3712,10 +3640,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   border-radius: 999px;
   box-shadow: var(--shadow-sm);
   cursor: pointer;
-  transition:
-    background 0.13s ease,
-    color 0.13s ease,
-    transform 0.13s ease;
+  transition: background 0.13s ease, color 0.13s ease, transform 0.13s ease;
 }
 .proc-group.is-clipped .proc-group-toggle {
   position: absolute;
@@ -4212,11 +4137,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   width: 80px;
   height: 56px;
   border-radius: 6px;
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--panel-2) 0 6px,
-    var(--card) 6px 12px
-  );
+  background: repeating-linear-gradient(-45deg, var(--panel-2) 0 6px, var(--card) 6px 12px);
   border: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -4504,9 +4425,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 }
 .composer:focus-within {
   border-color: var(--accent);
-  box-shadow:
-    var(--shadow-md),
-    0 0 0 3px var(--accent-soft);
+  box-shadow: var(--shadow-md), 0 0 0 3px var(--accent-soft);
 }
 .composer-tags {
   display: flex;
@@ -5093,12 +5012,9 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   transform: translateX(0) scale(1);
   transform-origin: top right;
   will-change: opacity, transform;
-  transition:
-    opacity 170ms ease,
-    transform 230ms var(--context-surface-ease),
-    box-shadow 230ms var(--context-surface-ease);
-  box-shadow: -18px 0 34px -34px
-    color-mix(in oklch, var(--shadow) 32%, transparent);
+  transition: opacity 170ms ease, transform 230ms var(--context-surface-ease), box-shadow 230ms
+    var(--context-surface-ease);
+  box-shadow: -18px 0 34px -34px color-mix(in oklch, var(--shadow) 32%, transparent);
 }
 .ctx[data-placement="bottom"] {
   grid-area: bottom;
@@ -5106,14 +5022,12 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   border-top: 1px solid var(--border);
   transform: translateY(0) scale(1);
   transform-origin: bottom center;
-  box-shadow: 0 -18px 34px -34px
-    color-mix(in oklch, var(--shadow) 32%, transparent);
+  box-shadow: 0 -18px 34px -34px color-mix(in oklch, var(--shadow) 32%, transparent);
 }
 .app[data-ctx-collapsed="true"] .ctx[data-placement="side"] {
   opacity: 0;
   transform: translateX(26px) scale(0.985);
-  box-shadow: -6px 0 12px -18px
-    color-mix(in oklch, var(--shadow) 16%, transparent);
+  box-shadow: -6px 0 12px -18px color-mix(in oklch, var(--shadow) 16%, transparent);
 }
 .app[data-context-info-open="true"] .ctx[data-placement="side"] {
   pointer-events: none;
@@ -5146,16 +5060,13 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   display: flex;
   background: var(--bg-2);
   border-left: 1px solid var(--border);
-  box-shadow: -18px 0 34px -34px
-    color-mix(in oklch, var(--shadow) 32%, transparent);
+  box-shadow: -18px 0 34px -34px color-mix(in oklch, var(--shadow) 32%, transparent);
   pointer-events: none;
   opacity: 0;
   transform: translateX(22px) scale(0.972);
   transform-origin: top right;
   will-change: opacity, transform;
-  transition:
-    opacity 160ms ease,
-    transform 230ms var(--context-surface-ease);
+  transition: opacity 160ms ease, transform 230ms var(--context-surface-ease);
 }
 .context-info-popover[data-open="true"] {
   pointer-events: auto;
@@ -5176,9 +5087,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   border-radius: 0;
   background: color-mix(in oklch, var(--card) 96%, var(--bg));
   box-shadow: none;
-  transition:
-    border-color 230ms var(--context-surface-ease),
-    box-shadow 230ms var(--context-surface-ease);
+  transition: border-color 230ms var(--context-surface-ease), box-shadow 230ms
+    var(--context-surface-ease);
 }
 .context-info-popover[data-open="true"] .context-info-card {
   border-color: transparent;
@@ -6152,33 +6062,16 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   flex: 1;
   min-height: 0;
   width: 100%;
-  background:
-    linear-gradient(
+  background: linear-gradient(
       45deg,
       color-mix(in oklch, var(--panel) 88%, var(--card)) 25%,
       transparent 25%
     ),
-    linear-gradient(
-      -45deg,
-      color-mix(in oklch, var(--panel) 88%, var(--card)) 25%,
-      transparent 25%
-    ),
-    linear-gradient(
-      45deg,
-      transparent 75%,
-      color-mix(in oklch, var(--panel) 88%, var(--card)) 75%
-    ),
-    linear-gradient(
-      -45deg,
-      transparent 75%,
-      color-mix(in oklch, var(--panel) 88%, var(--card)) 75%
-    );
+    linear-gradient(-45deg, color-mix(in oklch, var(--panel) 88%, var(--card)) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, color-mix(in oklch, var(--panel) 88%, var(--card)) 75%),
+    linear-gradient(-45deg, transparent 75%, color-mix(in oklch, var(--panel) 88%, var(--card)) 75%);
   background-color: oklch(100% 0 0);
-  background-position:
-    0 0,
-    0 8px,
-    8px -8px,
-    -8px 0;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   background-size: 16px 16px;
 }
 .ctx-browser-empty {
@@ -6377,9 +6270,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   max-height: 360px;
   overflow: auto;
   color: var(--fg-2);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 10.75px;
   line-height: 1.5;
 }
@@ -6559,53 +6450,62 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
   padding: 0;
+  color: var(--fg);
 }
 .ctx-terminal-cwd {
   flex: 0 0 auto;
   min-width: 0;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 7px;
+  gap: 6px;
   align-items: center;
-  padding: 6px 8px;
-  border: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
-  border-radius: 8px;
-  background: color-mix(in oklch, var(--panel) 54%, transparent);
+  padding: 4px 6px;
+  border: 1px solid color-mix(in oklch, var(--border) 46%, transparent);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--panel) 68%, transparent);
   color: var(--muted);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    monospace;
-  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.ctx-terminal-cwd span:first-child {
+  color: color-mix(in oklch, var(--fg) 62%, transparent);
 }
 .ctx-terminal-cwd span:last-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg-2);
+  color: color-mix(in oklch, var(--fg) 72%, var(--muted));
 }
 .ctx-terminal-screen {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 7px;
-  border: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
-  border-radius: 9px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in oklch, var(--panel) 42%, transparent),
-      color-mix(in oklch, var(--card) 72%, var(--bg))
-    );
+  padding: 7px 4px 7px 8px;
+  border: 1px solid color-mix(in oklch, var(--terminal-border, var(--border)) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--terminal-surface, var(--panel)) 96%, var(--bg));
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklch, var(--card) 48%, transparent),
+    0 1px 0 color-mix(in oklch, var(--bg) 80%, transparent);
 }
 .ctx-terminal-screen .xterm {
   height: 100%;
+  padding: 0;
 }
 .ctx-terminal-screen .xterm-viewport,
 .ctx-terminal-screen .xterm-screen {
   background: transparent !important;
+}
+.ctx-terminal-screen .xterm-viewport {
+  scrollbar-width: none;
+}
+.ctx-terminal-screen .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 .ctx-terminal-output {
   flex: 1;
@@ -6640,9 +6540,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   gap: 4px;
   padding: 8px 9px;
   border-bottom: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 .ctx-terminal-command span {
   min-width: 0;
@@ -6671,9 +6569,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   padding: 8px 9px;
   overflow: auto;
   color: var(--fg-2);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 11px;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -6694,9 +6590,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   border-radius: 11px;
   background: color-mix(in oklch, var(--card) 90%, var(--bg));
   color: var(--muted);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 .ctx-terminal-input-row input {
   min-width: 0;
@@ -7025,8 +6919,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   border-radius: 0;
   background: transparent;
   color: var(--fg);
-  font-family:
-    "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11.5px;
   line-height: 1.45;
   white-space: pre;
@@ -7465,12 +7358,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 
 /* shimmer for streaming text */
 .shimmer {
-  background: linear-gradient(
-    90deg,
-    var(--fg-2) 0%,
-    var(--accent) 50%,
-    var(--fg-2) 100%
-  );
+  background: linear-gradient(90deg, var(--fg-2) 0%, var(--accent) 50%, var(--fg-2) 100%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -7538,12 +7426,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 
 .thinking .label .sh {
-  background: linear-gradient(
-    90deg,
-    var(--muted) 0%,
-    var(--accent) 50%,
-    var(--muted) 100%
-  );
+  background: linear-gradient(90deg, var(--muted) 0%, var(--accent) 50%, var(--muted) 100%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -7806,9 +7689,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   padding: 3px 7px 3px 2px;
   border-radius: 8px;
   color: var(--fg-2);
-  transition:
-    background 140ms ease,
-    color 140ms ease;
+  transition: background 140ms ease, color 140ms ease;
 }
 .composer-queue-row:hover {
   background: color-mix(in oklch, var(--panel) 72%, transparent);
@@ -8232,10 +8113,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   position: relative;
   cursor: pointer;
   box-shadow: inset 0 1px 2px color-mix(in oklch, var(--shadow) 14%, transparent);
-  transition:
-    background 0.16s ease,
-    border-color 0.16s ease,
-    box-shadow 0.16s ease;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
 }
 .toggle::after {
   content: "";
@@ -8246,19 +8124,15 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   background: oklch(99% 0 0);
   top: 2px;
   left: 2px;
-  box-shadow:
-    0 1px 2px color-mix(in oklch, var(--shadow) 18%, transparent),
-    0 0 0 1px color-mix(in oklch, var(--border) 40%, transparent);
-  transition:
-    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 0.16s ease;
+  box-shadow: 0 1px 2px color-mix(in oklch, var(--shadow) 18%, transparent), 0 0 0 1px
+    color-mix(in oklch, var(--border) 40%, transparent);
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.16s ease;
 }
 .toggle[data-on="true"] {
   background: var(--accent);
   border-color: color-mix(in oklch, var(--accent) 78%, var(--border));
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklch, white 16%, transparent),
-    0 4px 12px color-mix(in oklch, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, white 16%, transparent), 0 4px 12px
+    color-mix(in oklch, var(--accent) 18%, transparent);
 }
 .toggle[data-on="true"]::after {
   transform: translateX(18px);
@@ -8281,10 +8155,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   font-size: 12.5px;
   white-space: nowrap;
   cursor: pointer;
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .switch-control > span:first-child {
@@ -8398,86 +8269,62 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 .style-card[data-style="graphite"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="graphite"] .style-swatches span:nth-child(1),
-.settings-theme-option[data-style="graphite"]
-  .style-swatches
-  span:nth-child(1) {
+.settings-theme-option[data-style="graphite"] .style-swatches span:nth-child(1) {
   background: oklch(17% 0.005 280);
 }
 .style-card[data-style="graphite"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="graphite"] .style-swatches span:nth-child(2),
-.settings-theme-option[data-style="graphite"]
-  .style-swatches
-  span:nth-child(2) {
+.settings-theme-option[data-style="graphite"] .style-swatches span:nth-child(2) {
   background: oklch(24.5% 0.008 275);
 }
 .style-card[data-style="graphite"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="graphite"] .style-swatches span:nth-child(3),
-.settings-theme-option[data-style="graphite"]
-  .style-swatches
-  span:nth-child(3) {
+.settings-theme-option[data-style="graphite"] .style-swatches span:nth-child(3) {
   background: oklch(68% 0.16 38);
 }
 .style-card[data-style="sandstone"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="sandstone"] .style-swatches span:nth-child(1),
-.settings-theme-option[data-style="sandstone"]
-  .style-swatches
-  span:nth-child(1) {
+.settings-theme-option[data-style="sandstone"] .style-swatches span:nth-child(1) {
   background: oklch(97.5% 0.008 80);
 }
 .style-card[data-style="sandstone"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="sandstone"] .style-swatches span:nth-child(2),
-.settings-theme-option[data-style="sandstone"]
-  .style-swatches
-  span:nth-child(2) {
+.settings-theme-option[data-style="sandstone"] .style-swatches span:nth-child(2) {
   background: oklch(93.5% 0.014 76);
 }
 .style-card[data-style="sandstone"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="sandstone"] .style-swatches span:nth-child(3),
-.settings-theme-option[data-style="sandstone"]
-  .style-swatches
-  span:nth-child(3) {
+.settings-theme-option[data-style="sandstone"] .style-swatches span:nth-child(3) {
   background: oklch(60% 0.19 38);
 }
 .style-card[data-style="porcelain"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="porcelain"] .style-swatches span:nth-child(1),
-.settings-theme-option[data-style="porcelain"]
-  .style-swatches
-  span:nth-child(1) {
+.settings-theme-option[data-style="porcelain"] .style-swatches span:nth-child(1) {
   background: oklch(99.2% 0.001 100);
 }
 .style-card[data-style="porcelain"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="porcelain"] .style-swatches span:nth-child(2),
-.settings-theme-option[data-style="porcelain"]
-  .style-swatches
-  span:nth-child(2) {
+.settings-theme-option[data-style="porcelain"] .style-swatches span:nth-child(2) {
   background: oklch(95.6% 0.001 100);
 }
 .style-card[data-style="porcelain"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="porcelain"] .style-swatches span:nth-child(3),
-.settings-theme-option[data-style="porcelain"]
-  .style-swatches
-  span:nth-child(3) {
+.settings-theme-option[data-style="porcelain"] .style-swatches span:nth-child(3) {
   background: oklch(56% 0.12 285);
 }
 .style-card[data-style="midnight"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="midnight"] .style-swatches span:nth-child(1),
-.settings-theme-option[data-style="midnight"]
-  .style-swatches
-  span:nth-child(1) {
+.settings-theme-option[data-style="midnight"] .style-swatches span:nth-child(1) {
   background: oklch(17% 0.026 260);
 }
 .style-card[data-style="midnight"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="midnight"] .style-swatches span:nth-child(2),
-.settings-theme-option[data-style="midnight"]
-  .style-swatches
-  span:nth-child(2) {
+.settings-theme-option[data-style="midnight"] .style-swatches span:nth-child(2) {
   background: oklch(25% 0.03 265);
 }
 .style-card[data-style="midnight"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="midnight"] .style-swatches span:nth-child(3),
-.settings-theme-option[data-style="midnight"]
-  .style-swatches
-  span:nth-child(3) {
+.settings-theme-option[data-style="midnight"] .style-swatches span:nth-child(3) {
   background: oklch(73% 0.12 285);
 }
 @media (max-width: 760px) {
@@ -9258,17 +9105,14 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   resize: vertical;
   outline: none;
   box-sizing: border-box;
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .approval-textarea::placeholder {
   color: var(--muted-2);
 }
 .approval-textarea:focus {
   border-color: var(--approval-accent, var(--accent));
-  box-shadow: 0 0 0 2px
-    color-mix(in srgb, var(--approval-accent, var(--accent)) 20%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--approval-accent, var(--accent)) 20%, transparent);
 }
 .approval .ap-preview {
   margin: 0 14px 10px;
@@ -9326,9 +9170,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   overflow: hidden;
   border-radius: 14px;
   background: var(--card);
-  box-shadow:
-    0 14px 34px color-mix(in srgb, var(--shadow, black) 11%, transparent),
-    inset 0 1px 0 color-mix(in srgb, white 40%, transparent);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--shadow, black) 11%, transparent), inset 0 1px 0
+    color-mix(in srgb, white 40%, transparent);
 }
 .choice-approval::before {
   display: none;
@@ -9403,18 +9246,14 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition:
-    background 0.14s ease,
-    border-color 0.14s ease,
-    transform 0.14s ease,
-    box-shadow 0.14s ease;
+  transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s
+    ease;
 }
 .choice-approval-option:hover {
   background: var(--panel);
   border-color: var(--border-strong);
   transform: translateY(-1px);
-  box-shadow: 0 8px 18px
-    color-mix(in srgb, var(--shadow, black) 8%, transparent);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--shadow, black) 8%, transparent);
 }
 .choice-approval-option:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 58%, transparent);
@@ -9454,9 +9293,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 .choice-approval-option-arrow {
   color: var(--muted-2);
-  transition:
-    transform 0.14s ease,
-    color 0.14s ease;
+  transition: transform 0.14s ease, color 0.14s ease;
 }
 .choice-approval-option:hover .choice-approval-option-arrow {
   color: var(--fg-2);
@@ -10639,8 +10476,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
    ============================================================ */
 
 .app {
-  --side-width: 252px;
-  --ctx-width: 336px;
+  --side-width: 254px;
+  --ctx-width: 254px;
   background: var(--bg);
 }
 
@@ -11000,9 +10837,7 @@ html[data-platform="macos"] .app {
   border-radius: 6px;
   font-size: 14px;
   color: var(--muted);
-  transition:
-    background 0.12s ease,
-    color 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .ms-seg:hover {
   color: var(--fg);
@@ -11030,9 +10865,7 @@ html[data-platform="macos"] .app {
 /* Full-control toast variant */
 .toast-yolo {
   border-color: var(--tone-err);
-  box-shadow:
-    0 0 0 1px oklch(68% 0.2 25 / 0.18),
-    var(--shadow-lg);
+  box-shadow: 0 0 0 1px oklch(68% 0.2 25 / 0.18), var(--shadow-lg);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -11328,10 +11161,7 @@ html[data-platform="macos"] .app {
   padding: 4px;
   border-radius: 4px;
   opacity: 0;
-  transition:
-    opacity 0.12s ease,
-    color 0.12s ease,
-    background 0.12s ease;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
 }
 .wd-row:hover .wd-del {
   opacity: 1;
@@ -11789,11 +11619,7 @@ html[data-platform="macos"] .splash {
    ============================================================ */
 
 .btn {
-  transition:
-    background 0.15s ease,
-    color 0.15s ease,
-    border-color 0.15s ease,
-    opacity 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
 
 .tree-session .ts-dot {
@@ -11805,9 +11631,7 @@ html[data-platform="macos"] .splash {
 }
 
 .settings-side .row {
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .settings-main {
@@ -11864,9 +11688,7 @@ html[data-platform="macos"] .splash {
 }
 
 .statusbar .seg {
-  transition:
-    background 0.12s ease,
-    color 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 /* ---- about modal ---- */
@@ -11907,9 +11729,7 @@ html[data-platform="macos"] .splash {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition:
-    background 0.12s,
-    color 0.12s;
+  transition: background 0.12s, color 0.12s;
 }
 .about-close:hover {
   background: var(--panel);
@@ -11991,9 +11811,7 @@ html[data-platform="macos"] .splash {
   font-family: inherit;
   font-size: 13px;
   cursor: pointer;
-  transition:
-    background 0.12s,
-    border-color 0.12s;
+  transition: background 0.12s, border-color 0.12s;
 }
 .about-check:hover:not(:disabled) {
   background: var(--card);
@@ -12414,6 +12232,28 @@ html[data-platform="macos"] .splash {
   --accent-strong: oklch(39% 0.065 255);
   --violet: oklch(50% 0.05 285);
   --violet-soft: oklch(50% 0.05 285 / 0.1);
+  --terminal-bg: #f7f8fa;
+  --terminal-surface: #fbfcfd;
+  --terminal-border: #d8dde5;
+  --terminal-fg: #24292f;
+  --terminal-muted: #6e7781;
+  --terminal-selection: rgba(9, 105, 218, 0.18);
+  --terminal-black: #24292f;
+  --terminal-bright-black: #57606a;
+  --terminal-red: #cf222e;
+  --terminal-bright-red: #a40e26;
+  --terminal-green: #1a7f37;
+  --terminal-bright-green: #116329;
+  --terminal-yellow: #9a6700;
+  --terminal-bright-yellow: #7d4e00;
+  --terminal-blue: #0969da;
+  --terminal-bright-blue: #0550ae;
+  --terminal-magenta: #8250df;
+  --terminal-bright-magenta: #6639ba;
+  --terminal-cyan: #1b7c83;
+  --terminal-bright-cyan: #0a6b73;
+  --terminal-white: #f6f8fa;
+  --terminal-bright-white: #ffffff;
   --shadow-sm: 0 1px 0 oklch(20% 0.01 255 / 0.04);
   --shadow-md: 0 14px 38px -28px oklch(18% 0.01 255 / 0.22);
   --shadow-lg: 0 28px 80px -44px oklch(18% 0.01 255 / 0.32);
@@ -12440,6 +12280,28 @@ html[data-platform="macos"] .splash {
   --accent-strong: oklch(38% 0.065 255);
   --violet: oklch(50% 0.05 285);
   --violet-soft: oklch(50% 0.05 285 / 0.1);
+  --terminal-bg: #f7f8fa;
+  --terminal-surface: #fbfcfd;
+  --terminal-border: #d8dde5;
+  --terminal-fg: #24292f;
+  --terminal-muted: #6e7781;
+  --terminal-selection: rgba(9, 105, 218, 0.18);
+  --terminal-black: #24292f;
+  --terminal-bright-black: #57606a;
+  --terminal-red: #cf222e;
+  --terminal-bright-red: #a40e26;
+  --terminal-green: #1a7f37;
+  --terminal-bright-green: #116329;
+  --terminal-yellow: #9a6700;
+  --terminal-bright-yellow: #7d4e00;
+  --terminal-blue: #0969da;
+  --terminal-bright-blue: #0550ae;
+  --terminal-magenta: #8250df;
+  --terminal-bright-magenta: #6639ba;
+  --terminal-cyan: #1b7c83;
+  --terminal-bright-cyan: #0a6b73;
+  --terminal-white: #f6f8fa;
+  --terminal-bright-white: #ffffff;
   --shadow-sm: 0 1px 0 oklch(20% 0.01 255 / 0.04);
   --shadow-md: 0 14px 38px -28px oklch(18% 0.01 255 / 0.22);
   --shadow-lg: 0 28px 80px -44px oklch(18% 0.01 255 / 0.32);
@@ -12465,6 +12327,28 @@ html[data-platform="macos"] .splash {
   --accent-strong: oklch(78% 0.07 255);
   --violet: oklch(72% 0.06 285);
   --violet-soft: oklch(72% 0.06 285 / 0.13);
+  --terminal-bg: #1f242b;
+  --terminal-surface: #252b33;
+  --terminal-border: #3a414c;
+  --terminal-fg: #e6edf3;
+  --terminal-muted: #8b949e;
+  --terminal-selection: rgba(121, 192, 255, 0.28);
+  --terminal-black: #0d1117;
+  --terminal-bright-black: #6e7681;
+  --terminal-red: #ff7b72;
+  --terminal-bright-red: #ffa198;
+  --terminal-green: #7ee787;
+  --terminal-bright-green: #56d364;
+  --terminal-yellow: #d29922;
+  --terminal-bright-yellow: #e3b341;
+  --terminal-blue: #79c0ff;
+  --terminal-bright-blue: #a5d6ff;
+  --terminal-magenta: #d2a8ff;
+  --terminal-bright-magenta: #e2c5ff;
+  --terminal-cyan: #76e3ea;
+  --terminal-bright-cyan: #b3f0ff;
+  --terminal-white: #c9d1d9;
+  --terminal-bright-white: #f0f6fc;
   --shadow-sm: 0 1px 0 oklch(0% 0 0 / 0.3);
   --shadow-md: 0 14px 38px -20px oklch(0% 0 0 / 0.46);
   --shadow-lg: 0 28px 80px -34px oklch(0% 0 0 / 0.62);
@@ -12472,7 +12356,7 @@ html[data-platform="macos"] .splash {
 
 .app {
   --side-width: 254px;
-  --ctx-width: 332px;
+  --ctx-width: 254px;
   grid-template-rows: 38px 32px minmax(0, 1fr) var(--bottom-height);
   background: var(--bg);
 }
@@ -12780,9 +12664,8 @@ html[data-platform="macos"] .app {
   border-radius: 999px;
   background: color-mix(in oklch, var(--panel) 76%, transparent);
   border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
-  box-shadow:
-    0 10px 30px -24px color-mix(in oklch, var(--accent) 46%, black),
-    inset 0 1px 0 color-mix(in oklch, white 22%, transparent);
+  box-shadow: 0 10px 30px -24px color-mix(in oklch, var(--accent) 46%, black), inset 0 1px 0
+    color-mix(in oklch, white 22%, transparent);
 }
 
 .thread-thinking-label {
@@ -12961,11 +12844,38 @@ html[data-platform="macos"] .app {
   color: var(--fg-2);
 }
 
+.composer-workspace-btn {
+  height: 30px;
+  max-width: 190px;
+  min-width: 0;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: var(--font-size-ui-sm);
+  line-height: var(--line-height-ui);
+  cursor: pointer;
+}
+
+.composer-workspace-btn span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-plus-btn:hover,
 .composer-plus-btn[aria-expanded="true"],
 .composer-permission:hover,
 .composer-permission[aria-expanded="true"],
-.composer-foot .model-pill:hover {
+.composer-foot .model-pill:hover,
+.composer-workspace-btn:hover {
   background: var(--panel-2);
   border-color: transparent;
   color: var(--fg);
@@ -13090,10 +13000,20 @@ html[data-platform="macos"] .app {
   border-radius: 8px;
 }
 
-.empty-state {
-  width: min(620px, 100%);
+.thread-inner--standalone {
+  max-width: min(100%, 880px);
+  min-height: 100%;
   margin: 0 auto;
-  padding: 42px 16px 22px;
+  padding: clamp(24px, 8vh, 72px) 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-state {
+  width: 100%;
+  margin: 0 auto;
+  padding: 0;
   text-align: center;
   color: var(--muted);
   font-family: var(--font-sans, "Geist", sans-serif);
@@ -13134,7 +13054,30 @@ html[data-platform="macos"] .app {
   justify-content: center;
   gap: 8px;
   max-width: 560px;
-  margin: 0 auto;
+  margin: 16px auto 0;
+}
+
+.empty-state .composer-wrap--hero {
+  padding: 0;
+  background: transparent;
+  border-top: 0;
+}
+
+.empty-state .composer-wrap--hero .composer-inner {
+  max-width: min(100%, 760px);
+}
+
+.empty-state .composer-wrap--hero .composer {
+  box-shadow: 0 24px 70px -52px oklch(18% 0.01 255 / 0.52);
+}
+
+.empty-state .composer-wrap--hero .composer-backdrop,
+.empty-state .composer-wrap--hero .composer textarea {
+  padding: 14px 16px 7px;
+}
+
+.empty-state .composer-wrap--hero .composer textarea {
+  min-height: 96px;
 }
 
 .empty-suggestion {
@@ -13157,7 +13100,7 @@ html[data-platform="macos"] .app {
 
 /* Top tabs and right inspector refinement */
 .app {
-  --ctx-width: 318px;
+  --ctx-width: 254px;
   grid-template-rows: 38px 30px minmax(0, 1fr) var(--bottom-height);
 }
 
@@ -13359,6 +13302,28 @@ html[data-platform="macos"] .app {
   --accent-strong: oklch(38% 0.085 255);
   --violet: oklch(48% 0.065 285);
   --violet-soft: oklch(48% 0.065 285 / 0.11);
+  --terminal-bg: #f6f7f9;
+  --terminal-surface: #fbfcfd;
+  --terminal-border: #d3d9e1;
+  --terminal-fg: #24292f;
+  --terminal-muted: #68717d;
+  --terminal-selection: rgba(8, 92, 194, 0.18);
+  --terminal-black: #24292f;
+  --terminal-bright-black: #57606a;
+  --terminal-red: #cf222e;
+  --terminal-bright-red: #a40e26;
+  --terminal-green: #1a7f37;
+  --terminal-bright-green: #116329;
+  --terminal-yellow: #9a6700;
+  --terminal-bright-yellow: #7d4e00;
+  --terminal-blue: #0969da;
+  --terminal-bright-blue: #0550ae;
+  --terminal-magenta: #8250df;
+  --terminal-bright-magenta: #6639ba;
+  --terminal-cyan: #1b7c83;
+  --terminal-bright-cyan: #0a6b73;
+  --terminal-white: #f6f8fa;
+  --terminal-bright-white: #ffffff;
 }
 
 [data-theme-style="sandstone"] {
@@ -13379,6 +13344,28 @@ html[data-platform="macos"] .app {
   --accent-strong: oklch(45% 0.145 40);
   --violet: oklch(49% 0.07 24);
   --violet-soft: oklch(49% 0.07 24 / 0.11);
+  --terminal-bg: #f6f0e6;
+  --terminal-surface: #fbf6ee;
+  --terminal-border: #d9c7ae;
+  --terminal-fg: #33261a;
+  --terminal-muted: #735f49;
+  --terminal-selection: rgba(176, 82, 22, 0.18);
+  --terminal-black: #33261a;
+  --terminal-bright-black: #6d5842;
+  --terminal-red: #b4232b;
+  --terminal-bright-red: #8f1820;
+  --terminal-green: #24733d;
+  --terminal-bright-green: #155f2e;
+  --terminal-yellow: #946200;
+  --terminal-bright-yellow: #765000;
+  --terminal-blue: #2367b2;
+  --terminal-bright-blue: #174f91;
+  --terminal-magenta: #8a4a6a;
+  --terminal-bright-magenta: #6f3552;
+  --terminal-cyan: #27737a;
+  --terminal-bright-cyan: #175f65;
+  --terminal-white: #f6eee2;
+  --terminal-bright-white: #fffaf2;
 }
 
 [data-theme-style="graphite"] {
@@ -13399,6 +13386,28 @@ html[data-platform="macos"] .app {
   --accent-strong: oklch(80% 0.085 255);
   --violet: oklch(73% 0.065 285);
   --violet-soft: oklch(73% 0.065 285 / 0.14);
+  --terminal-bg: #1d2229;
+  --terminal-surface: #242a32;
+  --terminal-border: #3c4552;
+  --terminal-fg: #eef2f7;
+  --terminal-muted: #9aa4b2;
+  --terminal-selection: rgba(125, 197, 255, 0.28);
+  --terminal-black: #10151c;
+  --terminal-bright-black: #76808d;
+  --terminal-red: #ff8178;
+  --terminal-bright-red: #ffaaa3;
+  --terminal-green: #83e88d;
+  --terminal-bright-green: #5ed86c;
+  --terminal-yellow: #d8a82d;
+  --terminal-bright-yellow: #e8bc4d;
+  --terminal-blue: #7dc5ff;
+  --terminal-bright-blue: #addcff;
+  --terminal-magenta: #d7adff;
+  --terminal-bright-magenta: #e7ccff;
+  --terminal-cyan: #79e6ec;
+  --terminal-bright-cyan: #bbf4ff;
+  --terminal-white: #cfd6df;
+  --terminal-bright-white: #f7fbff;
 }
 
 [data-theme-style="midnight"] {
@@ -13419,90 +13428,88 @@ html[data-platform="macos"] .app {
   --accent-strong: oklch(83% 0.105 164);
   --violet: oklch(76% 0.075 112);
   --violet-soft: oklch(76% 0.075 112 / 0.14);
+  --terminal-bg: #162224;
+  --terminal-surface: #1c2b2e;
+  --terminal-border: #315055;
+  --terminal-fg: #e8f7f4;
+  --terminal-muted: #8fb0ad;
+  --terminal-selection: rgba(84, 217, 190, 0.26);
+  --terminal-black: #0d1719;
+  --terminal-bright-black: #66817f;
+  --terminal-red: #ff8a7a;
+  --terminal-bright-red: #ffb0a4;
+  --terminal-green: #8be39c;
+  --terminal-bright-green: #67d77f;
+  --terminal-yellow: #d9bd50;
+  --terminal-bright-yellow: #ecd06d;
+  --terminal-blue: #86caff;
+  --terminal-bright-blue: #b6e0ff;
+  --terminal-magenta: #cdb6ff;
+  --terminal-bright-magenta: #e0d1ff;
+  --terminal-cyan: #7ee7d6;
+  --terminal-bright-cyan: #baf5eb;
+  --terminal-white: #c9dbd8;
+  --terminal-bright-white: #f4fffc;
 }
 
 .style-card[data-style="porcelain"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="porcelain"] .style-swatches span:nth-child(1),
-.settings-theme-option[data-style="porcelain"]
-  .style-swatches
-  span:nth-child(1) {
+.settings-theme-option[data-style="porcelain"] .style-swatches span:nth-child(1) {
   background: oklch(97.8% 0.003 255);
 }
 .style-card[data-style="porcelain"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="porcelain"] .style-swatches span:nth-child(2),
-.settings-theme-option[data-style="porcelain"]
-  .style-swatches
-  span:nth-child(2) {
+.settings-theme-option[data-style="porcelain"] .style-swatches span:nth-child(2) {
   background: oklch(92.8% 0.004 255);
 }
 .style-card[data-style="porcelain"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="porcelain"] .style-swatches span:nth-child(3),
-.settings-theme-option[data-style="porcelain"]
-  .style-swatches
-  span:nth-child(3) {
+.settings-theme-option[data-style="porcelain"] .style-swatches span:nth-child(3) {
   background: oklch(48% 0.075 255);
 }
 .style-card[data-style="sandstone"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="sandstone"] .style-swatches span:nth-child(1),
-.settings-theme-option[data-style="sandstone"]
-  .style-swatches
-  span:nth-child(1) {
+.settings-theme-option[data-style="sandstone"] .style-swatches span:nth-child(1) {
   background: oklch(96.5% 0.012 78);
 }
 .style-card[data-style="sandstone"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="sandstone"] .style-swatches span:nth-child(2),
-.settings-theme-option[data-style="sandstone"]
-  .style-swatches
-  span:nth-child(2) {
+.settings-theme-option[data-style="sandstone"] .style-swatches span:nth-child(2) {
   background: oklch(90.8% 0.018 72);
 }
 .style-card[data-style="sandstone"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="sandstone"] .style-swatches span:nth-child(3),
-.settings-theme-option[data-style="sandstone"]
-  .style-swatches
-  span:nth-child(3) {
+.settings-theme-option[data-style="sandstone"] .style-swatches span:nth-child(3) {
   background: oklch(53% 0.125 42);
 }
 .style-card[data-style="graphite"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="graphite"] .style-swatches span:nth-child(1),
-.settings-theme-option[data-style="graphite"]
-  .style-swatches
-  span:nth-child(1) {
+.settings-theme-option[data-style="graphite"] .style-swatches span:nth-child(1) {
   background: oklch(17.2% 0.003 255);
 }
 .style-card[data-style="graphite"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="graphite"] .style-swatches span:nth-child(2),
-.settings-theme-option[data-style="graphite"]
-  .style-swatches
-  span:nth-child(2) {
+.settings-theme-option[data-style="graphite"] .style-swatches span:nth-child(2) {
   background: oklch(27.2% 0.005 255);
 }
 .style-card[data-style="graphite"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="graphite"] .style-swatches span:nth-child(3),
-.settings-theme-option[data-style="graphite"]
-  .style-swatches
-  span:nth-child(3) {
+.settings-theme-option[data-style="graphite"] .style-swatches span:nth-child(3) {
   background: oklch(72% 0.075 255);
 }
 .style-card[data-style="midnight"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="midnight"] .style-swatches span:nth-child(1),
-.settings-theme-option[data-style="midnight"]
-  .style-swatches
-  span:nth-child(1) {
+.settings-theme-option[data-style="midnight"] .style-swatches span:nth-child(1) {
   background: oklch(13.6% 0.012 180);
 }
 .style-card[data-style="midnight"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="midnight"] .style-swatches span:nth-child(2),
-.settings-theme-option[data-style="midnight"]
-  .style-swatches
-  span:nth-child(2) {
+.settings-theme-option[data-style="midnight"] .style-swatches span:nth-child(2) {
   background: oklch(24.6% 0.017 178);
 }
 .style-card[data-style="midnight"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="midnight"] .style-swatches span:nth-child(3),
-.settings-theme-option[data-style="midnight"]
-  .style-swatches
-  span:nth-child(3) {
+.settings-theme-option[data-style="midnight"] .style-swatches span:nth-child(3) {
   background: oklch(74% 0.095 164);
 }
 
@@ -13558,8 +13565,7 @@ html[data-platform="macos"] .app {
 .settings-side .row[data-active="true"] {
   background: color-mix(in oklch, var(--panel-2) 68%, var(--panel));
   color: var(--fg);
-  box-shadow: inset 0 0 0 1px
-    color-mix(in oklch, var(--border) 70%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--border) 70%, transparent);
 }
 
 .settings-side .row .ico {

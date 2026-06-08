@@ -4,14 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import * as eventApi from "@tauri-apps/api/event";
 import * as webviewApi from "@tauri-apps/api/webview";
 import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  act,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings, UsageStats } from "../App";
@@ -21,6 +14,7 @@ import { ContextInfoPopover, ContextPanel } from "./context-panel";
 
 const xtermMockState = vi.hoisted(() => {
   const terminals: Array<{
+    options?: Record<string, unknown>;
     writes: string[];
     disposed: boolean;
     dataHandlers: Array<(data: string) => void>;
@@ -47,9 +41,7 @@ vi.mock("@xterm/xterm", () => ({
       this.dataHandlers.push(handler);
       return {
         dispose: () => {
-          this.dataHandlers = this.dataHandlers.filter(
-            (item) => item !== handler,
-          );
+          this.dataHandlers = this.dataHandlers.filter((item) => item !== handler);
         },
       };
     }
@@ -60,7 +52,8 @@ vi.mock("@xterm/xterm", () => ({
     dispose() {
       this.disposed = true;
     }
-    constructor() {
+    constructor(options?: Record<string, unknown>) {
+      this.options = options;
       xtermMockState.terminals.push(this);
     }
   },
@@ -139,6 +132,7 @@ function renderPanel(overrides: Record<string, unknown> = {}) {
 describe("ContextPanel files", () => {
   beforeEach(() => {
     setLang("en");
+    document.documentElement.removeAttribute("style");
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockResolvedValue(null as never);
     vi.mocked(openPath).mockReset();
@@ -156,21 +150,15 @@ describe("ContextPanel files", () => {
   it("shows the module home panel by default without shell controls", () => {
     renderPanel({ mode: undefined });
 
-    expect(document.querySelector(".ctx")?.getAttribute("data-mode")).toBe(
-      "home",
-    );
+    expect(document.querySelector(".ctx")?.getAttribute("data-mode")).toBe("home");
     expect(screen.getByText("Files")).toBeTruthy();
     expect(screen.getAllByText("Library").length).toBeGreaterThan(0);
     expect(screen.getByText("Side Chat")).toBeTruthy();
     expect(screen.getByText("Browser")).toBeTruthy();
     expect(screen.getByText("Review")).toBeTruthy();
     expect(screen.getByText("Terminal")).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Toggle bottom bar" }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Toggle right sidebar" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Toggle bottom bar" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Toggle right sidebar" })).toBeNull();
   });
 
   it("does not annotate sidebar home cards with keyboard shortcuts", () => {
@@ -232,16 +220,12 @@ describe("ContextPanel files", () => {
     const onSourceSearch = vi.fn();
     renderPanel({ mode: "library", onSourceSearch });
 
-    fireEvent.change(
-      screen.getByPlaceholderText("Search web or saved sources…"),
-      { target: { value: "notebook lm" } },
-    );
+    fireEvent.change(screen.getByPlaceholderText("Search web or saved sources…"), {
+      target: { value: "notebook lm" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
 
-    expect(onSourceSearch).toHaveBeenCalledWith(
-      "notebook lm",
-      expect.any(Number),
-    );
+    expect(onSourceSearch).toHaveBeenCalledWith("notebook lm", expect.any(Number));
   });
 
   it("keeps library stats focused on saved sources", () => {
@@ -281,10 +265,9 @@ describe("ContextPanel files", () => {
       },
     });
 
-    fireEvent.change(
-      screen.getByPlaceholderText("Search web or saved sources…"),
-      { target: { value: "NotebookLM" } },
-    );
+    fireEvent.change(screen.getByPlaceholderText("Search web or saved sources…"), {
+      target: { value: "NotebookLM" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
@@ -373,10 +356,9 @@ describe("ContextPanel files", () => {
       ],
     });
 
-    fireEvent.change(
-      screen.getByPlaceholderText("Search web or saved sources…"),
-      { target: { value: "notebook" } },
-    );
+    fireEvent.change(screen.getByPlaceholderText("Search web or saved sources…"), {
+      target: { value: "notebook" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
 
     expect(screen.getByText("NotebookLM")).toBeTruthy();
@@ -393,9 +375,7 @@ describe("ContextPanel files", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send side chat" }));
 
     expect(onSideChatSend).toHaveBeenCalledWith("Check the current diff");
-    expect(
-      (screen.getByLabelText("Side chat message") as HTMLTextAreaElement).value,
-    ).toBe("");
+    expect((screen.getByLabelText("Side chat message") as HTMLTextAreaElement).value).toBe("");
   });
 
   it("keeps side chat sends available while a temporary answer is pending", () => {
@@ -403,9 +383,7 @@ describe("ContextPanel files", () => {
     renderPanel({
       mode: "sidechat",
       sideChatBusy: true,
-      sideChats: [
-        { id: "side-1", question: "Existing side question", status: "pending" },
-      ],
+      sideChats: [{ id: "side-1", question: "Existing side question", status: "pending" }],
       onSideChatSend,
     });
 
@@ -434,9 +412,7 @@ describe("ContextPanel files", () => {
     });
 
     expect(screen.getByText("What is a closure?")).toBeTruthy();
-    expect(
-      screen.getByText("A closure captures variables from its outer scope."),
-    ).toBeTruthy();
+    expect(screen.getByText("A closure captures variables from its outer scope.")).toBeTruthy();
   });
 
   it("opens a website inside the browser panel and can open it externally", async () => {
@@ -447,21 +423,15 @@ describe("ContextPanel files", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Open website" }));
 
-    expect(
-      screen
-        .getByTitle("Browser preview")
-        .classList.contains("ctx-browser-native-host"),
-    ).toBe(true);
+    expect(screen.getByTitle("Browser preview").classList.contains("ctx-browser-native-host")).toBe(
+      true,
+    );
     expect(document.querySelector("iframe")).toBeNull();
     expect(screen.getByText("https://example.com/")).toBeTruthy();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open in default browser" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Open in default browser" }));
 
-    await waitFor(() =>
-      expect(openUrl).toHaveBeenCalledWith("https://example.com/"),
-    );
+    await waitFor(() => expect(openUrl).toHaveBeenCalledWith("https://example.com/"));
   });
 
   it("opens browser requests passed from the conversation", () => {
@@ -470,11 +440,9 @@ describe("ContextPanel files", () => {
       browserRequest: { id: 1, url: "https://example.com/docs" },
     });
 
-    expect(
-      screen
-        .getByTitle("Browser preview")
-        .classList.contains("ctx-browser-native-host"),
-    ).toBe(true);
+    expect(screen.getByTitle("Browser preview").classList.contains("ctx-browser-native-host")).toBe(
+      true,
+    );
     expect(screen.getByText("https://example.com/docs")).toBeTruthy();
   });
 
@@ -498,37 +466,31 @@ describe("ContextPanel files", () => {
       browserRequest: { id: 1, url: "file:///repo/reports/index.html" },
     });
 
-    expect(
-      screen
-        .getByTitle("Browser preview")
-        .classList.contains("ctx-browser-native-host"),
-    ).toBe(true);
+    expect(screen.getByTitle("Browser preview").classList.contains("ctx-browser-native-host")).toBe(
+      true,
+    );
     expect(screen.getByText("file:///repo/reports/index.html")).toBeTruthy();
   });
 
   it("hides the native browser webview when the sidebar is not visible", async () => {
-    const rectSpy = vi
-      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
-      .mockReturnValue({
-        x: 100,
-        y: 120,
-        left: 100,
-        top: 120,
-        right: 460,
-        bottom: 520,
-        width: 360,
-        height: 400,
-        toJSON: () => ({}),
-      } as DOMRect);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 100,
+      y: 120,
+      left: 100,
+      top: 120,
+      right: 460,
+      bottom: 520,
+      width: 360,
+      height: 400,
+      toJSON: () => ({}),
+    } as DOMRect);
     const view = renderPanel({
       mode: "browser",
       browserRequest: { id: 1, url: "https://example.com/docs" },
       visible: true,
     });
 
-    await waitFor(() =>
-      expect(webviewMockState.webviewInstances[0]?.show).toHaveBeenCalled(),
-    );
+    await waitFor(() => expect(webviewMockState.webviewInstances[0]?.show).toHaveBeenCalled());
 
     view.rerender(
       <Panel
@@ -548,9 +510,7 @@ describe("ContextPanel files", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(webviewMockState.webviewInstances[0]?.hide).toHaveBeenCalled(),
-    );
+    await waitFor(() => expect(webviewMockState.webviewInstances[0]?.hide).toHaveBeenCalled());
     rectSpy.mockRestore();
   });
 
@@ -587,9 +547,7 @@ describe("ContextPanel files", () => {
 
     renderPanel({ mode: "review", onPreviewFile });
 
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("git_status", { root: "/repo" }),
-    );
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("git_status", { root: "/repo" }));
     expect(invoke).toHaveBeenCalledWith("git_diff", { root: "/repo" });
     expect(screen.getByText("2 changed")).toBeTruthy();
     expect(screen.getByText("+2")).toBeTruthy();
@@ -599,16 +557,12 @@ describe("ContextPanel files", () => {
     const appRow = screen.getByRole("button", {
       name: "src/App.tsx M +1 -1",
     });
-    await waitFor(() =>
-      expect(appRow.getAttribute("aria-expanded")).toBe("true"),
-    );
+    await waitFor(() => expect(appRow.getAttribute("aria-expanded")).toBe("true"));
     expect(document.body.textContent).toContain("-old");
     expect(document.body.textContent).toContain("+new");
     expect(document.body.textContent).not.toContain("diff --git");
     expect(document.body.textContent).not.toContain("index 123..456");
-    expect(
-      screen.queryByRole("button", { name: "Refresh changes" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh changes" })).toBeNull();
 
     fireEvent.click(appRow);
     expect(appRow.getAttribute("aria-expanded")).toBe("false");
@@ -646,9 +600,7 @@ describe("ContextPanel files", () => {
       });
 
       expect(
-        vi
-          .mocked(invoke)
-          .mock.calls.filter(([command]) => command === "git_status").length,
+        vi.mocked(invoke).mock.calls.filter(([command]) => command === "git_status").length,
       ).toBeGreaterThanOrEqual(2);
     } finally {
       vi.useRealTimers();
@@ -682,10 +634,33 @@ describe("ContextPanel files", () => {
     });
 
     view.unmount();
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("terminal_kill", { id: "sidebar" }),
-    );
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_kill", { id: "sidebar" }));
     expect(xtermMockState.terminals[0]?.disposed).toBe(true);
+  });
+
+  it("uses the app theme tokens for the sidebar terminal surface and text", async () => {
+    document.documentElement.style.setProperty("--fg", "#20242a");
+    document.documentElement.style.setProperty("--panel", "#f7f8fa");
+    document.documentElement.style.setProperty("--accent-soft", "rgba(32, 36, 42, 0.16)");
+    document.documentElement.style.setProperty("--terminal-fg", "#24292f");
+    document.documentElement.style.setProperty("--terminal-surface", "#fbfcfd");
+    document.documentElement.style.setProperty("--terminal-red", "#c42b3a");
+    document.documentElement.style.setProperty("--terminal-blue", "#2f63c7");
+
+    renderPanel({ mode: "terminal" });
+
+    await waitFor(() => expect(xtermMockState.terminals.length).toBe(1));
+    const theme = xtermMockState.terminals[0]?.options?.theme as Record<string, string> | undefined;
+    expect(theme?.background).toBe("#fbfcfd");
+    expect(theme?.foreground).toBe("#24292f");
+    expect(theme?.cursor).toBe("#24292f");
+    expect(theme?.cursorAccent).toBe("#fbfcfd");
+    expect(theme?.black).toBe("#24292f");
+    expect(theme?.white).toBe("#24292f");
+    expect(theme?.brightWhite).toBe("#24292f");
+    expect(theme?.red).toBe("#c42b3a");
+    expect(theme?.blue).toBe("#2f63c7");
+    expect(theme?.selectionBackground).toBe("rgba(32, 36, 42, 0.16)");
   });
 
   it("previews a searched project file", async () => {
@@ -742,13 +717,9 @@ describe("ContextPanel files", () => {
   it("opens a tracked file from the file row action", async () => {
     renderPanel();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open file: src/new-file.ts" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Open file: src/new-file.ts" }));
 
-    await waitFor(() =>
-      expect(openPath).toHaveBeenCalledWith("/repo/src/new-file.ts"),
-    );
+    await waitFor(() => expect(openPath).toHaveBeenCalledWith("/repo/src/new-file.ts"));
   });
 
   it("adds a tracked file to the library from the files panel", () => {
@@ -824,14 +795,10 @@ describe("ContextPanel files", () => {
   it("reveals a tracked file from its actions menu", async () => {
     renderPanel();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "File actions: src/new-file.ts" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "File actions: src/new-file.ts" }));
     fireEvent.click(screen.getByRole("button", { name: "Reveal in folder" }));
 
-    await waitFor(() =>
-      expect(revealItemInDir).toHaveBeenCalledWith("/repo/src/new-file.ts"),
-    );
+    await waitFor(() => expect(revealItemInDir).toHaveBeenCalledWith("/repo/src/new-file.ts"));
   });
 
   it("opens the tracked file actions menu from the row context menu", () => {
@@ -840,9 +807,7 @@ describe("ContextPanel files", () => {
     fireEvent.contextMenu(screen.getByText("new-file.ts"));
 
     expect(screen.getByRole("menu")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Open in default app" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open in default app" })).toBeTruthy();
   });
 
   it("renders live log tokens even before final usage arrives", () => {
@@ -909,9 +874,7 @@ describe("ContextPanel files", () => {
       }),
     );
 
-    expect(onOpenSubagent).toHaveBeenCalledWith(
-      "subagent-sub-1-20260531120000",
-    );
+    expect(onOpenSubagent).toHaveBeenCalledWith("subagent-sub-1-20260531120000");
   });
 
   it("shows git information in the floating info card without context files", async () => {
@@ -953,14 +916,10 @@ describe("ContextPanel files", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("git_info", { root: "/repo" }),
-    );
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("git_info", { root: "/repo" }));
     expect(invoke).toHaveBeenCalledWith("git_status", { root: "/repo" });
     expect(screen.getByText("Git")).toBeTruthy();
-    expect((screen.getByLabelText("Branch") as HTMLSelectElement).value).toBe(
-      "main",
-    );
+    expect((screen.getByLabelText("Branch") as HTMLSelectElement).value).toBe("main");
     expect(screen.getByText("origin/main")).toBeTruthy();
     expect(screen.getByText("1 ahead")).toBeTruthy();
     expect(screen.getByText("2 changed")).toBeTruthy();
@@ -1018,9 +977,7 @@ describe("ContextPanel files", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Push" }));
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("git_push", { root: "/repo" }),
-    );
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("git_push", { root: "/repo" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
     await waitFor(() =>
@@ -1058,9 +1015,7 @@ describe("ContextPanel files", () => {
       filePreviewError: null,
     });
 
-    expect(document.querySelector(".ctx")?.getAttribute("data-mode")).toBe(
-      "preview",
-    );
+    expect(document.querySelector(".ctx")?.getAttribute("data-mode")).toBe("preview");
     expect(document.querySelector(".ctx-file-preview--full")).toBeTruthy();
     expect(screen.queryByText("Files in context")).toBeNull();
 
@@ -1083,9 +1038,7 @@ describe("ContextPanel files", () => {
       />,
     );
 
-    expect(document.querySelector(".ctx")?.getAttribute("data-mode")).toBe(
-      "files",
-    );
+    expect(document.querySelector(".ctx")?.getAttribute("data-mode")).toBe("files");
     expect(screen.getByText("Files in context")).toBeTruthy();
   });
 
@@ -1113,11 +1066,7 @@ describe("ContextPanel files", () => {
   it("does not render shell controls inside the context panel", () => {
     renderPanel();
 
-    expect(
-      screen.queryByRole("button", { name: "Toggle bottom bar" }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Toggle right sidebar" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Toggle bottom bar" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Toggle right sidebar" })).toBeNull();
   });
 });

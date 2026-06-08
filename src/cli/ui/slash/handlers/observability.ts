@@ -135,7 +135,7 @@ function renderTinyBar(pct: number, width: number): string {
 
 const compact: SlashHandler = (_args, loop, ctx) => {
   void loop
-    .compactHistory()
+    .manualCompactHistory()
     .then((r) => {
       if (!r.folded) {
         ctx.postInfo?.(t("handlers.observability.compactNoop"));

@@ -127,8 +127,7 @@ export const ja = {
     themeDarkDesc: "デフォルト · 低照度",
     themeLightDesc: "高コントラスト · 昼間",
     themeStyle: "スタイル",
-    themeStyleHint:
-      "選択したライト/ダークモードのビジュアルパレットを選択します。",
+    themeStyleHint: "選択したライト/ダークモードのビジュアルパレットを選択します。",
     themeStyleGraphite: "グラファイト",
     themeStyleGraphiteDesc: "長時間作業向けのニュートラルな暗いグレー。",
     themeStyleSandstone: "Mist",
@@ -136,8 +135,7 @@ export const ja = {
     themeStylePorcelain: "ポーセリン",
     themeStylePorcelainDesc: "Codex風のクリーンな標準ライトパレット。",
     themeStyleMidnight: "Ink",
-    themeStyleMidnightDesc:
-      "控えめなグリーンアクセントのほぼ黒い夜間パレット。",
+    themeStyleMidnightDesc: "控えめなグリーンアクセントのほぼ黒い夜間パレット。",
     fontScale: "フォントスケール",
     fontScaleHint: "UI全体をスケーリング; 高DPI画面では大きめを選択。",
     fontScaleSmall: "小",
@@ -158,8 +156,7 @@ export const ja = {
     effortHighDesc: "高速、思考少なめ",
     effortMaxDesc: "深い推論、低速",
     editMode: "権限モード",
-    editModeHint:
-      "Jupiter がツール実行、ファイル編集、コマンド実行をどう許可するかを制御します。",
+    editModeHint: "Jupiter がツール実行、ファイル編集、コマンド実行をどう許可するかを制御します。",
     editModeReview: "毎回確認",
     editModeAuto: "自動承認",
     editModeYolo: "フルコントロール",
@@ -188,26 +185,19 @@ export const ja = {
     budgetPlaceholder: "上限なし",
     webSearchEngine: "検索エンジン",
     webSearchEngineBing: "bing — デフォルト、プロキシなしで中国から利用可",
-    webSearchEngineBingIntl:
-      "bing-intl — www.bing.com 経由の国際版インデックス",
-    webSearchEngineSearxng:
-      "searxng — セルフホスト (/se searxng <url> でエンドポイント設定)",
-    webSearchEngineMetaso:
-      "metaso — 100回/日無料 (中国対応、metaso.cnで無料キー取得)",
+    webSearchEngineBingIntl: "bing-intl — www.bing.com 経由の国際版インデックス",
+    webSearchEngineSearxng: "searxng — セルフホスト (/se searxng <url> でエンドポイント設定)",
+    webSearchEngineMetaso: "metaso — 100回/日無料 (中国対応、metaso.cnで無料キー取得)",
     webSearchEngineBaidu:
       "baidu — Baidu AI Search、公式ドキュメントでは1500回/月無料 (BAIDU_API_KEY または QIANFAN_API_KEY を設定)",
     webSearchEngineTavily: "tavily — 1000回/月無料 (TAVILY_API_KEY を設定)",
-    webSearchEnginePerplexity:
-      "perplexity — AIネイティブ (PERPLEXITY_API_KEY を設定)",
+    webSearchEnginePerplexity: "perplexity — AIネイティブ (PERPLEXITY_API_KEY を設定)",
     webSearchEngineExa: "exa — AIネイティブ 1000回/月無料 (EXA_API_KEY を設定)",
-    webSearchEngineBrave:
-      "brave — 独立インデックス、2000回/月無料 (BRAVE_SEARCH_API_KEY を設定)",
-    webSearchEngineOllama:
-      "ollama — Ollama クラウド web 検索 (OLLAMA_API_KEY を設定)",
+    webSearchEngineBrave: "brave — 独立インデックス、2000回/月無料 (BRAVE_SEARCH_API_KEY を設定)",
+    webSearchEngineOllama: "ollama — Ollama クラウド web 検索 (OLLAMA_API_KEY を設定)",
     webSearchEngineNote: "次の web_search 呼び出しに適用されます",
     webSearchEndpoint: "SearXNG エンドポイント",
-    webSearchEndpointHint:
-      "SearXNGインスタンスのベースURL。デフォルトは http://localhost:8080。",
+    webSearchEndpointHint: "SearXNGインスタンスのベースURL。デフォルトは http://localhost:8080。",
     webSearchApiKeySignup: "(キーを取得)",
     webSearchApiKeyClear: "クリア",
     webSearchApiKey: {
@@ -220,8 +210,7 @@ export const ja = {
       ollama: "Ollama APIキー",
     },
     baseUrl: "DeepSeek ベースURL",
-    baseUrlHint:
-      "プロキシ使用時のみ上書き。空欄 = 公式エンドポイント。再起動が必要です。",
+    baseUrlHint: "プロキシ使用時のみ上書き。空欄 = 公式エンドポイント。再起動が必要です。",
     workspace: "ワークスペース",
     workspaceHint:
       "エージェントツールが操作するルートディレクトリ。切り替えは設定に保存され、ツールが再読み込みされます。",
@@ -249,7 +238,7 @@ export const ja = {
     pageRulesLabel: "権限",
     pageRulesDesc: "Jupiter がツール実行前にどう確認するかを選択",
     pageMcpLabel: "連携",
-    pageMcpDesc: "DeepSeek API、Web検索、QQチャンネル、MCPツールサーバー",
+    pageMcpDesc: "DeepSeek API、Web検索、QQ/Feishuチャンネル、MCPツールサーバー",
     pageSkillsLabel: "スキル",
     pageSkillsDesc: "/ コマンド用の再利用可能なプロンプトセット",
     pageMemoryLabel: "ルールとメモリ",
@@ -312,14 +301,37 @@ export const ja = {
     qqApplyAction: "申請ページを開く",
     qqSave: "保存",
     qqSaveAndConnect: "保存して接続",
+    feishuSection: "Feishuチャンネル",
+    feishuTitle: "Feishuボット連携",
+    feishuConnected: "接続済み",
+    feishuConnecting: "接続中",
+    feishuEnabled: "有効",
+    feishuFailed: "失敗",
+    feishuDisconnected: "切断済み",
+    feishuSummaryMissing: "認証情報がまだ設定されていません",
+    feishuSummaryDetail: "{appId} · {mode}",
+    feishuConfigure: "設定…",
+    feishuConfigureTitle: "Feishuチャンネルを設定",
+    feishuConfigureHint: "Feishu自社アプリのボットでメッセージを受信・返信します。",
+    feishuBack: "戻る",
+    feishuAppId: "App ID",
+    feishuAppSecret: "App Secret",
+    feishuGroupPolicy: "グループ方針",
+    feishuGroupPolicyHint:
+      "ダイレクトメッセージは常に処理し、グループは既定で@メンションのみ処理します。",
+    feishuGroupMentionRequired: "@メンションのみ",
+    feishuGroupAllMessages: "すべてのグループメッセージ",
+    feishuApplyLabel: "Feishu Open Platform",
+    feishuApplyAction: "アプリ管理画面を開く",
+    feishuSave: "保存",
+    feishuSaveAndConnect: "保存して接続",
     mcpSection: "設定済み",
     currentWorkspace: "現在のワークスペース",
     notSelected: "(未選択)",
     apiKeySet: "設定済み · {prefix}…",
     defaultModelCurrent: "デフォルトモデル · 現在 {model}",
     modelCustom: "カスタムモデルID",
-    modelCustomHint:
-      "エンドポイントが提供するOpenAI互換ID (vLLM, Ollama, Together, …)。",
+    modelCustomHint: "エンドポイントが提供するOpenAI互換ID (vLLM, Ollama, Together, …)。",
     modelCustomActive: "現在カスタムIDで実行中: {model}",
     contextTokensLabel: "コンテキストウィンドウサイズ",
     contextTokensHint:
@@ -332,8 +344,7 @@ export const ja = {
     mcpBridged: "· ブリッジ済み",
     mcpNotBridged:
       "· 現在のデスクトップセッションはブリッジされていません — jupiter code (TUI) を再起動すると有効になります",
-    mcpEmpty:
-      "MCPサーバーがまだ設定されていません。以下に仕様を入力して追加してください。",
+    mcpEmpty: "MCPサーバーがまだ設定されていません。以下に仕様を入力して追加してください。",
     mcpRemove: "削除",
     mcpReconnect: "再接続",
     mcpEnable: "有効化",
@@ -348,8 +359,7 @@ export const ja = {
     parseError: "パース失敗: {error}",
     mcpAddSection: "サーバーを追加",
     mcpSpecLabel: "仕様文字列",
-    mcpSpecFormat:
-      "形式: <code>name=command args</code> または <code>name=https://host/sse</code>",
+    mcpSpecFormat: "形式: <code>name=command args</code> または <code>name=https://host/sse</code>",
     mcpAdd: "追加",
     skillRoots: "スキルパス",
     skillPathAdd: "パスを追加",
@@ -364,8 +374,7 @@ export const ja = {
     subagentModelDefault: "デフォルト",
     subagentModelFlash: "flash",
     subagentModelPro: "pro",
-    subagentModelHint:
-      "このスキルが分離サブエージェントを生成するときに使用するモデル",
+    subagentModelHint: "このスキルが分離サブエージェントを生成するときに使用するモデル",
     memorySection: "長期メモリ",
     memoryDesc:
       "現在のバージョンはビルトインの CLAUDE.md / AGENTS.md インジェクションに依存しています。プロジェクトレベルのメモリはカーネルレベルで維持されます。",
@@ -434,8 +443,7 @@ export const ja = {
     shortcutSettings: "設定",
   },
   modal: {
-    planFeedbackPlaceholder:
-      "任意のフィードバック — 変更が必要な場合はここに記入",
+    planFeedbackPlaceholder: "任意のフィードバック — 変更が必要な場合はここに記入",
     choiceCustomPlaceholder: "または自分の回答を入力…",
   },
   plan: {
@@ -462,8 +470,7 @@ export const ja = {
     planHint: "読み取り専用 · すべての書き込みとコマンドをブロック",
     reviewHint: "慎重モード · ツール実行前に確認",
     autoHint: "信頼モード · 通常操作は自動承認、重要操作は確認",
-    yoloHint:
-      "フルコントロール権限 · すべてのツールを自動実行。注意してください",
+    yoloHint: "フルコントロール権限 · すべてのツールを自動実行。注意してください",
   },
   markdown: {
     filePillTitle: "クリックでプレビュー · 右クリックで操作",
@@ -528,8 +535,7 @@ export const ja = {
       copyLast: "最後の返信をコピー",
       switchModel: "モデル切替",
       searchEngine: "Web検索エンジンとAPIキーを設定",
-      skill:
-        "ユーザースキルの一覧と管理（プロジェクト + カスタム + グローバル + 組み込み）",
+      skill: "ユーザースキルの一覧と管理（プロジェクト + カスタム + グローバル + 組み込み）",
       setMode: "モードを {mode} に設定",
       setEffort: "推論努力を {effort} に設定",
       toggleTheme: "テーマ切替",
@@ -541,6 +547,22 @@ export const ja = {
       compact: "古いターンをサマリーに折りたたみ（コンテキスト節約）",
       retry: "最後のメッセージを切り詰めて再送",
       btw: "脇道の質問をする（コンテキストに追加されません）",
+    },
+    compact: {
+      starting: "▸ 古いターンをサマリーに折りたたみ中…",
+      noop: "▸ 折りたたむ内容はありません — ログが小さいか、最近のターンだけで予算を超えています。",
+      noopEmpty: "▸ 折りたたむ内容はありません — このセッションには圧縮できる履歴がありません。",
+      noopAlreadySmall:
+        "▸ 折りたたむ内容はありません — このセッションは手動圧縮のしきい値未満です。",
+      noopTailBoundary:
+        "▸ 折りたたむ内容はありません — 直近コンテキストに安全なユーザーターン境界がありません。",
+      noopInsufficientSavings: "▸ 折りたたむ内容はありません — 削除できる履歴が少なすぎます。",
+      noopSummaryEmpty:
+        "▸ 折りたたみは完了しませんでした — サマリーリクエストが内容を返しませんでした。",
+      noopUnknown: "▸ 折りたたむ内容はありません — 具体的な理由が返されませんでした。",
+      stats: "現在のログは約 {total} tokens、手動 tail 予算は {budget} tokens です。",
+      done: "▸ {before} 件のメッセージ → {after} 件に折りたたみました（サマリー {chars} 文字）。続行します。",
+      failed: "▸ 折りたたみに失敗しました: {reason}",
     },
     skill: {
       generic: "{scope} スキル · {runAs}",
@@ -559,11 +581,9 @@ export const ja = {
       bannerBold: "自動承認",
       banner2: "されます（確認なし）。",
       switchBack: "毎回確認に切り替え",
-      toast:
-        "フルコントロール権限に切り替えました。すべての操作を自動承認します",
+      toast: "フルコントロール権限に切り替えました。すべての操作を自動承認します",
     },
-    btwUsage:
-      "▸ /btw <question> — 会話コンテキストを汚さずに脇道の質問をします。",
+    btwUsage: "▸ /btw <question> — 会話コンテキストを汚さずに脇道の質問をします。",
     errorLabel: "エラー",
     warningLabel: "警告",
     dismissError: "閉じる",
@@ -573,8 +593,7 @@ export const ja = {
     splashSubtitle: "DeepSeek Agents",
     connecting: "Jupiterコアに接続中…",
     startupFailedTitle: "Jupiterを起動できませんでした",
-    startupFailedMessage:
-      "デスクトップバックエンドがワークスペースを開く前に失敗しました。",
+    startupFailedMessage: "デスクトップバックエンドがワークスペースを開く前に失敗しました。",
     startupFailedRetry: "再試行",
     startupFailedUnknown: "不明な起動エラー",
     langZH: "中国語",
@@ -756,15 +775,11 @@ export const ja = {
       terminalDesc: "対話型 shell を起動",
     },
     placeholder: {
-      sidechat:
-        "サイドチャットの入口は準備済みです。次のステップで機能を接続します。",
-      library:
-        "ライブラリの入口は準備済みです。次のステップで機能を接続します。",
-      browser:
-        "ブラウザーの入口は準備済みです。次のステップで機能を接続します。",
+      sidechat: "サイドチャットの入口は準備済みです。次のステップで機能を接続します。",
+      library: "ライブラリの入口は準備済みです。次のステップで機能を接続します。",
+      browser: "ブラウザーの入口は準備済みです。次のステップで機能を接続します。",
       review: "レビューの入口は準備済みです。次のステップで機能を接続します。",
-      terminal:
-        "ターミナルの入口は準備済みです。次のステップで機能を接続します。",
+      terminal: "ターミナルの入口は準備済みです。次のステップで機能を接続します。",
     },
     terminal: {
       inputLabel: "ターミナルコマンド",
@@ -803,8 +818,7 @@ export const ja = {
       emptyBody: "上にURLを入力すると、サイドバー内で閲覧できます。",
       invalidUrl: "有効な http または https のURLを入力してください。",
       nativeError: "ネイティブブラウザー表示を作成できませんでした。",
-      nativeHint:
-        "ネイティブ webview を使用するため、iframe の埋め込み制限を受けません。",
+      nativeHint: "ネイティブ webview を使用するため、iframe の埋め込み制限を受けません。",
       embedHint:
         "一部のサイトは埋め込み表示をブロックします。空白のままなら「開く」を使ってください。",
     },
@@ -816,8 +830,7 @@ export const ja = {
       changedFiles: "変更ファイル",
       noChanges: "コード変更はありません。",
       diffTitle: "Diff",
-      noDiff:
-        "追跡済みの diff はありません。未追跡ファイルはファイル一覧から開けます。",
+      noDiff: "追跡済みの diff はありません。未追跡ファイルはファイル一覧から開けます。",
       status: {
         modified: "M",
         added: "A",
@@ -858,8 +871,7 @@ export const ja = {
       memorySources: "保存メモ",
       savedSources: "保存ソース",
       addTitle: "ソースを追加",
-      addDesc:
-        "Web を検索するかローカルファイルをインポートして、ソースをライブラリに追加します。",
+      addDesc: "Web を検索するかローカルファイルをインポートして、ソースをライブラリに追加します。",
       searchPlaceholder: "Web または保存済みソースを検索…",
       searchButton: "検索",
       webResults: "Web 結果",
@@ -930,8 +942,7 @@ export const ja = {
     previewTitle: "プレビュー",
     previewLoading: "プレビューを読み込み中…",
     previewError: "このファイルをプレビューできません: {message}",
-    previewUnsupported:
-      "このファイルタイプのインラインプレビューはありません。",
+    previewUnsupported: "このファイルタイプのインラインプレビューはありません。",
     previewOpenHint: "メニューから既定のアプリまたは別のアプリで開けます。",
     bytes: "{count} バイト",
     truncated: "切り詰め済み",
@@ -978,8 +989,7 @@ export const ja = {
     noSessions: "セッションなし",
     noMatches: "一致なし",
     unassignedWorkspace: "未整理",
-    unassignedWorkspaceDetail:
-      "旧セッション。開くと現在のワークスペースに保存されます",
+    unassignedWorkspaceDetail: "旧セッション。開くと現在のワークスペースに保存されます",
     messageCount: "{count} メッセージ",
     deleteSession: "セッションを削除",
     sessionActions: "セッション操作",
@@ -1012,8 +1022,7 @@ export const ja = {
     importSessionCount: "{count} セッション · すべてインポート",
     importNotFound: "ローカルセッションが見つかりません",
     importPrivacyHint: "既存のアプリ設定は変更されません。",
-    importResult:
-      "{imported} 件のセッションをインポート、{skipped} 件スキップ、{failed} 件失敗。",
+    importResult: "{imported} 件のセッションをインポート、{skipped} 件スキップ、{failed} 件失敗。",
     continue: "続行",
     refresh: "更新",
     importSource: "ソース",

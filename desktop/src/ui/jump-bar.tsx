@@ -1,11 +1,15 @@
+import type { RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { VirtuosoHandle } from "react-virtuoso";
+
+type JumpBarVirtuosoHandle = Pick<VirtuosoHandle, "scrollToIndex">;
 
 interface JumpBarProps {
   messages: { kind: string; text?: string; turn?: number }[];
-  threadEl: HTMLElement | null;
+  virtuosoRef: RefObject<JumpBarVirtuosoHandle | null>;
 }
 
-export function JumpBar({ messages, threadEl }: JumpBarProps) {
+export function JumpBar({ messages, virtuosoRef }: JumpBarProps) {
   const [hovered, setHovered] = useState<number | null>(null);
   const [active, setActive] = useState<number | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -15,10 +19,12 @@ export function JumpBar({ messages, threadEl }: JumpBarProps) {
   const items = useMemo(
     () =>
       messages
-        .filter((m): m is { kind: "user"; text: string; turn: number } =>
-          m.kind === "user" && typeof m.text === "string" && typeof m.turn === "number",
+        .map((m, index) => ({ ...m, index }))
+        .filter(
+          (m): m is { kind: "user"; text: string; turn: number } =>
+            m.kind === "user" && typeof m.text === "string" && typeof m.turn === "number",
         )
-        .map((m) => ({ turn: m.turn, text: m.text.slice(0, 80) })),
+        .map((m) => ({ index: m.index, turn: m.turn, text: m.text.slice(0, 80) })),
     [messages],
   );
 
@@ -43,7 +49,7 @@ export function JumpBar({ messages, threadEl }: JumpBarProps) {
     const q = el.querySelectorAll<HTMLElement>(".jump-item");
     const barRect = el.getBoundingClientRect();
     let closest = -1;
-    let closestDist = Infinity;
+    let closestDist = Number.POSITIVE_INFINITY;
     q.forEach((item, i) => {
       const r = item.getBoundingClientRect();
       const midY = r.top + r.height / 2;
@@ -65,9 +71,13 @@ export function JumpBar({ messages, threadEl }: JumpBarProps) {
 
   const scrollTo = (turn: number) => {
     setActive(turn);
-    threadEl
-      ?.querySelector(`[data-turn="${turn}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const item = items.find((entry) => entry.turn === turn);
+    if (!item) return;
+    virtuosoRef.current?.scrollToIndex({
+      index: item.index,
+      align: "start",
+      behavior: "smooth",
+    });
   };
 
   const dotProps = (
@@ -76,7 +86,9 @@ export function JumpBar({ messages, threadEl }: JumpBarProps) {
   ): { style: React.CSSProperties; "data-d"?: string } => {
     const isActive = active === turn;
     if (hoverIdx < 0) {
-      return { style: { width: isActive ? 18 : 12, background: isActive ? "var(--accent)" : undefined } };
+      return {
+        style: { width: isActive ? 18 : 12, background: isActive ? "var(--accent)" : undefined },
+      };
     }
     const d = Math.abs(idx - hoverIdx);
     const width = d === 0 ? 32 : d === 1 ? 20 : d === 2 ? 14 : isActive ? 18 : 12;
@@ -88,12 +100,27 @@ export function JumpBar({ messages, threadEl }: JumpBarProps) {
   };
 
   return (
-    <div className="jump-bar" ref={barRef} onMouseMove={onMove} onMouseLeave={() => { setHovered(null); setShowPreview(false); }}>
+    <div
+      className="jump-bar"
+      ref={barRef}
+      onMouseMove={onMove}
+      onMouseLeave={() => {
+        setHovered(null);
+        setShowPreview(false);
+      }}
+    >
       <div className="jump-scroll">
         {items.map((item, idx) => (
-          <div className="jump-item" key={item.turn} data-turn={item.turn} onClick={() => scrollTo(item.turn)}>
+          <button
+            className="jump-item"
+            key={item.turn}
+            type="button"
+            data-turn={item.turn}
+            aria-label={`Jump to turn ${item.turn}`}
+            onClick={() => scrollTo(item.turn)}
+          >
             <div className="jump-dot" {...dotProps(idx, item.turn)} />
-          </div>
+          </button>
         ))}
       </div>
       {showPreview && hoverText && (

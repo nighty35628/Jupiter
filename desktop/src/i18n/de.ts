@@ -47,8 +47,7 @@ export const de: typeof en = {
     repo: "Repository",
     checkUpdates: "Nach Updates suchen",
     checking: "Prüfe...",
-    updateChannelDisabled:
-      "Der Jupiter-Update-Kanal ist noch nicht konfiguriert.",
+    updateChannelDisabled: "Der Jupiter-Update-Kanal ist noch nicht konfiguriert.",
     upToDate: "Aktuell ({version})",
     updateAvailable: "Update verfügbar: {version}",
     openReleases: "Releases anzeigen",
@@ -138,27 +137,22 @@ export const de: typeof en = {
     themeDarkDesc: "Standard · wenig Licht",
     themeLightDesc: "hoher Kontrast · Tageslicht",
     themeStyle: "Stil",
-    themeStyleHint:
-      "Wähle die visuelle Palette für den gewählten hellen oder dunklen Modus.",
+    themeStyleHint: "Wähle die visuelle Palette für den gewählten hellen oder dunklen Modus.",
     themeStyleGraphite: "Graphit",
-    themeStyleGraphiteDesc:
-      "Neutraler dunkler Grauton für lange Arbeitssitzungen.",
+    themeStyleGraphiteDesc: "Neutraler dunkler Grauton für lange Arbeitssitzungen.",
     themeStyleSandstone: "Mist",
     themeStyleSandstoneDesc: "Blendarmes kühles Hellgrau für Tageslicht.",
     themeStylePorcelain: "Porzellan",
     themeStylePorcelainDesc: "Standardmäßige Codex-ähnliche helle Palette.",
     themeStyleMidnight: "Ink",
-    themeStyleMidnightDesc:
-      "Fast schwarze Nachtpalette mit gedämpften grünen Akzenten.",
+    themeStyleMidnightDesc: "Fast schwarze Nachtpalette mit gedämpften grünen Akzenten.",
     fontScale: "Schriftgröße",
-    fontScaleHint:
-      "Skaliert die gesamte UI; wähle größer für hochauflösende Bildschirme.",
+    fontScaleHint: "Skaliert die gesamte UI; wähle größer für hochauflösende Bildschirme.",
     fontScaleSmall: "klein",
     fontScaleMedium: "mittel",
     fontScaleLarge: "groß",
     fontFamily: "Schriftfamilie",
-    fontFamilyHint:
-      "Textkörper; Code-Blöcke bleiben unabhängig davon monospace.",
+    fontFamilyHint: "Textkörper; Code-Blöcke bleiben unabhängig davon monospace.",
     fontFamilySans: "serifenlos",
     fontFamilySystem: "System",
     fontFamilySerif: "Serife",
@@ -172,8 +166,7 @@ export const de: typeof en = {
     effortHighDesc: "schneller, weniger Denken",
     effortMaxDesc: "tieferes Reasoning, langsamer",
     editMode: "Berechtigungsmodus",
-    editModeHint:
-      "Steuert, wie Jupiter Tools ausführen, Dateien ändern und Befehle starten darf.",
+    editModeHint: "Steuert, wie Jupiter Tools ausführen, Dateien ändern und Befehle starten darf.",
     editModeReview: "Erst fragen",
     editModeAuto: "Auto-genehmigen",
     editModeYolo: "Volle Kontrolle",
@@ -196,35 +189,27 @@ export const de: typeof en = {
     closeToTray: "in Ablage",
     editModeReviewDesc: "Vor Edits oder Befehlen fragen",
     editModeAutoDesc: "Routine-Edits automatisch, sensible Befehle fragen",
-    editModeYoloDesc:
-      "Berechtigung mit voller Kontrolle; alle Tools automatisch ausführen",
+    editModeYoloDesc: "Berechtigung mit voller Kontrolle; alle Tools automatisch ausführen",
     budget: "Budgetgrenze",
     budgetHint: "USD pro Sitzung. Leer = keine Grenze.",
     budgetPlaceholder: "keine Grenze",
     webSearchEngine: "Suchmaschine",
     webSearchEngineBing: "bing — Standard, funktioniert von CN ohne Proxy",
-    webSearchEngineBingIntl:
-      "bing-intl — internationaler Index über www.bing.com",
-    webSearchEngineSearxng:
-      "searxng — selbst gehostet (Endpunkt via /se searxng <url>)",
+    webSearchEngineBingIntl: "bing-intl — internationaler Index über www.bing.com",
+    webSearchEngineSearxng: "searxng — selbst gehostet (Endpunkt via /se searxng <url>)",
     webSearchEngineMetaso:
       "metaso — 100/Tag kostenlos (CN-freundlich, kostenloser Schlüssel auf metaso.cn)",
     webSearchEngineBaidu:
       "baidu — Baidu AI Search, laut Baidu-Doku 1500/Monat kostenlos (BAIDU_API_KEY oder QIANFAN_API_KEY setzen)",
-    webSearchEngineTavily:
-      "tavily — 1000/Monat kostenlos (TAVILY_API_KEY setzen)",
-    webSearchEnginePerplexity:
-      "perplexity — AI-native (PERPLEXITY_API_KEY setzen)",
-    webSearchEngineExa:
-      "exa — AI-native 1000/Monat kostenlos (EXA_API_KEY setzen)",
+    webSearchEngineTavily: "tavily — 1000/Monat kostenlos (TAVILY_API_KEY setzen)",
+    webSearchEnginePerplexity: "perplexity — AI-native (PERPLEXITY_API_KEY setzen)",
+    webSearchEngineExa: "exa — AI-native 1000/Monat kostenlos (EXA_API_KEY setzen)",
     webSearchEngineBrave:
       "brave — unabhängiger Index, 2000/Monat kostenlos (BRAVE_SEARCH_API_KEY setzen)",
-    webSearchEngineOllama:
-      "ollama — Ollama Cloud-Websuche (OLLAMA_API_KEY setzen)",
+    webSearchEngineOllama: "ollama — Ollama Cloud-Websuche (OLLAMA_API_KEY setzen)",
     webSearchEngineNote: "gilt für den nächsten web_search-Aufruf",
     webSearchEndpoint: "SearXNG-Endpunkt",
-    webSearchEndpointHint:
-      "Basis-URL der SearXNG-Instanz. Leer = http://localhost:8080.",
+    webSearchEndpointHint: "Basis-URL der SearXNG-Instanz. Leer = http://localhost:8080.",
     webSearchApiKeySignup: "(Schlüssel holen)",
     webSearchApiKeyClear: "Löschen",
     webSearchApiKey: {
@@ -248,12 +233,10 @@ export const de: typeof en = {
       "Wird beim Klicken auf einen Dateilink/-pfad verwendet. Systemstandard = OS-Dateizuordnung. Andere müssen im PATH sein.",
     editorSystem: "Systemstandard",
     editorCustom: "benutzerdefiniert",
-    editorPlaceholder:
-      'z.B. "code", "subl" oder vollständiger Pfad zur ausführbaren Datei',
+    editorPlaceholder: 'z.B. "code", "subl" oder vollständiger Pfad zur ausführbaren Datei',
     editorDefault: "(Standard)",
     apiKey: "API-Schlüssel",
-    apiKeyHint:
-      "DeepSeek-Schlüssel — gespeichert in ~/.jupiter/config.json (0600).",
+    apiKeyHint: "DeepSeek-Schlüssel — gespeichert in ~/.jupiter/config.json (0600).",
     apiKeyNotSet: "(nicht gesetzt)",
     apiKeyCancel: "Abbrechen",
     apiKeySave: "Speichern",
@@ -268,7 +251,7 @@ export const de: typeof en = {
     pageRulesLabel: "Berechtigungen",
     pageRulesDesc: "Wähle, wie Jupiter vor Tool-Ausführung fragt",
     pageMcpLabel: "Integrationen",
-    pageMcpDesc: "DeepSeek API, Websuche, QQ-Kanal und MCP-Tool-Server",
+    pageMcpDesc: "DeepSeek API, Websuche, QQ/Feishu-Kanäle und MCP-Tool-Server",
     pageSkillsLabel: "Skills",
     pageSkillsDesc: "Wiederverwendbare Prompt-Sets für /-Befehle",
     pageMemoryLabel: "Regeln und Memory",
@@ -313,8 +296,7 @@ export const de: typeof en = {
     qqConfigure: "Konfigurieren…",
     qqDisconnect: "Trennen",
     qqConfigureTitle: "QQ-Kanal konfigurieren",
-    qqConfigureHint:
-      "Registriere einen QQ-Bot zum Empfangen und Beantworten von Nachrichten.",
+    qqConfigureHint: "Registriere einen QQ-Bot zum Empfangen und Beantworten von Nachrichten.",
     qqEnvironment: "QQ-Umgebung",
     qqEnvironmentHint:
       "Wähle die QQ-Open-Platform-Umgebung für diesen Bot. Verwende Sandbox zum Testen und Production für den Live-Betrieb.",
@@ -333,6 +315,31 @@ export const de: typeof en = {
     qqApplyAction: "Antragsseite öffnen",
     qqSave: "Speichern",
     qqSaveAndConnect: "Speichern und verbinden",
+    feishuSection: "Feishu-Kanal",
+    feishuTitle: "Feishu-Bot-Integration",
+    feishuConnected: "Verbunden",
+    feishuConnecting: "Verbinden",
+    feishuEnabled: "Aktiviert",
+    feishuFailed: "Fehlgeschlagen",
+    feishuDisconnected: "Getrennt",
+    feishuSummaryMissing: "Zugangsdaten noch nicht konfiguriert",
+    feishuSummaryDetail: "{appId} · {mode}",
+    feishuConfigure: "Konfigurieren…",
+    feishuConfigureTitle: "Feishu-Kanal konfigurieren",
+    feishuConfigureHint:
+      "Nutze einen selbst erstellten Feishu-App-Bot zum Empfangen und Beantworten von Nachrichten.",
+    feishuBack: "Zurück",
+    feishuAppId: "App ID",
+    feishuAppSecret: "App Secret",
+    feishuGroupPolicy: "Gruppenrichtlinie",
+    feishuGroupPolicyHint:
+      "Direktnachrichten werden immer weitergeleitet; Gruppen standardmäßig nur bei @Mention.",
+    feishuGroupMentionRequired: "Nur @Mention",
+    feishuGroupAllMessages: "Alle Gruppennachrichten",
+    feishuApplyLabel: "Feishu Open Platform",
+    feishuApplyAction: "App-Konsole öffnen",
+    feishuSave: "Speichern",
+    feishuSaveAndConnect: "Speichern und verbinden",
     mcpSection: "Konfiguriert",
     currentWorkspace: "Aktueller Arbeitsbereich",
     notSelected: "(nicht ausgewählt)",
@@ -353,8 +360,7 @@ export const de: typeof en = {
     mcpBridged: "· Verbunden",
     mcpNotBridged:
       "· Aktuelle Desktop-Sitzung nicht verbunden — starte jupiter code (TUI) neu, um wirksam zu werden",
-    mcpEmpty:
-      "Noch keine MCP-Server konfiguriert. Gib unten eine Spec ein, um einen hinzuzufügen.",
+    mcpEmpty: "Noch keine MCP-Server konfiguriert. Gib unten eine Spec ein, um einen hinzuzufügen.",
     mcpRemove: "Entfernen",
     mcpReconnect: "Neu verbinden",
     mcpEnable: "Aktivieren",
@@ -369,8 +375,7 @@ export const de: typeof en = {
     parseError: "Parse fehlgeschlagen: {error}",
     mcpAddSection: "Server hinzufügen",
     mcpSpecLabel: "Spec-String",
-    mcpSpecFormat:
-      "Format: <code>name=befehl args</code> oder <code>name=https://host/sse</code>",
+    mcpSpecFormat: "Format: <code>name=befehl args</code> oder <code>name=https://host/sse</code>",
     mcpAdd: "Hinzufügen",
     skillRoots: "Skill-Pfade",
     skillPathAdd: "Pfad hinzufügen",
@@ -456,8 +461,7 @@ export const de: typeof en = {
   },
   modal: {
     ...en.modal,
-    planFeedbackPlaceholder:
-      "Welche Probleme hat der Plan? Was muss verbessert werden?",
+    planFeedbackPlaceholder: "Welche Probleme hat der Plan? Was muss verbessert werden?",
     choiceCustomPlaceholder: "Wo kann der Plan weiter verfeinert werden?",
   },
   plan: {
@@ -482,14 +486,11 @@ export const de: typeof en = {
     planDesc: "schreibgeschützt · keine Edits, keine Shell",
     reviewDesc: "vor Edits oder Befehlen fragen",
     autoDesc: "Routine-Edits automatisch, sensible Befehle fragen",
-    yoloDesc:
-      "Berechtigung mit voller Kontrolle; alle Tools laufen automatisch",
+    yoloDesc: "Berechtigung mit voller Kontrolle; alle Tools laufen automatisch",
     planHint: "Nur lesen · alle Schreibvorgänge und Befehle werden blockiert",
     reviewHint: "Vorsichtiger Modus · vor Tool-Ausführung fragen",
-    autoHint:
-      "Vertrauensmodus · Routineaktionen automatisch, sensible Aktionen fragen",
-    yoloHint:
-      "Volle Kontrolle · alle Tools laufen automatisch, vorsichtig verwenden",
+    autoHint: "Vertrauensmodus · Routineaktionen automatisch, sensible Aktionen fragen",
+    yoloHint: "Volle Kontrolle · alle Tools laufen automatisch, vorsichtig verwenden",
   },
   markdown: {
     ...en.markdown,
@@ -563,8 +564,7 @@ export const de: typeof en = {
       copyLast: "Letzte Antwort kopieren",
       switchModel: "Modell wechseln",
       searchEngine: "Suchmaschine + API-Keys konfigurieren",
-      skill:
-        "Skills auflisten / verwalten (Projekt + Custom + Global + Eingebaut)",
+      skill: "Skills auflisten / verwalten (Projekt + Custom + Global + Eingebaut)",
       setMode: "Modus auf {mode} setzen",
       setEffort: "Reasoning-Effort auf {effort} setzen",
       toggleTheme: "Theme wechseln",
@@ -576,6 +576,22 @@ export const de: typeof en = {
       compact: "Ältere Turns in eine Zusammenfassung falten (Kontext sparen)",
       retry: "Letzte Nachricht kürzen und erneut senden",
       btw: "Eine Randfrage stellen (nie zum Kontext hinzugefügt)",
+    },
+    compact: {
+      starting: "▸ falte ältere Turns in eine Zusammenfassung...",
+      noop: "▸ nichts zu falten — dieser Chat liegt unter der manuellen Kompaktierungsschwelle oder der aktuelle Abschnitt ist bereits zu groß.",
+      noopEmpty: "▸ nichts zu falten — diese Sitzung hat keinen komprimierbaren Verlauf.",
+      noopAlreadySmall:
+        "▸ nichts zu falten — diese Sitzung liegt unter der manuellen Kompaktierungsschwelle.",
+      noopTailBoundary:
+        "▸ nichts zu falten — der aktuelle Kontext hat keine sichere Benutzer-Turn-Grenze.",
+      noopInsufficientSavings: "▸ nichts zu falten — es würde zu wenig Verlauf entfernt.",
+      noopSummaryEmpty:
+        "▸ Falten nicht abgeschlossen — die Zusammenfassungsanfrage lieferte keinen Inhalt.",
+      noopUnknown: "▸ nichts zu falten — kein konkreter Grund wurde zurückgegeben.",
+      stats: "Aktuelles Log: ~{total} Tokens; manuelles Tail-Budget: {budget} Tokens.",
+      done: "▸ {before} Nachrichten → {after} gefaltet (Zusammenfassung {chars} Zeichen). Weiter.",
+      failed: "▸ Falten fehlgeschlagen: {reason}",
     },
     skill: {
       ...en.app.skill,
@@ -597,11 +613,9 @@ export const de: typeof en = {
       bannerBold: "auto-genehmigt",
       banner2: " ohne Nachfrage.",
       switchBack: "Zu Erst fragen wechseln",
-      toast:
-        "Auf volle Kontrolle gewechselt; alle Operationen werden auto-genehmigt",
+      toast: "Auf volle Kontrolle gewechselt; alle Operationen werden auto-genehmigt",
     },
-    btwUsage:
-      "▸ /btw <Frage> — eine Randfrage stellen, ohne den Gesprächskontext zu belasten.",
+    btwUsage: "▸ /btw <Frage> — eine Randfrage stellen, ohne den Gesprächskontext zu belasten.",
     errorLabel: "Fehler",
     warningLabel: "Warnung",
     dismissError: "Schließen",
@@ -654,8 +668,7 @@ export const de: typeof en = {
       ...en.app.empty,
       welcome: "Willkommen bei Jupiter",
       currentWorkspace: "Aktueller Arbeitsbereich: ",
-      selectWorkspace:
-        "Wähle zuerst einen Arbeitsbereich aus der oberen Leiste",
+      selectWorkspace: "Wähle zuerst einen Arbeitsbereich aus der oberen Leiste",
       suggestion0: "Aktuellen Repo-Status prüfen",
       suggestion1: "Diese Projektstruktur erklären",
       suggestion2: "Nächste prüfbare Aufgabe finden",
@@ -811,18 +824,15 @@ export const de: typeof en = {
         "Side Chat ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
       library:
         "Bibliothek ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
-      browser:
-        "Browser ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
-      review:
-        "Review ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
+      browser: "Browser ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
+      review: "Review ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
       terminal:
         "Terminal ist hier vorbereitet; die Oberfläche ist für den nächsten Schritt bereit.",
     },
     terminal: {
       inputLabel: "Terminalbefehl",
       placeholder: "Befehl ausführen…",
-      readyHint:
-        "Enter führt aus · ↑/↓ Verlauf · cd und clear werden unterstützt",
+      readyHint: "Enter führt aus · ↑/↓ Verlauf · cd und clear werden unterstützt",
       noWorkspace: "Kein Arbeitsbereich geöffnet.",
       empty: "Einen Befehl in diesem Arbeitsbereich ausführen.",
       running: "Läuft…",
@@ -1151,7 +1161,6 @@ export const de: typeof en = {
     readBody: "Lesen: {path}",
     writeBody: "Schreiben: {path}",
     turnCompleteTitle: "Jupiter-Aufgabe abgeschlossen",
-    turnCompleteBody:
-      "Die aktuelle Aufgabe ist abgeschlossen und bereit zur Überprüfung.",
+    turnCompleteBody: "Die aktuelle Aufgabe ist abgeschlossen und bereit zur Überprüfung.",
   },
 };

@@ -2,7 +2,13 @@ import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { FilePreviewTarget } from "../file-preview";
-import { openDefaultFile, openFileWithApp, revealFileInFolder } from "../file-preview";
+import {
+  fileUrlToPath,
+  isHtmlFilePath,
+  openDefaultFile,
+  openFileWithApp,
+  revealFileInFolder,
+} from "../file-preview";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
 
@@ -257,6 +263,12 @@ async function openLink(href: string): Promise<void> {
   await openPath(href);
 }
 
+function htmlTargetFromLink(href: string): FilePreviewTarget | null {
+  if (/^(https?|mailto):/i.test(href)) return null;
+  const path = fileUrlToPath(href) ?? href;
+  return isHtmlFilePath(path) ? { path } : null;
+}
+
 function fileDisplayPath(file: { path: string; line?: string }): string {
   return file.line ? `${file.path}:${file.line}` : file.path;
 }
@@ -265,10 +277,12 @@ export function AppContextMenu({
   workspaceDir,
   editor,
   onPreviewFile,
+  onOpenHtmlFile,
 }: {
   workspaceDir?: string;
   editor?: string;
   onPreviewFile?: (target: FilePreviewTarget) => void;
+  onOpenHtmlFile?: (target: FilePreviewTarget) => void;
 }) {
   useLang();
   const [menu, setMenu] = useState<{ anchor: Anchor; details: ContextMenuDetails } | null>(null);
@@ -358,12 +372,24 @@ export function AppContextMenu({
     } else if (kind === "previewFile" && file) {
       onPreviewFile?.({ path: file.path, line: file.line });
     } else if (kind === "openFile" && file) {
+      if (isHtmlFilePath(file.path) && onOpenHtmlFile) {
+        onOpenHtmlFile({ path: file.path, line: file.line });
+        close();
+        return;
+      }
       await openDefaultFile(file.path, workspaceDir);
     } else if (kind === "revealFile" && file) {
       await revealFileInFolder(file.path, workspaceDir);
     } else if (kind === "copyFilePath" && file) {
       await writeClipboardText(fileDisplayPath(file));
     } else if (kind === "openLink" && link) {
+      const openHtmlFile = onOpenHtmlFile;
+      const htmlTarget = openHtmlFile ? htmlTargetFromLink(link.href) : null;
+      if (openHtmlFile && htmlTarget) {
+        openHtmlFile(htmlTarget);
+        close();
+        return;
+      }
       await openLink(link.href);
     } else if (kind === "copyLink" && link) {
       await writeClipboardText(link.href);

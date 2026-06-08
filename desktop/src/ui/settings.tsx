@@ -1,6 +1,12 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { Balance, SessionInfo, Settings as SettingsType, UsageStats } from "../App";
+import {
+  type FeishuDesktopSettingsState,
+  describeFeishuRowSummary,
+  getFeishuConnectIntent,
+  getFeishuStatusLabel,
+} from "../feishu-settings";
 import { getLangLabel, getSupportedLangs, setLang, t, useLang } from "../i18n";
 import { I } from "../icons";
 import type {
@@ -13,10 +19,10 @@ import type {
   SkillRootInfo,
 } from "../protocol";
 import {
+  type QQDesktopSettingsState,
   describeQQRowSummary,
   getQQConnectIntent,
   getQQStatusLabel,
-  type QQDesktopSettingsState,
 } from "../qq-settings";
 import {
   FONT_FAMILY,
@@ -81,6 +87,7 @@ export function SettingsModal({
   memoryDetail,
   archivedSessions,
   qq,
+  feishu,
   onClose,
   onSave,
   onSaveApiKey,
@@ -89,6 +96,11 @@ export function SettingsModal({
   onDisconnectQQ,
   onSaveQQConfig,
   onOpenQQApplyLink,
+  onLoadFeishu,
+  onConnectFeishu,
+  onDisconnectFeishu,
+  onSaveFeishuConfig,
+  onOpenFeishuApplyLink,
   onPickWorkspace,
   onAddMcpSpec,
   onRemoveMcpSpec,
@@ -131,6 +143,7 @@ export function SettingsModal({
   memoryDetail: MemoryDetail | null;
   archivedSessions: SessionInfo[];
   qq: QQDesktopSettingsState | null;
+  feishu: FeishuDesktopSettingsState | null;
   onClose: () => void;
   onSave: (patch: SettingsPatch) => void;
   onSaveApiKey: (key: string) => void;
@@ -143,6 +156,15 @@ export function SettingsModal({
     sandbox: boolean;
   }) => void;
   onOpenQQApplyLink: () => void;
+  onLoadFeishu: () => void;
+  onConnectFeishu: () => void;
+  onDisconnectFeishu: () => void;
+  onSaveFeishuConfig: (patch: {
+    appId?: string;
+    appSecret?: string;
+    requireMentionInGroup?: boolean;
+  }) => void;
+  onOpenFeishuApplyLink: () => void;
   onPickWorkspace: () => void;
   onAddMcpSpec: (spec: string) => void;
   onRemoveMcpSpec: (spec: string) => void;
@@ -164,6 +186,7 @@ export function SettingsModal({
 }) {
   const [page, setPage] = useState<PageId>(initialPage ?? "general");
   const [qqConfigureOpen, setQQConfigureOpen] = useState(false);
+  const [feishuConfigureOpen, setFeishuConfigureOpen] = useState(false);
   const [settingsBodyScrolling, setSettingsBodyScrolling] = useState(false);
   const settingsBodyScrollTimerRef = useRef<number | null>(null);
   const markSettingsBodyScrolling = () => {
@@ -213,11 +236,7 @@ export function SettingsModal({
               onClick={() => setPage(p.id)}
             >
               <span className="ico">{I[p.icon]({ size: 13 })}</span>
-              <span>
-                {t(
-                  `settings.page${p.id[0]!.toUpperCase()}${p.id.slice(1)}Label` as any,
-                )}
-              </span>
+              <span>{t(`settings.page${p.id[0]!.toUpperCase()}${p.id.slice(1)}Label` as any)}</span>
             </div>
           ))}
         </nav>
@@ -253,9 +272,7 @@ export function SettingsModal({
                 onOpenAbout={onOpenAbout}
               />
             )}
-            {page === "models" && (
-              <PageModels settings={settings} onSave={onSave} />
-            )}
+            {page === "models" && <PageModels settings={settings} onSave={onSave} />}
             {page === "mcp" && (
               <>
                 <ApiKeySection
@@ -281,6 +298,23 @@ export function SettingsModal({
                     onConnectQQ();
                   }}
                   onOpenApplyLink={onOpenQQApplyLink}
+                />
+                <FeishuChannelSection
+                  feishu={feishu}
+                  configureOpen={feishuConfigureOpen}
+                  onOpenConfigure={() => {
+                    onLoadFeishu();
+                    setFeishuConfigureOpen(true);
+                  }}
+                  onCloseConfigure={() => setFeishuConfigureOpen(false)}
+                  onConnect={onConnectFeishu}
+                  onDisconnect={onDisconnectFeishu}
+                  onSaveConfig={onSaveFeishuConfig}
+                  onSaveAndConnect={(patch) => {
+                    onSaveFeishuConfig(patch);
+                    onConnectFeishu();
+                  }}
+                  onOpenApplyLink={onOpenFeishuApplyLink}
                 />
                 <PageMCP
                   specs={mcpSpecs}
@@ -324,9 +358,7 @@ export function SettingsModal({
                 onDelete={onDeleteArchivedSession}
               />
             )}
-            {page === "rules" && (
-              <PageRules settings={settings} onSave={onSave} />
-            )}
+            {page === "rules" && <PageRules settings={settings} onSave={onSave} />}
             {page === "appearance" && (
               <PageAppearance
                 theme={theme}
@@ -342,11 +374,7 @@ export function SettingsModal({
               />
             )}
             {page === "billing" && (
-              <PageBilling
-                balance={balance}
-                usage={usage}
-                currency={currency}
-              />
+              <PageBilling balance={balance} usage={usage} currency={currency} />
             )}
             {page === "shortcuts" && <PageShortcuts />}
           </div>
@@ -485,18 +513,10 @@ export function QQChannelSection({
               <div className="n">{t("settings.qqEnvironment")}</div>
             </div>
             <div className="seg-ctrl">
-              <button
-                type="button"
-                data-on={sandbox}
-                onClick={() => setSandbox(true)}
-              >
+              <button type="button" data-on={sandbox} onClick={() => setSandbox(true)}>
                 {t("settings.qqSandbox")}
               </button>
-              <button
-                type="button"
-                data-on={!sandbox}
-                onClick={() => setSandbox(false)}
-              >
+              <button type="button" data-on={!sandbox} onClick={() => setSandbox(false)}>
                 {t("settings.qqProduction")}
               </button>
             </div>
@@ -537,6 +557,187 @@ export function QQChannelSection({
   );
 }
 
+export function FeishuChannelSection({
+  feishu,
+  configureOpen,
+  onOpenConfigure,
+  onCloseConfigure,
+  onConnect,
+  onDisconnect,
+  onSaveConfig,
+  onSaveAndConnect,
+  onOpenApplyLink,
+}: {
+  feishu: FeishuDesktopSettingsState | null;
+  configureOpen: boolean;
+  onOpenConfigure: () => void;
+  onCloseConfigure: () => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onSaveConfig: (patch: {
+    appId?: string;
+    appSecret?: string;
+    requireMentionInGroup?: boolean;
+  }) => void;
+  onSaveAndConnect: (patch: {
+    appId?: string;
+    appSecret?: string;
+    requireMentionInGroup?: boolean;
+  }) => void;
+  onOpenApplyLink: () => void;
+}) {
+  const current = feishu ?? {
+    appId: undefined,
+    appSecret: undefined,
+    enabled: false,
+    configured: false,
+    requireMentionInGroup: true,
+    runtimeState: "disconnected" as const,
+  };
+  const [appId, setAppId] = useState(current.appId ?? "");
+  const [appSecret, setAppSecret] = useState(current.appSecret ?? "");
+  const [requireMentionInGroup, setRequireMentionInGroup] = useState(current.requireMentionInGroup);
+
+  useEffect(() => {
+    setAppId(current.appId ?? "");
+    setAppSecret(current.appSecret ?? "");
+    setRequireMentionInGroup(current.requireMentionInGroup);
+  }, [current.appId, current.appSecret, current.requireMentionInGroup, configureOpen]);
+
+  const savePatch = { appId, appSecret, requireMentionInGroup };
+
+  return (
+    <section className="section">
+      <div className="stitle">{t("settings.feishuSection")}</div>
+      {!configureOpen ? (
+        <div className="setting-row qq-setting-row">
+          <div className="l">
+            <div className="n">{t("settings.feishuTitle")}</div>
+            <div className="h">{describeFeishuRowSummary(current)}</div>
+          </div>
+          <div className="qq-row-actions">
+            <button
+              type="button"
+              className={`btn qq-status-btn qq-status-${
+                current.runtimeState === "connected"
+                  ? "on"
+                  : current.runtimeState === "connecting"
+                    ? "connecting"
+                    : current.runtimeState === "failed"
+                      ? "failed"
+                      : "off"
+              }`}
+              onClick={() => {
+                if (getFeishuConnectIntent(current) === "configure") {
+                  onOpenConfigure();
+                  return;
+                }
+                if (current.runtimeState === "connected") {
+                  onDisconnect();
+                  return;
+                }
+                onConnect();
+              }}
+            >
+              {getFeishuStatusLabel(current)}
+            </button>
+            <button type="button" className="btn" onClick={onOpenConfigure}>
+              {t("settings.feishuConfigure")}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="qq-config-card">
+          <div className="qq-config-head">
+            <div>
+              <div className="n">{t("settings.feishuConfigureTitle")}</div>
+              <div className="h">{t("settings.feishuConfigureHint")}</div>
+            </div>
+            <button type="button" className="btn" onClick={onCloseConfigure}>
+              {t("settings.feishuBack")}
+            </button>
+          </div>
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.feishuAppId")}</div>
+            </div>
+            <input
+              className="field mono"
+              value={appId}
+              onChange={(e) => setAppId(e.target.value)}
+              placeholder="Feishu App ID"
+            />
+          </div>
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.feishuAppSecret")}</div>
+            </div>
+            <input
+              className="field mono"
+              type="password"
+              value={appSecret}
+              onChange={(e) => setAppSecret(e.target.value)}
+              placeholder="Feishu App Secret"
+            />
+          </div>
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.feishuGroupPolicy")}</div>
+              <div className="h">{t("settings.feishuGroupPolicyHint")}</div>
+            </div>
+            <div className="seg-ctrl">
+              <button
+                type="button"
+                data-on={requireMentionInGroup}
+                onClick={() => setRequireMentionInGroup(true)}
+              >
+                {t("settings.feishuGroupMentionRequired")}
+              </button>
+              <button
+                type="button"
+                data-on={!requireMentionInGroup}
+                onClick={() => setRequireMentionInGroup(false)}
+              >
+                {t("settings.feishuGroupAllMessages")}
+              </button>
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.feishuApplyLabel")}</div>
+            </div>
+            <button type="button" className="btn" onClick={onOpenApplyLink}>
+              {t("settings.feishuApplyAction")}
+            </button>
+          </div>
+          <div className="qq-config-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                onSaveConfig(savePatch);
+                onCloseConfigure();
+              }}
+            >
+              {t("settings.feishuSave")}
+            </button>
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => {
+                onSaveAndConnect(savePatch);
+                onCloseConfigure();
+              }}
+            >
+              {t("settings.feishuSaveAndConnect")}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function PageGeneral({
   settings,
   onSave,
@@ -558,10 +759,7 @@ function PageGeneral({
           <div className="l">
             <div className="n">{t("settings.currentWorkspace")}</div>
             <div className="h">
-              {displayWorkspacePath(
-                settings.workspaceDir,
-                t("settings.notSelected"),
-              )}
+              {displayWorkspacePath(settings.workspaceDir, t("settings.notSelected"))}
             </div>
           </div>
           <button type="button" className="btn" onClick={onPickWorkspace}>
@@ -612,11 +810,7 @@ function PageGeneral({
             <div className="n">{t("settings.processCardsDefaultOpen")}</div>
             <div className="h">{t("settings.processCardsDefaultOpenHint")}</div>
           </div>
-          <div
-            className="seg-ctrl"
-            role="group"
-            aria-label={t("settings.processCardsDefaultOpen")}
-          >
+          <div className="seg-ctrl" role="group" aria-label={t("settings.processCardsDefaultOpen")}>
             <button
               type="button"
               data-on={settings.processCardsDefaultOpen === true}
@@ -641,10 +835,7 @@ function PageGeneral({
           <div className="seg-ctrl">
             <button
               type="button"
-              data-on={
-                (settings.desktopCloseBehavior ?? "closeToQuit") ===
-                "closeToQuit"
-              }
+              data-on={(settings.desktopCloseBehavior ?? "closeToQuit") === "closeToQuit"}
               onClick={() => onSave({ desktopCloseBehavior: "closeToQuit" })}
             >
               {t("settings.closeToQuit")}
@@ -750,18 +941,12 @@ function WebSearchSection({
           }
         >
           <option value="bing">{t("settings.webSearchEngineBing")}</option>
-          <option value="bing-intl">
-            {t("settings.webSearchEngineBingIntl")}
-          </option>
-          <option value="searxng">
-            {t("settings.webSearchEngineSearxng")}
-          </option>
+          <option value="bing-intl">{t("settings.webSearchEngineBingIntl")}</option>
+          <option value="searxng">{t("settings.webSearchEngineSearxng")}</option>
           <option value="metaso">{t("settings.webSearchEngineMetaso")}</option>
           <option value="baidu">{t("settings.webSearchEngineBaidu")}</option>
           <option value="tavily">{t("settings.webSearchEngineTavily")}</option>
-          <option value="perplexity">
-            {t("settings.webSearchEnginePerplexity")}
-          </option>
+          <option value="perplexity">{t("settings.webSearchEnginePerplexity")}</option>
           <option value="exa">{t("settings.webSearchEngineExa")}</option>
           <option value="brave">{t("settings.webSearchEngineBrave")}</option>
           <option value="ollama">{t("settings.webSearchEngineOllama")}</option>
@@ -847,9 +1032,7 @@ function PageAppearance({
               >
                 <span className="style-card-head">
                   <span className="style-name">
-                    {t(
-                      `settings.themeStyle${style[0]!.toUpperCase()}${style.slice(1)}` as any,
-                    )}
+                    {t(`settings.themeStyle${style[0]!.toUpperCase()}${style.slice(1)}` as any)}
                   </span>
                   <span className="style-mode">
                     {themeForStyle(style) === THEME.DARK
@@ -863,9 +1046,7 @@ function PageAppearance({
                   <span />
                 </span>
                 <span className="style-desc">
-                  {t(
-                    `settings.themeStyle${style[0]!.toUpperCase()}${style.slice(1)}Desc` as any,
-                  )}
+                  {t(`settings.themeStyle${style[0]!.toUpperCase()}${style.slice(1)}Desc` as any)}
                 </span>
               </button>
             ))}
@@ -967,14 +1148,7 @@ function PageAppearance({
 }
 
 const SEARCH_ENGINE_API_KEY_FIELDS: ReadonlyArray<{
-  engine:
-    | "metaso"
-    | "baidu"
-    | "tavily"
-    | "perplexity"
-    | "exa"
-    | "brave"
-    | "ollama";
+  engine: "metaso" | "baidu" | "tavily" | "perplexity" | "exa" | "brave" | "ollama";
   patchKey:
     | "metasoApiKey"
     | "baiduApiKey"
@@ -1087,14 +1261,7 @@ function WebSearchApiKeyRow({
   prefix,
   onSave,
 }: {
-  engine:
-    | "metaso"
-    | "baidu"
-    | "tavily"
-    | "perplexity"
-    | "exa"
-    | "brave"
-    | "ollama";
+  engine: "metaso" | "baidu" | "tavily" | "perplexity" | "exa" | "brave" | "ollama";
   patchKey:
     | "metasoApiKey"
     | "baiduApiKey"
@@ -1114,9 +1281,7 @@ function WebSearchApiKeyRow({
       <div className="l">
         <div className="n">{label}</div>
         <div className="h">
-          {prefix
-            ? t("settings.apiKeySet", { prefix })
-            : t("settings.apiKeyNotSet")}{" "}
+          {prefix ? t("settings.apiKeySet", { prefix }) : t("settings.apiKeyNotSet")}{" "}
           <a
             href={signupUrl}
             target="_blank"
@@ -1246,9 +1411,7 @@ function PageModels({
   return (
     <>
       <section className="section">
-        <div className="stitle">
-          {t("settings.defaultModelCurrent", { model: settings.model })}
-        </div>
+        <div className="stitle">{t("settings.defaultModelCurrent", { model: settings.model })}</div>
         <div className="model-grid">
           {KNOWN_MODELS.map((id) => (
             <div
@@ -1301,7 +1464,7 @@ function PageModels({
               value={settings.contextTokens?.[settings.model] ?? ""}
               onChange={(e) => {
                 const raw = e.target.value.trim();
-                const num = raw ? parseInt(raw, 10) : 0;
+                const num = raw ? Number.parseInt(raw, 10) : 0;
                 const next = { ...(settings.contextTokens ?? {}) };
                 if (num > 0 && Number.isFinite(num)) {
                   next[settings.model] = num;
@@ -1309,8 +1472,7 @@ function PageModels({
                   delete next[settings.model];
                 }
                 onSave({
-                  contextTokens:
-                    Object.keys(next).length > 0 ? next : undefined,
+                  contextTokens: Object.keys(next).length > 0 ? next : undefined,
                 });
               }}
               placeholder={t("settings.contextTokensPlaceholder")}
@@ -1367,16 +1529,13 @@ function PageMCP({
     onAdd(v);
     setDraft("");
   };
-  const statusLabel = (status: McpSpecInfo["status"]) =>
-    t(`settings.mcpStatus.${status}` as const);
+  const statusLabel = (status: McpSpecInfo["status"]) => t(`settings.mcpStatus.${status}` as const);
   return (
     <>
       <section className="section">
         <div className="settings-toolbar">
           <div>
-            <div className="stitle">
-              {t("settings.mcpConfigured", { count: specs.length })}
-            </div>
+            <div className="stitle">{t("settings.mcpConfigured", { count: specs.length })}</div>
             <div className="h">
               {bridged ? t("settings.mcpBridged") : t("settings.mcpNotBridged")}
             </div>
@@ -1411,22 +1570,14 @@ function PageMCP({
                     type="button"
                     className="btn ghost"
                     disabled={!canToggle}
-                    title={
-                      disabled
-                        ? t("settings.mcpEnable")
-                        : t("settings.mcpDisable")
-                    }
+                    title={disabled ? t("settings.mcpEnable") : t("settings.mcpDisable")}
                     onClick={() => {
                       if (!s.name) return;
                       disabled ? onEnable(s.name) : onDisable(s.name);
                     }}
                   >
                     {disabled ? <I.play size={12} /> : <I.stop size={12} />}
-                    <span>
-                      {disabled
-                        ? t("settings.mcpEnable")
-                        : t("settings.mcpDisable")}
-                    </span>
+                    <span>{disabled ? t("settings.mcpEnable") : t("settings.mcpDisable")}</span>
                   </button>
                   <button
                     type="button"
@@ -1442,9 +1593,7 @@ function PageMCP({
                     {t("settings.parseError", { error: s.parseError })}
                   </div>
                 ) : null}
-                {s.statusReason ? (
-                  <div className="desc">{s.statusReason}</div>
-                ) : null}
+                {s.statusReason ? <div className="desc">{s.statusReason}</div> : null}
               </div>
             );
           })
@@ -1455,10 +1604,7 @@ function PageMCP({
         <div className="setting-row">
           <div className="l">
             <div className="n">{t("settings.mcpSpecLabel")}</div>
-            <div
-              className="h"
-              dangerouslySetInnerHTML={{ __html: t("settings.mcpSpecFormat") }}
-            />
+            <div className="h" dangerouslySetInnerHTML={{ __html: t("settings.mcpSpecFormat") }} />
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <input
@@ -1470,12 +1616,7 @@ function PageMCP({
                 if (e.key === "Enter") submit();
               }}
             />
-            <button
-              type="button"
-              className="btn primary"
-              disabled={!draft.trim()}
-              onClick={submit}
-            >
+            <button type="button" className="btn primary" disabled={!draft.trim()} onClick={submit}>
               <I.plus size={12} />
               {t("settings.mcpAdd")}
             </button>
@@ -1608,9 +1749,7 @@ function PageSkills({
         </div>
       </section>
       <section className="section">
-        <div className="stitle">
-          {t("settings.skillsLoaded", { count: skills.length })}
-        </div>
+        <div className="stitle">{t("settings.skillsLoaded", { count: skills.length })}</div>
         {skills.length === 0 ? (
           <div className="muted-card">{t("settings.skillsEmpty")}</div>
         ) : (
@@ -1636,22 +1775,13 @@ function PageSkills({
                     value={subagentModels[s.name] ?? ""}
                     onChange={(e) => {
                       const value = e.target.value;
-                      onSetModel(
-                        s.name,
-                        value === "" ? null : (value as "flash" | "pro"),
-                      );
+                      onSetModel(s.name, value === "" ? null : (value as "flash" | "pro"));
                     }}
                     title={t("settings.subagentModelHint")}
                   >
-                    <option value="">
-                      {t("settings.subagentModelDefault")}
-                    </option>
-                    <option value="flash">
-                      {t("settings.subagentModelFlash")}
-                    </option>
-                    <option value="pro">
-                      {t("settings.subagentModelPro")}
-                    </option>
+                    <option value="">{t("settings.subagentModelDefault")}</option>
+                    <option value="flash">{t("settings.subagentModelFlash")}</option>
+                    <option value="pro">{t("settings.subagentModelPro")}</option>
                   </select>
                 ) : null}
               </div>
@@ -1841,11 +1971,7 @@ function PageMemory({
             <span className="n">{t("settings.memoryGlobalEnabled")}</span>
             <span className="h">{t("settings.memoryGlobalRulesDesc")}</span>
           </span>
-          <div
-            className="seg-ctrl"
-            role="group"
-            aria-label={t("settings.memoryGlobalEnabled")}
-          >
+          <div className="seg-ctrl" role="group" aria-label={t("settings.memoryGlobalEnabled")}>
             <button
               type="button"
               data-on={globalMemoryOn}
@@ -1867,11 +1993,7 @@ function PageMemory({
             <span className="n">{t("settings.memoryConfirmWrites")}</span>
             <span className="h">{t("settings.memoryLongTermDesc")}</span>
           </span>
-          <div
-            className="seg-ctrl"
-            role="group"
-            aria-label={t("settings.memoryConfirmWrites")}
-          >
+          <div className="seg-ctrl" role="group" aria-label={t("settings.memoryConfirmWrites")}>
             <button
               type="button"
               data-on={confirmMemoryWritesOn}
@@ -1914,23 +2036,13 @@ function PageMemory({
                 <div className="memory-group-desc">{group.desc}</div>
               </div>
               {group.entries.length === 0 ? (
-                <div className="memory-empty">
-                  {t("settings.memoryEmptyGroup")}
-                </div>
+                <div className="memory-empty">{t("settings.memoryEmptyGroup")}</div>
               ) : (
                 group.entries.map((m) => {
                   const label = m.description || m.name;
                   return (
-                    <div
-                      className="memory-item"
-                      data-active={detail?.path === m.path}
-                      key={m.path}
-                    >
-                      <button
-                        type="button"
-                        className="memory-read"
-                        onClick={() => onRead(m.path)}
-                      >
+                    <div className="memory-item" data-active={detail?.path === m.path} key={m.path}>
+                      <button type="button" className="memory-read" onClick={() => onRead(m.path)}>
                         <span className="memory-kind">
                           {m.scope} / {m.type ?? m.kind.replace("_", " ")}
                         </span>
@@ -1974,9 +2086,7 @@ function PageMemory({
             <>
               <div className="memory-detail-head">
                 <div>
-                  <div className="memory-detail-title">
-                    {detail.description || detail.name}
-                  </div>
+                  <div className="memory-detail-title">{detail.description || detail.name}</div>
                   <div className="memory-detail-meta">
                     {detail.scope} / {detail.type ?? detail.kind.replace("_", " ")}
                   </div>
@@ -1990,9 +2100,7 @@ function PageMemory({
               <pre className="memory-detail">{detail.body}</pre>
             </>
           ) : (
-            <div className="memory-detail-placeholder">
-              {t("settings.memoryDetailPlaceholder")}
-            </div>
+            <div className="memory-detail-placeholder">{t("settings.memoryDetailPlaceholder")}</div>
           )}
           {editorOpen ? (
             <div
@@ -2007,9 +2115,7 @@ function PageMemory({
                       ? t("settings.memoryEditStructured")
                       : t("settings.memoryNewStructured")}
                   </div>
-                  <div className="memory-editor-desc">
-                    {t("settings.memoryStructuredHint")}
-                  </div>
+                  <div className="memory-editor-desc">{t("settings.memoryStructuredHint")}</div>
                 </div>
                 <button
                   type="button"
@@ -2026,9 +2132,7 @@ function PageMemory({
                   <input
                     className="field"
                     value={draft.name}
-                    onChange={(e) =>
-                      setDraft((v) => ({ ...v, name: e.target.value }))
-                    }
+                    onChange={(e) => setDraft((v) => ({ ...v, name: e.target.value }))}
                   />
                 </label>
                 <div className="memory-inline-fields">
@@ -2044,12 +2148,8 @@ function PageMemory({
                         }))
                       }
                     >
-                      <option value="project">
-                        {t("settings.memoryScopeProject")}
-                      </option>
-                      <option value="global">
-                        {t("settings.memoryScopeGlobal")}
-                      </option>
+                      <option value="project">{t("settings.memoryScopeProject")}</option>
+                      <option value="global">{t("settings.memoryScopeGlobal")}</option>
                     </select>
                   </label>
                   <label className="memory-field">
@@ -2057,20 +2157,12 @@ function PageMemory({
                     <select
                       className="field"
                       value={draft.type}
-                      onChange={(e) =>
-                        setDraft((v) => ({ ...v, type: e.target.value }))
-                      }
+                      onChange={(e) => setDraft((v) => ({ ...v, type: e.target.value }))}
                     >
                       <option value="user">{t("settings.memoryTypeUser")}</option>
-                      <option value="feedback">
-                        {t("settings.memoryTypeFeedback")}
-                      </option>
-                      <option value="project">
-                        {t("settings.memoryTypeProject")}
-                      </option>
-                      <option value="reference">
-                        {t("settings.memoryTypeReference")}
-                      </option>
+                      <option value="feedback">{t("settings.memoryTypeFeedback")}</option>
+                      <option value="project">{t("settings.memoryTypeProject")}</option>
+                      <option value="reference">{t("settings.memoryTypeReference")}</option>
                     </select>
                   </label>
                 </div>
@@ -2083,26 +2175,14 @@ function PageMemory({
                       onChange={(e) =>
                         setDraft((v) => ({
                           ...v,
-                          priority: e.target.value as
-                            | ""
-                            | "low"
-                            | "medium"
-                            | "high",
+                          priority: e.target.value as "" | "low" | "medium" | "high",
                         }))
                       }
                     >
-                      <option value="">
-                        {t("settings.memoryPriorityDefault")}
-                      </option>
-                      <option value="low">
-                        {t("settings.memoryPriority_low")}
-                      </option>
-                      <option value="medium">
-                        {t("settings.memoryPriority_medium")}
-                      </option>
-                      <option value="high">
-                        {t("settings.memoryPriority_high")}
-                      </option>
+                      <option value="">{t("settings.memoryPriorityDefault")}</option>
+                      <option value="low">{t("settings.memoryPriority_low")}</option>
+                      <option value="medium">{t("settings.memoryPriority_medium")}</option>
+                      <option value="high">{t("settings.memoryPriority_high")}</option>
                     </select>
                   </label>
                   <label className="memory-field">
@@ -2118,9 +2198,7 @@ function PageMemory({
                       }
                     >
                       <option value="">{t("settings.memoryExpiresNone")}</option>
-                      <option value="project_end">
-                        {t("settings.memoryExpiresProjectEnd")}
-                      </option>
+                      <option value="project_end">{t("settings.memoryExpiresProjectEnd")}</option>
                     </select>
                   </label>
                 </div>
@@ -2142,25 +2220,15 @@ function PageMemory({
                   <textarea
                     className="field memory-body-field"
                     value={draft.body}
-                    onChange={(e) =>
-                      setDraft((v) => ({ ...v, body: e.target.value }))
-                    }
+                    onChange={(e) => setDraft((v) => ({ ...v, body: e.target.value }))}
                   />
                 </label>
               </div>
               <div className="memory-editor-actions">
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={closeEditor}
-                >
+                <button type="button" className="ghost-btn" onClick={closeEditor}>
                   {t("settings.memoryCancel")}
                 </button>
-                <button
-                  type="button"
-                  className="primary-btn"
-                  onClick={submitDraft}
-                >
+                <button type="button" className="primary-btn" onClick={submitDraft}>
                   {t("settings.memorySave")}
                 </button>
               </div>
@@ -2231,13 +2299,9 @@ function PageBilling({
   currency: "CNY" | "USD";
 }) {
   const symbol = currency === "CNY" ? "¥" : "$";
-  const sessionCost =
-    currency === "CNY" ? usage.totalCostUsd * 7.2 : usage.totalCostUsd;
+  const sessionCost = currency === "CNY" ? usage.totalCostUsd * 7.2 : usage.totalCostUsd;
   const totalTokens = usage.cacheHitTokens + usage.cacheMissTokens;
-  const hitPct =
-    totalTokens > 0
-      ? Math.round((usage.cacheHitTokens / totalTokens) * 100)
-      : 0;
+  const hitPct = totalTokens > 0 ? Math.round((usage.cacheHitTokens / totalTokens) * 100) : 0;
   return (
     <>
       <div className="bill-grid">
@@ -2259,9 +2323,7 @@ function PageBilling({
           <div className="v">
             {symbol} {sessionCost.toFixed(4)}
           </div>
-          <div className="sub">
-            prompt {usage.totalPromptTokens.toLocaleString()} t
-          </div>
+          <div className="sub">prompt {usage.totalPromptTokens.toLocaleString()} t</div>
         </div>
         <div className="bill-card">
           <div className="l">{t("settings.cacheHitRate")}</div>

@@ -1094,7 +1094,8 @@ export const EN: TranslationSchema = {
     observability: {
       contextInfo: "context: ~{total} of {max} ({pct}%) · system {sys} · tools {tools} · log {log}",
       compactStarting: "▸ folding older turns into a summary…",
-      compactNoop: "▸ nothing to fold — log already small or recent turns alone exceed the budget.",
+      compactNoop:
+        "▸ nothing to fold — this chat is below the manual compaction threshold, or the recent tail is already too large.",
       compactDone: "▸ folded {before} messages → {after} (summary {chars} chars). Continuing.",
       compactFailed: "▸ fold failed: {reason}",
       costNoTurn: "no turn yet — `/cost` shows the most recent turn's token + spend breakdown.",

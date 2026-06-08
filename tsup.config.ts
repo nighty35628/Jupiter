@@ -25,7 +25,7 @@ export default defineConfig([
     platform: "node",
     noExternal: [/.*/],
     esbuildOptions(opts) {
-      opts.external = [...(opts.external ?? []), "react-devtools-core"];
+      opts.external = [...(opts.external ?? []), "react-devtools-core", "@larksuiteoapi/node-sdk"];
     },
   },
   // Dashboard is now built by Vite (npm run build:dashboard).

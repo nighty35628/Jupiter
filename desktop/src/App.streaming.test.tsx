@@ -39,6 +39,11 @@ const tauri = vi.hoisted(() => {
   };
 });
 
+const splashMockState = vi.hoisted(() => ({
+  shouldShow: false,
+  shouldShowCalls: 0,
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: tauri.invoke,
 }));
@@ -128,8 +133,15 @@ vi.mock("./Markdown", () => ({
 }));
 
 vi.mock("./ui/splash", () => ({
-  Splash: () => null,
-  shouldShowSplash: () => false,
+  Splash: ({ onDone }: { onDone: () => void }) => (
+    <button type="button" data-testid="splash" onClick={onDone}>
+      Jupiter splash
+    </button>
+  ),
+  shouldShowSplash: () => {
+    splashMockState.shouldShowCalls += 1;
+    return splashMockState.shouldShow;
+  },
 }));
 
 vi.mock("./theme", () => ({
@@ -267,6 +279,8 @@ beforeEach(() => {
   vi.mocked(openDialog).mockReset();
   vi.mocked(openDialog).mockResolvedValue(null as never);
   localStorage.clear();
+  splashMockState.shouldShow = false;
+  splashMockState.shouldShowCalls = 0;
   sessionStorage.setItem("jupiter.splash.shown", "1");
 });
 
@@ -275,6 +289,47 @@ afterEach(() => {
 });
 
 describe("App streaming events", () => {
+  it("starts a blank chat with the composer centered and workspace picker in the composer", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-new", "/tmp/jupiter-streaming-test");
+
+    expect(screen.getByText("What should we do in Jupiter today?")).toBeTruthy();
+    expect(document.querySelector(".empty-state .composer-wrap--hero")).toBeTruthy();
+    expect(document.querySelector(".main > .composer-wrap")).toBeNull();
+
+    const workspaceButton = screen.getByRole("button", {
+      name: /Switch workspace: jupiter-streaming-test/,
+    });
+    fireEvent.click(workspaceButton);
+
+    expect(screen.getByText("Switch workspace")).toBeTruthy();
+    expect(document.querySelector(".wd-pop")?.textContent).toContain("jupiter-streaming-test");
+  });
+
+  it("does not show the startup splash again when switching to a newly opened tab", async () => {
+    splashMockState.shouldShow = true;
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-one", "/tmp/ws");
+    expect(screen.getByTestId("splash")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("splash"));
+    expect(screen.queryByTestId("splash")).toBeNull();
+
+    await emitRpc({
+      type: "$tab_opened",
+      tabId: "tab-two",
+      workspaceDir: "/tmp/ws",
+      active: true,
+    });
+
+    expect(screen.queryByTestId("splash")).toBeNull();
+    expect(splashMockState.shouldShowCalls).toBe(1);
+  });
+
   it("renders live reasoning and content deltas before final", async () => {
     render(<App />);
 
@@ -1043,6 +1098,56 @@ describe("App streaming events", () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it("sends natural-language compaction requests to the backend for model intent detection", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap();
+
+    const textarea = screen.getByPlaceholderText("Ask the agent / describe a task…");
+    fireEvent.change(textarea, {
+      target: { value: "帮我压缩上下文" },
+    });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(
+        sentRpcCommands().some((cmd) => cmd.cmd === "user_input" && cmd.text === "帮我压缩上下文"),
+      ).toBe(true);
+    });
+    expect(sentRpcCommands().some((cmd) => cmd.cmd === "compact_history")).toBe(false);
+  });
+
+  it("routes slash context compaction requests to the compact RPC with visible feedback", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap();
+
+    const textarea = screen.getByPlaceholderText("Ask the agent / describe a task…");
+    fireEvent.change(textarea, {
+      target: { value: "/compact" },
+    });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(sentRpcCommands().some((cmd) => cmd.cmd === "compact_history")).toBe(true);
+    });
+    expect(sentRpcCommands().some((cmd) => cmd.cmd === "slash")).toBe(false);
+    expect(screen.getByText(/folding older turns into a summary/i)).toBeTruthy();
+
+    await emitRpc({
+      type: "$compact_result",
+      tabId: "tab-1",
+      folded: true,
+      beforeMessages: 12,
+      afterMessages: 4,
+      summaryChars: 3456,
+    });
+
+    expect(screen.getByText(/folded 12 messages/i)).toBeTruthy();
   });
 
   it("imports local files into the library from the library panel", async () => {

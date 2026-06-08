@@ -286,6 +286,17 @@ export class QQChannel {
     }
   }
 
+  async sendTurnReceipt(): Promise<void> {
+    if (!this.bot || !this.qqUserId) return;
+    await this.bot.sendPrivateMessage(
+      this.qqUserId,
+      "Jupiter 已收到请求，开始处理。",
+      this.qqMessageId ?? undefined,
+      this.nextOutboundMsgSeq++,
+      false,
+    );
+  }
+
   async stop(): Promise<void> {
     await this.bot?.stop();
     this.releaseLock();
