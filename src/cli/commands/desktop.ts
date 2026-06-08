@@ -153,16 +153,20 @@ import {
 import { parseMcpSpec, specToRaw } from "../../mcp/spec.js";
 import { isProjectMemoryPath } from "../../memory/project.js";
 import {
+  deleteArchivedSession,
   deleteSession,
   isInternalSessionName,
+  listArchivedSessions,
   listSessions,
   loadSessionMessages,
   loadSessionMeta,
   markSessionRead,
   markSessionUnread,
+  migrateLegacyArchivedSessions,
+  moveSessionToArchive,
   patchSessionMeta,
   patchSessionWorkspaceIfMissing,
-  sessionIsUnread,
+  restoreArchivedSession,
   sessionPath,
   timestampSuffix,
 } from "../../memory/session.js";
@@ -214,7 +218,12 @@ type InMessage = { tabId?: string } & (
   | { cmd: "checkpoint_response"; id: number; response: CheckpointVerdict }
   | { cmd: "revision_response"; id: number; response: RevisionVerdict }
   | { cmd: "session_list" }
+  | { cmd: "session_list_archived" }
   | { cmd: "session_delete"; name: string }
+  | { cmd: "session_archive"; name: string }
+  | { cmd: "session_archive_many"; names: string[] }
+  | { cmd: "session_restore_archived"; name: string }
+  | { cmd: "session_delete_archived"; name: string }
   | { cmd: "session_load"; name: string; openInNewTab?: boolean }
   | { cmd: "session_rename"; name: string; title: string }
   | {
@@ -411,20 +420,26 @@ interface PlanRequiredEvent {
   summary?: string;
 }
 
+type SessionListItem = {
+  name: string;
+  path?: string;
+  messageCount: number;
+  mtime: string;
+  summary?: string;
+  workspace?: string;
+  archivedAt?: number;
+  pinnedAt?: number;
+  workspaceStatus?: "matched" | "legacy_missing_meta";
+};
+
 interface SessionsEvent {
   type: "$sessions";
-  items: {
-    name: string;
-    path?: string;
-    messageCount: number;
-    mtime: string;
-    summary?: string;
-    workspace?: string;
-    archivedAt?: number;
-    pinnedAt?: number;
-    unread?: boolean;
-    workspaceStatus?: "matched" | "legacy_missing_meta";
-  }[];
+  items: SessionListItem[];
+}
+
+interface ArchivedSessionsEvent {
+  type: "$archived_sessions";
+  items: SessionListItem[];
 }
 
 interface SessionImportSourcesEvent {
@@ -742,6 +757,7 @@ type EmittableEvent =
   | StepCompletedEvent
   | PlanClearedEvent
   | SessionsEvent
+  | ArchivedSessionsEvent
   | SessionImportSourcesEvent
   | SessionImportResultEvent
   | SessionLoadedEvent
@@ -1015,28 +1031,49 @@ async function emitBalance(tab: Tab): Promise<void> {
   );
 }
 
+function toSessionListItem(s: ReturnType<typeof listSessions>[number], tab: Tab): SessionListItem {
+  return {
+    name: s.name,
+    path: s.path,
+    messageCount: s.messageCount,
+    mtime: s.mtime.toISOString(),
+    summary: s.meta.summary,
+    workspace: repairRetiredSessionWorkspace(s.name, s.meta.workspace, tab.rootDir),
+    archivedAt: s.meta.archivedAt,
+    pinnedAt: s.meta.pinnedAt,
+    workspaceStatus: s.workspaceStatus,
+  };
+}
+
 function emitSessions(tab: Tab): void {
   try {
+    migrateLegacyArchivedSessions();
     const items = listSessions()
       .filter((s) => !isInternalSessionName(s.name))
-      .map((s) => ({
-        name: s.name,
-        path: s.path,
-        messageCount: s.messageCount,
-        mtime: s.mtime.toISOString(),
-        summary: s.meta.summary,
-        workspace: repairRetiredSessionWorkspace(s.name, s.meta.workspace, tab.rootDir),
-        archivedAt: s.meta.archivedAt,
-        pinnedAt: s.meta.pinnedAt,
-        unread: sessionIsUnread(s.meta),
-        workspaceStatus: s.workspaceStatus,
-      }));
+      .map((s) => toSessionListItem(s, tab));
     emit({ type: "$sessions", items }, tab.id);
   } catch (err) {
     emit(
       {
         type: "$error",
         message: `session_list failed: ${(err as Error).message}`,
+      },
+      tab.id,
+    );
+  }
+}
+
+function emitArchivedSessions(tab: Tab): void {
+  try {
+    const items = listArchivedSessions()
+      .filter((s) => !isInternalSessionName(s.name))
+      .map((s) => toSessionListItem(s, tab));
+    emit({ type: "$archived_sessions", items }, tab.id);
+  } catch (err) {
+    emit(
+      {
+        type: "$error",
+        message: `session_list_archived failed: ${(err as Error).message}`,
       },
       tab.id,
     );
@@ -3765,6 +3802,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     if (msg.cmd === "session_list") {
       emitSessions(tab);
+      emitArchivedSessions(tab);
+      return;
+    }
+    if (msg.cmd === "session_list_archived") {
+      emitArchivedSessions(tab);
       return;
     }
     if (msg.cmd === "session_delete") {
@@ -3774,6 +3816,53 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       } else {
         emitSessions(tab);
       }
+      return;
+    }
+    if (msg.cmd === "session_archive") {
+      const archived = moveSessionToArchive(msg.name);
+      if (!archived) {
+        emit({ type: "$error", message: `session_archive failed: ${msg.name}` }, tab.id);
+        return;
+      }
+      if (tab.currentSession === msg.name) {
+        startNewChatInTab(tab);
+      } else {
+        emitSessions(tab);
+      }
+      emitArchivedSessions(tab);
+      return;
+    }
+    if (msg.cmd === "session_archive_many") {
+      let archivedCurrent = false;
+      for (const name of msg.names) {
+        const ok = moveSessionToArchive(name);
+        archivedCurrent = archivedCurrent || (ok && tab.currentSession === name);
+      }
+      if (archivedCurrent) {
+        startNewChatInTab(tab);
+      } else {
+        emitSessions(tab);
+      }
+      emitArchivedSessions(tab);
+      return;
+    }
+    if (msg.cmd === "session_restore_archived") {
+      const restored = restoreArchivedSession(msg.name);
+      if (!restored) {
+        emit({ type: "$error", message: `session_restore_archived failed: ${msg.name}` }, tab.id);
+        return;
+      }
+      emitSessions(tab);
+      emitArchivedSessions(tab);
+      return;
+    }
+    if (msg.cmd === "session_delete_archived") {
+      const deleted = deleteArchivedSession(msg.name);
+      if (!deleted) {
+        emit({ type: "$error", message: `session_delete_archived failed: ${msg.name}` }, tab.id);
+        return;
+      }
+      emitArchivedSessions(tab);
       return;
     }
     if (msg.cmd === "session_rename") {

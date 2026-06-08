@@ -307,7 +307,6 @@ export type SessionInfo = {
   workspace?: string;
   archivedAt?: number;
   pinnedAt?: number;
-  unread?: boolean;
   workspaceStatus?: "matched" | "legacy_missing_meta";
 };
 
@@ -402,6 +401,7 @@ type State = {
   activePlan: ActivePlan | null;
   usage: UsageStats;
   sessions: SessionInfo[];
+  archivedSessions: SessionInfo[];
   externalImportSources: ExternalSessionApp[];
   settings: Settings | null;
   qq: QQDesktopSettingsState | null;
@@ -1554,6 +1554,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
     case "$sessions":
       return { ...state, sessions: ev.items };
+    case "$archived_sessions":
+      return { ...state, archivedSessions: ev.items };
     case "$session_import_sources":
       return { ...state, externalImportSources: ev.apps };
     case "$session_import_result":
@@ -2022,6 +2024,7 @@ type TabRuntimeSnapshot = {
 type TabRuntimeControls = {
   clearAbortDraft: () => void;
   openSettingsCard: () => void;
+  openSettingsPage: (page?: SettingsPageId) => void;
   openCommandPalette: () => void;
 };
 
@@ -2114,6 +2117,7 @@ function TabRuntimeInner({
     activePlan: null,
     usage: zeroUsage(),
     sessions: [],
+    archivedSessions: [],
     externalImportSources: [],
     settings: null,
     qq: null,
@@ -2219,10 +2223,11 @@ function TabRuntimeInner({
     registerRuntimeControls(tabId, {
       clearAbortDraft,
       openSettingsCard: () => setSettingsCardOpen((open) => !open),
+      openSettingsPage: openSettingsAt,
       openCommandPalette: () => setPaletteOpen(true),
     });
     return () => registerRuntimeControls(tabId, null);
-  }, [clearAbortDraft, registerRuntimeControls, setPaletteOpen, tabId]);
+  }, [clearAbortDraft, openSettingsAt, registerRuntimeControls, setPaletteOpen, tabId]);
   useEffect(() => {
     onRuntimeSnapshot(tabId, {
       currentSession: state.currentSession,
@@ -4144,6 +4149,7 @@ function TabRuntimeInner({
                 skillRoots={state.skillRoots}
                 memory={state.memory}
                 memoryDetail={state.memoryDetail}
+                archivedSessions={state.archivedSessions}
                 qq={state.qq}
                 onClose={() => setSettingsOpen(false)}
                 onSave={applySettingsPatch}
@@ -4169,6 +4175,11 @@ function TabRuntimeInner({
                 onRefreshMemory={() => sendRpc({ cmd: "memory_refresh" })}
                 onDeleteMemory={(path) => sendRpc({ cmd: "memory_delete", path })}
                 onSaveMemory={(input) => sendRpc({ cmd: "memory_save", ...input })}
+                onRefreshArchivedSessions={() => sendRpc({ cmd: "session_list_archived" })}
+                onRestoreArchivedSession={(name) =>
+                  sendRpc({ cmd: "session_restore_archived", name })
+                }
+                onDeleteArchivedSession={(name) => sendRpc({ cmd: "session_delete_archived", name })}
                 onOpenAbout={() => {
                   setSettingsOpen(false);
                   setAboutOpen(true);
@@ -5335,7 +5346,11 @@ export function App() {
               setSidebarImportSources(ev.apps);
             }
 
-            if (ev.type === "$sessions" || ev.type === "$session_import_sources") {
+            if (
+              ev.type === "$sessions" ||
+              ev.type === "$archived_sessions" ||
+              ev.type === "$session_import_sources"
+            ) {
               const ids = new Set([
                 ...(tabId ? [tabId] : []),
                 ...tabsRef.current.map((t) => t.id),
@@ -5594,7 +5609,6 @@ export function App() {
             }}
             onLoadSession={(name) => {
               runtimeControlsRef.current.get(activeTabId)?.clearAbortDraft();
-              sendRpcToTab(activeTabId, { cmd: "session_mark_read", name });
               sendRpcToTab(activeTabId, {
                 cmd: "session_load",
                 name,
@@ -5608,11 +5622,11 @@ export function App() {
             onPatchSessionMeta={(name, patch) =>
               sendRpcToTab(activeTabId, { cmd: "session_patch_meta", name, patch })
             }
-            onMarkSessionRead={(name) =>
-              sendRpcToTab(activeTabId, { cmd: "session_mark_read", name })
+            onArchiveSession={(name) =>
+              sendRpcToTab(activeTabId, { cmd: "session_archive", name })
             }
-            onMarkSessionUnread={(name) =>
-              sendRpcToTab(activeTabId, { cmd: "session_mark_unread", name })
+            onArchiveSessions={(names) =>
+              sendRpcToTab(activeTabId, { cmd: "session_archive_many", names })
             }
             onRefreshImportSources={() => sendRpcToTab(activeTabId, { cmd: "session_import_scan" })}
             onImportDetectedSessions={(sources: ExternalSessionSource[]) =>
@@ -5630,7 +5644,14 @@ export function App() {
               })
             }
             onOpenSettings={() => runtimeControlsRef.current.get(activeTabId)?.openSettingsCard()}
+            onOpenSettingsPage={(page) =>
+              runtimeControlsRef.current.get(activeTabId)?.openSettingsPage(page)
+            }
             onOpenCommands={() => runtimeControlsRef.current.get(activeTabId)?.openCommandPalette()}
+            onRemoveWorkspace={(workspace) => {
+              const nextRecent = activeRecentWorkspaces.filter((p) => p !== workspace);
+              sendRpcToTab(activeTabId, { cmd: "settings_save", recentWorkspaces: nextRecent });
+            }}
           />
 
           {!sideCollapsed ? (

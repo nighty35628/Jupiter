@@ -1,5 +1,11 @@
 import { Highlight, type PrismTheme } from "prism-react-renderer";
 import { useEffect, useRef, useState } from "react";
+import {
+  highlightCode,
+  type HighlightedLine,
+  type HighlightTheme,
+  type HighlightToken,
+} from "./ui/shiki-highlighter";
 
 const DARK_THEME: PrismTheme = {
   plain: { color: "#dde1ea", backgroundColor: "transparent" },
@@ -33,7 +39,7 @@ const LIGHT_THEME: PrismTheme = {
   ],
 };
 
-function usePrismTheme(): PrismTheme {
+function useThemeMode(): HighlightTheme {
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     document.documentElement.dataset.theme === "light" ? "light" : "dark",
   );
@@ -51,7 +57,7 @@ function usePrismTheme(): PrismTheme {
     mo.observe(el, { attributes: true, attributeFilter: ["data-theme"] });
     return () => mo.disconnect();
   }, []);
-  return theme === "dark" ? DARK_THEME : LIGHT_THEME;
+  return theme;
 }
 
 export const PRISM_THEME = DARK_THEME;
@@ -112,7 +118,44 @@ export function CodeView({
   startLine?: number;
   showLineNumbers?: boolean;
 }) {
-  const theme = usePrismTheme();
+  const themeMode = useThemeMode();
+  const theme = themeMode === "dark" ? DARK_THEME : LIGHT_THEME;
+  const [shikiLines, setShikiLines] = useState<HighlightedLine[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setShikiLines(null);
+    void highlightCode(text, lang, themeMode)
+      .then((lines) => {
+        if (!cancelled) setShikiLines(lines);
+      })
+      .catch(() => {
+        if (!cancelled) setShikiLines(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lang, text, themeMode]);
+
+  if (shikiLines) {
+    return (
+      <pre className="codeview codeview-shiki">
+        {shikiLines.map((line, i) => (
+          <div key={i} className="codeview-line">
+            {showLineNumbers && (
+              <span className="codeview-line-num">{i + startLine}</span>
+            )}
+            <span className="codeview-line-content">
+              {line.map((token, k) => (
+                <ShikiToken key={k} token={token} />
+              ))}
+            </span>
+          </div>
+        ))}
+      </pre>
+    );
+  }
+
   return (
     <Highlight theme={theme} code={text} language={lang}>
       {({ className, tokens, getLineProps, getTokenProps }) => (
@@ -132,6 +175,21 @@ export function CodeView({
         </pre>
       )}
     </Highlight>
+  );
+}
+
+function ShikiToken({ token }: { token: HighlightToken }) {
+  return (
+    <span
+      style={{
+        color: token.color,
+        fontStyle: token.fontStyle && token.fontStyle & 1 ? "italic" : undefined,
+        fontWeight: token.fontStyle && token.fontStyle & 2 ? 600 : undefined,
+        textDecoration: token.fontStyle && token.fontStyle & 4 ? "underline" : undefined,
+      }}
+    >
+      {token.content}
+    </span>
   );
 }
 

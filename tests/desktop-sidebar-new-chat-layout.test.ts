@@ -19,11 +19,8 @@ describe("desktop sidebar new chat button layout", () => {
     expect(cssRule(".side-head .new-btn > span:not(.shortcut)")).toContain(
       "text-overflow: ellipsis",
     );
-    expect(cssRule(".side-head .new-btn .shortcut")).toContain("flex: 0 0 auto");
-    expect(cssRule(".side-head .new-btn .shortcut")).toContain("display: none");
-    expect(css).toContain("@container sidebar (min-width: 191px)");
-    expect(css).toContain("display: inline-flex");
-    expect(css).toContain("display: none");
+    expect(cssRule(".side-head .new-btn .shortcut")).toBe("");
+    expect(css).not.toContain("@container sidebar (min-width: 191px)");
     expect(cssRule(".side-head .icon-btn")).toContain("flex: 0 0 auto");
   });
 });

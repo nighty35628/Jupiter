@@ -100,20 +100,26 @@ export type StepCompletedEvent = {
 
 export type PlanClearedEvent = { type: "$plan_cleared" };
 
+export type SessionListItem = {
+  name: string;
+  path?: string;
+  messageCount: number;
+  mtime: string;
+  summary?: string;
+  workspace?: string;
+  archivedAt?: number;
+  pinnedAt?: number;
+  workspaceStatus?: "matched" | "legacy_missing_meta";
+};
+
 export type SessionsEvent = {
   type: "$sessions";
-  items: {
-    name: string;
-    path?: string;
-    messageCount: number;
-    mtime: string;
-    summary?: string;
-    workspace?: string;
-    archivedAt?: number;
-    pinnedAt?: number;
-    unread?: boolean;
-    workspaceStatus?: "matched" | "legacy_missing_meta";
-  }[];
+  items: SessionListItem[];
+};
+
+export type ArchivedSessionsEvent = {
+  type: "$archived_sessions";
+  items: SessionListItem[];
 };
 
 export type ExternalSessionSource = "claude" | "codex";
@@ -649,6 +655,7 @@ export type IncomingEvent = { tabId?: string } & (
   | ChoiceRequiredEvent
   | PlanRequiredEvent
   | SessionsEvent
+  | ArchivedSessionsEvent
   | SessionImportSourcesEvent
   | SessionImportResultEvent
   | SessionLoadedEvent
@@ -699,7 +706,12 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "checkpoint_response"; id: number; response: CheckpointVerdict }
   | { cmd: "revision_response"; id: number; response: RevisionVerdict }
   | { cmd: "session_list" }
+  | { cmd: "session_list_archived" }
   | { cmd: "session_delete"; name: string }
+  | { cmd: "session_archive"; name: string }
+  | { cmd: "session_archive_many"; names: string[] }
+  | { cmd: "session_restore_archived"; name: string }
+  | { cmd: "session_delete_archived"; name: string }
   | { cmd: "session_load"; name: string; openInNewTab?: boolean }
   | { cmd: "session_rename"; name: string; title: string }
   | {

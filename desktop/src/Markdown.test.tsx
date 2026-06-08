@@ -63,6 +63,22 @@ describe("Markdown", () => {
     expect(openUrl).not.toHaveBeenCalled();
   });
 
+  it("renders unsafe links inert", () => {
+    const onOpenBrowserUrl = vi.fn();
+    render(
+      <WorkspaceProvider value={{ onOpenBrowserUrl }}>
+        <Markdown source="[bad](javascript:alert(1))" />
+      </WorkspaceProvider>,
+    );
+
+    const link = screen.getByRole("link", { name: /bad/ });
+    expect(link.getAttribute("href")).toBe("#");
+    fireEvent.click(link);
+
+    expect(onOpenBrowserUrl).not.toHaveBeenCalled();
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
   it("opens html file pills through the workspace browser callback", () => {
     const onOpenHtmlFile = vi.fn();
     const onPreviewFile = vi.fn();

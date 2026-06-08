@@ -303,9 +303,7 @@ describe("desktop Sidebar workspace grouping", () => {
     expect(
       screen.getByRole("menuitem", { name: /Archive conversation|归档会话|会話をアーカイブ/ }),
     ).toBeTruthy();
-    expect(
-      screen.getByRole("menuitem", { name: /Mark unread|标记为未读|未読にする/ }),
-    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Mark unread|标记为未读|未読にする/ })).toBeNull();
     expect(
       screen.getByRole("menuitem", { name: /Show in folder|在文件夹中显示|フォルダーで表示/ }),
     ).toBeTruthy();
@@ -322,8 +320,8 @@ describe("desktop Sidebar workspace grouping", () => {
     ).toBeTruthy();
   });
 
-  it("archives sessions through backend session metadata", () => {
-    const onPatchSessionMeta = vi.fn();
+  it("archives sessions through the backend archive command", () => {
+    const onArchiveSession = vi.fn();
     const baseSession = {
       name: "desktop-alpha",
       messageCount: 1,
@@ -331,7 +329,7 @@ describe("desktop Sidebar workspace grouping", () => {
       summary: "Alpha chat",
       workspace: "/tmp/Alpha",
     };
-    const { rerender } = render(
+    render(
       <Sidebar
         sessions={[baseSession]}
         importSources={[]}
@@ -342,7 +340,7 @@ describe("desktop Sidebar workspace grouping", () => {
         onLoadSession={vi.fn()}
         onDeleteSession={vi.fn()}
         onRenameSession={vi.fn()}
-        onPatchSessionMeta={onPatchSessionMeta}
+        onArchiveSession={onArchiveSession}
         onRefreshImportSources={vi.fn()}
         onImportDetectedSessions={vi.fn()}
         onImportSession={vi.fn()}
@@ -356,53 +354,11 @@ describe("desktop Sidebar workspace grouping", () => {
       screen.getByRole("menuitem", { name: /Archive conversation|归档会话|会話をアーカイブ/ }),
     );
 
-    expect(onPatchSessionMeta).toHaveBeenCalledWith("desktop-alpha", {
-      archivedAt: expect.any(Number),
-    });
-    rerender(
-      <Sidebar
-        sessions={[{ ...baseSession, archivedAt: 1_000 }]}
-        importSources={[]}
-        activeName="desktop-alpha"
-        workspaceDir="/tmp/Alpha"
-        recentWorkspaces={["/tmp/Alpha"]}
-        onNewChat={vi.fn()}
-        onLoadSession={vi.fn()}
-        onDeleteSession={vi.fn()}
-        onRenameSession={vi.fn()}
-        onPatchSessionMeta={onPatchSessionMeta}
-        onRefreshImportSources={vi.fn()}
-        onImportDetectedSessions={vi.fn()}
-        onImportSession={vi.fn()}
-        onOpenSettings={vi.fn()}
-        onOpenCommands={vi.fn()}
-      />,
-    );
-    expect(screen.queryByText("Alpha chat")).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /Sidebar options|侧边栏选项|サイドバーオプション/ }),
-    );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: /Show archived|显示已归档|アーカイブを表示/ }),
-    );
-
-    expect(screen.getByText("Alpha chat")).toBeTruthy();
-    fireEvent.contextMenu(screen.getByTitle(/Alpha chat/), { clientX: 42, clientY: 64 });
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: /Unarchive conversation|取消归档会话|アーカイブを解除/,
-      }),
-    );
-
-    expect(onPatchSessionMeta).toHaveBeenLastCalledWith("desktop-alpha", {
-      archivedAt: null,
-    });
+    expect(onArchiveSession).toHaveBeenCalledWith("desktop-alpha");
   });
 
-  it("marks a session unread from the context menu", () => {
-    const onMarkSessionUnread = vi.fn();
-    const { rerender } = render(
+  it("does not expose unread actions or unread row state", () => {
+    render(
       <Sidebar
         sessions={[
           {
@@ -421,7 +377,6 @@ describe("desktop Sidebar workspace grouping", () => {
         onLoadSession={vi.fn()}
         onDeleteSession={vi.fn()}
         onRenameSession={vi.fn()}
-        onMarkSessionUnread={onMarkSessionUnread}
         onRefreshImportSources={vi.fn()}
         onImportDetectedSessions={vi.fn()}
         onImportSession={vi.fn()}
@@ -432,43 +387,9 @@ describe("desktop Sidebar workspace grouping", () => {
 
     const row = screen.getByTitle(/Alpha chat/);
     fireEvent.contextMenu(row, { clientX: 42, clientY: 64 });
-    fireEvent.click(screen.getByRole("menuitem", { name: /Mark unread|标记为未读|未読にする/ }));
 
-    expect(onMarkSessionUnread).toHaveBeenCalledWith("desktop-alpha");
-    rerender(
-      <Sidebar
-        sessions={[
-          {
-            name: "desktop-alpha",
-            messageCount: 1,
-            mtime: new Date("2026-05-31T12:00:00Z").toISOString(),
-            summary: "Alpha chat",
-            workspace: "/tmp/Alpha",
-            unread: true,
-          },
-        ]}
-        importSources={[]}
-        activeName="desktop-other"
-        workspaceDir="/tmp/Alpha"
-        recentWorkspaces={["/tmp/Alpha"]}
-        onNewChat={vi.fn()}
-        onLoadSession={vi.fn()}
-        onDeleteSession={vi.fn()}
-        onRenameSession={vi.fn()}
-        onMarkSessionUnread={onMarkSessionUnread}
-        onRefreshImportSources={vi.fn()}
-        onImportDetectedSessions={vi.fn()}
-        onImportSession={vi.fn()}
-        onOpenSettings={vi.fn()}
-        onOpenCommands={vi.fn()}
-      />,
-    );
-    expect(
-      screen
-        .getByTitle(/Alpha chat/)
-        .closest(".session-item")
-        ?.getAttribute("data-unread"),
-    ).toBe("true");
+    expect(screen.queryByRole("menuitem", { name: /Mark unread|标记为未读|未読にする/ })).toBeNull();
+    expect(row.closest(".session-item")?.getAttribute("data-unread")).toBeNull();
   });
 
   it("shows a right-edge spinner while a session is busy", () => {
@@ -505,10 +426,9 @@ describe("desktop Sidebar workspace grouping", () => {
     expect(row?.querySelector(".session-state-dot")).toBeNull();
   });
 
-  it("marks an inactive busy session unread after it completes and clears it when opened", () => {
+  it("does not mark completed busy sessions unread", () => {
     const onLoadSession = vi.fn();
     const onPatchSessionMeta = vi.fn();
-    const onMarkSessionRead = vi.fn();
     const sessions = [
       {
         name: "desktop-alpha",
@@ -539,7 +459,6 @@ describe("desktop Sidebar workspace grouping", () => {
         onDeleteSession={vi.fn()}
         onRenameSession={vi.fn()}
         onPatchSessionMeta={onPatchSessionMeta}
-        onMarkSessionRead={onMarkSessionRead}
         onRefreshImportSources={vi.fn()}
         onImportDetectedSessions={vi.fn()}
         onImportSession={vi.fn()}
@@ -552,10 +471,7 @@ describe("desktop Sidebar workspace grouping", () => {
       <Sidebar
         sessions={[
           sessions[0]!,
-          {
-            ...sessions[1]!,
-            unread: true,
-          },
+          sessions[1]!,
         ]}
         sessionActivity={{}}
         importSources={[]}
@@ -567,7 +483,6 @@ describe("desktop Sidebar workspace grouping", () => {
         onDeleteSession={vi.fn()}
         onRenameSession={vi.fn()}
         onPatchSessionMeta={onPatchSessionMeta}
-        onMarkSessionRead={onMarkSessionRead}
         onRefreshImportSources={vi.fn()}
         onImportDetectedSessions={vi.fn()}
         onImportSession={vi.fn()}
@@ -577,14 +492,11 @@ describe("desktop Sidebar workspace grouping", () => {
     );
 
     const betaRow = screen.getByTitle(/Beta chat/).closest(".session-item");
-    expect(onPatchSessionMeta).toHaveBeenCalledWith("desktop-beta", {
-      lastAssistantCompletedAt: expect.any(Number),
-    });
-    expect(betaRow?.getAttribute("data-unread")).toBe("true");
-    expect(betaRow?.querySelector(".session-state-dot")).toBeTruthy();
+    expect(onPatchSessionMeta).not.toHaveBeenCalled();
+    expect(betaRow?.getAttribute("data-unread")).toBeNull();
+    expect(betaRow?.querySelector(".session-state-dot")).toBeNull();
 
     fireEvent.click(screen.getByTitle(/Beta chat/));
-    expect(onMarkSessionRead).toHaveBeenCalledWith("desktop-beta");
     expect(onLoadSession).toHaveBeenCalledWith("desktop-beta");
   });
 
@@ -782,6 +694,63 @@ describe("desktop Sidebar workspace grouping", () => {
     expect(betaTitles).toEqual(["Beta chat"]);
   });
 
+  it("reorders a workspace session immediately after pinning it", () => {
+    const onPatchSessionMeta = vi.fn();
+    render(
+      <Sidebar
+        sessions={[
+          {
+            name: "desktop-alpha-recent",
+            messageCount: 1,
+            mtime: new Date("2026-05-31T12:00:00Z").toISOString(),
+            summary: "Alpha recent",
+            workspace: "/tmp/Alpha",
+          },
+          {
+            name: "desktop-alpha-main",
+            messageCount: 1,
+            mtime: new Date("2026-05-30T12:00:00Z").toISOString(),
+            summary: "Alpha main",
+            workspace: "/tmp/Alpha",
+          },
+        ]}
+        importSources={[]}
+        activeName="desktop-alpha-recent"
+        workspaceDir="/tmp/Alpha"
+        recentWorkspaces={["/tmp/Alpha"]}
+        onNewChat={vi.fn()}
+        onLoadSession={vi.fn()}
+        onDeleteSession={vi.fn()}
+        onRenameSession={vi.fn()}
+        onPatchSessionMeta={onPatchSessionMeta}
+        onRefreshImportSources={vi.fn()}
+        onImportDetectedSessions={vi.fn()}
+        onImportSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onOpenCommands={vi.fn()}
+      />,
+    );
+
+    const alphaGroup = screen.getByText("Alpha").closest(".workspace-group");
+    if (!alphaGroup) throw new Error("missing workspace group");
+    expect(
+      Array.from(alphaGroup.querySelectorAll(".session-item .title")).map((el) => el.textContent),
+    ).toEqual(["Alpha recent", "Alpha main"]);
+
+    fireEvent.click(
+      within(screen.getByTitle(/Alpha main/)).getByRole("button", {
+        name: /Pin in workspace|工作区内置顶|ワークスペース内でピン留め/,
+      }),
+    );
+
+    expect(onPatchSessionMeta).toHaveBeenCalledWith("desktop-alpha-main", {
+      pinnedAt: expect.any(Number),
+    });
+    expect(
+      Array.from(alphaGroup.querySelectorAll(".session-item .title")).map((el) => el.textContent),
+    ).toEqual(["Alpha main", "Alpha recent"]);
+  });
+
   it("pins a workspace group above other workspace groups", () => {
     render(
       <Sidebar
@@ -821,6 +790,11 @@ describe("desktop Sidebar workspace grouping", () => {
     if (!betaGroup) throw new Error("missing Beta workspace group");
     fireEvent.click(
       within(betaGroup as HTMLElement).getByRole("button", {
+        name: /Workspace actions|工作区操作|ワークスペース操作/,
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
         name: /Pin workspace|置顶工作区|ワークスペースをピン留め/,
       }),
     );
@@ -829,6 +803,62 @@ describe("desktop Sidebar workspace grouping", () => {
       (el) => el.textContent,
     );
     expect(names).toEqual(["Beta", "Alpha"]);
+  });
+
+  it("archives workspace chats and opens archived settings from the workspace menu", () => {
+    const onArchiveSessions = vi.fn();
+    const onOpenSettingsPage = vi.fn();
+    render(
+      <Sidebar
+        sessions={[
+          {
+            name: "desktop-alpha-1",
+            messageCount: 1,
+            mtime: new Date("2026-05-31T12:00:00Z").toISOString(),
+            summary: "Alpha one",
+            workspace: "/tmp/Alpha",
+          },
+          {
+            name: "desktop-alpha-2",
+            messageCount: 1,
+            mtime: new Date("2026-05-30T12:00:00Z").toISOString(),
+            summary: "Alpha two",
+            workspace: "/tmp/Alpha",
+          },
+        ]}
+        importSources={[]}
+        activeName="desktop-alpha-1"
+        workspaceDir="/tmp/Alpha"
+        recentWorkspaces={["/tmp/Alpha"]}
+        onNewChat={vi.fn()}
+        onLoadSession={vi.fn()}
+        onDeleteSession={vi.fn()}
+        onRenameSession={vi.fn()}
+        onArchiveSessions={onArchiveSessions}
+        onRefreshImportSources={vi.fn()}
+        onImportDetectedSessions={vi.fn()}
+        onImportSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onOpenSettingsPage={onOpenSettingsPage}
+        onOpenCommands={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Workspace actions|工作区操作/ }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: /Archive workspace chats|归档工作区对话|ワークスペースの会話をアーカイブ/,
+      }),
+    );
+    expect(onArchiveSessions).toHaveBeenCalledWith(["desktop-alpha-1", "desktop-alpha-2"]);
+
+    fireEvent.click(screen.getByRole("button", { name: /Workspace actions|工作区操作/ }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: /View archived chats|查看已归档|アーカイブ済みを表示/,
+      }),
+    );
+    expect(onOpenSettingsPage).toHaveBeenCalledWith("archives");
   });
 
   it("keeps relative time labels on a sidebar clock instead of click-triggered renders", () => {

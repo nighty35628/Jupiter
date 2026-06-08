@@ -228,6 +228,19 @@ struct GitStatusEntry {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitInfo {
+    is_repo: bool,
+    branch: Option<String>,
+    upstream: Option<String>,
+    remote: Option<String>,
+    ahead: i32,
+    behind: i32,
+    last_commit: Option<String>,
+    branches: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct TerminalCommandResult {
     code: i32,
     stdout: String,
@@ -241,6 +254,120 @@ fn git_status(root: String) -> Result<Vec<GitStatusEntry>, String> {
         return Err(format!("not a directory: {root}"));
     }
     git_status_entries(root_path)
+}
+
+fn run_command_output(
+    root_path: &Path,
+    program: &str,
+    args: &[&str],
+) -> Result<TerminalCommandResult, String> {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(root_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd.output().map_err(|e| format!("{program}: {e}"))?;
+    Ok(TerminalCommandResult {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+fn git_output_text(root_path: &Path, args: &[&str]) -> Option<String> {
+    let result = run_command_output(root_path, "git", args).ok()?;
+    if result.code != 0 {
+        return None;
+    }
+    Some(result.stdout.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+fn git_is_repo(root_path: &Path) -> bool {
+    git_output_text(root_path, &["rev-parse", "--is-inside-work-tree"])
+        .is_some_and(|value| value == "true")
+}
+
+#[tauri::command]
+fn git_info(root: String) -> Result<GitInfo, String> {
+    let root_path = Path::new(&root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {root}"));
+    }
+    if !git_is_repo(root_path) {
+        return Ok(GitInfo {
+            is_repo: false,
+            branch: None,
+            upstream: None,
+            remote: None,
+            ahead: 0,
+            behind: 0,
+            last_commit: None,
+            branches: Vec::new(),
+        });
+    }
+
+    let branch = git_output_text(root_path, &["branch", "--show-current"])
+        .or_else(|| git_output_text(root_path, &["rev-parse", "--short", "HEAD"]));
+    let upstream = git_output_text(
+        root_path,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    );
+    let remote = upstream
+        .as_deref()
+        .and_then(|value| value.split('/').next())
+        .map(str::to_string)
+        .or_else(|| {
+            git_output_text(root_path, &["remote"])
+                .and_then(|value| value.lines().next().map(str::to_string))
+        });
+    let (ahead, behind) = upstream
+        .as_ref()
+        .and_then(|_| {
+            git_output_text(
+                root_path,
+                &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
+            )
+        })
+        .and_then(|value| {
+            let mut parts = value.split_whitespace();
+            let ahead = parts.next()?.parse::<i32>().ok()?;
+            let behind = parts.next()?.parse::<i32>().ok()?;
+            Some((ahead, behind))
+        })
+        .unwrap_or((0, 0));
+    let last_commit = git_output_text(root_path, &["log", "-1", "--format=%h %s"]);
+    let branches = git_output_text(
+        root_path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    )
+    .map(|value| {
+        value
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+
+    Ok(GitInfo {
+        is_repo: true,
+        branch,
+        upstream,
+        remote,
+        ahead,
+        behind,
+        last_commit,
+        branches,
+    })
 }
 
 fn git_status_entries(root_path: &Path) -> Result<Vec<GitStatusEntry>, String> {
@@ -364,6 +491,54 @@ fn git_untracked_diff_output(root_path: &Path, path: &str) -> Result<String, Str
         return Ok(String::new());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[tauri::command]
+fn git_commit_all(root: String, message: String) -> Result<TerminalCommandResult, String> {
+    let root_path = Path::new(&root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {root}"));
+    }
+    let message = message.trim();
+    if message.is_empty() {
+        return Err("commit message is empty".into());
+    }
+    let add = run_command_output(root_path, "git", &["add", "-A"])?;
+    if add.code != 0 {
+        return Ok(add);
+    }
+    run_command_output(root_path, "git", &["commit", "-m", message])
+}
+
+#[tauri::command]
+fn git_push(root: String) -> Result<TerminalCommandResult, String> {
+    let root_path = Path::new(&root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {root}"));
+    }
+    run_command_output(root_path, "git", &["push"])
+}
+
+#[tauri::command]
+fn git_create_pull_request(root: String) -> Result<TerminalCommandResult, String> {
+    let root_path = Path::new(&root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {root}"));
+    }
+    run_command_output(root_path, "gh", &["pr", "create", "--fill", "--web"])
+}
+
+#[tauri::command]
+fn git_checkout_branch(root: String, branch: String) -> Result<TerminalCommandResult, String> {
+    let root_path = Path::new(&root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {root}"));
+    }
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("branch is empty".into());
+    }
+    run_command_output(root_path, "git", &["checkout", branch])
 }
 
 #[tauri::command]
@@ -806,8 +981,13 @@ fn main() {
             terminal_kill,
             open_in_editor,
             list_workspace_tree,
+            git_info,
             git_status,
             git_diff,
+            git_commit_all,
+            git_push,
+            git_create_pull_request,
+            git_checkout_branch,
             run_terminal_command,
             read_file_preview,
             write_text_file,

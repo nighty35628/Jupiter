@@ -17,21 +17,28 @@ import { ImmutablePrefix } from "../src/memory/runtime.js";
 import {
   appendSessionMessage,
   archiveSession,
+  archivedSessionPath,
+  archivedSessionsDir,
+  deleteArchivedSession,
   deleteSession,
   findSessionsByPrefix,
   freshSessionName,
+  listArchivedSessions,
   listSessions,
   listSessionsForWorkspace,
   loadSessionMessages,
   loadSessionMeta,
   markSessionRead,
   markSessionUnread,
+  migrateLegacyArchivedSessions,
+  moveSessionToArchive,
   normalizeWorkspace,
   patchSessionMeta,
   patchSessionWorkspaceIfMissing,
   pruneStaleSessions,
   renameSession,
   resolveSession,
+  restoreArchivedSession,
   rewriteSession,
   sanitizeName,
   sessionIsUnread,
@@ -317,6 +324,65 @@ describe("session persistence", () => {
     deleteSession("plan-sidecar");
     expect(existsSync(sessionPath("plan-sidecar"))).toBe(false);
     expect(existsSync(planPath)).toBe(false);
+  });
+
+  it("moves a session and sidecars into the desktop archive directory", () => {
+    appendSessionMessage("ui-archive", { role: "user", content: "hi" });
+    patchSessionMeta("ui-archive", { workspace: "/proj/a", pinnedAt: 42 });
+    const events = sessionPath("ui-archive").replace(/\.jsonl$/, ".events.jsonl");
+    const plan = sessionPath("ui-archive").replace(/\.jsonl$/, ".plan.json");
+    writeFileSync(events, '{"id":1}\n');
+    writeFileSync(plan, "{}");
+
+    expect(moveSessionToArchive("ui-archive", 1_234)).toBe(true);
+
+    expect(archivedSessionsDir()).toContain(join(".jupiter", "sessions", "archive"));
+    expect(existsSync(sessionPath("ui-archive"))).toBe(false);
+    expect(existsSync(archivedSessionPath("ui-archive"))).toBe(true);
+    expect(existsSync(events)).toBe(false);
+    expect(existsSync(plan)).toBe(false);
+    expect(existsSync(archivedSessionPath("ui-archive").replace(/\.jsonl$/, ".events.jsonl"))).toBe(
+      true,
+    );
+    expect(existsSync(archivedSessionPath("ui-archive").replace(/\.jsonl$/, ".plan.json"))).toBe(
+      true,
+    );
+    expect(listSessions().map((s) => s.name)).not.toContain("ui-archive");
+
+    const archived = listArchivedSessions();
+    expect(archived.map((s) => s.name)).toEqual(["ui-archive"]);
+    expect(archived[0]!.meta.archivedAt).toBe(1_234);
+    expect(archived[0]!.meta.workspace).toBe("/proj/a");
+  });
+
+  it("restores archived sessions and can delete only archived copies", () => {
+    appendSessionMessage("restore-me", { role: "user", content: "hi" });
+    patchSessionMeta("restore-me", { workspace: "/proj/a" });
+    expect(moveSessionToArchive("restore-me", 1_234)).toBe(true);
+
+    expect(restoreArchivedSession("restore-me")).toBe(true);
+    expect(existsSync(sessionPath("restore-me"))).toBe(true);
+    expect(existsSync(archivedSessionPath("restore-me"))).toBe(false);
+    expect(loadSessionMeta("restore-me").archivedAt).toBeUndefined();
+    expect(listSessions().map((s) => s.name)).toContain("restore-me");
+
+    expect(moveSessionToArchive("restore-me", 2_345)).toBe(true);
+    expect(deleteArchivedSession("restore-me")).toBe(true);
+    expect(deleteArchivedSession("restore-me")).toBe(false);
+    expect(existsSync(archivedSessionPath("restore-me"))).toBe(false);
+    expect(existsSync(sessionPath("restore-me"))).toBe(false);
+  });
+
+  it("migrates legacy metadata-archived sessions into the archive directory", () => {
+    appendSessionMessage("legacy-archive", { role: "user", content: "hi" });
+    patchSessionMeta("legacy-archive", { archivedAt: 9_999, workspace: "/proj/a" });
+
+    expect(migrateLegacyArchivedSessions()).toBe(1);
+
+    expect(existsSync(sessionPath("legacy-archive"))).toBe(false);
+    expect(existsSync(archivedSessionPath("legacy-archive"))).toBe(true);
+    expect(listSessions().map((s) => s.name)).not.toContain("legacy-archive");
+    expect(listArchivedSessions()[0]!.meta.archivedAt).toBe(9_999);
   });
 
   it("pruneStaleSessions deletes sessions older than the cutoff and leaves fresh ones", () => {

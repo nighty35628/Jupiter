@@ -100,6 +100,14 @@ export function sessionPath(name: string): string {
   return join(sessionsDir(), `${sanitizeName(name)}.jsonl`);
 }
 
+export function archivedSessionsDir(): string {
+  return join(sessionsDir(), "archive");
+}
+
+export function archivedSessionPath(name: string): string {
+  return join(archivedSessionsDir(), `${sanitizeName(name)}.jsonl`);
+}
+
 export function sanitizeName(name: string): string {
   const cleaned = name.replace(/[^\w\-\u4e00-\u9fa5]/g, "_").slice(0, 64);
   return cleaned || "default";
@@ -281,7 +289,23 @@ export function listSessions(opts?: {
   workspaceFilter?: string;
   includeLegacyWorkspaceMatches?: boolean;
 }): SessionInfo[] {
-  const dir = sessionsDir();
+  return listSessionsInDir(sessionsDir(), opts);
+}
+
+export function listArchivedSessions(opts?: {
+  workspaceFilter?: string;
+  includeLegacyWorkspaceMatches?: boolean;
+}): SessionInfo[] {
+  return listSessionsInDir(archivedSessionsDir(), opts);
+}
+
+function listSessionsInDir(
+  dir: string,
+  opts?: {
+    workspaceFilter?: string;
+    includeLegacyWorkspaceMatches?: boolean;
+  },
+): SessionInfo[] {
   if (!existsSync(dir)) return [];
   const want = opts?.workspaceFilter ? normalizeWorkspace(opts.workspaceFilter) : null;
   const legacyPrefix =
@@ -297,7 +321,7 @@ export function listSessions(opts?: {
       .flatMap((file) => {
         const path = join(dir, file);
         const name = file.replace(/\.jsonl$/, "");
-        const meta = loadSessionMeta(name);
+        const meta = loadSessionMetaFromDir(dir, name);
         // Workspace pre-filter: cheap meta read first, skip the
         // (potentially multi-MB) jsonl read for sessions that don't
         // belong to the current workspace. Issue #1179.
@@ -360,11 +384,19 @@ export function patchSessionWorkspaceIfMissing(name: string, workspace: string):
 }
 
 function metaPath(name: string): string {
-  return join(sessionsDir(), `${sanitizeName(name)}.meta.json`);
+  return metaPathInDir(sessionsDir(), name);
+}
+
+function metaPathInDir(dir: string, name: string): string {
+  return join(dir, `${sanitizeName(name)}.meta.json`);
 }
 
 export function loadSessionMeta(name: string): SessionMeta {
-  const p = metaPath(name);
+  return loadSessionMetaFromDir(sessionsDir(), name);
+}
+
+function loadSessionMetaFromDir(dir: string, name: string): SessionMeta {
+  const p = metaPathInDir(dir, name);
   if (!existsSync(p)) return {};
   try {
     const raw = JSON.parse(readFileSync(p, "utf8")) as SessionMeta;
@@ -447,6 +479,65 @@ export function pruneStaleSessions(daysOld = 90): string[] {
 
 export function deleteSession(name: string): boolean {
   const path = sessionPath(name);
+  return deleteSessionFiles(path);
+}
+
+export function moveSessionToArchive(name: string, archivedAt = Date.now()): boolean {
+  const livePath = sessionPath(name);
+  const archivePath = archivedSessionPath(name);
+  if (!existsSync(livePath) || existsSync(archivePath)) return false;
+  try {
+    patchSessionMeta(name, { archivedAt });
+    moveSessionFiles(livePath, archivePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function restoreArchivedSession(name: string): boolean {
+  const archivePath = archivedSessionPath(name);
+  const livePath = sessionPath(name);
+  if (!existsSync(archivePath) || existsSync(livePath)) return false;
+  try {
+    moveSessionFiles(archivePath, livePath);
+    patchSessionMeta(name, { archivedAt: undefined });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function deleteArchivedSession(name: string): boolean {
+  return deleteSessionFiles(archivedSessionPath(name));
+}
+
+export function migrateLegacyArchivedSessions(): number {
+  let moved = 0;
+  for (const session of listSessions()) {
+    if (typeof session.meta.archivedAt !== "number") continue;
+    if (moveSessionToArchive(session.name, session.meta.archivedAt)) moved++;
+  }
+  return moved;
+}
+
+function moveSessionFiles(oldJsonl: string, newJsonl: string): void {
+  mkdirSync(dirname(newJsonl), { recursive: true });
+  renameSync(oldJsonl, newJsonl);
+  for (const ext of SESSION_SIDECAR_EXTS) {
+    const oldP = oldJsonl.replace(/\.jsonl$/, ext);
+    const newP = newJsonl.replace(/\.jsonl$/, ext);
+    if (existsSync(oldP)) {
+      try {
+        renameSync(oldP, newP);
+      } catch {
+        /* sidecar move failed — leave the jsonl move in place */
+      }
+    }
+  }
+}
+
+function deleteSessionFiles(path: string): boolean {
   try {
     unlinkSync(path);
     for (const ext of SESSION_SIDECAR_EXTS) {

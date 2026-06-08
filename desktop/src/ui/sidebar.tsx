@@ -10,6 +10,8 @@ import { displayWorkspaceBasename, displayWorkspacePath } from "../workspace-dis
 const RENAME_MAX_CHARS = 200;
 const WORKSPACE_PIN_STORAGE_KEY = "jupiter.sidebar.pinnedWorkspaces";
 const COLLAPSED_WORKSPACES_STORAGE_KEY = "jupiter.sidebar.collapsedWorkspaces";
+const WORKSPACE_ALIAS_STORAGE_KEY = "jupiter.sidebar.workspaceAliases";
+const REMOVED_WORKSPACES_STORAGE_KEY = "jupiter.sidebar.removedWorkspaces";
 const SIDEBAR_CLOCK_INTERVAL_MS = 15_000;
 const UNASSIGNED_WORKSPACE_KEY = "__unassigned__";
 
@@ -28,11 +30,7 @@ type WorkspaceGroup = {
 
 type SessionActivity = Record<string, { busy?: boolean }>;
 type SessionMetaPatch = {
-  archivedAt?: number | null;
   pinnedAt?: number | null;
-  lastReadAt?: number | null;
-  lastAssistantCompletedAt?: number | null;
-  manualUnread?: boolean | null;
 };
 
 type PendingDelete = {
@@ -49,6 +47,19 @@ type PendingImport = {
 
 type SessionMenuTarget = {
   session: SessionInfo;
+  x: number;
+  y: number;
+};
+
+type WorkspaceMenuTarget = {
+  group: WorkspaceGroup;
+  x: number;
+  y: number;
+};
+
+type PendingWorkspaceRename = {
+  key: string;
+  label: string;
   x: number;
   y: number;
 };
@@ -94,6 +105,46 @@ function saveCollapsedWorkspaces(items: string[]): void {
   }
 }
 
+function loadWorkspaceAliases(): Record<string, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem?.(WORKSPACE_ALIAS_STORAGE_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(
+      Object.entries(raw).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[0] === "string" && typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspaceAliases(items: Record<string, string>): void {
+  try {
+    localStorage.setItem?.(WORKSPACE_ALIAS_STORAGE_KEY, JSON.stringify(items));
+  } catch {
+    // Sidebar preferences are best-effort.
+  }
+}
+
+function loadRemovedWorkspaces(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem?.(REMOVED_WORKSPACES_STORAGE_KEY) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRemovedWorkspaces(items: string[]): void {
+  try {
+    localStorage.setItem?.(REMOVED_WORKSPACES_STORAGE_KEY, JSON.stringify(items));
+  } catch {
+    // Sidebar preferences are best-effort.
+  }
+}
+
 function prettyName(s: SessionInfo): string {
   if (s.summary && s.summary.trim()) return s.summary.trim();
   const m = s.name.match(/^desktop-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(?:-(\d+))?$/);
@@ -124,13 +175,6 @@ function sessionWorkspacePath(session: SessionInfo): string | undefined {
   return session.workspace;
 }
 
-function sessionWorkspaceLabel(session: SessionInfo): string {
-  const path = sessionWorkspacePath(session);
-  return path
-    ? displayWorkspaceBasename(path, t("sidebarPanel.unassignedWorkspace"))
-    : t("sidebarPanel.unassignedWorkspace");
-}
-
 export function Sidebar({
   sessions,
   sessionActivity = {},
@@ -143,13 +187,15 @@ export function Sidebar({
   onDeleteSession,
   onRenameSession,
   onPatchSessionMeta = () => {},
-  onMarkSessionRead = () => {},
-  onMarkSessionUnread = () => {},
+  onArchiveSession = () => {},
+  onArchiveSessions = () => {},
   onRefreshImportSources,
   onImportDetectedSessions,
   onImportSession,
   onOpenSettings,
+  onOpenSettingsPage = () => {},
   onOpenCommands,
+  onRemoveWorkspace = () => {},
 }: {
   sessions: SessionInfo[];
   sessionActivity?: SessionActivity;
@@ -162,19 +208,24 @@ export function Sidebar({
   onDeleteSession: (name: string) => void;
   onRenameSession: (name: string, title: string) => void;
   onPatchSessionMeta?: (name: string, patch: SessionMetaPatch) => void;
-  onMarkSessionRead?: (name: string) => void;
-  onMarkSessionUnread?: (name: string) => void;
+  onArchiveSession?: (name: string) => void;
+  onArchiveSessions?: (names: string[]) => void;
   onRefreshImportSources: () => void;
   onImportDetectedSessions: (sources: ImportSource[]) => void;
   onImportSession: (payload: { source: ImportSource; path: string; name?: string }) => void;
   onOpenSettings: () => void;
+  onOpenSettingsPage?: (page: "archives") => void;
   onOpenCommands: () => void;
+  onRemoveWorkspace?: (workspace: string) => void;
 }) {
   useLang();
   const [query, setQuery] = useState("");
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
   const [sessionMenu, setSessionMenu] = useState<SessionMenuTarget | null>(null);
+  const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuTarget | null>(null);
+  const [pendingWorkspaceRename, setPendingWorkspaceRename] =
+    useState<PendingWorkspaceRename | null>(null);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [sidebarMenuOpen, setSidebarMenuOpen] = useState(false);
   const [sortModeMenuOpen, setSortModeMenuOpen] = useState(false);
@@ -188,36 +239,66 @@ export function Sidebar({
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<string[]>(() =>
     loadCollapsedWorkspaces(),
   );
-  const [showArchived, setShowArchived] = useState(false);
+  const [workspaceAliases, setWorkspaceAliases] = useState<Record<string, string>>(() =>
+    loadWorkspaceAliases(),
+  );
+  const [removedWorkspaces, setRemovedWorkspaces] = useState<string[]>(() =>
+    loadRemovedWorkspaces(),
+  );
+  const [optimisticSessionPins, setOptimisticSessionPins] = useState<Record<string, number | null>>(
+    {},
+  );
   const [now, setNow] = useState(() => Date.now());
-  const previousBusySessionsRef = useRef<Set<string>>(new Set());
-  const previousActiveNameRef = useRef<string | undefined>(activeName);
   const newMenuRef = useRef<HTMLDivElement>(null);
   const sidebarMenuRef = useRef<HTMLDivElement>(null);
+  const removedWorkspaceSet = useMemo(() => new Set(removedWorkspaces), [removedWorkspaces]);
   const workspaceOptions = useMemo(() => {
     const values = [workspaceDir, ...recentWorkspaces].filter((p): p is string => Boolean(p));
-    return Array.from(new Set(values));
-  }, [recentWorkspaces, workspaceDir]);
+    return Array.from(new Set(values)).filter((p) => p === workspaceDir || !removedWorkspaceSet.has(p));
+  }, [recentWorkspaces, removedWorkspaceSet, workspaceDir]);
   const busySessionSet = useMemo(() => {
     const names = Object.entries(sessionActivity)
       .filter(([, activity]) => Boolean(activity.busy))
       .map(([name]) => name);
     return new Set(names);
   }, [sessionActivity]);
-  const visibleSessions = useMemo(
-    () => sessions.filter((s) => showArchived || !s.archivedAt),
-    [sessions, showArchived],
+  const effectiveSessions = useMemo(
+    () =>
+      sessions.map((session) => {
+        if (!(session.name in optimisticSessionPins)) return session;
+        const pinnedAt = optimisticSessionPins[session.name];
+        return pinnedAt === null ? { ...session, pinnedAt: undefined } : { ...session, pinnedAt };
+      }),
+    [optimisticSessionPins, sessions],
   );
+  const visibleSessions = useMemo(
+    () =>
+      effectiveSessions.filter((s) => {
+        if (s.archivedAt) return false;
+        const path = sessionWorkspacePath(s);
+        return !path || path === workspaceDir || !removedWorkspaceSet.has(path);
+      }),
+    [effectiveSessions, removedWorkspaceSet, workspaceDir],
+  );
+  const workspaceLabelForPath = (path: string | undefined, fallback: string): string => {
+    if (!path) return fallback;
+    const alias = workspaceAliases[path]?.trim();
+    return alias || displayWorkspaceBasename(path, fallback);
+  };
+  const sessionLabel = (session: SessionInfo): string => {
+    const path = sessionWorkspacePath(session);
+    return workspaceLabelForPath(path, t("sidebarPanel.unassignedWorkspace"));
+  };
   const matchingSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q
       ? visibleSessions.filter((s) => {
           const title = prettyName(s).toLowerCase();
-          const ws = sessionWorkspaceLabel(s).toLowerCase();
+          const ws = sessionLabel(s).toLowerCase();
           return title.includes(q) || s.name.toLowerCase().includes(q) || ws.includes(q);
         })
       : visibleSessions;
-  }, [query, visibleSessions]);
+  }, [query, visibleSessions, workspaceAliases]);
 
   const collapsedWorkspaceSet = useMemo(() => new Set(collapsedWorkspaces), [collapsedWorkspaces]);
   const pinnedWorkspaceSet = useMemo(() => new Set(pinnedWorkspaces), [pinnedWorkspaces]);
@@ -227,12 +308,12 @@ export function Sidebar({
     return [...items].sort((a, b) => {
       if (sortMode === "title") return prettyName(a).localeCompare(prettyName(b));
       if (sortMode === "workspace") {
-        const byWorkspace = sessionWorkspaceLabel(a).localeCompare(sessionWorkspaceLabel(b));
+        const byWorkspace = sessionLabel(a).localeCompare(sessionLabel(b));
         if (byWorkspace !== 0) return byWorkspace;
       }
       return Date.parse(b.mtime) - Date.parse(a.mtime);
     });
-  }, [sortMode, matchingSessions]);
+  }, [sortMode, matchingSessions, workspaceAliases]);
 
   const workspaceGroups = useMemo(() => {
     const groups = new Map<string, WorkspaceGroup>();
@@ -246,7 +327,7 @@ export function Sidebar({
         group = {
           key,
           path,
-          label: sessionWorkspaceLabel(session),
+          label: sessionLabel(session),
           detail: path
             ? displayWorkspacePath(path, path)
             : t("sidebarPanel.unassignedWorkspaceDetail"),
@@ -284,11 +365,16 @@ export function Sidebar({
         }
         return a.label.localeCompare(b.label) || b.latest - a.latest;
       });
-  }, [matchingSessions, pinnedWorkspaces, workspaceDir, workspaceGroupSort]);
+  }, [matchingSessions, pinnedWorkspaces, workspaceAliases, workspaceDir, workspaceGroupSort]);
 
   const toggleSessionPin = (session: SessionInfo) => {
+    const pinnedAt = session.pinnedAt ? null : Date.now();
+    setOptimisticSessionPins((prev) => ({
+      ...prev,
+      [session.name]: pinnedAt,
+    }));
     onPatchSessionMeta(session.name, {
-      pinnedAt: session.pinnedAt ? null : Date.now(),
+      pinnedAt,
     });
   };
 
@@ -308,15 +394,32 @@ export function Sidebar({
     });
   };
 
-  const toggleSessionArchived = (session: SessionInfo) => {
-    onPatchSessionMeta(session.name, {
-      archivedAt: session.archivedAt ? null : Date.now(),
+  const archiveSession = (session: SessionInfo) => {
+    onArchiveSession(session.name);
+  };
+
+  const archiveWorkspaceSessions = (group: WorkspaceGroup) => {
+    onArchiveSessions(group.sessions.map((session) => session.name));
+  };
+
+  const renameWorkspace = (key: string, value: string) => {
+    const nextValue = value.trim().slice(0, RENAME_MAX_CHARS);
+    setWorkspaceAliases((prev) => {
+      const next = { ...prev };
+      if (nextValue) next[key] = nextValue;
+      else delete next[key];
+      saveWorkspaceAliases(next);
+      return next;
     });
   };
 
-  const toggleSessionUnread = (session: SessionInfo) => {
-    if (session.unread) onMarkSessionRead(session.name);
-    else onMarkSessionUnread(session.name);
+  const removeWorkspace = (path: string) => {
+    setRemovedWorkspaces((prev) => {
+      const next = prev.includes(path) ? prev : [path, ...prev];
+      saveRemovedWorkspaces(next);
+      return next;
+    });
+    onRemoveWorkspace(path);
   };
 
   const copyText = (text?: string) => {
@@ -350,34 +453,23 @@ export function Sidebar({
   }, []);
 
   useEffect(() => {
-    const previous = previousBusySessionsRef.current;
-    const completed = Array.from(previous).filter((name) => !busySessionSet.has(name));
-    const unreadCompleted = completed.filter((name) => name !== activeName);
-    const completedAt = Date.now();
-    for (const name of unreadCompleted) {
-      onPatchSessionMeta(name, { lastAssistantCompletedAt: completedAt });
+    if (!pendingDelete && !pendingImport && !sessionMenu && !workspaceMenu && !pendingWorkspaceRename) {
+      return;
     }
-    previousBusySessionsRef.current = new Set(busySessionSet);
-  }, [activeName, busySessionSet, onPatchSessionMeta]);
-
-  useEffect(() => {
-    if (!activeName || previousActiveNameRef.current === activeName) return;
-    previousActiveNameRef.current = activeName;
-    onMarkSessionRead(activeName);
-  }, [activeName, onMarkSessionRead]);
-
-  useEffect(() => {
-    if (!pendingDelete && !pendingImport && !sessionMenu) return;
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (!target?.closest(".session-delete-popover")) setPendingDelete(null);
       if (!target?.closest(".session-import-popover")) setPendingImport(null);
       if (!target?.closest(".session-menu")) setSessionMenu(null);
+      if (!target?.closest(".workspace-menu")) setWorkspaceMenu(null);
+      if (!target?.closest(".workspace-rename-popover")) setPendingWorkspaceRename(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setPendingDelete(null);
       if (e.key === "Escape") setPendingImport(null);
       if (e.key === "Escape") setSessionMenu(null);
+      if (e.key === "Escape") setWorkspaceMenu(null);
+      if (e.key === "Escape") setPendingWorkspaceRename(null);
     };
     window.addEventListener("mousedown", onMouseDown);
     window.addEventListener("keydown", onKey);
@@ -385,7 +477,7 @@ export function Sidebar({
       window.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("keydown", onKey);
     };
-  }, [pendingDelete, pendingImport, sessionMenu]);
+  }, [pendingDelete, pendingImport, pendingWorkspaceRename, sessionMenu, workspaceMenu]);
 
   useEffect(() => {
     if (!newMenuOpen) return;
@@ -456,17 +548,19 @@ export function Sidebar({
     setWorkspaceSortMenuOpen(false);
   };
 
+  const openWorkspaceMenu = (group: WorkspaceGroup, x: number, y: number) => {
+    setWorkspaceMenu({ group, x, y });
+  };
+
   const renderSessionItem = (s: SessionInfo, grouped = false) => {
     const active = s.name === activeName;
     const pinnedSession = Boolean(s.pinnedAt);
-    const archivedSession = Boolean(s.archivedAt);
     const busySession = busySessionSet.has(s.name);
-    const unreadSession = Boolean(s.unread) && !active;
     const mtime = Date.parse(s.mtime);
     const updated = Number.isFinite(mtime) ? relative(now - mtime) : s.mtime;
     const editing = editingName === s.name;
     const currentSummary = s.summary?.trim() ?? "";
-    const workspaceName = sessionWorkspaceLabel(s);
+    const workspaceName = sessionLabel(s);
     const workspacePath = sessionWorkspacePath(s);
     const commitRename = () => {
       const next = editValue.trim().slice(0, RENAME_MAX_CHARS);
@@ -479,11 +573,9 @@ export function Sidebar({
         key={s.name}
         className={grouped ? "session-item grouped" : "session-item"}
         data-active={active}
-        data-archived={archivedSession || undefined}
         data-busy={busySession || undefined}
         data-editing={editing || undefined}
-        data-has-state={busySession || unreadSession || undefined}
-        data-unread={unreadSession || undefined}
+        data-has-state={busySession || undefined}
         onClick={
           editing
             ? undefined
@@ -491,7 +583,6 @@ export function Sidebar({
                 // Skip the round-trip when clicking the already-loaded
                 // session — a reload would clear live in-turn state (#1653).
                 if (s.name === activeName) return;
-                onMarkSessionRead(s.name);
                 onLoadSession(s.name);
               }
         }
@@ -503,7 +594,6 @@ export function Sidebar({
         onKeyDown={(e) => {
           if (editing) return;
           if (e.key === "Enter" && s.name !== activeName) {
-            onMarkSessionRead(s.name);
             onLoadSession(s.name);
           }
           if ((e.shiftKey && e.key === "F10") || e.key === "ContextMenu") {
@@ -550,13 +640,9 @@ export function Sidebar({
             <span className="time">{updated}</span>
           </span>
         </div>
-        {editing || (!busySession && !unreadSession) ? null : (
+        {editing || !busySession ? null : (
           <span className="session-state" aria-hidden="true">
-            {busySession ? (
-              <span className="session-busy-spinner" />
-            ) : (
-              <span className="session-state-dot" />
-            )}
+            <span className="session-busy-spinner" />
           </span>
         )}
         {editing ? null : (
@@ -657,6 +743,11 @@ export function Sidebar({
               aria-expanded={!collapsed}
               title={group.detail}
               onClick={() => toggleWorkspaceCollapsed(group.key)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openWorkspaceMenu(group, e.clientX, e.clientY);
+              }}
             >
               <span className="ico">
                 <I.folder size={13} />
@@ -667,20 +758,17 @@ export function Sidebar({
             </button>
             <button
               type="button"
-              className="workspace-pin-btn"
+              className="workspace-menu-btn"
               data-pinned={workspacePinned || undefined}
-              title={
-                workspacePinned ? t("sidebarPanel.unpinWorkspace") : t("sidebarPanel.pinWorkspace")
-              }
-              aria-label={
-                workspacePinned ? t("sidebarPanel.unpinWorkspace") : t("sidebarPanel.pinWorkspace")
-              }
+              title={t("sidebarPanel.workspaceActions")}
+              aria-label={t("sidebarPanel.workspaceActions")}
               onClick={(e) => {
                 e.stopPropagation();
-                toggleWorkspacePin(group.key);
+                const rect = e.currentTarget.getBoundingClientRect();
+                openWorkspaceMenu(group, rect.left, rect.bottom);
               }}
             >
-              <I.pin size={12} />
+              <I.more size={13} />
             </button>
           </div>
           {collapsed ? null : (
@@ -709,24 +797,6 @@ export function Sidebar({
           </button>
           {sidebarMenuOpen ? (
             <div className="sidebar-options-menu" role="menu" style={sidebarMenuPos}>
-              <button
-                type="button"
-                className="sidebar-menu-row"
-                role="menuitem"
-                data-active={showArchived || undefined}
-                onClick={() => {
-                  setShowArchived((value) => !value);
-                  setSidebarMenuOpen(false);
-                }}
-              >
-                <span className="menu-ico">
-                  <I.archive size={16} />
-                </span>
-                <span>{t("sidebarPanel.showArchived")}</span>
-                <span className="menu-grow" />
-                {showArchived ? <I.check size={16} /> : null}
-              </button>
-              <div className="sidebar-menu-divider" />
               <div
                 className="sidebar-menu-row-wrap"
                 onMouseEnter={() => {
@@ -965,11 +1035,9 @@ export function Sidebar({
       {sessionMenu ? (
         <SessionContextMenu
           target={sessionMenu}
-          archived={Boolean(sessionMenu.session.archivedAt)}
           pinned={Boolean(sessionMenu.session.pinnedAt)}
-          unread={Boolean(sessionMenu.session.unread)}
           onArchive={() => {
-            toggleSessionArchived(sessionMenu.session);
+            archiveSession(sessionMenu.session);
             setSessionMenu(null);
           }}
           onCopySessionId={() => {
@@ -1003,9 +1071,58 @@ export function Sidebar({
             toggleSessionPin(sessionMenu.session);
             setSessionMenu(null);
           }}
-          onToggleUnread={() => {
-            toggleSessionUnread(sessionMenu.session);
-            setSessionMenu(null);
+        />
+      ) : null}
+      {workspaceMenu ? (
+        <WorkspaceContextMenu
+          target={workspaceMenu}
+          pinned={pinnedWorkspaceSet.has(workspaceMenu.group.key)}
+          onArchive={() => {
+            archiveWorkspaceSessions(workspaceMenu.group);
+            setWorkspaceMenu(null);
+          }}
+          onCopyWorkspacePath={() => {
+            copyText(workspaceMenu.group.path);
+            setWorkspaceMenu(null);
+          }}
+          onOpenArchived={() => {
+            onOpenSettingsPage("archives");
+            setWorkspaceMenu(null);
+          }}
+          onOpenInFolder={() => {
+            if (workspaceMenu.group.path) {
+              void Promise.resolve(revealItemInDir(workspaceMenu.group.path)).catch((err) => {
+                console.error("reveal workspace failed", err);
+              });
+            }
+            setWorkspaceMenu(null);
+          }}
+          onRemove={() => {
+            if (workspaceMenu.group.path) removeWorkspace(workspaceMenu.group.path);
+            setWorkspaceMenu(null);
+          }}
+          onRename={() => {
+            setPendingWorkspaceRename({
+              key: workspaceMenu.group.key,
+              label: workspaceAliases[workspaceMenu.group.key] ?? workspaceMenu.group.label,
+              x: workspaceMenu.x,
+              y: workspaceMenu.y,
+            });
+            setWorkspaceMenu(null);
+          }}
+          onTogglePin={() => {
+            toggleWorkspacePin(workspaceMenu.group.key);
+            setWorkspaceMenu(null);
+          }}
+        />
+      ) : null}
+      {pendingWorkspaceRename ? (
+        <WorkspaceRenamePopover
+          target={pendingWorkspaceRename}
+          onCancel={() => setPendingWorkspaceRename(null)}
+          onConfirm={(value) => {
+            renameWorkspace(pendingWorkspaceRename.key, value);
+            setPendingWorkspaceRename(null);
           }}
         />
       ) : null}
@@ -1044,9 +1161,7 @@ function positionFloatingPanel(
 
 function SessionContextMenu({
   target,
-  archived,
   pinned,
-  unread,
   onArchive,
   onCopySessionId,
   onCopyWorkspacePath,
@@ -1054,12 +1169,9 @@ function SessionContextMenu({
   onRename,
   onReveal,
   onTogglePin,
-  onToggleUnread,
 }: {
   target: SessionMenuTarget;
-  archived: boolean;
   pinned: boolean;
-  unread: boolean;
   onArchive: () => void;
   onCopySessionId: () => void;
   onCopyWorkspacePath: () => void;
@@ -1067,7 +1179,6 @@ function SessionContextMenu({
   onRename: () => void;
   onReveal: () => void;
   onTogglePin: () => void;
-  onToggleUnread: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number }>({
@@ -1122,13 +1233,8 @@ function SessionContextMenu({
       {item(<I.pencil size={13} />, t("sidebarPanel.renameConversation"), onRename)}
       {item(
         <I.archive size={13} />,
-        archived ? t("sidebarPanel.unarchiveConversation") : t("sidebarPanel.archiveConversation"),
+        t("sidebarPanel.archiveConversation"),
         onArchive,
-      )}
-      {item(
-        <I.check size={13} />,
-        unread ? t("sidebarPanel.markRead") : t("sidebarPanel.markUnread"),
-        onToggleUnread,
       )}
       <div className="session-menu-divider" />
       {item(<I.folder size={13} />, t("sidebarPanel.showInFolder"), onReveal, {
@@ -1142,6 +1248,165 @@ function SessionContextMenu({
       {item(<I.trash size={13} />, t("sidebarPanel.deleteConversation"), onDelete, {
         danger: true,
       })}
+    </div>
+  );
+}
+
+function WorkspaceContextMenu({
+  target,
+  pinned,
+  onArchive,
+  onCopyWorkspacePath,
+  onOpenArchived,
+  onOpenInFolder,
+  onRemove,
+  onRename,
+  onTogglePin,
+}: {
+  target: WorkspaceMenuTarget;
+  pinned: boolean;
+  onArchive: () => void;
+  onCopyWorkspacePath: () => void;
+  onOpenArchived: () => void;
+  onOpenInFolder: () => void;
+  onRemove: () => void;
+  onRename: () => void;
+  onTogglePin: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number }>({
+    left: target.x,
+    top: target.y,
+  });
+  const hasPath = Boolean(target.group.path);
+
+  useLayoutEffect(() => {
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    const next = positionFloatingPanel(target, {
+      width: rect.width,
+      height: rect.height,
+    });
+    if (next.left !== pos.left || next.top !== pos.top) setPos(next);
+  }, [target, pos.left, pos.top]);
+
+  const item = (
+    icon: ReactNode,
+    label: string,
+    onClick: () => void,
+    options: { disabled?: boolean; danger?: boolean } = {},
+  ) => (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={options.disabled}
+      data-danger={options.danger || undefined}
+      onClick={onClick}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+
+  return (
+    <div
+      ref={ref}
+      className="session-menu workspace-menu"
+      role="menu"
+      aria-label={t("sidebarPanel.workspaceActions")}
+      style={{ left: pos.left, top: pos.top }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="session-menu-title">{target.group.label}</div>
+      {item(
+        <I.pin size={13} />,
+        pinned ? t("sidebarPanel.unpinWorkspace") : t("sidebarPanel.pinWorkspace"),
+        onTogglePin,
+      )}
+      {item(<I.folder size={13} />, t("sidebarPanel.showInFolder"), onOpenInFolder, {
+        disabled: !hasPath,
+      })}
+      {item(<I.pencil size={13} />, t("sidebarPanel.renameWorkspace"), onRename, {
+        disabled: !hasPath,
+      })}
+      {item(<I.archive size={13} />, t("sidebarPanel.archiveWorkspaceChats"), onArchive, {
+        disabled: target.group.sessions.length === 0,
+      })}
+      {item(<I.archive size={13} />, t("sidebarPanel.viewArchived"), onOpenArchived)}
+      <div className="session-menu-divider" />
+      {item(<I.copy size={13} />, t("sidebarPanel.copyWorkspacePath"), onCopyWorkspacePath, {
+        disabled: !hasPath,
+      })}
+      {item(<I.trash size={13} />, t("sidebarPanel.removeWorkspace"), onRemove, {
+        disabled: !hasPath,
+        danger: true,
+      })}
+    </div>
+  );
+}
+
+function WorkspaceRenamePopover({
+  target,
+  onCancel,
+  onConfirm,
+}: {
+  target: PendingWorkspaceRename;
+  onCancel: () => void;
+  onConfirm: (value: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [value, setValue] = useState(target.label);
+  const [pos, setPos] = useState<{ left: number; top: number }>({
+    left: target.x,
+    top: target.y,
+  });
+
+  useLayoutEffect(() => {
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    const next = positionFloatingPanel(target, {
+      width: rect.width,
+      height: rect.height,
+    });
+    if (next.left !== pos.left || next.top !== pos.top) setPos(next);
+  }, [target, pos.left, pos.top]);
+
+  const confirm = () => onConfirm(value);
+
+  return (
+    <div
+      ref={ref}
+      className="workspace-rename-popover"
+      role="dialog"
+      aria-label={t("sidebarPanel.renameWorkspace")}
+      style={{ left: pos.left, top: pos.top }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="session-delete-head">
+        <span className="ico">
+          <I.pencil size={15} />
+        </span>
+        <span>{t("sidebarPanel.renameWorkspace")}</span>
+      </div>
+      <input
+        className="workspace-rename-input"
+        autoFocus
+        value={value}
+        maxLength={RENAME_MAX_CHARS}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") confirm();
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <div className="actions">
+        <button type="button" className="cancel" onClick={onCancel}>
+          {t("sidebarPanel.cancel")}
+        </button>
+        <button type="button" className="confirm" onClick={confirm}>
+          {t("sidebarPanel.renameWorkspace")}
+        </button>
+      </div>
     </div>
   );
 }

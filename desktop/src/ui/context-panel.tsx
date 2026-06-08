@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
-import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { ReactNode } from "react";
@@ -29,6 +28,8 @@ import type {
 import { PanelErrorBoundary } from "./error-boundary";
 import { FileActionMenu } from "./file-action-menu";
 import { NativeBrowserWebview } from "./native-browser-webview";
+import { rankItems } from "./fuzzy";
+import { createTerminalAddons, type TerminalFitAddon } from "./xterm-addons";
 
 export type ContextPanelMode =
   | "home"
@@ -175,13 +176,10 @@ export function ContextInfoPopover({
   mcpSpecs,
   mcpBridged,
   subagents,
-  sessionFiles,
   memory,
   memoryDetail,
-  activePath,
   onOpenSubagent,
   onReadMemory,
-  onPreviewFile,
 }: {
   open: boolean;
   settings: Settings | null;
@@ -216,13 +214,7 @@ export function ContextInfoPopover({
           </div>
           <ContextTokenPanel usage={usage} />
           <div className="context-info-scroll">
-            <CtxFiles
-              files={sessionFiles}
-              settings={settings}
-              activePath={activePath}
-              onPreviewFile={onPreviewFile}
-              compact
-            />
+            <CtxGitInfo settings={settings} />
             <CtxSubagents runs={subagents} onOpen={onOpenSubagent} />
             <CtxTools specs={mcpSpecs} bridged={mcpBridged} />
             <CtxMemory
@@ -788,8 +780,60 @@ type GitStatusEntry = {
   kind: "modified" | "added" | "deleted" | "renamed" | "untracked" | string;
 };
 
+type GitInfo = {
+  isRepo: boolean;
+  branch?: string | null;
+  upstream?: string | null;
+  remote?: string | null;
+  ahead: number;
+  behind: number;
+  lastCommit?: string | null;
+  branches: string[];
+};
+
+type TerminalCommandResult = {
+  code: number;
+  stdout: string;
+  stderr: string;
+};
+
+type GitInfoState =
+  | { status: "loading"; info: GitInfo | null; entries: GitStatusEntry[]; error: null }
+  | { status: "ready"; info: GitInfo | null; entries: GitStatusEntry[]; error: null }
+  | { status: "error"; info: GitInfo | null; entries: GitStatusEntry[]; error: string };
+
 type TerminalOutputEvent = { id: string; data: string };
 type TerminalExitEvent = { id: string; code: number | null };
+
+function cssColor(host: HTMLElement, name: string, fallback: string): string {
+  const value = window.getComputedStyle(host).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function terminalTheme(host: HTMLElement) {
+  return {
+    background: "transparent",
+    foreground: cssColor(host, "--fg", "#1f2328"),
+    cursor: cssColor(host, "--fg", "#1f2328"),
+    selectionBackground: cssColor(
+      host,
+      "--accent-soft",
+      "rgba(80, 120, 255, 0.22)",
+    ),
+    black: cssColor(host, "--fg", "#1f2328"),
+    brightBlack: cssColor(host, "--muted", "#6b7280"),
+    white: cssColor(host, "--panel", "#f5f5f5"),
+    brightWhite: cssColor(host, "--fg", "#1f2328"),
+  };
+}
+
+function applyTerminalTheme(terminal: Terminal, host: HTMLElement): void {
+  const typed = terminal as Terminal & {
+    options?: { theme?: ReturnType<typeof terminalTheme> };
+  };
+  if (!typed.options) typed.options = {};
+  typed.options.theme = terminalTheme(host);
+}
 
 type ReviewState =
   | { status: "loading"; entries: GitStatusEntry[]; diff: string; error: null }
@@ -907,6 +951,217 @@ function statusLabel(kind: string): string {
   if (kind === "renamed") return t("contextPanel.review.status.renamed");
   if (kind === "untracked") return t("contextPanel.review.status.untracked");
   return t("contextPanel.review.status.modified");
+}
+
+function gitSyncLabel(info: GitInfo): string {
+  const parts: string[] = [];
+  if (info.ahead > 0) {
+    parts.push(t("contextPanel.git.ahead", { count: info.ahead }));
+  }
+  if (info.behind > 0) {
+    parts.push(t("contextPanel.git.behind", { count: info.behind }));
+  }
+  return parts.length > 0 ? parts.join(" · ") : t("contextPanel.git.upToDate");
+}
+
+function gitCommandMessage(result: TerminalCommandResult): string {
+  const text = (result.stderr || result.stdout).trim();
+  if (text) return text;
+  return result.code === 0
+    ? t("contextPanel.git.actionComplete")
+    : t("contextPanel.git.actionFailed", { code: result.code });
+}
+
+function CtxGitInfo({ settings }: { settings: Settings | null }) {
+  const workspaceDir = settings?.workspaceDir;
+  const [commitMessage, setCommitMessage] = useState("");
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [state, setState] = useState<GitInfoState>({
+    status: "loading",
+    info: null,
+    entries: [],
+    error: null,
+  });
+  const load = useCallback(() => {
+    if (!workspaceDir) {
+      setState({
+        status: "error",
+        info: null,
+        entries: [],
+        error: t("contextPanel.git.noWorkspace"),
+      });
+      return;
+    }
+    setState((current) => ({
+      status: "loading",
+      info: current.info,
+      entries: current.entries,
+      error: null,
+    }));
+    void Promise.all([
+      invoke<GitInfo>("git_info", { root: workspaceDir }),
+      invoke<GitStatusEntry[]>("git_status", { root: workspaceDir }),
+    ]).then(
+      ([info, entries]) => {
+        setState({
+          status: "ready",
+          info: info ?? null,
+          entries: Array.isArray(entries) ? entries : [],
+          error: null,
+        });
+      },
+      (reason) => {
+        setState({
+          status: "error",
+          info: null,
+          entries: [],
+          error: reason instanceof Error ? reason.message : String(reason),
+        });
+      },
+    );
+  }, [workspaceDir]);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const runGitAction = async (
+    label: string,
+    action: () => Promise<TerminalCommandResult>,
+  ) => {
+    setBusyAction(label);
+    setActionStatus(null);
+    try {
+      const result = await action();
+      setActionStatus(gitCommandMessage(result));
+      load();
+    } catch (error) {
+      setActionStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const info = state.info;
+  const changedCount = state.entries.length;
+  const canCommit = Boolean(commitMessage.trim()) && Boolean(workspaceDir);
+  return (
+    <div className="ctx-block ctx-git-info">
+      <div className="h">
+        <span>{t("contextPanel.git.title")}</span>
+        <span className="right">
+          {state.status === "loading" ? t("contextPanel.git.loading") : ""}
+        </span>
+      </div>
+      {state.error ? <div className="ctx-browser-error">{state.error}</div> : null}
+      {info && !info.isRepo ? (
+        <div className="ctx-empty">{t("contextPanel.git.notRepo")}</div>
+      ) : info ? (
+        <>
+          <div className="ctx-git-grid">
+            <span>{t("contextPanel.git.branch")}</span>
+            <strong>{info.branch ?? t("contextPanel.git.detached")}</strong>
+            <span>{t("contextPanel.git.upstream")}</span>
+            <strong>{info.upstream ?? "—"}</strong>
+            <span>{t("contextPanel.git.remote")}</span>
+            <strong>{info.remote ?? "—"}</strong>
+            <span>{t("contextPanel.git.sync")}</span>
+            <strong>{gitSyncLabel(info)}</strong>
+            <span>{t("contextPanel.git.changes")}</span>
+            <strong>{t("contextPanel.review.filesChanged", { count: changedCount })}</strong>
+            <span>{t("contextPanel.git.lastCommit")}</span>
+            <strong title={info.lastCommit ?? undefined}>{info.lastCommit ?? "—"}</strong>
+          </div>
+          <label className="ctx-git-branch">
+            <span>{t("contextPanel.git.branch")}</span>
+            <select
+              aria-label={t("contextPanel.git.branch")}
+              value={info.branch ?? ""}
+              disabled={busyAction !== null || info.branches.length === 0}
+              onChange={(event) => {
+                const branch = event.target.value;
+                if (!workspaceDir || !branch || branch === info.branch) return;
+                void runGitAction(t("contextPanel.git.checkout"), () =>
+                  invoke<TerminalCommandResult>("git_checkout_branch", {
+                    root: workspaceDir,
+                    branch,
+                  }),
+                );
+              }}
+            >
+              {info.branches.length === 0 ? (
+                <option value="">{info.branch ?? t("contextPanel.git.detached")}</option>
+              ) : (
+                info.branches.map((branch) => (
+                  <option value={branch} key={branch}>
+                    {branch}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+          <label className="ctx-git-commit">
+            <span>{t("contextPanel.git.commitMessage")}</span>
+            <input
+              aria-label={t("contextPanel.git.commitMessage")}
+              value={commitMessage}
+              placeholder={t("contextPanel.git.commitPlaceholder")}
+              onChange={(event) => setCommitMessage(event.target.value)}
+            />
+          </label>
+          <div className="ctx-git-actions">
+            <button
+              type="button"
+              disabled={!canCommit || busyAction !== null}
+              onClick={() => {
+                if (!workspaceDir) return;
+                const message = commitMessage.trim();
+                void runGitAction(t("contextPanel.git.commitAll"), () =>
+                  invoke<TerminalCommandResult>("git_commit_all", {
+                    root: workspaceDir,
+                    message,
+                  }),
+                );
+              }}
+            >
+              {t("contextPanel.git.commitAll")}
+            </button>
+            <button
+              type="button"
+              disabled={!workspaceDir || busyAction !== null}
+              onClick={() => {
+                if (!workspaceDir) return;
+                void runGitAction(t("contextPanel.git.push"), () =>
+                  invoke<TerminalCommandResult>("git_push", { root: workspaceDir }),
+                );
+              }}
+            >
+              {t("contextPanel.git.push")}
+            </button>
+            <button
+              type="button"
+              disabled={!workspaceDir || busyAction !== null}
+              onClick={() => {
+                if (!workspaceDir) return;
+                void runGitAction(t("contextPanel.git.createPr"), () =>
+                  invoke<TerminalCommandResult>("git_create_pull_request", {
+                    root: workspaceDir,
+                  }),
+                );
+              }}
+            >
+              {t("contextPanel.git.createPr")}
+            </button>
+          </div>
+          {actionStatus ? (
+            <div className="ctx-git-action-status">{actionStatus}</div>
+          ) : null}
+        </>
+      ) : (
+        <div className="ctx-empty">{t("contextPanel.git.loading")}</div>
+      )}
+    </div>
+  );
 }
 
 function CtxReview({
@@ -1189,7 +1444,7 @@ function CtxTerminal({ settings }: { settings: Settings | null }) {
   const workspaceDir = settings?.workspaceDir ?? "";
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
+  const fitRef = useRef<TerminalFitAddon | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fitAndResize = useCallback(() => {
@@ -1217,55 +1472,69 @@ function CtxTerminal({ settings }: { settings: Settings | null }) {
     }
     setError(null);
 
-    const terminal = new Terminal({
-      cursorBlink: true,
-      convertEol: true,
-      fontFamily:
-        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-      fontSize: 12,
-      lineHeight: 1.25,
-      scrollback: 5000,
-      theme: {
-        background: "transparent",
-        foreground: "var(--fg)",
-        cursor: "var(--fg)",
-        selectionBackground:
-          "color-mix(in oklch, var(--accent) 24%, transparent)",
-      },
-    });
-    const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(host);
-    terminalRef.current = terminal;
-    fitRef.current = fit;
-    fit.fit();
-    terminal.focus();
-
-    const dataDisposable = terminal.onData((data) => {
-      void invoke("terminal_write", { id: SIDEBAR_TERMINAL_ID, data });
-    });
     let stopped = false;
+    let terminal: Terminal | null = null;
+    let dataDisposable: { dispose: () => void } | null = null;
     let unlistenOutput: (() => void) | null = null;
     let unlistenExit: (() => void) | null = null;
-    const resize = () => fitAndResize();
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(() => resize());
-    observer?.observe(host);
-    window.setTimeout(resize, 0);
+    let observer: ResizeObserver | null = null;
+    let themeObserver: MutationObserver | null = null;
+
     void (async () => {
+      terminal = new Terminal({
+        cursorBlink: true,
+        convertEol: true,
+        fontFamily:
+          'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+        fontSize: 12,
+        lineHeight: 1.25,
+        scrollback: 5000,
+        theme: terminalTheme(host),
+      });
+      const currentTerminal = terminal;
+      const { addons, fitAddon } = await createTerminalAddons();
+      if (stopped) {
+        currentTerminal.dispose();
+        return;
+      }
+      for (const addon of addons) currentTerminal.loadAddon(addon);
+      currentTerminal.open(host);
+      terminalRef.current = currentTerminal;
+      fitRef.current = fitAddon;
+      fitAddon?.fit();
+      currentTerminal.focus();
+
+      dataDisposable = currentTerminal.onData((data) => {
+        void invoke("terminal_write", { id: SIDEBAR_TERMINAL_ID, data });
+      });
+
+      const resize = () => fitAndResize();
+      observer =
+        typeof ResizeObserver === "undefined"
+          ? null
+          : new ResizeObserver(() => resize());
+      observer?.observe(host);
+      themeObserver =
+        typeof MutationObserver === "undefined"
+          ? null
+          : new MutationObserver(() => applyTerminalTheme(currentTerminal, host));
+      themeObserver?.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme", "data-theme-style", "class", "style"],
+      });
+      window.setTimeout(resize, 0);
+
       const output = await listen<TerminalOutputEvent>(
         "terminal:output",
         (event) => {
           if (event.payload.id !== SIDEBAR_TERMINAL_ID) return;
-          terminal.write(event.payload.data);
+          currentTerminal.write(event.payload.data);
         },
       );
       const exit = await listen<TerminalExitEvent>("terminal:exit", (event) => {
         if (event.payload.id !== SIDEBAR_TERMINAL_ID) return;
         const code = event.payload.code;
-        terminal.write(
+        currentTerminal.write(
           `\r\n[${t("contextPanel.terminal.exitCode", { code: code ?? "?" })}]\r\n`,
         );
       });
@@ -1280,25 +1549,26 @@ function CtxTerminal({ settings }: { settings: Settings | null }) {
         await invoke("terminal_spawn", {
           id: SIDEBAR_TERMINAL_ID,
           root: workspaceDir,
-          cols: terminal.cols || 80,
-          rows: terminal.rows || 24,
+          cols: currentTerminal.cols || 80,
+          rows: currentTerminal.rows || 24,
         });
       } catch (reason) {
         const message =
           reason instanceof Error ? reason.message : String(reason);
         setError(message);
-        terminal.write(`\r\n${message}\r\n`);
+        currentTerminal.write(`\r\n${message}\r\n`);
       }
     })();
 
     return () => {
       stopped = true;
       observer?.disconnect();
-      dataDisposable.dispose();
+      themeObserver?.disconnect();
+      dataDisposable?.dispose();
       unlistenOutput?.();
       unlistenExit?.();
       void invoke("terminal_kill", { id: SIDEBAR_TERMINAL_ID });
-      terminal.dispose();
+      terminal?.dispose();
       terminalRef.current = null;
       fitRef.current = null;
     };
@@ -1328,14 +1598,12 @@ function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
     icon: ReactNode;
     title: string;
     desc: string;
-    shortcut?: string;
   }> = [
     {
       mode: "files",
       icon: <I.folder size={34} />,
       title: t("contextPanel.home.filesTitle"),
       desc: t("contextPanel.home.filesDesc"),
-      shortcut: "⌘P",
     },
     {
       mode: "library",
@@ -1354,21 +1622,18 @@ function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
       icon: <I.globe size={34} />,
       title: t("contextPanel.home.browserTitle"),
       desc: t("contextPanel.home.browserDesc"),
-      shortcut: "⌘T",
     },
     {
       mode: "review",
       icon: <I.diff size={34} />,
       title: t("contextPanel.home.reviewTitle"),
       desc: t("contextPanel.home.reviewDesc"),
-      shortcut: "^⇧G",
     },
     {
       mode: "terminal",
       icon: <I.terminal size={34} />,
       title: t("contextPanel.home.terminalTitle"),
       desc: t("contextPanel.home.terminalDesc"),
-      shortcut: "^`",
     },
   ];
   return (
@@ -1383,7 +1648,6 @@ function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
           <span className="ctx-home-icon">{card.icon}</span>
           <span className="ctx-home-title">{card.title}</span>
           <span className="ctx-home-desc">{card.desc}</span>
-          {card.shortcut ? <kbd>{card.shortcut}</kbd> : null}
         </button>
       ))}
     </div>
@@ -1423,19 +1687,20 @@ function CtxLibrary({
   const savedSourceCount = sources.length;
   const activeQuery = activeSearch?.query.trim().toLowerCase() ?? "";
   const matchingSavedSources = useMemo(() => {
-    if (!activeQuery) return sources;
-    return sources.filter((source) =>
-      [
-        source.title,
-        source.url ?? "",
-        source.path ?? "",
-        source.snippet ?? "",
-        source.contentText ?? "",
-        source.contentError ?? "",
-      ]
-        .join("\n")
-        .toLowerCase()
-        .includes(activeQuery),
+    return rankItems(
+      sources.map((source) => ({
+        ...source,
+        searchableText: [
+          source.title,
+          source.url ?? "",
+          source.path ?? "",
+          source.snippet ?? "",
+          source.contentText ?? "",
+          source.contentError ?? "",
+        ].join("\n"),
+      })),
+      activeQuery,
+      ["title", "url", "path", "snippet", "contentText", "contentError", "searchableText"],
     );
   }, [activeQuery, sources]);
   const activeSearchResults =

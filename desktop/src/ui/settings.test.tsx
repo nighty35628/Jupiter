@@ -59,6 +59,10 @@ function renderSettings({
   onRefreshMemory = vi.fn(),
   onDeleteMemory = vi.fn(),
   onSaveMemory = vi.fn(),
+  archivedSessions = [],
+  onRefreshArchivedSessions = vi.fn(),
+  onRestoreArchivedSession = vi.fn(),
+  onDeleteArchivedSession = vi.fn(),
   initialPage,
 }: {
   onOpenAbout?: () => void;
@@ -68,7 +72,11 @@ function renderSettings({
   onRefreshMemory?: () => void;
   onDeleteMemory?: (path: string) => void;
   onSaveMemory?: (...args: any[]) => void;
-  initialPage?: "memory";
+  archivedSessions?: any[];
+  onRefreshArchivedSessions?: () => void;
+  onRestoreArchivedSession?: (name: string) => void;
+  onDeleteArchivedSession?: (name: string) => void;
+  initialPage?: "memory" | "archives";
 } = {}) {
   render(
     <SettingsModal
@@ -92,6 +100,7 @@ function renderSettings({
       skillRoots={[]}
       memory={memory}
       memoryDetail={null}
+      archivedSessions={archivedSessions}
       qq={null}
       initialPage={initialPage}
       onClose={vi.fn()}
@@ -116,6 +125,9 @@ function renderSettings({
       onRefreshMemory={onRefreshMemory}
       onDeleteMemory={onDeleteMemory}
       onSaveMemory={onSaveMemory}
+      onRefreshArchivedSessions={onRefreshArchivedSessions}
+      onRestoreArchivedSession={onRestoreArchivedSession}
+      onDeleteArchivedSession={onDeleteArchivedSession}
       onOpenAbout={onOpenAbout}
     />,
   );

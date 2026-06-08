@@ -20,6 +20,7 @@ import { CodeView } from "./CodeView";
 import { type FilePreviewTarget, firstPreviewLine, resolveWorkspacePath } from "./file-preview";
 import { t, useLang } from "./i18n";
 import { FileActionMenu } from "./ui/file-action-menu";
+import { sanitizeUserUrl } from "./ui/safe-content";
 
 async function openWithEditor(
   editor: string | undefined,
@@ -306,26 +307,27 @@ function SafeLink({ href, children }: { href?: string; children: ReactNode }) {
   useLang();
   const ctx = useContext(WorkspaceContext);
   const [done, setDone] = useState(false);
-  const scheme = href ? protocolScheme(href) : null;
+  const safeHref = sanitizeUserUrl(href);
+  const scheme = safeHref ? protocolScheme(safeHref) : null;
   const isExternal = !!scheme && scheme !== "file";
-  const localFileTarget = !isExternal && href ? parseFileHref(href) : null;
+  const localFileTarget = !isExternal && safeHref ? parseFileHref(safeHref) : null;
   const onClick = async (e: React.MouseEvent) => {
     e.preventDefault();
-    if (!href) return;
+    if (!safeHref) return;
     if (isExternal) {
       if (ctx.onOpenBrowserUrl) {
-        ctx.onOpenBrowserUrl(href);
+        ctx.onOpenBrowserUrl(safeHref);
         return;
       }
       try {
-        await openUrl(href);
+        await openUrl(safeHref);
       } catch {
-        window.open(href, "_blank", "noopener,noreferrer");
+        window.open(safeHref, "_blank", "noopener,noreferrer");
       }
       return;
     }
     try {
-      const target = localFileTarget ?? { path: decodeMaybeUri(stripFileScheme(href)) };
+      const target = localFileTarget ?? { path: decodeMaybeUri(stripFileScheme(safeHref)) };
       if (isHtmlPath(target.path) && ctx.onOpenHtmlFile) {
         ctx.onOpenHtmlFile(target);
         return;
@@ -338,7 +340,7 @@ function SafeLink({ href, children }: { href?: string; children: ReactNode }) {
       await openWithEditor(ctx.editor, abs, firstPreviewLine(target.line));
     } catch {
       try {
-        await navigator.clipboard.writeText(href);
+        await navigator.clipboard.writeText(safeHref);
         setDone(true);
         setTimeout(() => setDone(false), 1200);
       } catch {
@@ -348,15 +350,15 @@ function SafeLink({ href, children }: { href?: string; children: ReactNode }) {
   };
   return (
     <a
-      href={href ?? "#"}
+      href={safeHref ?? "#"}
       onClick={onClick}
       className={`md-link ${isExternal ? "external" : "local"} ${done ? "done" : ""}`}
       data-jupiter-file-path={localFileTarget?.path}
       data-jupiter-file-line={localFileTarget?.line}
       title={
         isExternal
-          ? t("markdown.externalLinkTitle", { href: href ?? "" })
-          : t("markdown.localLinkTitle", { href: href ?? "" })
+          ? t("markdown.externalLinkTitle", { href: safeHref ?? "" })
+          : t("markdown.localLinkTitle", { href: safeHref ?? "" })
       }
     >
       {children}

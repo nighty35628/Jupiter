@@ -173,6 +173,16 @@ describe("ContextPanel files", () => {
     ).toBeNull();
   });
 
+  it("does not annotate sidebar home cards with keyboard shortcuts", () => {
+    renderPanel({ mode: undefined });
+
+    expect(document.querySelector(".ctx-home-card kbd")).toBeNull();
+    expect(document.body.textContent).not.toContain("⌘P");
+    expect(document.body.textContent).not.toContain("⌘T");
+    expect(document.body.textContent).not.toContain("^⇧G");
+    expect(document.body.textContent).not.toContain("^`");
+  });
+
   it("lets the tab add button switch to another panel", () => {
     const onModeChange = vi.fn();
     renderPanel({ mode: "files", onModeChange });
@@ -901,6 +911,132 @@ describe("ContextPanel files", () => {
 
     expect(onOpenSubagent).toHaveBeenCalledWith(
       "subagent-sub-1-20260531120000",
+    );
+  });
+
+  it("shows git information in the floating info card without context files", async () => {
+    vi.mocked(invoke).mockImplementation((command: string) => {
+      if (command === "git_info") {
+        return Promise.resolve({
+          isRepo: true,
+          branch: "main",
+          upstream: "origin/main",
+          remote: "origin",
+          ahead: 1,
+          behind: 0,
+          lastCommit: "abc1234 Update docs",
+          branches: ["main", "feature/git-panel"],
+        }) as never;
+      }
+      if (command === "git_status") {
+        return Promise.resolve([
+          { path: "README.md", kind: "modified" },
+          { path: "src/new.ts", kind: "untracked" },
+        ]) as never;
+      }
+      return Promise.resolve(null) as never;
+    });
+
+    render(
+      <ContextInfoPopover
+        open
+        settings={settings}
+        usage={usage}
+        mcpSpecs={[]}
+        mcpBridged={false}
+        subagents={[]}
+        sessionFiles={[{ path: "src/new-file.ts", status: "m" }]}
+        memory={[]}
+        memoryDetail={null}
+        onOpenSubagent={() => {}}
+        onReadMemory={() => {}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("git_info", { root: "/repo" }),
+    );
+    expect(invoke).toHaveBeenCalledWith("git_status", { root: "/repo" });
+    expect(screen.getByText("Git")).toBeTruthy();
+    expect((screen.getByLabelText("Branch") as HTMLSelectElement).value).toBe(
+      "main",
+    );
+    expect(screen.getByText("origin/main")).toBeTruthy();
+    expect(screen.getByText("1 ahead")).toBeTruthy();
+    expect(screen.getByText("2 changed")).toBeTruthy();
+    expect(screen.queryByText("Files in context")).toBeNull();
+    expect(screen.queryByText("new-file.ts")).toBeNull();
+  });
+
+  it("runs lightweight git actions from the floating info card", async () => {
+    vi.mocked(invoke).mockImplementation((command: string) => {
+      if (command === "git_info") {
+        return Promise.resolve({
+          isRepo: true,
+          branch: "main",
+          upstream: "origin/main",
+          remote: "origin",
+          ahead: 0,
+          behind: 0,
+          lastCommit: "abc1234 Update docs",
+          branches: ["main", "feature/git-panel"],
+        }) as never;
+      }
+      if (command === "git_status") {
+        return Promise.resolve([{ path: "README.md", kind: "modified" }]) as never;
+      }
+      return Promise.resolve({ stdout: "ok", stderr: "", code: 0 }) as never;
+    });
+
+    render(
+      <ContextInfoPopover
+        open
+        settings={settings}
+        usage={usage}
+        mcpSpecs={[]}
+        mcpBridged={false}
+        subagents={[]}
+        sessionFiles={[]}
+        memory={[]}
+        memoryDetail={null}
+        onOpenSubagent={() => {}}
+        onReadMemory={() => {}}
+      />,
+    );
+
+    await waitFor(() => screen.getByText("Git"));
+
+    fireEvent.change(screen.getByLabelText("Commit message"), {
+      target: { value: "Update git panel" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("git_commit_all", {
+        root: "/repo",
+        message: "Update git panel",
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Push" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("git_push", { root: "/repo" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("git_create_pull_request", {
+        root: "/repo",
+      }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Branch"), {
+      target: { value: "feature/git-panel" },
+    });
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("git_checkout_branch", {
+        root: "/repo",
+        branch: "feature/git-panel",
+      }),
     );
   });
 

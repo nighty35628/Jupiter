@@ -3,7 +3,7 @@
 [中文](#中文) / [ENGLISH](#english)
 
 [![Release](https://img.shields.io/github/v/release/nighty35628/Jupiter?display_name=tag&label=release)](https://github.com/nighty35628/Jupiter/releases/latest)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license--许可证)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](#license--许可证)
 
 ## 中文
 
@@ -183,7 +183,7 @@ Asset names include platform labels:
 - Linux x64: `Jupiter_<version>_linux-x64.deb`
 - Linux ARM64: `Jupiter_<version>_linux-arm64.deb`
 
-Windows installers are currently unsigned. Microsoft Defender SmartScreen may show an "unrecognized app" warning
+The current Windows installers are unsigned. Microsoft Defender SmartScreen may show an "unrecognized app" warning
 on first launch; choose **More info** -> **Run anyway** if you downloaded Jupiter from the official GitHub
 Releases page above.
 
@@ -218,4 +218,9 @@ See [CHANGELOG.md](./CHANGELOG.md) for release history. Older README snapshots a
 
 ## License / 许可证
 
-MIT. Required source-only notice is kept in `src/legal/upstream-notice.ts`.
+Jupiter is licensed under the GNU General Public License v3.0 or later
+(`GPL-3.0-or-later`). Contributions are accepted under the project CLA in
+[`CLA.md`](./CLA.md), which grants the project owner the right to maintain,
+relicense, and offer separate commercial licensing where needed.
+
+Required source-only upstream notice is kept in `src/legal/upstream-notice.ts`.

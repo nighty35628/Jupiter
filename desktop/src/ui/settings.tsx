@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import type { Balance, Settings as SettingsType, UsageStats } from "../App";
+import type { Balance, SessionInfo, Settings as SettingsType, UsageStats } from "../App";
 import { getLangLabel, getSupportedLangs, setLang, t, useLang } from "../i18n";
 import { I } from "../icons";
 import type {
@@ -39,6 +39,7 @@ export type PageId =
   | "mcp"
   | "skills"
   | "memory"
+  | "archives"
   | "appearance"
   | "billing"
   | "shortcuts";
@@ -50,6 +51,7 @@ const PAGE_META: ReadonlyArray<{ id: PageId; icon: keyof typeof I }> = [
   { id: "mcp", icon: "wrench" },
   { id: "skills", icon: "zap" },
   { id: "memory", icon: "bookmark" },
+  { id: "archives", icon: "archive" },
   { id: "appearance", icon: "sun" },
   { id: "billing", icon: "coin" },
   { id: "shortcuts", icon: "cpu" },
@@ -77,6 +79,7 @@ export function SettingsModal({
   skillRoots,
   memory,
   memoryDetail,
+  archivedSessions,
   qq,
   onClose,
   onSave,
@@ -100,6 +103,9 @@ export function SettingsModal({
   onRefreshMemory,
   onDeleteMemory,
   onSaveMemory,
+  onRefreshArchivedSessions,
+  onRestoreArchivedSession,
+  onDeleteArchivedSession,
   onOpenAbout,
 }: {
   settings: SettingsType;
@@ -123,6 +129,7 @@ export function SettingsModal({
   skillRoots: SkillRootInfo[];
   memory: MemoryEntryInfo[];
   memoryDetail: MemoryDetail | null;
+  archivedSessions: SessionInfo[];
   qq: QQDesktopSettingsState | null;
   onClose: () => void;
   onSave: (patch: SettingsPatch) => void;
@@ -150,6 +157,9 @@ export function SettingsModal({
   onRefreshMemory: () => void;
   onDeleteMemory: (path: string) => void;
   onSaveMemory: (input: MemoryWriteInput) => void;
+  onRefreshArchivedSessions: () => void;
+  onRestoreArchivedSession: (name: string) => void;
+  onDeleteArchivedSession: (name: string) => void;
   onOpenAbout: () => void;
 }) {
   const [page, setPage] = useState<PageId>(initialPage ?? "general");
@@ -166,6 +176,12 @@ export function SettingsModal({
       setSettingsBodyScrolling(false);
     }, 800);
   };
+  useEffect(() => {
+    setPage(initialPage ?? "general");
+  }, [initialPage]);
+  useEffect(() => {
+    if (page === "archives") onRefreshArchivedSessions();
+  }, [onRefreshArchivedSessions, page]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -298,6 +314,14 @@ export function SettingsModal({
                 onDelete={onDeleteMemory}
                 onSave={onSaveMemory}
                 onSaveSettings={onSave}
+              />
+            )}
+            {page === "archives" && (
+              <PageArchives
+                sessions={archivedSessions}
+                onRefresh={onRefreshArchivedSessions}
+                onRestore={onRestoreArchivedSession}
+                onDelete={onDeleteArchivedSession}
               />
             )}
             {page === "rules" && (
@@ -1638,6 +1662,76 @@ function PageSkills({
         )}
       </section>
     </>
+  );
+}
+
+function PageArchives({
+  sessions,
+  onRefresh,
+  onRestore,
+  onDelete,
+}: {
+  sessions: SessionInfo[];
+  onRefresh: () => void;
+  onRestore: (name: string) => void;
+  onDelete: (name: string) => void;
+}) {
+  const sorted = [...sessions].sort((a, b) => {
+    const aTime = a.archivedAt ?? Date.parse(a.mtime);
+    const bTime = b.archivedAt ?? Date.parse(b.mtime);
+    return bTime - aTime;
+  });
+  return (
+    <section className="section">
+      <div className="setting-row">
+        <div className="l">
+          <div className="n">{t("settings.archivesTitle")}</div>
+          <div className="h">{t("settings.archivesHint")}</div>
+        </div>
+        <button type="button" className="btn" onClick={onRefresh}>
+          <I.refresh size={12} />
+          <span>{t("settings.archivesRefresh")}</span>
+        </button>
+      </div>
+      {sorted.length === 0 ? (
+        <div className="muted-card">{t("settings.archivesEmpty")}</div>
+      ) : (
+        <div className="settings-archive-list">
+          {sorted.map((session) => {
+            const title = session.summary?.trim() || session.name.replace(/^desktop-/, "");
+            const when = session.archivedAt
+              ? new Date(session.archivedAt).toLocaleString()
+              : new Date(session.mtime).toLocaleString();
+            return (
+              <div className="settings-archive-card" key={session.name}>
+                <div className="archive-main">
+                  <div className="archive-title">{title}</div>
+                  <div className="archive-meta">
+                    <span>{when}</span>
+                    {session.workspace ? (
+                      <span>{displayWorkspacePath(session.workspace, session.workspace)}</span>
+                    ) : null}
+                  </div>
+                  <div className="archive-id">{session.name}</div>
+                </div>
+                <div className="archive-actions">
+                  <button type="button" className="btn" onClick={() => onRestore(session.name)}>
+                    {t("settings.archivesRestore")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn danger"
+                    onClick={() => onDelete(session.name)}
+                  >
+                    {t("settings.archivesDelete")}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 

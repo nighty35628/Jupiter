@@ -72,6 +72,7 @@ function initialState(): Parameters<typeof reduce>[0] {
       liveLogTokens: 0,
     },
     sessions: [],
+    archivedSessions: [],
     librarySources: [],
     externalImportSources: [],
     settings: null,

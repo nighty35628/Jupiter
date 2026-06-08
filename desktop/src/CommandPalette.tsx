@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { t, useLang } from "./i18n";
+import { rankItems } from "./ui/fuzzy";
 import type { ShortcutKey } from "./ui/shortcut";
 
 export type CommandGroup = "nav" | "action" | "workspace" | "settings";
@@ -204,11 +205,7 @@ export function CommandPalette({
   const listRef = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return commands;
-    return commands.filter((c) =>
-      [c.label, c.hint].filter(Boolean).join(" ").toLowerCase().includes(q),
-    );
+    return rankItems(commands, query, ["label", "hint"]);
   }, [query, commands]);
 
   useEffect(() => {

@@ -19,8 +19,9 @@ body,
 
 body {
   font-family: var(--font-sans, "Geist", system-ui, sans-serif);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: var(--font-size-body, 13.5px);
+  font-weight: var(--font-weight-regular, 450);
+  line-height: var(--line-height-body, 1.54);
   color: var(--fg);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -41,14 +42,44 @@ body[data-drag-over="1"]::after {
   place-items: center;
   background: oklch(20% 0.006 255 / 0.6);
   color: var(--fg);
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--font-size-ui);
+  font-weight: var(--font-weight-medium);
   border: 2px dashed var(--accent);
   z-index: 9999;
   pointer-events: none;
 }
 
 /* ---------- THEME TOKENS ---------- */
+
+:root {
+  --font-sans: "Geist", system-ui, sans-serif;
+  --font-mono:
+    "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+  --mono: var(--font-mono);
+  --font-size-body: 13.5px;
+  --font-size-ui: 13px;
+  --font-size-ui-sm: 12.5px;
+  --font-size-caption: 11.5px;
+  --font-size-micro: 10.5px;
+  --font-size-title: 15px;
+  --font-size-display: 17px;
+  --font-size-message: 14px;
+  --font-weight-regular: 450;
+  --font-weight-medium: 540;
+  --font-weight-strong: 620;
+  --font-weight-title: 650;
+  --line-height-body: 1.54;
+  --line-height-ui: 1.36;
+  --line-height-message: 1.58;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
 
 [data-theme="dark"],
 [data-theme-style="graphite"] {
@@ -899,41 +930,6 @@ html[data-platform="macos"] .titlebar .tb-left {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.side-head .new-btn kbd {
-  font-family: inherit;
-  font-size: 14px;
-  background: oklch(100% 0 0 / 0.18);
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-weight: 500;
-}
-.side-head .new-btn .shortcut {
-  display: none;
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-.side-head .new-btn .shortcut kbd {
-  min-width: 0;
-  font-size: 14px;
-  font-weight: 500;
-  line-height: inherit;
-  color: inherit;
-  background: oklch(100% 0 0 / 0.18);
-  border: none;
-  border-radius: 3px;
-  padding: 1px 5px;
-  box-shadow: none;
-}
-@container sidebar (min-width: 191px) {
-  .side-head .new-btn .shortcut {
-    display: inline-flex;
-  }
-}
-@container sidebar (max-width: 240px) {
-  .side-head .new-btn .shortcut {
-    display: none;
-  }
-}
 @container sidebar (max-width: 190px) {
   .side-head .new-btn > span:not(.shortcut) {
     display: none;
@@ -1479,7 +1475,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   font-size: 13px;
   font-weight: 650;
 }
-.workspace-pin-btn {
+.workspace-menu-btn {
   width: 22px;
   height: 22px;
   display: inline-flex;
@@ -1496,20 +1492,20 @@ html[data-platform="macos"] .titlebar .tb-left {
     background 120ms,
     color 120ms;
 }
-.workspace-pin-btn[data-pinned="true"] {
+.workspace-menu-btn[data-pinned="true"] {
   opacity: 1;
   color: var(--accent);
 }
-.workspace-group-row:hover .workspace-pin-btn,
-.workspace-group-row:focus-within .workspace-pin-btn,
-.workspace-pin-btn:focus-visible {
+.workspace-group-row:hover .workspace-menu-btn,
+.workspace-group-row:focus-within .workspace-menu-btn,
+.workspace-menu-btn:focus-visible {
   opacity: 1;
   background: var(--panel-2);
 }
-.workspace-pin-btn:hover {
+.workspace-menu-btn:hover {
   color: var(--accent);
 }
-.workspace-pin-btn:focus-visible {
+.workspace-menu-btn:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
@@ -1585,10 +1581,6 @@ html[data-platform="macos"] .titlebar .tb-left {
   font-size: 14px;
   font-weight: 500;
 }
-.session-item[data-unread="true"] .body .title {
-  color: var(--fg);
-  font-weight: 650;
-}
 .session-item[data-archived="true"] {
   opacity: 0.62;
 }
@@ -1606,13 +1598,6 @@ html[data-platform="macos"] .titlebar .tb-left {
   justify-content: center;
   transform: translateY(-50%);
   pointer-events: none;
-}
-.session-state-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .session-busy-spinner {
   width: 11px;
@@ -3375,9 +3360,12 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   background: var(--panel-2);
 }
 
-.file-action-menu {
+.floating-layer {
   position: fixed;
   z-index: 9000;
+}
+
+.file-action-menu {
   width: 236px;
   padding: 6px;
   border: 1px solid var(--border);
@@ -3390,8 +3378,8 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 .file-action-title {
   padding: 4px 7px 7px;
   color: var(--muted);
-  font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3407,7 +3395,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   text-align: left;
 }
 .file-action-menu > button:hover {
@@ -3432,7 +3420,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   color: var(--fg);
   padding: 0 7px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-ui-sm);
 }
 .file-action-open-with button {
   height: 28px;
@@ -3442,7 +3430,20 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   color: var(--fg);
   padding: 0 8px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.sortable-list {
+  display: grid;
+  gap: 6px;
+}
+
+.sortable-list-item {
+  touch-action: none;
+}
+
+.sortable-list-item[data-dragging="true"] {
+  opacity: 0.72;
 }
 
 .app-context-menu {
@@ -3458,6 +3459,34 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   font-family: inherit;
   backdrop-filter: blur(14px);
   animation: rise 0.12s ease-out;
+}
+.workspace-rename-popover {
+  position: fixed;
+  z-index: 9101;
+  width: 260px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--card) 96%, var(--bg));
+  color: var(--fg);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(14px);
+  animation: rise 0.12s ease-out;
+}
+.workspace-rename-input {
+  width: 100%;
+  margin-top: 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  outline: none;
+}
+.workspace-rename-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .app-context-title {
   padding: 5px 7px 7px;
@@ -4142,7 +4171,8 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 .tool-call {
   padding: 10px 14px 12px;
   font-family: "Geist Mono", monospace;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
+  line-height: var(--line-height-ui);
 }
 .tool-call .row {
   display: grid;
@@ -5050,6 +5080,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 
 .ctx {
   grid-area: ctx;
+  container: ctx / inline-size;
   position: relative;
   z-index: 60;
   background: var(--bg-2);
@@ -5175,8 +5206,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   justify-content: space-between;
   gap: 12px;
   color: var(--muted-2);
-  font-size: 16px;
-  font-weight: 720;
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-title);
   margin-bottom: 12px;
 }
 .context-info-gear {
@@ -5212,6 +5243,93 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 .context-info-scroll .ctx-block:last-child {
   margin-bottom: 0;
 }
+.ctx-git-info {
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--panel) 70%, transparent);
+  padding: 10px;
+}
+.ctx-git-grid {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  gap: 7px 10px;
+  align-items: baseline;
+  font-size: var(--font-size-caption);
+}
+.ctx-git-grid span {
+  color: var(--muted);
+}
+.ctx-git-grid strong {
+  min-width: 0;
+  color: var(--fg);
+  font-weight: var(--font-weight-title);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-git-branch,
+.ctx-git-commit {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.ctx-git-branch select,
+.ctx-git-commit input {
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--font-size-ui-sm);
+  padding: 0 8px;
+}
+.ctx-git-commit input::placeholder {
+  color: var(--muted);
+}
+.ctx-git-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+.ctx-git-actions button {
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-title);
+  padding: 0 9px;
+  cursor: pointer;
+}
+.ctx-git-actions button:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+.ctx-git-actions button:disabled {
+  cursor: default;
+  opacity: 0.52;
+}
+.ctx-git-action-status {
+  margin-top: 9px;
+  max-height: 72px;
+  overflow: auto;
+  border: 1px solid color-mix(in oklch, var(--border) 68%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 82%, var(--panel));
+  color: var(--muted);
+  font-size: var(--font-size-micro);
+  line-height: 1.45;
+  padding: 7px 8px;
+  white-space: pre-wrap;
+}
 .ctx-home-shell,
 .ctx-mode-shell {
   flex: 1;
@@ -5230,13 +5348,21 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-rows: repeat(6, minmax(0, 1fr));
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(112px, max-content);
+  align-content: start;
   gap: 12px;
-  padding: 18px 36px 18px;
-  overflow: hidden;
+  padding: 16px 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.ctx-home::-webkit-scrollbar {
+  display: none;
 }
 .ctx-home-card {
-  min-height: 0;
+  min-height: 112px;
   border: 0;
   border-radius: 18px;
   background: color-mix(in oklch, var(--panel) 84%, var(--card));
@@ -5259,33 +5385,22 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   line-height: 1;
 }
 .ctx-home-title {
-  font-size: 16px;
-  font-weight: 760;
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-title);
   line-height: 1.1;
   color: var(--fg);
 }
 .ctx-home-desc {
-  font-size: 13px;
-  font-weight: 560;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
   line-height: 1.2;
   color: var(--muted);
 }
-.ctx-home-card kbd {
-  margin-top: 2px;
-  min-width: 36px;
-  height: 20px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--panel-2);
-  color: var(--fg-2);
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 650;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: none;
+
+@container ctx (min-width: 440px) {
+  .ctx-home {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .ctx-library {
@@ -5307,13 +5422,13 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 
 .ctx-library-title {
-  font-size: 18px;
-  font-weight: 760;
+  font-size: var(--font-size-display);
+  font-weight: var(--font-weight-title);
   color: var(--fg);
 }
 
 .ctx-library-desc {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   line-height: 1.4;
   color: var(--muted);
 }
@@ -5329,8 +5444,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   gap: 6px;
   padding: 0 9px;
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 650;
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-title);
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -5404,7 +5519,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   min-width: 0;
   overflow: hidden;
   color: var(--fg);
-  font-size: 14px;
+  font-size: var(--font-size-message);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5437,7 +5552,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 
 .ctx-library-search button,
@@ -5449,8 +5564,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   color: var(--fg);
   cursor: pointer;
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 650;
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-title);
   padding: 0 11px;
 }
 
@@ -5479,8 +5594,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 
 .ctx-library-section-title {
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 760;
+  font-size: var(--font-size-micro);
+  font-weight: var(--font-weight-title);
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -5527,7 +5642,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   min-width: 0;
   overflow: hidden;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5538,7 +5653,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5548,7 +5663,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   margin: 0;
   color: var(--muted);
   display: -webkit-box;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.35;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -5628,7 +5743,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   border: 1px dashed var(--border);
   border-radius: 10px;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
   line-height: 1.4;
   padding: 10px;
 }
@@ -5658,14 +5773,14 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 
 .ctx-library-empty div {
   color: var(--fg);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: var(--font-size-message);
+  font-weight: var(--font-weight-title);
 }
 
 .ctx-library-empty p {
   max-width: 260px;
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
   line-height: 1.4;
 }
 
@@ -5697,15 +5812,15 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 
 .source-search-title {
   color: var(--fg);
-  font-size: 14px;
-  font-weight: 760;
+  font-size: var(--font-size-message);
+  font-weight: var(--font-weight-title);
   line-height: 1.25;
 }
 
 .source-search-subtitle {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.35;
 }
 
@@ -5747,8 +5862,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   color: var(--fg);
   cursor: pointer;
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 650;
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-title);
 }
 
 .source-search-load-more:hover {
@@ -5756,23 +5871,26 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 
 .ctx[data-placement="bottom"] .ctx-home {
-  grid-template-rows: none;
-  grid-auto-rows: var(--ctx-bottom-card-height, 118px);
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(148px, 1fr);
+  grid-auto-rows: minmax(var(--ctx-bottom-card-height, 108px), max-content);
   align-content: start;
   gap: 12px;
-  padding: 18px;
+  padding: 14px 18px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 .ctx[data-placement="bottom"] .ctx-home-card {
-  min-height: var(--ctx-bottom-card-height, 118px);
+  min-height: var(--ctx-bottom-card-height, 108px);
   border-radius: 14px;
   gap: 6px;
 }
 .ctx[data-placement="bottom"] .ctx-home-title {
-  font-size: 15px;
+  font-size: var(--font-size-message);
 }
 .ctx[data-placement="bottom"] .ctx-home-desc {
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 .ctx-tabs {
   flex: 0 0 auto;
@@ -5822,8 +5940,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--font-size-ui);
+  font-weight: var(--font-weight-title);
 }
 .ctx-tab-close,
 .ctx-tab-add,
@@ -5875,7 +5993,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   gap: 8px;
   padding: 0 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   text-align: left;
 }
 .ctx-tab-menu button:hover {
@@ -5905,12 +6023,12 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 .ctx-placeholder-title {
   color: var(--fg);
-  font-size: 18px;
-  font-weight: 700;
+  font-size: var(--font-size-display);
+  font-weight: var(--font-weight-title);
 }
 .ctx-placeholder-body {
   max-width: 260px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   line-height: 1.45;
 }
 .ctx-browser {
@@ -5966,7 +6084,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   padding: 0 10px;
   outline: 0;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
 }
 .ctx-browser-input:focus {
   border-color: color-mix(in oklch, var(--accent) 72%, var(--border));
@@ -5981,7 +6099,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   border-radius: 8px;
   background: color-mix(in oklch, var(--danger) 10%, transparent);
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.35;
 }
 .ctx-browser-frame-wrap {
@@ -6004,7 +6122,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   padding: 0 8px 0 10px;
   border-bottom: 1px solid color-mix(in oklch, var(--border) 68%, transparent);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .ctx-browser-status > span {
   min-width: 0;
@@ -6023,8 +6141,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   gap: 5px;
   padding: 0 7px;
   font: inherit;
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-title);
 }
 .ctx-browser-external:hover {
   background: var(--panel-2);
@@ -6079,18 +6197,18 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 .ctx-browser-empty-title {
   color: var(--fg);
-  font-size: 15px;
-  font-weight: 720;
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-title);
 }
 .ctx-browser-empty-body {
   max-width: 240px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.4;
 }
 .ctx-browser-hint {
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.35;
   padding: 0 2px;
 }
@@ -6115,8 +6233,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   align-items: center;
   gap: 7px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-title);
 }
 .ctx-review-count {
   color: var(--fg);
@@ -6148,13 +6266,13 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   gap: 8px;
   padding: 9px 10px 7px;
   color: var(--fg);
-  font-size: 11px;
-  font-weight: 720;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-title);
 }
 .ctx-review-changes .h .right {
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--font-size-micro);
+  font-weight: var(--font-weight-strong);
 }
 .ctx-review-file-list {
   flex: 1;
@@ -6441,8 +6559,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 2px 0 0;
+  gap: 7px;
+  padding: 0;
 }
 .ctx-terminal-cwd {
   flex: 0 0 auto;
@@ -6451,10 +6569,10 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 7px;
   align-items: center;
-  padding: 7px 9px;
-  border: 1px solid color-mix(in oklch, var(--border) 74%, transparent);
-  border-radius: 9px;
-  background: color-mix(in oklch, var(--panel) 70%, transparent);
+  padding: 6px 8px;
+  border: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--panel) 54%, transparent);
   color: var(--muted);
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
@@ -6472,10 +6590,15 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 8px;
-  border: 1px solid color-mix(in oklch, var(--border) 74%, transparent);
-  border-radius: 10px;
-  background: color-mix(in oklch, var(--card) 88%, var(--bg));
+  padding: 7px;
+  border: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
+  border-radius: 9px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--panel) 42%, transparent),
+      color-mix(in oklch, var(--card) 72%, var(--bg))
+    );
 }
 .ctx-terminal-screen .xterm {
   height: 100%;
@@ -8536,6 +8659,62 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   gap: 6px;
   align-items: center;
 }
+.settings-archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-archive-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: 8px;
+  padding: 11px 12px;
+}
+.archive-main {
+  min-width: 0;
+}
+.archive-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--fg);
+}
+.archive-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.archive-id {
+  margin-top: 5px;
+  color: var(--muted-2);
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.archive-actions {
+  display: flex;
+  gap: 7px;
+}
+@media (max-width: 720px) {
+  .settings-archive-card {
+    grid-template-columns: 1fr;
+  }
+  .archive-actions {
+    justify-content: flex-end;
+  }
+}
 
 .status-pill {
   flex: 0 0 auto;
@@ -10560,12 +10739,6 @@ html[data-platform="macos"] .app {
   border-color: var(--border);
 }
 
-.side-head .new-btn kbd,
-.side-head .new-btn .shortcut kbd {
-  background: var(--panel);
-  color: var(--muted);
-}
-
 .side-head .icon-btn,
 .side-workspace .workspace-btn,
 .search-row .input {
@@ -12187,7 +12360,7 @@ html[data-platform="macos"] .splash {
   display: grid;
   gap: 5px;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--muted);
 }
 
@@ -12198,7 +12371,7 @@ html[data-platform="macos"] .splash {
 .memory-body-field {
   min-height: 92px;
   resize: vertical;
-  font-family: var(--mono);
+  font-family: var(--font-mono);
 }
 
 .memory-editor-actions {
@@ -12314,21 +12487,22 @@ html[data-platform="macos"] .app {
   height: 38px;
   background: color-mix(in oklch, var(--panel) 92%, var(--bg));
   border-bottom-color: color-mix(in oklch, var(--border) 72%, transparent);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
+  line-height: var(--line-height-ui);
 }
 
 .titlebar .brand {
   gap: 8px;
   padding-left: 0;
-  font-weight: 650;
+  font-weight: var(--font-weight-title);
 }
 
 .titlebar .brand .brand-name {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 
 .titlebar .crumbs {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   color: var(--muted);
 }
 
@@ -12356,7 +12530,8 @@ html[data-platform="macos"] .app {
   padding: 0 10px;
   border-radius: 7px 7px 0 0;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
+  line-height: var(--line-height-ui);
 }
 
 .tab:hover {
@@ -12400,7 +12575,8 @@ html[data-platform="macos"] .app {
   border-radius: 7px;
   padding: 0 9px;
   gap: 7px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
+  line-height: var(--line-height-ui);
   background: transparent;
   border: 1px solid transparent;
   color: var(--fg-2);
@@ -12443,8 +12619,8 @@ html[data-platform="macos"] .app {
 }
 
 .side-workspace .workspace-btn .name {
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--font-size-ui);
+  font-weight: var(--font-weight-medium);
 }
 
 .search-row {
@@ -12460,15 +12636,13 @@ html[data-platform="macos"] .app {
 }
 
 .search-row input {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 
 .search-row .input kbd,
-.side-head .new-btn kbd,
-.side-head .new-btn .shortcut kbd,
 .popup-item .kb,
 .search-row .input .shortcut kbd {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   border-radius: 4px;
   background: color-mix(in oklch, var(--panel-2) 78%, transparent);
   color: var(--muted);
@@ -12482,8 +12656,8 @@ html[data-platform="macos"] .app {
 
 .side-section .label {
   padding: 7px 8px 5px;
-  font-size: 10.5px;
-  font-weight: 650;
+  font-size: var(--font-size-micro);
+  font-weight: var(--font-weight-title);
   letter-spacing: 0;
 }
 
@@ -12533,7 +12707,8 @@ html[data-platform="macos"] .app {
 
 .side-foot .row {
   padding: 7px 9px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
+  line-height: var(--line-height-ui);
 }
 
 .main {
@@ -12548,14 +12723,14 @@ html[data-platform="macos"] .app {
 }
 
 .main-head h1 {
-  font-size: 13.5px;
-  font-weight: 650;
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-title);
 }
 
 .main-head .sub {
   margin-top: 1px;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
 }
 
 .main-head .sub .pill {
@@ -12568,7 +12743,8 @@ html[data-platform="macos"] .app {
   height: 30px;
   padding: 0 9px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
+  line-height: var(--line-height-ui);
   border-color: transparent;
   background: transparent;
 }
@@ -12610,8 +12786,8 @@ html[data-platform="macos"] .app {
 }
 
 .thread-thinking-label {
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--font-size-ui);
+  font-weight: var(--font-weight-title);
   letter-spacing: 0;
   line-height: 1;
   color: var(--fg-2);
@@ -12672,7 +12848,7 @@ html[data-platform="macos"] .app {
 
 .turn-divider {
   margin: 5px 0 0;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--muted-2);
 }
 
@@ -12681,8 +12857,8 @@ html[data-platform="macos"] .app {
 }
 
 .msg-text {
-  font-size: 14px;
-  line-height: 1.58;
+  font-size: var(--font-size-message);
+  line-height: var(--line-height-message);
 }
 
 .msg.user .body {
@@ -12740,12 +12916,12 @@ html[data-platform="macos"] .app {
 .composer-backdrop,
 .composer textarea {
   padding: 11px 14px 5px;
-  font-size: 14px;
-  line-height: 1.52;
+  font-size: var(--font-size-message);
+  line-height: var(--line-height-message);
 }
 
 .composer textarea {
-  min-height: calc(2 * 1.52em + 17px);
+  min-height: calc(2 * var(--line-height-message) * 1em + 17px);
 }
 
 .composer-foot {
@@ -12773,7 +12949,8 @@ html[data-platform="macos"] .app {
 .composer-foot .model-pill,
 .composer-foot .cf-btn {
   border-radius: 999px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
+  line-height: var(--line-height-ui);
 }
 
 .composer-plus-btn,
@@ -12798,7 +12975,7 @@ html[data-platform="macos"] .app {
   max-width: 132px;
   padding: 0 7px;
   gap: 5px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
 }
 
 .composer-foot .model-pill {
@@ -12858,7 +13035,7 @@ html[data-platform="macos"] .app {
   height: 28px;
   border-radius: 999px;
   background: transparent;
-  font-size: 11.5px;
+  font-size: var(--font-size-caption);
 }
 
 .composer-effort-option[data-active="true"] {
@@ -12881,8 +13058,8 @@ html[data-platform="macos"] .app {
 
 .ctx-block .h {
   padding-bottom: 7px;
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-title);
 }
 
 .legend,
@@ -12890,7 +13067,7 @@ html[data-platform="macos"] .app {
 .subagent-row,
 .mcp-row,
 .statusbar-pop {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 
 .meter {
@@ -12934,21 +13111,21 @@ html[data-platform="macos"] .app {
 .empty-title {
   margin-bottom: 4px;
   color: var(--fg);
-  font-size: 17px;
-  font-weight: 650;
+  font-size: var(--font-size-display);
+  font-weight: var(--font-weight-title);
 }
 
 .empty-sub {
   margin-bottom: 18px;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
 }
 
 .empty-sub code {
   margin-left: 5px;
   color: var(--fg-2);
-  font-family: "Geist Mono", monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
 }
 
 .empty-suggestions {
@@ -12967,8 +13144,8 @@ html[data-platform="macos"] .app {
   border: 1px solid var(--border);
   background: color-mix(in oklch, var(--card) 88%, transparent);
   color: var(--fg-2);
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-medium);
   box-shadow: none;
 }
 
@@ -13006,7 +13183,8 @@ html[data-platform="macos"] .app {
   border: 1px solid transparent;
   border-radius: 6px;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
+  line-height: var(--line-height-ui);
 }
 
 .tab:not(.newtab) {
@@ -13043,7 +13221,7 @@ html[data-platform="macos"] .app {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 520;
+  font-weight: var(--font-weight-medium);
 }
 
 .tab .close {
@@ -13073,7 +13251,7 @@ html[data-platform="macos"] .app {
 
 .tab.newtab .newtab-label {
   margin-left: 2px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 
 .ctx {
@@ -13096,14 +13274,14 @@ html[data-platform="macos"] .app {
 
 .ctx-block .h {
   padding-bottom: 6px;
-  font-size: 10.5px;
+  font-size: var(--font-size-micro);
   line-height: 1.2;
   color: var(--muted);
 }
 
 .ctx-block .h .right {
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-title);
   color: var(--fg-2);
 }
 
@@ -13121,7 +13299,7 @@ html[data-platform="macos"] .app {
 .legend {
   gap: 7px 10px;
   margin-top: 9px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
 }
 
 .legend .l {
@@ -13139,7 +13317,7 @@ html[data-platform="macos"] .app {
 }
 
 .tree {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 
 .tree .node {
@@ -13159,88 +13337,88 @@ html[data-platform="macos"] .app {
 .ctx-empty {
   padding: 8px 2px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 
 /* Theme palette refresh */
 [data-theme-style="porcelain"] {
-  --bg: oklch(97.6% 0.002 255);
-  --bg-2: oklch(94.4% 0.003 255);
-  --panel: oklch(98.8% 0.001 255);
-  --panel-2: oklch(92.6% 0.004 255);
-  --card: oklch(99.6% 0 0);
-  --card-hover: oklch(95.4% 0.003 255);
-  --border: oklch(84.5% 0.005 255);
-  --border-strong: oklch(69% 0.007 255);
-  --fg: oklch(20.5% 0.005 255);
-  --fg-2: oklch(32.5% 0.006 255);
-  --muted: oklch(46% 0.006 255);
-  --muted-2: oklch(58% 0.005 255);
-  --accent: oklch(46% 0.065 255);
-  --accent-soft: oklch(46% 0.065 255 / 0.11);
-  --accent-strong: oklch(36% 0.075 255);
-  --violet: oklch(46% 0.055 285);
-  --violet-soft: oklch(46% 0.055 285 / 0.11);
+  --bg: oklch(97.8% 0.003 255);
+  --bg-2: oklch(94.8% 0.004 255);
+  --panel: oklch(99% 0.001 255);
+  --panel-2: oklch(92.8% 0.004 255);
+  --card: oklch(99.7% 0 0);
+  --card-hover: oklch(95.7% 0.003 255);
+  --border: oklch(85.5% 0.005 255);
+  --border-strong: oklch(70% 0.007 255);
+  --fg: oklch(21% 0.005 255);
+  --fg-2: oklch(34% 0.006 255);
+  --muted: oklch(48% 0.006 255);
+  --muted-2: oklch(61% 0.005 255);
+  --accent: oklch(48% 0.075 255);
+  --accent-soft: oklch(48% 0.075 255 / 0.11);
+  --accent-strong: oklch(38% 0.085 255);
+  --violet: oklch(48% 0.065 285);
+  --violet-soft: oklch(48% 0.065 285 / 0.11);
 }
 
 [data-theme-style="sandstone"] {
-  --bg: oklch(96.2% 0.006 235);
-  --bg-2: oklch(92.8% 0.008 235);
-  --panel: oklch(97.6% 0.004 235);
-  --panel-2: oklch(90.8% 0.01 235);
-  --card: oklch(98.5% 0.003 235);
-  --card-hover: oklch(93.6% 0.008 235);
-  --border: oklch(83.5% 0.011 235);
-  --border-strong: oklch(68% 0.013 235);
-  --fg: oklch(21.5% 0.009 245);
-  --fg-2: oklch(34% 0.01 245);
-  --muted: oklch(47% 0.009 245);
-  --muted-2: oklch(59% 0.008 245);
-  --accent: oklch(45% 0.06 225);
-  --accent-soft: oklch(45% 0.06 225 / 0.11);
-  --accent-strong: oklch(35% 0.07 225);
-  --violet: oklch(45% 0.06 275);
-  --violet-soft: oklch(45% 0.06 275 / 0.11);
+  --bg: oklch(96.5% 0.012 78);
+  --bg-2: oklch(93.3% 0.016 76);
+  --panel: oklch(97.8% 0.008 78);
+  --panel-2: oklch(90.8% 0.018 72);
+  --card: oklch(98.6% 0.006 78);
+  --card-hover: oklch(94.2% 0.014 74);
+  --border: oklch(84.8% 0.02 72);
+  --border-strong: oklch(68.5% 0.026 68);
+  --fg: oklch(22% 0.018 58);
+  --fg-2: oklch(35% 0.018 58);
+  --muted: oklch(49% 0.016 62);
+  --muted-2: oklch(61% 0.014 66);
+  --accent: oklch(53% 0.125 42);
+  --accent-soft: oklch(53% 0.125 42 / 0.11);
+  --accent-strong: oklch(45% 0.145 40);
+  --violet: oklch(49% 0.07 24);
+  --violet-soft: oklch(49% 0.07 24 / 0.11);
 }
 
 [data-theme-style="graphite"] {
-  --bg: oklch(17.4% 0.003 255);
-  --bg-2: oklch(20.2% 0.004 255);
-  --panel: oklch(22.2% 0.004 255);
-  --panel-2: oklch(27.4% 0.005 255);
-  --card: oklch(23.3% 0.004 255);
-  --card-hover: oklch(29.8% 0.005 255);
-  --border: oklch(35% 0.004 255);
-  --border-strong: oklch(48% 0.005 255);
-  --fg: oklch(96% 0.002 255);
-  --fg-2: oklch(85% 0.003 255);
-  --muted: oklch(68% 0.004 255);
-  --muted-2: oklch(56% 0.004 255);
-  --accent: oklch(74% 0.06 255);
-  --accent-soft: oklch(74% 0.06 255 / 0.15);
-  --accent-strong: oklch(82% 0.07 255);
-  --violet: oklch(75% 0.055 285);
-  --violet-soft: oklch(75% 0.055 285 / 0.14);
+  --bg: oklch(17.2% 0.003 255);
+  --bg-2: oklch(20.1% 0.004 255);
+  --panel: oklch(22.4% 0.004 255);
+  --panel-2: oklch(27.2% 0.005 255);
+  --card: oklch(23.5% 0.004 255);
+  --card-hover: oklch(29.2% 0.005 255);
+  --border: oklch(34% 0.004 255);
+  --border-strong: oklch(46% 0.005 255);
+  --fg: oklch(95.5% 0.002 255);
+  --fg-2: oklch(83% 0.003 255);
+  --muted: oklch(65% 0.004 255);
+  --muted-2: oklch(52% 0.004 255);
+  --accent: oklch(72% 0.075 255);
+  --accent-soft: oklch(72% 0.075 255 / 0.15);
+  --accent-strong: oklch(80% 0.085 255);
+  --violet: oklch(73% 0.065 285);
+  --violet-soft: oklch(73% 0.065 285 / 0.14);
 }
 
 [data-theme-style="midnight"] {
-  --bg: oklch(13.8% 0.006 170);
-  --bg-2: oklch(16.5% 0.007 170);
-  --panel: oklch(19.2% 0.008 170);
-  --panel-2: oklch(24.8% 0.01 170);
-  --card: oklch(20.4% 0.008 170);
-  --card-hover: oklch(26.2% 0.01 170);
-  --border: oklch(33.5% 0.01 170);
-  --border-strong: oklch(46% 0.012 170);
-  --fg: oklch(96% 0.004 170);
-  --fg-2: oklch(84% 0.006 170);
-  --muted: oklch(68% 0.008 170);
-  --muted-2: oklch(57% 0.008 170);
-  --accent: oklch(74% 0.08 155);
-  --accent-soft: oklch(74% 0.08 155 / 0.15);
-  --accent-strong: oklch(83% 0.09 155);
-  --violet: oklch(78% 0.075 95);
-  --violet-soft: oklch(78% 0.075 95 / 0.14);
+  --bg: oklch(13.6% 0.012 180);
+  --bg-2: oklch(16.5% 0.014 180);
+  --panel: oklch(19.2% 0.015 180);
+  --panel-2: oklch(24.6% 0.017 178);
+  --card: oklch(20.5% 0.015 180);
+  --card-hover: oklch(26.4% 0.018 178);
+  --border: oklch(33% 0.018 178);
+  --border-strong: oklch(45% 0.021 176);
+  --fg: oklch(95% 0.006 175);
+  --fg-2: oklch(82% 0.01 175);
+  --muted: oklch(64% 0.012 175);
+  --muted-2: oklch(52% 0.012 175);
+  --accent: oklch(74% 0.095 164);
+  --accent-soft: oklch(74% 0.095 164 / 0.15);
+  --accent-strong: oklch(83% 0.105 164);
+  --violet: oklch(76% 0.075 112);
+  --violet-soft: oklch(76% 0.075 112 / 0.14);
 }
 
 .style-card[data-style="porcelain"] .style-swatches span:nth-child(1),
@@ -13248,84 +13426,84 @@ html[data-platform="macos"] .app {
 .settings-theme-option[data-style="porcelain"]
   .style-swatches
   span:nth-child(1) {
-  background: oklch(97.6% 0.002 255);
+  background: oklch(97.8% 0.003 255);
 }
 .style-card[data-style="porcelain"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="porcelain"] .style-swatches span:nth-child(2),
 .settings-theme-option[data-style="porcelain"]
   .style-swatches
   span:nth-child(2) {
-  background: oklch(92.6% 0.004 255);
+  background: oklch(92.8% 0.004 255);
 }
 .style-card[data-style="porcelain"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="porcelain"] .style-swatches span:nth-child(3),
 .settings-theme-option[data-style="porcelain"]
   .style-swatches
   span:nth-child(3) {
-  background: oklch(46% 0.065 255);
+  background: oklch(48% 0.075 255);
 }
 .style-card[data-style="sandstone"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="sandstone"] .style-swatches span:nth-child(1),
 .settings-theme-option[data-style="sandstone"]
   .style-swatches
   span:nth-child(1) {
-  background: oklch(96.2% 0.006 235);
+  background: oklch(96.5% 0.012 78);
 }
 .style-card[data-style="sandstone"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="sandstone"] .style-swatches span:nth-child(2),
 .settings-theme-option[data-style="sandstone"]
   .style-swatches
   span:nth-child(2) {
-  background: oklch(90.8% 0.01 235);
+  background: oklch(90.8% 0.018 72);
 }
 .style-card[data-style="sandstone"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="sandstone"] .style-swatches span:nth-child(3),
 .settings-theme-option[data-style="sandstone"]
   .style-swatches
   span:nth-child(3) {
-  background: oklch(45% 0.06 225);
+  background: oklch(53% 0.125 42);
 }
 .style-card[data-style="graphite"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="graphite"] .style-swatches span:nth-child(1),
 .settings-theme-option[data-style="graphite"]
   .style-swatches
   span:nth-child(1) {
-  background: oklch(17.4% 0.003 255);
+  background: oklch(17.2% 0.003 255);
 }
 .style-card[data-style="graphite"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="graphite"] .style-swatches span:nth-child(2),
 .settings-theme-option[data-style="graphite"]
   .style-swatches
   span:nth-child(2) {
-  background: oklch(27.4% 0.005 255);
+  background: oklch(27.2% 0.005 255);
 }
 .style-card[data-style="graphite"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="graphite"] .style-swatches span:nth-child(3),
 .settings-theme-option[data-style="graphite"]
   .style-swatches
   span:nth-child(3) {
-  background: oklch(74% 0.06 255);
+  background: oklch(72% 0.075 255);
 }
 .style-card[data-style="midnight"] .style-swatches span:nth-child(1),
 .theme-pop-item[data-style="midnight"] .style-swatches span:nth-child(1),
 .settings-theme-option[data-style="midnight"]
   .style-swatches
   span:nth-child(1) {
-  background: oklch(13.8% 0.006 170);
+  background: oklch(13.6% 0.012 180);
 }
 .style-card[data-style="midnight"] .style-swatches span:nth-child(2),
 .theme-pop-item[data-style="midnight"] .style-swatches span:nth-child(2),
 .settings-theme-option[data-style="midnight"]
   .style-swatches
   span:nth-child(2) {
-  background: oklch(24.8% 0.01 170);
+  background: oklch(24.6% 0.017 178);
 }
 .style-card[data-style="midnight"] .style-swatches span:nth-child(3),
 .theme-pop-item[data-style="midnight"] .style-swatches span:nth-child(3),
 .settings-theme-option[data-style="midnight"]
   .style-swatches
   span:nth-child(3) {
-  background: oklch(74% 0.08 155);
+  background: oklch(74% 0.095 164);
 }
 
 /* Codex-aligned settings surface */
@@ -13356,8 +13534,8 @@ html[data-platform="macos"] .app {
 
 .settings-side .sg {
   padding: 8px 9px 9px;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-title);
   text-transform: none;
   color: var(--fg);
 }
@@ -13367,7 +13545,8 @@ html[data-platform="macos"] .app {
   padding: 0 9px;
   gap: 8px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
+  line-height: var(--line-height-ui);
   color: var(--muted);
 }
 
@@ -13400,13 +13579,13 @@ html[data-platform="macos"] .app {
 }
 
 .settings-head h2 {
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-title);
 }
 
 .settings-head .desc {
   margin-top: 1px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
   color: var(--muted);
 }
 
@@ -13426,8 +13605,8 @@ html[data-platform="macos"] .app {
 
 .section .stitle {
   margin: 0 0 6px;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-title);
   text-transform: none;
   color: var(--fg-2);
 }
@@ -13441,14 +13620,14 @@ html[data-platform="macos"] .app {
 }
 
 .setting-row .l .n {
-  font-size: 13px;
-  font-weight: 560;
+  font-size: var(--font-size-ui);
+  font-weight: var(--font-weight-medium);
   color: var(--fg);
 }
 
 .setting-row .l .h {
   max-width: 58ch;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
   line-height: 1.38;
   color: var(--muted);
 }
@@ -13456,7 +13635,7 @@ html[data-platform="macos"] .app {
 .settings .field {
   min-height: 30px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   border-color: var(--border);
   background: var(--panel);
 }
@@ -13464,7 +13643,7 @@ html[data-platform="macos"] .app {
 .settings .btn {
   min-height: 30px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 
 .settings .btn.primary {
@@ -13481,7 +13660,7 @@ html[data-platform="macos"] .app {
   border-radius: 999px;
   background: color-mix(in oklch, var(--panel-2) 62%, transparent);
   border-color: color-mix(in oklch, var(--border) 80%, transparent);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui-sm);
 }
 
 .seg-ctrl button {
@@ -13517,11 +13696,11 @@ html[data-platform="macos"] .app {
 }
 
 .style-name {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 
 .style-desc {
-  font-size: 11.5px;
+  font-size: var(--font-size-caption);
 }
 
 .style-swatches {

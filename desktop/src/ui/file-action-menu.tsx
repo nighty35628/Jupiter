@@ -1,9 +1,9 @@
-import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { FilePreviewTarget } from "../file-preview";
 import { openDefaultFile, openFileWithApp, revealFileInFolder } from "../file-preview";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
+import { FloatingLayer } from "./floating-layer";
 
 type Anchor = { left: number; top: number };
 type MenuSize = { width: number; height: number };
@@ -58,41 +58,15 @@ export function FileActionMenu({
   useLang();
   const [openWithShown, setOpenWithShown] = useState(false);
   const [app, setApp] = useState(editor?.trim() ?? "");
-  const menuRef = useRef<HTMLDivElement | null>(null);
   const openWithRef = useRef<HTMLInputElement | null>(null);
-  const [position, setPosition] = useState(() => positionFileActionMenu(anchor));
+  const positionedAnchor = useMemo(
+    () => positionFileActionMenu(anchor),
+    [anchor.left, anchor.top],
+  );
 
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    const onPointer = (event: MouseEvent) => {
-      if (!(event.target as Element | null)?.closest(".file-action-menu")) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("mousedown", onPointer);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onPointer);
-    };
-  }, [onClose]);
-
-  useLayoutEffect(() => {
-    const updatePosition = () => {
-      const rect = menuRef.current?.getBoundingClientRect();
-      setPosition(
-        positionFileActionMenu(
-          { left: anchor.left, top: anchor.top },
-          rect ? { width: rect.width, height: rect.height } : FALLBACK_MENU_SIZE,
-        ),
-      );
-    };
-
-    updatePosition();
     if (openWithShown) openWithRef.current?.focus();
-    window.addEventListener("resize", updatePosition);
-    return () => window.removeEventListener("resize", updatePosition);
-  }, [anchor.left, anchor.top, openWithShown]);
+  }, [openWithShown]);
 
   const preview = () => {
     onPreviewFile?.({ path, line });
@@ -116,48 +90,42 @@ export function FileActionMenu({
     onClose();
   };
 
-  const menu = (
-    <div
-      ref={menuRef}
-      role="menu"
-      className="file-action-menu"
-      style={{ left: position.left, top: position.top }}
-      onMouseDown={(event) => event.stopPropagation()}
-    >
-      <div className="file-action-title">{path}</div>
-      <button type="button" onClick={preview} disabled={!onPreviewFile}>
-        <I.file size={13} />
-        <span>{t("fileActions.preview")}</span>
-      </button>
-      <button type="button" onClick={openDefault}>
-        <I.link size={13} />
-        <span>{t("fileActions.openDefault")}</span>
-      </button>
-      <button type="button" onClick={reveal}>
-        <I.folder size={13} />
-        <span>{t("fileActions.reveal")}</span>
-      </button>
-      <button type="button" onClick={() => setOpenWithShown((v) => !v)}>
-        <I.pencil size={13} />
-        <span>{t("fileActions.openWith")}</span>
-      </button>
-      {openWithShown ? (
-        <form className="file-action-open-with" onSubmit={submitOpenWith}>
-          <input
-            ref={openWithRef}
-            value={app}
-            onChange={(event) => setApp(event.currentTarget.value)}
-            placeholder={t("fileActions.openWithPlaceholder")}
-          />
-          <button type="submit">{t("fileActions.open")}</button>
-        </form>
-      ) : null}
-      <button type="button" onClick={copy}>
-        <I.copy size={13} />
-        <span>{t("fileActions.copyPath")}</span>
-      </button>
-    </div>
+  return (
+    <FloatingLayer anchor={positionedAnchor} open onClose={onClose}>
+      <div role="menu" className="file-action-menu">
+        <div className="file-action-title">{path}</div>
+        <button type="button" onClick={preview} disabled={!onPreviewFile}>
+          <I.file size={13} />
+          <span>{t("fileActions.preview")}</span>
+        </button>
+        <button type="button" onClick={openDefault}>
+          <I.link size={13} />
+          <span>{t("fileActions.openDefault")}</span>
+        </button>
+        <button type="button" onClick={reveal}>
+          <I.folder size={13} />
+          <span>{t("fileActions.reveal")}</span>
+        </button>
+        <button type="button" onClick={() => setOpenWithShown((v) => !v)}>
+          <I.pencil size={13} />
+          <span>{t("fileActions.openWith")}</span>
+        </button>
+        {openWithShown ? (
+          <form className="file-action-open-with" onSubmit={submitOpenWith}>
+            <input
+              ref={openWithRef}
+              value={app}
+              onChange={(event) => setApp(event.currentTarget.value)}
+              placeholder={t("fileActions.openWithPlaceholder")}
+            />
+            <button type="submit">{t("fileActions.open")}</button>
+          </form>
+        ) : null}
+        <button type="button" onClick={copy}>
+          <I.copy size={13} />
+          <span>{t("fileActions.copyPath")}</span>
+        </button>
+      </div>
+    </FloatingLayer>
   );
-
-  return createPortal(menu, document.body);
 }
