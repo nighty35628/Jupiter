@@ -3,6 +3,43 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.0] — 2026-06-09
+
+### 中文
+
+**飞书通道闭环。** 飞书机器人通道现在同时覆盖桌面端和 CLI/TUI：桌面设置页可以配置 App ID、
+App Secret 和群聊策略，CLI/TUI 新增 `/feishu connect/status/disconnect`，并支持启动时按配置自动连接。
+飞书私聊会直接进入当前会话，群聊默认需要 @ 机器人，也可以切换为接收全部群消息。
+
+**远程会话与回复回传。** 来自飞书的消息会带上来源标记进入 Jupiter，会话完成后会把助手最终回复发回飞书。
+桌面端飞书通道支持轻量远程命令，包括 `/help`、`/status`、`/session list`、`/session switch`、
+`/session new`、`/workspace list` 和 `/workspace switch`；只读命令可以在忙碌时执行，切换和新建类命令会避开正在运行的回合。
+
+**可靠性、国际化与发布资料。** 飞书通道加入事件去重、单进程锁、Markdown 卡片回复和文本 fallback，
+并补充配置、通道策略、远程命令和 slash handler 测试。CLI/TUI 飞书提示补齐中文和英文文案，德语和日语暂用英文 fallback。
+README 更新为覆盖当前项目能力的中英双语说明，旧 README 快照归档到 `history/readme/2026-06-09/`；
+桌面端版本、根包版本和 GitHub Release notes 统一升级为 `0.99.0`。
+
+### English
+
+**Feishu Channel end to end.** The Feishu bot channel now covers both Desktop and CLI/TUI. Desktop settings can
+configure App ID, App Secret, and group policy, while CLI/TUI now includes `/feishu connect/status/disconnect`
+and can auto-start from saved configuration. Direct Feishu messages route into the active session; group chats
+require an @mention by default and can be switched to accept all group messages.
+
+**Remote sessions and reply routing.** Messages from Feishu enter Jupiter with source tagging, and the assistant's
+final reply is sent back to Feishu when the turn completes. Desktop Feishu supports lightweight remote commands
+including `/help`, `/status`, `/session list`, `/session switch`, `/session new`, `/workspace list`, and
+`/workspace switch`; read-only commands can run while a turn is busy, while navigation and creation commands
+avoid interrupting an active turn.
+
+**Reliability, i18n, and release material.** The Feishu channel now includes event de-duplication, a single-process
+lock, Markdown card replies, and text fallback, with tests for config, channel policy, remote commands, and the
+slash handler. CLI/TUI Feishu prompts now include Chinese and English copy, with German and Japanese falling back
+to English for this command set. README was rewritten as bilingual current-project documentation, the previous
+README was archived under `history/readme/2026-06-09/`, and desktop/root package versions plus GitHub Release
+notes are aligned on `0.99.0`.
+
 ## [0.89.6] — 2026-06-07
 
 ### 中文

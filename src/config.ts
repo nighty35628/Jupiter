@@ -133,10 +133,7 @@ export interface FeishuBotConfig {
   appId?: string;
   appSecret?: string;
   enabled?: boolean;
-  /**
-   * Group chats only route into Jupiter when the incoming event includes an @
-   * mention. Direct messages are always accepted. Default true.
-   */
+  /** Group chats require an @mention by default; direct messages are always accepted. */
   requireMentionInGroup?: boolean;
 }
 

@@ -358,6 +358,11 @@ export const EN: TranslationSchema = {
         "connect, inspect, or disconnect the QQ channel for this session (first connect guides App ID / App Secret setup)",
       argsHint: "[connect [appId appSecret [sandbox]]|status|disconnect]",
     },
+    feishu: {
+      description:
+        "connect, inspect, or disconnect the Feishu channel for this session (first connect guides App ID / App Secret setup)",
+      argsHint: "[connect [appId appSecret [mention|all]]|status|disconnect]",
+    },
     telegram: {
       description:
         "connect, inspect, or disconnect the Telegram channel for this session (first connect guides bot token setup)",
@@ -873,6 +878,33 @@ export const EN: TranslationSchema = {
       missingAppSecret: "QQ App Secret is required. Run `/qq connect` to configure.",
       authFailed: "QQ bot authentication failed — check your App ID and App Secret.",
       readyTimeout: "QQ bot did not receive READY within 15s — check your App ID and App Secret.",
+    },
+    feishu: {
+      unavailable: "/feishu is not available in this session.",
+      connecting: "Feishu: connecting…",
+      connectFailed: "Feishu connect failed: {reason}",
+      disconnecting: "Feishu: disconnecting…",
+      disconnectFailed: "Feishu disconnect failed: {reason}",
+      usage:
+        "Usage: /feishu connect [appId appSecret [mention|all]] | /feishu status | /feishu disconnect",
+      credentialsRequired:
+        "Feishu App ID and App Secret are required. Pass them to `/feishu connect` or configure them in settings.",
+      connected: "Feishu connected in {mode} mode. It will auto-start on future launches.",
+      alreadyConnected: "Feishu is already connected in {mode} mode. Auto-start is enabled.",
+      disconnected: "Feishu disconnected. Auto-start is disabled.",
+      status:
+        "Feishu: {connected}, auto-start {enabled}, credentials {configured}, appId {appId}, group policy {groupPolicy}, current mode {mode}.",
+      stateConnected: "connected",
+      stateDisconnected: "disconnected",
+      stateEnabled: "enabled",
+      stateDisabled: "disabled",
+      stateConfigured: "configured",
+      stateNotConfigured: "not configured",
+      groupMention: "@mention only",
+      groupAll: "all group messages",
+      none: "none",
+      modeChat: "chat",
+      modeCode: "code",
     },
     telegram: {
       unavailable: "/telegram is not available in this session.",

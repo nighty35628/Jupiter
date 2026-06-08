@@ -888,6 +888,9 @@ export const de: TranslationSchema = {
       readyTimeout:
         "QQ-Bot hat READY nicht innerhalb von 15s erhalten — überprüfe deine App-ID und dein App-Secret.",
     },
+    feishu: {
+      ...EN.handlers.feishu,
+    },
     admin: {
       ...EN.handlers.admin,
       doctorNeedsTui: "/doctor benötigt einen TUI-Kontext (postDoctor angeschlossen).",

@@ -1,3 +1,4 @@
+import { EN } from "./EN.js";
 import type { TranslationSchema } from "./types.js";
 
 export const JA: TranslationSchema = {
@@ -896,6 +897,9 @@ export const JA: TranslationSchema = {
       authFailed: "QQ ボット認証に失敗しました — App ID と App Secret を確認してください。",
       readyTimeout:
         "QQ ボットが15秒以内に READY を受信しませんでした — App ID と App Secret を確認してください。",
+    },
+    feishu: {
+      ...EN.handlers.feishu,
     },
     admin: {
       doctorNeedsTui: "/doctor は TUI コンテキストが必要です（postDoctor wired）。",

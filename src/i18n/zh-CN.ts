@@ -344,6 +344,11 @@ export const zhCN: TranslationSchema = {
       description:
         "连接/查看/断开 QQ 通道，首次连接需提供 AppId + AppSecret（可选沙箱模式 sandbox）",
     },
+    feishu: {
+      description:
+        "连接/查看/断开飞书通道，首次连接需提供 App ID + App Secret（可选 mention/all 群聊策略）",
+      argsHint: "[connect [appId appSecret [mention|all]]|status|disconnect]",
+    },
     telegram: {
       description: "连接/查看/断开 Telegram 通道，首次连接需提供 BotFather bot token",
       argsHint: "[connect [botToken]|status|disconnect]",
@@ -828,6 +833,33 @@ export const zhCN: TranslationSchema = {
       missingAppSecret: "缺少 QQ App Secret。请先运行 `/qq connect` 完成配置。",
       authFailed: "QQ 机器人鉴权失败，请检查 App ID 和 App Secret。",
       readyTimeout: "QQ 机器人 15 秒内未收到 READY，请检查 App ID 和 App Secret。",
+    },
+    feishu: {
+      unavailable: "/feishu 在当前会话中不可用。",
+      connecting: "飞书：正在连接…",
+      connectFailed: "飞书连接失败：{reason}",
+      disconnecting: "飞书：正在断开…",
+      disconnectFailed: "飞书断开失败：{reason}",
+      usage:
+        "用法：/feishu connect [appId appSecret [mention|all]] | /feishu status | /feishu disconnect",
+      credentialsRequired:
+        "飞书 App ID 和 App Secret 不能为空。请传给 `/feishu connect`，或在设置中配置。",
+      connected: "飞书已在{mode}模式下连接成功，后续启动会自动启用。",
+      alreadyConnected: "飞书已在{mode}模式下连接，自动启动已启用。",
+      disconnected: "飞书已断开连接，自动启动已关闭。",
+      status:
+        "飞书：{connected}，自动启动{enabled}，凭据{configured}，appId {appId}，群聊策略 {groupPolicy}，当前模式 {mode}。",
+      stateConnected: "已连接",
+      stateDisconnected: "未连接",
+      stateEnabled: "已启用",
+      stateDisabled: "未启用",
+      stateConfigured: "已配置",
+      stateNotConfigured: "未配置",
+      groupMention: "仅 @ 提及",
+      groupAll: "所有群消息",
+      none: "无",
+      modeChat: "聊天",
+      modeCode: "代码",
     },
     telegram: {
       unavailable: "/telegram 在当前会话中不可用。",

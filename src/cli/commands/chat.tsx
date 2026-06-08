@@ -13,6 +13,7 @@ import {
   searchEnabled,
 } from "../../config.js";
 import { loadDotenv } from "../../env.js";
+import { FeishuChannel } from "../../feishu/channel.js";
 import { t } from "../../i18n/index.js";
 import {
   deleteSession,
@@ -133,11 +134,14 @@ interface RootProps extends ChatOptions {
   historyScrollMode: ResolvedHistoryScrollMode;
   /** Pre-created QQ channel (started before TUI mounts). */
   qqChannel?: QQChannel;
+  feishuChannel?: FeishuChannel;
   telegramChannel?: TelegramChannel;
   /** App fills this ref on mount so QQ messages flow into the TUI input queue. */
   qqSubmitRef: { current: ((text: string) => void) | null };
   /** App fills this ref on mount so QQ errors appear in the TUI log. */
   qqErrorRef: { current: ((msg: string) => void) | null };
+  feishuSubmitRef: { current: ((text: string) => void) | null };
+  feishuErrorRef: { current: ((msg: string) => void) | null };
   telegramSubmitRef: { current: ((text: string) => void) | null };
   telegramErrorRef: { current: ((msg: string) => void) | null };
 }
@@ -252,9 +256,12 @@ function Root({
         dashboardHost={appProps.dashboardHost}
         dashboardToken={appProps.dashboardToken}
         qqChannel={appProps.qqChannel}
+        feishuChannel={appProps.feishuChannel}
         telegramChannel={appProps.telegramChannel}
         qqSubmitRef={appProps.qqSubmitRef}
         qqErrorRef={appProps.qqErrorRef}
+        feishuSubmitRef={appProps.feishuSubmitRef}
+        feishuErrorRef={appProps.feishuErrorRef}
         telegramSubmitRef={appProps.telegramSubmitRef}
         telegramErrorRef={appProps.telegramErrorRef}
         historyScrollMode={historyScrollMode}
@@ -365,11 +372,15 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
   // deterministic.
   const qqSubmitRef: { current: ((text: string) => void) | null } = { current: null };
   const qqErrorRef: { current: ((msg: string) => void) | null } = { current: null };
+  const feishuSubmitRef: { current: ((text: string) => void) | null } = { current: null };
+  const feishuErrorRef: { current: ((msg: string) => void) | null } = { current: null };
   const telegramSubmitRef: { current: ((text: string) => void) | null } = { current: null };
   const telegramErrorRef: { current: ((msg: string) => void) | null } = { current: null };
   const qqRequested = cfg.qq?.enabled === true;
+  const feishuRequested = cfg.feishu?.enabled === true;
   const telegramRequested = cfg.telegram?.enabled === true;
   let qqChannel: QQChannel | undefined;
+  let feishuChannel: FeishuChannel | undefined;
   let telegramChannel: TelegramChannel | undefined;
   if (qqRequested) {
     const channel = new QQChannel({
@@ -383,6 +394,21 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
       process.stderr.write("QQ bot connected\n");
     } catch (err) {
       process.stderr.write(`QQ bot failed: ${(err as Error).message}\n`);
+    }
+  }
+  if (feishuRequested) {
+    const channel = new FeishuChannel({
+      onSubmitMessage: (text) => feishuSubmitRef.current?.(text),
+      onError: (msg) => feishuErrorRef.current?.(msg),
+      onInfo: (msg) => process.stderr.write(`${msg}\n`),
+    });
+    process.stderr.write("Connecting Feishu bot...\n");
+    try {
+      await channel.start();
+      feishuChannel = channel;
+      process.stderr.write("Feishu bot connected\n");
+    } catch (err) {
+      process.stderr.write(`Feishu bot failed: ${(err as Error).message}\n`);
     }
   }
   if (telegramRequested) {
@@ -436,9 +462,12 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
       codeMode={codeMode}
       session={resolvedSession}
       qqChannel={qqChannel}
+      feishuChannel={feishuChannel}
       telegramChannel={telegramChannel}
       qqSubmitRef={qqSubmitRef}
       qqErrorRef={qqErrorRef}
+      feishuSubmitRef={feishuSubmitRef}
+      feishuErrorRef={feishuErrorRef}
       telegramSubmitRef={telegramSubmitRef}
       telegramErrorRef={telegramErrorRef}
     />,
@@ -450,6 +479,7 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
     disableMouseMode();
     await runtime.closeAll();
     qqChannel?.stop();
+    feishuChannel?.stop();
     telegramChannel?.stop();
     await drainTtyResponses();
   }

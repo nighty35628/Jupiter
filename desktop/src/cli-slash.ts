@@ -90,6 +90,11 @@ export const DESKTOP_CLI_SLASH_COMMANDS: readonly DesktopCliSlashCommand[] = [
     summary: "connect, inspect, or disconnect the QQ channel",
   },
   {
+    cmd: "feishu",
+    argsHint: "<connect|status|disconnect>",
+    summary: "connect, inspect, or disconnect the Feishu channel",
+  },
+  {
     cmd: "telegram",
     argsHint: "<connect|status|disconnect>",
     summary: "connect, inspect, or disconnect the Telegram channel",
