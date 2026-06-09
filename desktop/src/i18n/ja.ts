@@ -229,6 +229,7 @@ export const ja = {
     apiKeyNotSet: "(未設定)",
     apiKeyCancel: "キャンセル",
     apiKeySave: "保存",
+    apiKeySignOut: "ログアウト",
     apiKeyShow: "表示",
     apiKeyHide: "非表示",
     environment: "環境",

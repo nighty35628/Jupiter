@@ -31,6 +31,7 @@ import {
   type DesktopOpenTab,
   type EditMode,
   bridgeEndpointEnv,
+  clearApiKey,
   isPlausibleKey,
   isReasoningEffort,
   loadApiKey,
@@ -270,6 +271,7 @@ type InMessage = { tabId?: string } & (
   | { cmd: "library_refresh"; id: string }
   | { cmd: "new_chat"; workspaceDir?: string; openInNewTab?: boolean }
   | { cmd: "setup_save_key"; key: string }
+  | { cmd: "settings_sign_out" }
   | { cmd: "settings_get" }
   | {
       cmd: "settings_save";
@@ -4041,6 +4043,28 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emit({
           type: "$error",
           message: `saveApiKey failed: ${(err as Error).message}`,
+        });
+      }
+      return;
+    }
+
+    if (msg.cmd === "settings_sign_out") {
+      try {
+        clearApiKey();
+        for (const t of tabs.values()) {
+          t.aborter?.abort();
+          t.aborter = null;
+          t.runtime = null;
+          emitSettings(t);
+          emit({ type: "$needs_setup", reason: "no_api_key" }, t.id);
+          void emitBalance(t);
+        }
+        const statusTab = msg.tabId ? (tabs.get(msg.tabId) ?? first) : first;
+        if (statusTab) emitStatus(statusTab, "Signed out");
+      } catch (err) {
+        emit({
+          type: "$error",
+          message: `settings_sign_out failed: ${(err as Error).message}`,
         });
       }
       return;

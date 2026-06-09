@@ -20,12 +20,12 @@ export default defineConfig([
     target: "node22",
     outDir: "dist/cli",
     banner: {
-      js: "#!/usr/bin/env node\nimport { createRequire as __cr } from 'node:module'; if (typeof globalThis.require === 'undefined') { globalThis.require = __cr(import.meta.url); }",
+      js: "#!/usr/bin/env node\nimport { createRequire as __cr } from 'node:module'; import { dirname as __j_dirname } from 'node:path'; import { fileURLToPath as __j_fileURLToPath } from 'node:url'; const __dirname = __j_dirname(__j_fileURLToPath(import.meta.url)); if (typeof globalThis.require === 'undefined') { globalThis.require = __cr(import.meta.url); }",
     },
     platform: "node",
     noExternal: [/.*/],
     esbuildOptions(opts) {
-      opts.external = [...(opts.external ?? []), "react-devtools-core", "@larksuiteoapi/node-sdk"];
+      opts.external = [...(opts.external ?? []), "react-devtools-core"];
     },
   },
   // Dashboard is now built by Vite (npm run build:dashboard).

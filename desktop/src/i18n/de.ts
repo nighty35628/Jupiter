@@ -240,6 +240,7 @@ export const de: typeof en = {
     apiKeyNotSet: "(nicht gesetzt)",
     apiKeyCancel: "Abbrechen",
     apiKeySave: "Speichern",
+    apiKeySignOut: "Abmelden",
     apiKeyShow: "anzeigen",
     apiKeyHide: "verbergen",
     environment: "Umgebung",

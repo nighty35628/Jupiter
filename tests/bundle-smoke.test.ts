@@ -53,7 +53,7 @@ describe("bundled dist — tokenizer path resolution", () => {
       const leakedImports = jsFiles.flatMap((f) => {
         const body = readFileSync(resolve(distDir, f), "utf8");
         const hits: string[] = [];
-        for (const pkg of ["commander", "ink", "undici"]) {
+        for (const pkg of ["commander", "ink", "undici", "@larksuiteoapi/node-sdk"]) {
           if (new RegExp(`from\\s*["']${pkg}["']`).test(body)) hits.push(`${f}:${pkg}`);
         }
         return hits;
@@ -62,6 +62,25 @@ describe("bundled dist — tokenizer path resolution", () => {
         leakedImports,
         `dist/cli/*.js still imports runtime deps from node_modules: ${leakedImports.join(", ")}`,
       ).toEqual([]);
+    },
+  );
+
+  (cliExists ? it : it.skip)(
+    "dist/cli/desktop chunk imports without CommonJS globals",
+    async () => {
+      const { readdirSync } = await import("node:fs");
+      const distDir = resolve("dist/cli");
+      const desktopChunk = readdirSync(distDir).find((f) => /^desktop-.*\.js$/.test(f));
+      expect(desktopChunk).toBeTruthy();
+      const desktopUrl = pathToFileURL(resolve(distDir, desktopChunk ?? "")).href;
+      const result = spawnSync(
+        "node",
+        ["--input-type=module", "-e", `await import("${desktopUrl}"); console.log("desktop-ok");`],
+        { encoding: "utf8", timeout: 30_000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).not.toMatch(/__dirname is not defined/);
+      expect(result.stdout).toContain("desktop-ok");
     },
   );
 

@@ -228,6 +228,7 @@ export const en = {
     apiKeyNotSet: "(not set)",
     apiKeyCancel: "Cancel",
     apiKeySave: "Save",
+    apiKeySignOut: "Sign out",
     apiKeyShow: "show",
     apiKeyHide: "hide",
     environment: "Environment",

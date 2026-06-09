@@ -3,6 +3,37 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.1] — 2026-06-09
+
+### 中文
+
+**依赖打包修复。** 修复桌面发布包中的飞书 SDK 运行时依赖问题：`@larksuiteoapi/node-sdk` 现在会随 CLI
+bundle 一起内联，避免安装后的桌面端启动飞书通道时因为依赖未随包发布而失败。
+
+**桌面 bundle 兼容性。** 修复 desktop CLI chunk 在 ESM 环境直接导入时缺少 `__dirname` 的问题，
+避免打包后的 desktop 入口因为 CommonJS 全局变量不可用而失败。bundle smoke test 现在同时检查飞书 SDK
+不会再次被误标为 external，并验证 desktop chunk 可以被 Node ESM 直接导入。
+
+**API key 状态修复。** 设置页新增 API key 退出登录入口；退出后会清除保存的 key、重置 setup 状态，
+并同步清理当前进程中的 `DEEPSEEK_API_KEY`。保存新 key 时也会标记 setup 已完成。桌面端、根包、Tauri 配置、
+CHANGELOG 和 GitHub Release notes 版本统一升级为 `0.99.1`。
+
+### English
+
+**Dependency bundling fix.** Fixed the Feishu SDK runtime dependency in desktop release packages:
+`@larksuiteoapi/node-sdk` is now inlined into the CLI bundle so installed desktop builds can start the Feishu
+channel without missing a dependency at runtime.
+
+**Desktop bundle compatibility.** Fixed desktop CLI chunk imports in ESM environments where `__dirname` was not
+available, preventing bundled desktop entrypoints from failing on missing CommonJS globals. The bundle smoke
+test now checks that the Feishu SDK is not accidentally marked external again and that the desktop chunk can be
+imported directly by Node ESM.
+
+**API-key state fix.** Settings now includes an API-key sign-out path; signing out clears the saved key, resets
+setup state, and removes the current process `DEEPSEEK_API_KEY`. Saving a new key now also marks setup as
+completed. Desktop, root package, Tauri config, CHANGELOG, and GitHub Release notes versions are aligned on
+`0.99.1`.
+
 ## [0.99.0] — 2026-06-09
 
 ### 中文

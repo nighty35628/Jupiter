@@ -225,6 +225,7 @@ export const zhCN: typeof en = {
     apiKeyNotSet: "(未设置)",
     apiKeyCancel: "取消",
     apiKeySave: "保存",
+    apiKeySignOut: "退出登录",
     apiKeyShow: "显示",
     apiKeyHide: "隐藏",
     environment: "运行环境",

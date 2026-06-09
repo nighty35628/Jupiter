@@ -6,6 +6,7 @@ import {
   type DesktopOpenTab,
   addProjectPathAllowed,
   addProjectShellAllowed,
+  clearApiKey,
   clearProjectPathAllowed,
   clearProjectShellAllowed,
   editModeHintShown,
@@ -147,6 +148,27 @@ describe("config", () => {
     saveApiKey("sk-freshfromui00000000000", path);
     expect(loadApiKey(path)).toBe("sk-freshfromui00000000000");
     expect(process.env.DEEPSEEK_API_KEY).toBe("sk-freshfromui00000000000");
+  });
+
+  it("clearApiKey removes the saved key, resets setup, and clears the current env key", () => {
+    process.env.DEEPSEEK_API_KEY = "sk-currentenv000000000000";
+    writeConfig(
+      {
+        apiKey: "sk-config00000000000000",
+        setupCompleted: true,
+        model: "deepseek-v4-pro",
+      },
+      path,
+    );
+
+    clearApiKey(path);
+
+    const cfg = readConfig(path);
+    expect(cfg.apiKey).toBeUndefined();
+    expect(cfg.setupCompleted).toBe(false);
+    expect(cfg.model).toBe("deepseek-v4-pro");
+    expect(process.env.DEEPSEEK_API_KEY).toBeUndefined();
+    expect(loadApiKey(path)).toBeUndefined();
   });
 
   it("loadApiKey returns undefined when nothing set", () => {

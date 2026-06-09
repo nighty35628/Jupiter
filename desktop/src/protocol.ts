@@ -788,6 +788,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | ({ cmd: "memory_save" } & MemoryWriteInput)
   | { cmd: "new_chat"; workspaceDir?: string; openInNewTab?: boolean }
   | { cmd: "setup_save_key"; key: string }
+  | { cmd: "settings_sign_out" }
   | { cmd: "settings_get" }
   | ({ cmd: "settings_save" } & SettingsPatch)
   | { cmd: "qq_status_get" }

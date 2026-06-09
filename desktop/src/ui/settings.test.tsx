@@ -52,8 +52,10 @@ const usage: UsageStats = {
 };
 
 function renderSettings({
+  settings: settingsOverride,
   onOpenAbout = vi.fn(),
   onSave = vi.fn(),
+  onSignOutApiKey = vi.fn(),
   memory = [],
   onReadMemory = vi.fn(),
   onRefreshMemory = vi.fn(),
@@ -65,8 +67,10 @@ function renderSettings({
   onDeleteArchivedSession = vi.fn(),
   initialPage,
 }: {
+  settings?: Partial<SettingsType>;
   onOpenAbout?: () => void;
   onSave?: (...args: any[]) => void;
+  onSignOutApiKey?: () => void;
   memory?: MemoryEntryInfo[];
   onReadMemory?: (path: string) => void;
   onRefreshMemory?: () => void;
@@ -80,7 +84,7 @@ function renderSettings({
 } = {}) {
   render(
     <SettingsModal
-      settings={settings}
+      settings={{ ...settings, ...settingsOverride }}
       balance={null}
       usage={usage}
       currency="USD"
@@ -107,6 +111,7 @@ function renderSettings({
       onClose={vi.fn()}
       onSave={onSave}
       onSaveApiKey={vi.fn()}
+      onSignOutApiKey={onSignOutApiKey}
       onLoadQQ={vi.fn()}
       onConnectQQ={vi.fn()}
       onDisconnectQQ={vi.fn()}
@@ -187,6 +192,19 @@ describe("SettingsModal", () => {
     );
 
     expect(onSave).toHaveBeenCalledWith({ processCardsDefaultOpen: true });
+  });
+
+  it("signs out of the current API key from the integrations page", () => {
+    const onSignOutApiKey = vi.fn();
+    renderSettings({
+      settings: { apiKeyPrefix: "sk-abc…xyz" },
+      onSignOutApiKey,
+    });
+
+    fireEvent.click(screen.getByText("Integrations"));
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    expect(onSignOutApiKey).toHaveBeenCalledTimes(1);
   });
 
   it("saves the model memory confirmation setting", () => {

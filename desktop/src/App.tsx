@@ -2654,6 +2654,7 @@ function TabRuntimeInner({
     (key: string) => sendRpc({ cmd: "setup_save_key", key }),
     [sendRpc],
   );
+  const signOutApiKey = useCallback(() => sendRpc({ cmd: "settings_sign_out" }), [sendRpc]);
   const addMcpSpec = useCallback(
     (spec: string) => sendRpc({ cmd: "mcp_specs_add", spec }),
     [sendRpc],
@@ -4286,6 +4287,7 @@ function TabRuntimeInner({
                 onClose={() => setSettingsOpen(false)}
                 onSave={applySettingsPatch}
                 onSaveApiKey={saveApiKey}
+                onSignOutApiKey={signOutApiKey}
                 onLoadQQ={loadQQSettings}
                 onConnectQQ={connectQQ}
                 onDisconnectQQ={disconnectQQ}

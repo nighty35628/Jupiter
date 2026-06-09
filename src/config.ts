@@ -1104,10 +1104,21 @@ export function saveApiKey(key: string, path: string = defaultConfigPath()): voi
   const cfg = readConfig(path);
   const trimmed = key.trim();
   cfg.apiKey = trimmed;
+  cfg.setupCompleted = true;
   writeConfig(cfg, path);
   // A stale process env (User-level Windows env, `.env`, shell rc) shadows config in
   // loadEndpoint's fallback branch — an explicit UI save must win for the current run.
   if (trimmed) process.env.DEEPSEEK_API_KEY = trimmed;
+}
+
+export function clearApiKey(path: string = defaultConfigPath()): void {
+  const cfg = readConfig(path);
+  // biome-ignore lint/performance/noDelete: JSON.stringify omits deleted keys; assigning undefined would leave process.env as "undefined" below.
+  delete cfg.apiKey;
+  cfg.setupCompleted = false;
+  writeConfig(cfg, path);
+  // biome-ignore lint/performance/noDelete: process.env coerces undefined to the string "undefined".
+  delete process.env.DEEPSEEK_API_KEY;
 }
 
 /** Windows: case-insensitive — NTFS treats `F:\Foo` and `f:\foo` as one directory (#402). */

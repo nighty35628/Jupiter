@@ -91,6 +91,7 @@ export function SettingsModal({
   onClose,
   onSave,
   onSaveApiKey,
+  onSignOutApiKey,
   onLoadQQ,
   onConnectQQ,
   onDisconnectQQ,
@@ -147,6 +148,7 @@ export function SettingsModal({
   onClose: () => void;
   onSave: (patch: SettingsPatch) => void;
   onSaveApiKey: (key: string) => void;
+  onSignOutApiKey: () => void;
   onLoadQQ: () => void;
   onConnectQQ: () => void;
   onDisconnectQQ: () => void;
@@ -280,6 +282,7 @@ export function SettingsModal({
                   apiKeyPrefix={settings.apiKeyPrefix}
                   onSave={onSave}
                   onSaveApiKey={onSaveApiKey}
+                  onSignOutApiKey={onSignOutApiKey}
                 />
                 <WebSearchSection settings={settings} onSave={onSave} />
                 <QQChannelSection
@@ -1335,11 +1338,13 @@ function ApiKeySection({
   apiKeyPrefix,
   onSave,
   onSaveApiKey,
+  onSignOutApiKey,
 }: {
   baseUrl?: string;
   apiKeyPrefix?: string;
   onSave: (patch: SettingsPatch) => void;
   onSaveApiKey: (key: string) => void;
+  onSignOutApiKey: () => void;
 }) {
   const [key, setKey] = useState("");
   const [urlDraft, setUrlDraft] = useState(baseUrl ?? "");
@@ -1375,6 +1380,18 @@ function ApiKeySection({
           >
             {t("settings.apiKeySave")}
           </button>
+          {apiKeyPrefix ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setKey("");
+                onSignOutApiKey();
+              }}
+            >
+              {t("settings.apiKeySignOut")}
+            </button>
+          ) : null}
         </div>
       </div>
       <div className="setting-row">
