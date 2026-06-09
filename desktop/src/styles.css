@@ -8103,6 +8103,13 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   margin-top: 2px;
   line-height: 1.5;
 }
+.settings-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 /* form controls */
 .toggle {
@@ -13080,6 +13087,24 @@ html[data-platform="macos"] .app {
 
 .empty-state .composer-wrap--hero .composer textarea {
   min-height: 96px;
+  text-align: center;
+}
+
+.empty-state .composer-wrap--hero .composer-backdrop {
+  min-height: 96px;
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.empty-state .composer-wrap--hero .composer-textarea-wrap {
+  display: grid;
+  align-items: center;
+}
+
+.empty-state .composer-wrap--hero .composer textarea::placeholder {
+  text-align: center;
 }
 
 .empty-suggestion {

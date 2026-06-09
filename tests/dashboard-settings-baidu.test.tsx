@@ -62,19 +62,43 @@ function renderSettingsModal(
       skills={[]}
       memory={[]}
       memoryDetail={null}
+      archivedSessions={[]}
       qq={null}
+      feishu={null}
       onClose={vi.fn()}
       onSave={onSave}
       onSaveApiKey={vi.fn()}
+      onSignOutApiKey={vi.fn()}
       onLoadQQ={vi.fn()}
       onConnectQQ={vi.fn()}
       onDisconnectQQ={vi.fn()}
       onSaveQQConfig={vi.fn()}
       onOpenQQApplyLink={vi.fn()}
+      onLoadFeishu={vi.fn()}
+      onConnectFeishu={vi.fn()}
+      onDisconnectFeishu={vi.fn()}
+      onSaveFeishuConfig={vi.fn()}
+      onOpenFeishuApplyLink={vi.fn()}
       onPickWorkspace={vi.fn()}
       onAddMcpSpec={vi.fn()}
       onRemoveMcpSpec={vi.fn()}
+      onEnableMcpSpec={vi.fn()}
+      onDisableMcpSpec={vi.fn()}
+      onReconnectMcpSpecs={vi.fn()}
+      skillRoots={[]}
+      onAddSkillPath={vi.fn()}
+      onRemoveSkillPath={vi.fn()}
+      onCreateSkill={vi.fn()}
+      onSetSkillModel={vi.fn()}
       onReadMemory={vi.fn()}
+      onRefreshMemory={vi.fn()}
+      onDeleteMemory={vi.fn()}
+      onSaveMemory={vi.fn()}
+      onRefreshArchivedSessions={vi.fn()}
+      onRestoreArchivedSession={vi.fn()}
+      onDeleteArchivedSession={vi.fn()}
+      onClearArchivedSessions={vi.fn()}
+      onOpenAbout={vi.fn()}
     />,
   );
 }

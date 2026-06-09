@@ -1,24 +1,73 @@
-import { type ExternalSessionSource, importExternalSession } from "../../session-import.js";
+import {
+  type ExternalSessionSelection,
+  type ExternalSessionSource,
+  discoverExternalSessionCandidates,
+  importExternalSession,
+  importExternalSessions,
+} from "../../session-import.js";
 
 export interface ImportSessionsOptions {
-  source: string;
-  path: string;
+  source?: string;
+  path?: string;
+  paths?: string[];
   name?: string;
   workspace?: string;
   summary?: string;
   force?: boolean;
+  scan?: boolean;
+  includeSubagents?: boolean;
 }
 
 export function importSessionsCommand(opts: ImportSessionsOptions): void {
-  const source = normalizeSource(opts.source);
-  if (!source) {
+  const source = opts.source ? normalizeSource(opts.source) : undefined;
+  if (opts.source && !source) {
     console.error(`unsupported source "${opts.source}" (expected: claude or codex).`);
+    process.exit(1);
+  }
+  if (opts.scan) {
+    for (const candidate of discoverExternalSessionCandidates({
+      includeSubagents: opts.includeSubagents,
+    })) {
+      const imported = candidate.imported ? " imported" : "";
+      console.log(
+        `${candidate.source}\t${candidate.messageCount}\t${candidate.summary ?? candidate.name}${imported}\t${candidate.path}`,
+      );
+    }
+    return;
+  }
+  const paths = [...(opts.paths ?? []), ...(opts.path ? [opts.path] : [])];
+  const hasPrefixedPath = paths.some((path) => /^(claude|codex):/.test(path));
+  if (paths.length > 1 || hasPrefixedPath || (paths.length === 0 && source)) {
+    const items: ExternalSessionSelection[] | undefined =
+      paths.length > 0
+        ? paths.map((path) => {
+            const parsed = parsePathSelection(path, source);
+            if (!parsed) {
+              console.error(`cannot infer source for "${path}" -- pass --source claude|codex.`);
+              process.exit(1);
+            }
+            return parsed;
+          })
+        : undefined;
+    const result = importExternalSessions({
+      sources: source ? [source] : undefined,
+      items,
+      workspace: opts.workspace,
+      includeSubagents: opts.includeSubagents,
+    });
+    console.log(
+      `imported ${result.imported} session(s), skipped ${result.skipped}, failed ${result.failed}.`,
+    );
+    return;
+  }
+  if (!source || paths.length !== 1) {
+    console.error("pass --scan, --source <claude|codex>, or --path <jsonl>.");
     process.exit(1);
   }
   try {
     const result = importExternalSession({
       source,
-      path: opts.path,
+      path: paths[0]!,
       name: opts.name,
       workspace: opts.workspace,
       summary: opts.summary,
@@ -41,4 +90,13 @@ export function importSessionsCommand(opts: ImportSessionsOptions): void {
 
 function normalizeSource(value: string): ExternalSessionSource | undefined {
   return value === "claude" || value === "codex" ? value : undefined;
+}
+
+function parsePathSelection(
+  value: string,
+  fallbackSource: ExternalSessionSource | undefined,
+): ExternalSessionSelection | undefined {
+  const match = /^(claude|codex):(.+)$/.exec(value);
+  if (match) return { source: match[1] as ExternalSessionSource, path: match[2]! };
+  return fallbackSource ? { source: fallbackSource, path: value } : undefined;
 }

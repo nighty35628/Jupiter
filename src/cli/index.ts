@@ -473,6 +473,33 @@ program
   });
 
 program
+  .command("import-sessions")
+  .description("import local Claude/Codex session transcripts")
+  .option("--scan", "list importable local sessions")
+  .option("--source <source>", "claude or codex")
+  .option("--path <path>", "single transcript path")
+  .option("--paths <paths...>", "transcript paths; each may be prefixed with claude: or codex:")
+  .option("--name <name>", "target Jupiter session name for single-file import")
+  .option("--workspace <path>", "workspace path to store in imported metadata")
+  .option("--summary <summary>", "summary to store in imported metadata")
+  .option("--force", "overwrite an existing target session")
+  .option("--include-subagents", "include subagent transcripts in scan or bulk import")
+  .action(async (opts) => {
+    const { importSessionsCommand } = await import("./commands/import-sessions.js");
+    importSessionsCommand({
+      source: opts.source,
+      path: opts.path,
+      paths: opts.paths,
+      name: opts.name,
+      workspace: opts.workspace,
+      summary: opts.summary,
+      force: !!opts.force,
+      scan: !!opts.scan,
+      includeSubagents: !!opts.includeSubagents,
+    });
+  });
+
+program
   .command("events <name>")
   .description(t("cli.events"))
   .option("--type <type>", t("ui.eventTypeHint"))

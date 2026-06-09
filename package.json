@@ -1,6 +1,6 @@
 {
   "name": "jupiter",
-  "version": "0.99.2",
+  "version": "0.99.3",
   "description": "Jupiter: a cache-first AI workbench with full coding-agent workflows, workspace libraries, and tabbed desktop sessions.",
   "type": "module",
   "bin": {

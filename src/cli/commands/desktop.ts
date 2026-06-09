@@ -167,6 +167,7 @@ import {
 import { parseMcpSpec, specToRaw } from "../../mcp/spec.js";
 import { isProjectMemoryPath } from "../../memory/project.js";
 import {
+  clearArchivedSessions,
   deleteArchivedSession,
   deleteSession,
   isInternalSessionName,
@@ -189,6 +190,7 @@ import { QQChannel } from "../../qq/channel.js";
 import {
   type ExternalSessionSource,
   discoverExternalSessionApps,
+  discoverExternalSessionCandidates,
   importExternalSession,
   importExternalSessions,
 } from "../../session-import.js";
@@ -239,6 +241,7 @@ type InMessage = { tabId?: string } & (
   | { cmd: "session_archive_many"; names: string[] }
   | { cmd: "session_restore_archived"; name: string }
   | { cmd: "session_delete_archived"; name: string }
+  | { cmd: "session_clear_archived" }
   | { cmd: "session_load"; name: string; openInNewTab?: boolean }
   | { cmd: "session_rename"; name: string; title: string }
   | {
@@ -261,7 +264,11 @@ type InMessage = { tabId?: string } & (
       name?: string;
     }
   | { cmd: "session_import_scan" }
-  | { cmd: "session_import_bulk"; sources: ExternalSessionSource[] }
+  | {
+      cmd: "session_import_bulk";
+      sources?: ExternalSessionSource[];
+      items?: Array<{ source: ExternalSessionSource; path: string }>;
+    }
   | { cmd: "memory_read"; path: string }
   | { cmd: "memory_refresh" }
   | { cmd: "memory_delete"; path: string }
@@ -486,6 +493,7 @@ interface ArchivedSessionsEvent {
 interface SessionImportSourcesEvent {
   type: "$session_import_sources";
   apps: ReturnType<typeof discoverExternalSessionApps>;
+  candidates: ReturnType<typeof discoverExternalSessionCandidates>;
 }
 
 interface SessionImportResultEvent {
@@ -4404,6 +4412,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       emitArchivedSessions(tab);
       return;
     }
+    if (msg.cmd === "session_clear_archived") {
+      clearArchivedSessions();
+      emitArchivedSessions(tab);
+      return;
+    }
     if (msg.cmd === "session_rename") {
       try {
         const trimmed = normalizeSessionTitle(msg.title);
@@ -4484,6 +4497,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           {
             type: "$session_import_sources",
             apps: discoverExternalSessionApps(),
+            candidates: discoverExternalSessionCandidates(),
           },
           tab.id,
         );
@@ -4502,6 +4516,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       try {
         const result = importExternalSessions({
           sources: msg.sources,
+          items: msg.items,
           workspace: tab.rootDir,
         });
         emitSessions(tab);

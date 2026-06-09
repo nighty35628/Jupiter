@@ -123,6 +123,7 @@ export function SettingsModal({
   onRefreshArchivedSessions,
   onRestoreArchivedSession,
   onDeleteArchivedSession,
+  onClearArchivedSessions,
   onOpenAbout,
 }: {
   settings: SettingsType;
@@ -188,6 +189,7 @@ export function SettingsModal({
   onRefreshArchivedSessions: () => void;
   onRestoreArchivedSession: (name: string) => void;
   onDeleteArchivedSession: (name: string) => void;
+  onClearArchivedSessions: () => void;
   onOpenAbout: () => void;
 }) {
   const [page, setPage] = useState<PageId>(initialPage ?? "general");
@@ -366,6 +368,7 @@ export function SettingsModal({
                 onRefresh={onRefreshArchivedSessions}
                 onRestore={onRestoreArchivedSession}
                 onDelete={onDeleteArchivedSession}
+                onClear={onClearArchivedSessions}
               />
             )}
             {page === "rules" && <PageRules settings={settings} onSave={onSave} />}
@@ -1970,11 +1973,13 @@ function PageArchives({
   onRefresh,
   onRestore,
   onDelete,
+  onClear,
 }: {
   sessions: SessionInfo[];
   onRefresh: () => void;
   onRestore: (name: string) => void;
   onDelete: (name: string) => void;
+  onClear: () => void;
 }) {
   const sorted = [...sessions].sort((a, b) => {
     const aTime = a.archivedAt ?? Date.parse(a.mtime);
@@ -1988,10 +1993,18 @@ function PageArchives({
           <div className="n">{t("settings.archivesTitle")}</div>
           <div className="h">{t("settings.archivesHint")}</div>
         </div>
-        <button type="button" className="btn" onClick={onRefresh}>
-          <I.refresh size={12} />
-          <span>{t("settings.archivesRefresh")}</span>
-        </button>
+        <div className="settings-row-actions">
+          {sorted.length > 0 ? (
+            <button type="button" className="btn danger" onClick={onClear}>
+              <I.trash size={12} />
+              <span>{t("settings.archivesClear")}</span>
+            </button>
+          ) : null}
+          <button type="button" className="btn" onClick={onRefresh}>
+            <I.refresh size={12} />
+            <span>{t("settings.archivesRefresh")}</span>
+          </button>
+        </div>
       </div>
       {sorted.length === 0 ? (
         <div className="muted-card">{t("settings.archivesEmpty")}</div>

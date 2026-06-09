@@ -75,6 +75,7 @@ function initialState(): Parameters<typeof reduce>[0] {
     archivedSessions: [],
     librarySources: [],
     externalImportSources: [],
+    externalImportCandidates: [],
     settings: null,
     qq: null,
     feishu: null,

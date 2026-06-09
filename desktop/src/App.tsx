@@ -48,7 +48,8 @@ import type {
   ChoiceVerdict,
   ConfirmationChoice,
   ExternalSessionApp,
-  ExternalSessionSource,
+  ExternalSessionCandidate,
+  ExternalSessionSelection,
   IncomingEvent,
   JobInfo,
   LibrarySource,
@@ -410,6 +411,7 @@ type State = {
   sessions: SessionInfo[];
   archivedSessions: SessionInfo[];
   externalImportSources: ExternalSessionApp[];
+  externalImportCandidates: ExternalSessionCandidate[];
   settings: Settings | null;
   qq: QQDesktopSettingsState | null;
   feishu: FeishuDesktopSettingsState | null;
@@ -1566,7 +1568,11 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "$archived_sessions":
       return { ...state, archivedSessions: ev.items };
     case "$session_import_sources":
-      return { ...state, externalImportSources: ev.apps };
+      return {
+        ...state,
+        externalImportSources: ev.apps,
+        externalImportCandidates: ev.candidates ?? [],
+      };
     case "$session_import_result":
       return {
         ...state,
@@ -2080,6 +2086,7 @@ type TabRuntimeSnapshot = {
   busy: boolean;
   sessions: SessionInfo[];
   importSources: ExternalSessionApp[];
+  importCandidates: ExternalSessionCandidate[];
   workspaceDir?: string;
   recentWorkspaces: string[];
   model?: string;
@@ -2185,6 +2192,7 @@ function TabRuntimeInner({
     sessions: [],
     archivedSessions: [],
     externalImportSources: [],
+    externalImportCandidates: [],
     settings: null,
     qq: null,
     feishu: null,
@@ -2300,6 +2308,7 @@ function TabRuntimeInner({
       busy: state.busy,
       sessions: state.sessions,
       importSources: state.externalImportSources,
+      importCandidates: state.externalImportCandidates,
       workspaceDir: state.settings?.workspaceDir,
       recentWorkspaces: state.settings?.recentWorkspaces ?? [],
       model: state.settings?.model ?? state.model,
@@ -2311,6 +2320,7 @@ function TabRuntimeInner({
     onRuntimeSnapshot,
     state.busy,
     state.currentSession,
+    state.externalImportCandidates,
     state.externalImportSources,
     state.messages.length,
     state.model,
@@ -4329,6 +4339,7 @@ function TabRuntimeInner({
                 onDeleteArchivedSession={(name) =>
                   sendRpc({ cmd: "session_delete_archived", name })
                 }
+                onClearArchivedSessions={() => sendRpc({ cmd: "session_clear_archived" })}
                 onOpenAbout={() => {
                   setSettingsOpen(false);
                   setAboutOpen(true);
@@ -5144,6 +5155,9 @@ export function App() {
   const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, TabRuntimeSnapshot>>({});
   const [sidebarSessions, setSidebarSessions] = useState<SessionInfo[]>([]);
   const [sidebarImportSources, setSidebarImportSources] = useState<ExternalSessionApp[]>([]);
+  const [sidebarImportCandidates, setSidebarImportCandidates] = useState<ExternalSessionCandidate[]>(
+    [],
+  );
   const dispatchersRef = useRef<Map<string, TabDispatcher>>(new Map());
   const pendingEventsRef = useRef<Map<string, TabAction[]>>(new Map());
   const runtimeControlsRef = useRef<Map<string, TabRuntimeControls>>(new Map());
@@ -5351,6 +5365,7 @@ export function App() {
         current.busy === snapshot.busy &&
         current.sessions === snapshot.sessions &&
         current.importSources === snapshot.importSources &&
+        current.importCandidates === snapshot.importCandidates &&
         current.workspaceDir === snapshot.workspaceDir &&
         current.recentWorkspaces === snapshot.recentWorkspaces &&
         current.model === snapshot.model &&
@@ -5496,6 +5511,7 @@ export function App() {
 
             if (ev.type === "$session_import_sources") {
               setSidebarImportSources(ev.apps);
+              setSidebarImportCandidates(ev.candidates ?? []);
             }
 
             if (
@@ -5759,6 +5775,7 @@ export function App() {
             sessions={sidebarSessions}
             sessionActivity={sidebarSessionActivity}
             importSources={sidebarImportSources}
+            importCandidates={sidebarImportCandidates}
             activeName={activeRuntimeSnapshot?.currentSession}
             workspaceDir={activeWorkspaceDir}
             recentWorkspaces={activeRecentWorkspaces}
@@ -5796,10 +5813,10 @@ export function App() {
               sendRpcToTab(activeTabId, { cmd: "session_archive_many", names })
             }
             onRefreshImportSources={() => sendRpcToTab(activeTabId, { cmd: "session_import_scan" })}
-            onImportDetectedSessions={(sources: ExternalSessionSource[]) =>
+            onImportDetectedSessions={(items: ExternalSessionSelection[]) =>
               sendRpcToTab(activeTabId, {
                 cmd: "session_import_bulk",
-                sources,
+                items,
               })
             }
             onImportSession={({ source, path, name }) =>

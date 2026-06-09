@@ -131,6 +131,50 @@ describe("filesystem outside-sandbox gate (#684)", () => {
     expect(onDisk).toBe("from-test");
   });
 
+  it("expands user-home paths before resolving against the workspace", async () => {
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const fakeHome = await mkdtemp(join(tmpdir(), "jupiter-home-"));
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+
+    try {
+      await fs.mkdir(join(fakeHome, "Desktop"), { recursive: true });
+      const target = join(fakeHome, "Desktop", "created.txt");
+      const call = tools.dispatch(
+        "write_file",
+        { path: "~/Desktop/created.txt", content: "home-file" },
+        { confirmationGate: gate },
+      );
+      await new Promise((r) => setTimeout(r, 5));
+
+      expect(gateRequests).toHaveLength(1);
+      const payload = gateRequests[0]?.payload as { path: string; intent: string };
+      expect(payload.path).toBe(target);
+      expect(payload.intent).toBe("write");
+      gate.resolve(gate.current!.id, { type: "run_once" });
+      await call;
+
+      expect(await fs.readFile(target, "utf8")).toBe("home-file");
+      await expect(fs.access(join(root, "~", "Desktop", "created.txt"))).rejects.toBeTruthy();
+
+      await tools.dispatch(
+        "write_file",
+        { path: "～/Desktop/fullwidth.txt", content: "fullwidth-home-file" },
+        { confirmationGate: gate },
+      );
+      expect(await fs.readFile(join(fakeHome, "Desktop", "fullwidth.txt"), "utf8")).toBe(
+        "fullwidth-home-file",
+      );
+    } finally {
+      if (originalHome === undefined) process.env.HOME = undefined;
+      else process.env.HOME = originalHome;
+      if (originalUserProfile === undefined) process.env.USERPROFILE = undefined;
+      else process.env.USERPROFILE = originalUserProfile;
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
   it("Windows drive-letter paths route to the gate (covers the looksAbsoluteSystemPath fallback)", async () => {
     // This path doesn't exist on POSIX but the resolver/check fires regardless.
     if (process.platform !== "win32") return;

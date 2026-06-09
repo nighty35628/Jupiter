@@ -19,6 +19,7 @@ import {
   archiveSession,
   archivedSessionPath,
   archivedSessionsDir,
+  clearArchivedSessions,
   deleteArchivedSession,
   deleteSession,
   findSessionsByPrefix,
@@ -371,6 +372,19 @@ describe("session persistence", () => {
     expect(deleteArchivedSession("restore-me")).toBe(false);
     expect(existsSync(archivedSessionPath("restore-me"))).toBe(false);
     expect(existsSync(sessionPath("restore-me"))).toBe(false);
+  });
+
+  it("clears all archived sessions without deleting active sessions", () => {
+    appendSessionMessage("active-live", { role: "user", content: "live" });
+    appendSessionMessage("archived-a", { role: "user", content: "a" });
+    appendSessionMessage("archived-b", { role: "user", content: "b" });
+    expect(moveSessionToArchive("archived-a", 1_000)).toBe(true);
+    expect(moveSessionToArchive("archived-b", 2_000)).toBe(true);
+
+    expect(clearArchivedSessions()).toBe(2);
+
+    expect(listArchivedSessions()).toEqual([]);
+    expect(loadSessionMessages("active-live")).toEqual([{ role: "user", content: "live" }]);
   });
 
   it("migrates legacy metadata-archived sessions into the archive directory", () => {

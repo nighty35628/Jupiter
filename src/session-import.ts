@@ -1,5 +1,13 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
+import * as os from "node:os";
 import { basename, extname, join } from "node:path";
 import {
   detectGitBranch,
@@ -46,6 +54,24 @@ export interface ExternalSessionApp {
   available: boolean;
   sessionCount: number;
   latestMtime?: string;
+}
+
+export interface ExternalSessionCandidate {
+  source: ExternalSessionSource;
+  label: string;
+  path: string;
+  name: string;
+  summary?: string;
+  workspace?: string;
+  messageCount: number;
+  mtime: string;
+  imported: boolean;
+  subagent: boolean;
+}
+
+export interface ExternalSessionSelection {
+  source: ExternalSessionSource;
+  path: string;
 }
 
 export interface ImportExternalSessionsResult {
@@ -144,7 +170,7 @@ export function importExternalSession(
 export function discoverExternalSessionApps(): ExternalSessionApp[] {
   return (["claude", "codex"] as const).map((source) => {
     const root = defaultSessionRoot(source);
-    const files = scanExternalSessionFiles(source);
+    const files = scanExternalSessionFiles(source).filter((file) => !isLikelySubagentFile(file));
     const latest = files[0];
     return {
       source,
@@ -157,9 +183,45 @@ export function discoverExternalSessionApps(): ExternalSessionApp[] {
   });
 }
 
+export function discoverExternalSessionCandidates(opts?: {
+  includeSubagents?: boolean;
+}): ExternalSessionCandidate[] {
+  const imported = importedPathKeys();
+  const out: ExternalSessionCandidate[] = [];
+  for (const source of ["claude", "codex"] as const) {
+    for (const file of scanExternalSessionFiles(source)) {
+      const subagent = isLikelySubagentFile(file);
+      if (subagent && opts?.includeSubagents !== true) continue;
+      try {
+        const parsed = parseExternalSessionFile(source, file.path);
+        if (parsed.messages.length === 0) continue;
+        out.push({
+          source,
+          label: source === "claude" ? "Claude Code" : "Codex",
+          path: file.path,
+          name: buildImportedSessionName(source, file.path, parsed),
+          summary: parsed.summary,
+          workspace: parsed.workspace,
+          messageCount: parsed.messages.length,
+          mtime: new Date(file.mtimeMs).toISOString(),
+          imported: imported.has(importKey(source, file.path)),
+          subagent,
+        });
+      } catch {
+        // Skip corrupt or incompatible transcripts during discovery; explicit
+        // custom import still surfaces the parser error to the user.
+      }
+    }
+  }
+  out.sort((a, b) => Date.parse(b.mtime) - Date.parse(a.mtime));
+  return out;
+}
+
 export function importExternalSessions(opts: {
-  sources: ExternalSessionSource[];
+  sources?: ExternalSessionSource[];
+  items?: ExternalSessionSelection[];
   workspace?: string;
+  includeSubagents?: boolean;
 }): ImportExternalSessionsResult {
   let imported = 0;
   let skipped = 0;
@@ -167,26 +229,28 @@ export function importExternalSessions(opts: {
   let latestName: string | undefined;
 
   const existing = importedPathKeys();
-  for (const source of opts.sources) {
-    const files = scanExternalSessionFiles(source);
-    for (const file of files) {
-      const key = importKey(source, file.path);
-      if (existing.has(key)) {
-        skipped++;
-        continue;
-      }
-      try {
-        const result = importExternalSession({
-          source,
-          path: file.path,
-          workspace: opts.workspace,
-        });
-        existing.add(key);
-        imported++;
-        latestName ||= result.name;
-      } catch {
-        failed++;
-      }
+  const items =
+    opts.items ??
+    discoverExternalSessionCandidates({ includeSubagents: opts.includeSubagents })
+      .filter((candidate) => (opts.sources ?? []).includes(candidate.source))
+      .map((candidate) => ({ source: candidate.source, path: candidate.path }));
+  for (const item of items) {
+    const key = importKey(item.source, item.path);
+    if (existing.has(key)) {
+      skipped++;
+      continue;
+    }
+    try {
+      const result = importExternalSession({
+        source: item.source,
+        path: item.path,
+        workspace: opts.workspace,
+      });
+      existing.add(key);
+      imported++;
+      latestName ||= result.name;
+    } catch {
+      failed++;
     }
   }
 
@@ -195,8 +259,8 @@ export function importExternalSessions(opts: {
 
 function defaultSessionRoot(source: ExternalSessionSource): string {
   return source === "claude"
-    ? join(homedir(), ".claude", "projects")
-    : join(homedir(), ".codex", "sessions");
+    ? join(os.homedir(), ".claude", "projects")
+    : join(os.homedir(), ".codex", "sessions");
 }
 
 function scanExternalSessionFiles(source: ExternalSessionSource): ExternalSessionFile[] {
@@ -258,6 +322,34 @@ function importedPathKeys(): Set<string> {
 
 function importKey(source: ExternalSessionSource, path: string): string {
   return `${source}:${path}`;
+}
+
+function isLikelySubagentFile(file: ExternalSessionFile): boolean {
+  const normalized = file.path.replaceAll("\\", "/");
+  if (file.source === "claude") {
+    if (normalized.includes("/subagents/")) return true;
+    if (/\/agent-[^/]+\.jsonl$/i.test(normalized)) return true;
+    return false;
+  }
+
+  const records = readJsonlHead(file.path, 24) as CodexRecord[];
+  for (const record of records) {
+    const payload = record.payload as Record<string, unknown> | undefined;
+    const threadSource =
+      firstString(payload?.thread_source) ||
+      firstString(payload?.threadSource) ||
+      firstString(payload?.source) ||
+      firstString((record as Record<string, unknown>).thread_source) ||
+      firstString((record as Record<string, unknown>).threadSource);
+    if (threadSource && threadSource !== "user") return true;
+    const parentSession =
+      firstString(payload?.parentSession) ||
+      firstString(payload?.parent_session) ||
+      firstString((record as Record<string, unknown>).parentSession) ||
+      firstString((record as Record<string, unknown>).parent_session);
+    if (parentSession) return true;
+  }
+  return false;
 }
 
 function parseClaudeSessionFile(path: string): ImportedSession {
@@ -505,6 +597,39 @@ function readJsonl(path: string): unknown[] {
         return [];
       }
     });
+}
+
+function readJsonlHead(path: string, maxRecords: number): unknown[] {
+  let raw = "";
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(64 * 1024);
+    const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+    raw = buffer.subarray(0, bytes).toString("utf8");
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Ignore close failures during best-effort discovery.
+      }
+    }
+  }
+  const out: unknown[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (out.length >= maxRecords) break;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      out.push(JSON.parse(trimmed));
+    } catch {
+      // Ignore malformed lines; full parser does the same.
+    }
+  }
+  return out;
 }
 
 function normalizeRole(value: unknown): "user" | "assistant" | undefined {

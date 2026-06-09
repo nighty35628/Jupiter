@@ -3,6 +3,37 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.3] — 2026-06-09
+
+### 中文
+
+**用户目录路径修复。** 文件系统工具现在会在沙盒判定前展开 `~/...` 和全角 `～/...`，
+避免这类路径被误当成工作区内的普通相对路径。`edit_file`、`write_file` 和 `multi_edit`
+的路径审查也使用同一套展开逻辑，让越界确认指向真实目标文件。
+
+**桌面空状态细节。** 桌面空状态的 hero 输入框、backdrop 和 placeholder 改为居中显示，
+让初始工作台布局更稳定。桌面端、根包、Tauri 配置、CHANGELOG 和 GitHub Release notes
+版本统一升级为 `0.99.3`。
+
+**归档与导入体验。** 设置页归档列表新增一键清空归档入口，只清理已归档会话，不影响活动会话。
+会话导入发现现在默认排除 Claude subagent 记录，并支持选择具体候选会话导入，避免把内部子任务误导入主会话列表。
+
+### English
+
+**Home-path handling fix.** Filesystem tools now expand `~/...` and full-width `～/...` before sandbox checks,
+preventing home-directory paths from being treated as normal workspace-relative paths. `edit_file`, `write_file`,
+and `multi_edit` path review now use the same expansion logic so outside-workspace confirmations point at the real
+target file.
+
+**Desktop empty-state polish.** The desktop empty-state hero composer, backdrop, and placeholder now center their
+content for a steadier initial workbench layout. Desktop, root package, Tauri config, CHANGELOG, and GitHub Release
+notes versions are aligned on `0.99.3`.
+
+**Archive and import workflow.** The settings archive list now includes a clear-archive action that only removes
+archived conversations, leaving active sessions intact. Session import discovery now excludes Claude subagent
+records by default and supports importing selected candidate sessions so internal subtask logs do not enter the
+main session list by accident.
+
 ## [0.99.2] — 2026-06-09
 
 ### 中文

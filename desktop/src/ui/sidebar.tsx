@@ -4,7 +4,12 @@ import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import type { SessionInfo } from "../App";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
-import type { ExternalSessionApp, ExternalSessionSource } from "../protocol";
+import type {
+  ExternalSessionApp,
+  ExternalSessionCandidate,
+  ExternalSessionSelection,
+  ExternalSessionSource,
+} from "../protocol";
 import { displayWorkspaceBasename, displayWorkspacePath } from "../workspace-display";
 
 const RENAME_MAX_CHARS = 200;
@@ -182,6 +187,7 @@ export function Sidebar({
   sessions,
   sessionActivity = {},
   importSources,
+  importCandidates,
   activeName,
   workspaceDir,
   onNewChat,
@@ -204,6 +210,7 @@ export function Sidebar({
   sessions: SessionInfo[];
   sessionActivity?: SessionActivity;
   importSources: ExternalSessionApp[];
+  importCandidates?: ExternalSessionCandidate[];
   activeName?: string;
   workspaceDir?: string;
   recentWorkspaces: string[];
@@ -217,7 +224,7 @@ export function Sidebar({
   onArchiveSession?: (name: string) => void;
   onArchiveSessions?: (names: string[]) => void;
   onRefreshImportSources: () => void;
-  onImportDetectedSessions: (sources: ImportSource[]) => void;
+  onImportDetectedSessions: (items: ExternalSessionSelection[]) => void;
   onImportSession: (payload: { source: ImportSource; path: string; name?: string }) => void;
   onOpenSettings: () => void;
   onOpenSettingsPage?: (page: "archives") => void;
@@ -1102,10 +1109,11 @@ export function Sidebar({
         <SessionImportPopover
           target={pendingImport}
           importSources={importSources}
+          importCandidates={importCandidates ?? []}
           onRefresh={onRefreshImportSources}
           onCancel={() => setPendingImport(null)}
-          onImportDetected={(sources) => {
-            onImportDetectedSessions(sources);
+          onImportDetected={(items) => {
+            onImportDetectedSessions(items);
             setPendingImport(null);
           }}
           onImport={(payload) => {
@@ -1457,6 +1465,7 @@ function SessionDeletePopover({
 function SessionImportPopover({
   target,
   importSources,
+  importCandidates,
   onRefresh,
   onCancel,
   onImportDetected,
@@ -1464,9 +1473,10 @@ function SessionImportPopover({
 }: {
   target: PendingImport;
   importSources: ExternalSessionApp[];
+  importCandidates: ExternalSessionCandidate[];
   onRefresh: () => void;
   onCancel: () => void;
-  onImportDetected: (sources: ImportSource[]) => void;
+  onImportDetected: (items: ExternalSessionSelection[]) => void;
   onImport: (payload: { source: ImportSource; path: string; name?: string }) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -1476,18 +1486,18 @@ function SessionImportPopover({
     top: target.y,
   });
   const [mode, setMode] = useState<"detected" | "custom">("detected");
-  const [selected, setSelected] = useState<ImportSource[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
   const [source, setSource] = useState<ImportSource>("claude");
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
 
   useEffect(() => {
-    const available = importSources.filter((app) => app.available).map((app) => app.source);
     setSelected((prev) => {
-      const kept = prev.filter((source) => available.includes(source));
+      const available = importCandidates.filter((item) => !item.imported).map((item) => item.path);
+      const kept = prev.filter((path) => available.includes(path));
       return kept.length > 0 ? kept : available;
     });
-  }, [importSources]);
+  }, [importCandidates]);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -1530,12 +1540,17 @@ function SessionImportPopover({
 
   const submitDetected = () => {
     if (selected.length === 0) return;
-    onImportDetected(selected);
+    const selectedSet = new Set(selected);
+    onImportDetected(
+      importCandidates
+        .filter((candidate) => selectedSet.has(candidate.path))
+        .map((candidate) => ({ source: candidate.source, path: candidate.path })),
+    );
   };
 
-  const toggleSource = (source: ImportSource) => {
+  const toggleCandidate = (path: string) => {
     setSelected((prev) =>
-      prev.includes(source) ? prev.filter((item) => item !== source) : [...prev, source],
+      prev.includes(path) ? prev.filter((item) => item !== path) : [...prev, path],
     );
   };
 
@@ -1575,35 +1590,53 @@ function SessionImportPopover({
             </button>
           </div>
           <div className="import-app-list">
-            {importSources.length === 0 ? (
+            {importSources.length === 0 && importCandidates.length === 0 ? (
               <div className="import-empty">{t("sidebarPanel.importScanning")}</div>
             ) : null}
-            {importSources.map((app) => {
-              const checked = selected.includes(app.source);
+            {importCandidates.length === 0 && importSources.length > 0 ? (
+              <div className="import-empty">{t("sidebarPanel.importNoCandidates")}</div>
+            ) : null}
+            {importCandidates.map((candidate) => {
+              const checked = selected.includes(candidate.path);
+              const title =
+                candidate.summary?.trim() ||
+                candidate.name.replace(/^(claude|codex)-/, "") ||
+                candidate.path.split(/[\\/]/).pop() ||
+                candidate.label;
+              const when = new Date(candidate.mtime).toLocaleString();
               return (
                 <button
-                  key={app.source}
+                  key={`${candidate.source}:${candidate.path}`}
                   type="button"
                   className="import-app-row"
-                  data-disabled={!app.available || undefined}
+                  data-disabled={candidate.imported || undefined}
                   onClick={() => {
-                    if (app.available) toggleSource(app.source);
+                    if (!candidate.imported) toggleCandidate(candidate.path);
                   }}
                 >
                   <span className="app-icon">
-                    {app.source === "claude" ? <I.terminal size={15} /> : <I.bot size={15} />}
+                    {candidate.source === "claude" ? (
+                      <I.terminal size={15} />
+                    ) : (
+                      <I.bot size={15} />
+                    )}
                   </span>
                   <span className="app-body">
-                    <span className="app-name">{app.label}</span>
+                    <span className="app-name">{title}</span>
                     <span className="app-meta">
-                      {app.available
-                        ? t("sidebarPanel.importSessionCount", {
-                            count: app.sessionCount,
-                          })
-                        : t("sidebarPanel.importNotFound")}
+                      {candidate.imported
+                        ? t("sidebarPanel.importAlreadyImported")
+                        : t("sidebarPanel.importCandidateMeta", {
+                            source: candidate.label,
+                            count: candidate.messageCount,
+                            when,
+                          })}
                     </span>
                   </span>
-                  <span className="switch" data-on={checked && app.available ? true : undefined} />
+                  <span
+                    className="switch"
+                    data-on={checked && !candidate.imported ? true : undefined}
+                  />
                 </button>
               );
             })}
@@ -1619,7 +1652,7 @@ function SessionImportPopover({
               disabled={selected.length === 0}
               onClick={submitDetected}
             >
-              {t("sidebarPanel.continue")}
+              {t("sidebarPanel.importSelected", { count: selected.length })}
             </button>
           </div>
         </>

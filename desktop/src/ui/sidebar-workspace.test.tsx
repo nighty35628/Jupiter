@@ -57,6 +57,69 @@ describe("desktop Sidebar workspace grouping", () => {
     expect(screen.queryByText("/tmp/other")).toBeNull();
   });
 
+  it("imports only selected discovered session candidates", async () => {
+    const onImportDetectedSessions = vi.fn();
+    render(
+      <Sidebar
+        sessions={[]}
+        importSources={[
+          {
+            source: "claude",
+            label: "Claude Code",
+            root: "/tmp/claude",
+            available: true,
+            sessionCount: 2,
+          },
+        ]}
+        importCandidates={[
+          {
+            source: "claude",
+            label: "Claude Code",
+            path: "/tmp/claude/main-a.jsonl",
+            name: "claude-main-a",
+            summary: "Main A",
+            messageCount: 2,
+            mtime: new Date("2026-06-01T00:00:00Z").toISOString(),
+            imported: false,
+            subagent: false,
+          },
+          {
+            source: "claude",
+            label: "Claude Code",
+            path: "/tmp/claude/main-b.jsonl",
+            name: "claude-main-b",
+            summary: "Main B",
+            messageCount: 3,
+            mtime: new Date("2026-06-02T00:00:00Z").toISOString(),
+            imported: false,
+            subagent: false,
+          },
+        ]}
+        activeName="desktop-current"
+        workspaceDir="/tmp/11"
+        recentWorkspaces={["/tmp/11"]}
+        onNewChat={vi.fn()}
+        onLoadSession={vi.fn()}
+        onDeleteSession={vi.fn()}
+        onRenameSession={vi.fn()}
+        onRefreshImportSources={vi.fn()}
+        onImportDetectedSessions={onImportDetectedSessions}
+        onImportSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onOpenCommands={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Import session|导入会话|セッション/ }));
+    await screen.findByText("Main A");
+    fireEvent.click(screen.getByText("Main B"));
+    fireEvent.click(screen.getByRole("button", { name: /Import selected 1/ }));
+
+    expect(onImportDetectedSessions).toHaveBeenCalledWith([
+      { source: "claude", path: "/tmp/claude/main-a.jsonl" },
+    ]);
+  });
+
   it("does not fallback untagged sessions to the current workspace", () => {
     render(
       <Sidebar

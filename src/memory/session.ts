@@ -512,6 +512,14 @@ export function deleteArchivedSession(name: string): boolean {
   return deleteSessionFiles(archivedSessionPath(name));
 }
 
+export function clearArchivedSessions(): number {
+  let deleted = 0;
+  for (const session of listArchivedSessions()) {
+    if (deleteArchivedSession(session.name)) deleted++;
+  }
+  return deleted;
+}
+
 export function migrateLegacyArchivedSessions(): number {
   let moved = 0;
   for (const session of listSessions()) {

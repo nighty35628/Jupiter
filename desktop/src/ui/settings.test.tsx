@@ -66,6 +66,7 @@ function renderSettings({
   onRefreshArchivedSessions = vi.fn(),
   onRestoreArchivedSession = vi.fn(),
   onDeleteArchivedSession = vi.fn(),
+  onClearArchivedSessions = vi.fn(),
   initialPage,
 }: {
   settings?: Partial<SettingsType>;
@@ -81,6 +82,7 @@ function renderSettings({
   onRefreshArchivedSessions?: () => void;
   onRestoreArchivedSession?: (name: string) => void;
   onDeleteArchivedSession?: (name: string) => void;
+  onClearArchivedSessions?: () => void;
   initialPage?: "memory" | "archives";
 } = {}) {
   render(
@@ -140,6 +142,7 @@ function renderSettings({
       onRefreshArchivedSessions={onRefreshArchivedSessions}
       onRestoreArchivedSession={onRestoreArchivedSession}
       onDeleteArchivedSession={onDeleteArchivedSession}
+      onClearArchivedSessions={onClearArchivedSessions}
       onOpenAbout={onOpenAbout}
     />,
   );
@@ -155,6 +158,27 @@ describe("SettingsModal", () => {
     );
 
     expect(onOpenAbout).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears archived conversations from the archive settings page", () => {
+    const onClearArchivedSessions = vi.fn();
+    renderSettings({
+      initialPage: "archives",
+      archivedSessions: [
+        {
+          name: "archived-a",
+          messageCount: 1,
+          mtime: new Date(1_000).toISOString(),
+          archivedAt: 1_000,
+          summary: "Archived A",
+        },
+      ],
+      onClearArchivedSessions,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Clear archive/ }));
+
+    expect(onClearArchivedSessions).toHaveBeenCalledTimes(1);
   });
 
   it("shows the settings body scrollbar only while the user is scrolling", () => {

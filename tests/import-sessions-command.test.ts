@@ -60,4 +60,30 @@ describe("import-sessions command", () => {
     expect(meta.workspace).toBe("/tmp/override-workspace");
     expect(meta.summary).toBe("Imported from Claude");
   });
+
+  it("imports a single prefixed path without a separate source option", () => {
+    const sourcePath = join(tmpSourceDir, "codex.jsonl");
+    writeFileSync(
+      sourcePath,
+      [
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Fix the cache key" }],
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    importSessionsCommand({
+      paths: [`codex:${sourcePath}`],
+    });
+
+    expect(loadSessionMessages("codex-Fix the cache key")).toEqual([
+      { role: "user", content: "Fix the cache key" },
+    ]);
+  });
 });

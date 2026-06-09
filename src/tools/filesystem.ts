@@ -1,6 +1,7 @@
 /** Native FS tools — sandbox enforced here, not delegated. `edit_file` takes a single SEARCH/REPLACE string. */
 
 import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
 import * as pathMod from "node:path";
 import picomatch from "picomatch";
 import { type AutoGitRollbackConfig, prepareAutoGitRollback } from "../code/auto-git-rollback.js";
@@ -72,6 +73,17 @@ export function looksLikeAbsoluteSystemPath(raw: string): boolean {
 export function pathIsUnder(child: string, parent: string): boolean {
   const rel = pathMod.relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !pathMod.isAbsolute(rel));
+}
+
+export function expandCurrentUserHomePath(raw: string): string {
+  const marker = raw[0];
+  if (marker !== "~" && marker !== "～") return raw;
+  const rest = raw.slice(1);
+  if (rest.length === 0) return homedir();
+  if (rest.startsWith("/") || rest.startsWith("\\")) {
+    return pathMod.join(homedir(), rest.slice(1));
+  }
+  return raw;
 }
 
 const GLOB_METACHARS = /[*?{[]/;
@@ -199,15 +211,16 @@ export function registerFilesystemTools(
     if (typeof raw !== "string" || raw.length === 0) {
       throw new Error("path must be a non-empty string");
     }
-    if (looksLikeAbsoluteSystemPath(raw)) {
-      const abs = pathMod.resolve(raw);
+    const expandedRaw = expandCurrentUserHomePath(raw);
+    if (looksLikeAbsoluteSystemPath(expandedRaw)) {
+      const abs = pathMod.resolve(expandedRaw);
       if (pathIsUnder(abs, normRoot)) return abs;
       await ensureOutsideSandboxAllowed(abs, intent, toolName, ctx);
       return abs;
     }
     // Sandbox-root semantics: leading `/` or `\` means "from project root", not "from filesystem root".
     // Model routinely writes `path: "/src/foo.ts"` intending rootDir-relative.
-    let normalized = raw;
+    let normalized = expandedRaw;
     while (normalized.startsWith("/") || normalized.startsWith("\\")) {
       normalized = normalized.slice(1);
     }

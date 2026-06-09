@@ -66,4 +66,35 @@ describe("buildEditToolBlocks", () => {
 
     expect(blocks).toEqual([{ path: `nested${sep}file.ts`, search: "a", replace: "b", offset: 0 }]);
   });
+
+  it("does not turn user-home paths into workspace-relative review blocks", () => {
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const fakeHome = mkdtempSync(join(tmpdir(), "jupiter-review-home-"));
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+
+    try {
+      expect(
+        buildEditToolBlocks(
+          "write_file",
+          { path: "~/Desktop/new.txt", content: "outside workspace" },
+          root,
+        ),
+      ).toBeNull();
+      expect(
+        buildEditToolBlocks(
+          "write_file",
+          { path: "～/Desktop/new.txt", content: "outside workspace" },
+          root,
+        ),
+      ).toBeNull();
+    } finally {
+      if (originalHome === undefined) process.env.HOME = undefined;
+      else process.env.HOME = originalHome;
+      if (originalUserProfile === undefined) process.env.USERPROFILE = undefined;
+      else process.env.USERPROFILE = originalUserProfile;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
 });

@@ -268,6 +268,7 @@ export const de: typeof en = {
     archivesTitle: "Archivierte Unterhaltungen",
     archivesHint:
       "Archivierte Unterhaltungen werden getrennt von der aktiven Seitenleiste gespeichert.",
+    archivesClear: "Archiv leeren",
     archivesRefresh: "Aktualisieren",
     archivesEmpty: "Keine archivierten Unterhaltungen",
     archivesRestore: "Wiederherstellen",
@@ -1059,6 +1060,10 @@ export const de: typeof en = {
     importFoundApps: "Gefundene Apps",
     importScanning: "Lokale Apps werden gesucht…",
     importSessionCount: "{count} Sitzungen · importiert alle",
+    importNoCandidates: "Keine importierbaren Hauptunterhaltungen gefunden",
+    importAlreadyImported: "Bereits importiert",
+    importCandidateMeta: "{source} · {count} Nachrichten · {when}",
+    importSelected: "{count} ausgewählte importieren",
     importNotFound: "Keine lokalen Sitzungen gefunden",
     importPrivacyHint: "Bestehende App-Einstellungen bleiben unverändert.",
     importResult:

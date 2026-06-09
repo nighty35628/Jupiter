@@ -1,7 +1,11 @@
 import { relative, resolve } from "node:path";
 import { type EditBlock, toWholeFileEditBlock } from "../../code/edit-blocks.js";
 import type { EditMode } from "../../config.js";
-import { looksLikeAbsoluteSystemPath, pathIsUnder } from "../../tools/filesystem.js";
+import {
+  expandCurrentUserHomePath,
+  looksLikeAbsoluteSystemPath,
+  pathIsUnder,
+} from "../../tools/filesystem.js";
 
 export type ReviewGatedEditTool = "edit_file" | "write_file" | "multi_edit";
 
@@ -13,14 +17,15 @@ function resolveEditRelPath(rawPath: unknown, rootForEdit: string): string | nul
   if (typeof rawPath !== "string" || rawPath.length === 0) return null;
 
   const absRoot = resolve(rootForEdit);
-  if (looksLikeAbsoluteSystemPath(rawPath)) {
-    const abs = resolve(rawPath);
+  const expandedPath = expandCurrentUserHomePath(rawPath);
+  if (looksLikeAbsoluteSystemPath(expandedPath)) {
+    const abs = resolve(expandedPath);
     if (!pathIsUnder(abs, absRoot)) return null;
     const rel = relative(absRoot, abs);
     return rel || null;
   }
 
-  let stripped = rawPath;
+  let stripped = expandedPath;
   while (stripped.startsWith("/") || stripped.startsWith("\\")) {
     stripped = stripped.slice(1);
   }

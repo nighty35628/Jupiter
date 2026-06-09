@@ -134,9 +134,28 @@ export type ExternalSessionApp = {
   latestMtime?: string;
 };
 
+export type ExternalSessionCandidate = {
+  source: ExternalSessionSource;
+  label: string;
+  path: string;
+  name: string;
+  summary?: string;
+  workspace?: string;
+  messageCount: number;
+  mtime: string;
+  imported: boolean;
+  subagent: boolean;
+};
+
+export type ExternalSessionSelection = {
+  source: ExternalSessionSource;
+  path: string;
+};
+
 export type SessionImportSourcesEvent = {
   type: "$session_import_sources";
   apps: ExternalSessionApp[];
+  candidates?: ExternalSessionCandidate[];
 };
 
 export type SessionImportResultEvent = {
@@ -778,6 +797,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "session_archive_many"; names: string[] }
   | { cmd: "session_restore_archived"; name: string }
   | { cmd: "session_delete_archived"; name: string }
+  | { cmd: "session_clear_archived" }
   | { cmd: "session_load"; name: string; openInNewTab?: boolean }
   | { cmd: "session_rename"; name: string; title: string }
   | {
@@ -800,7 +820,7 @@ export type OutgoingCommand = { tabId?: string } & (
       name?: string;
     }
   | { cmd: "session_import_scan" }
-  | { cmd: "session_import_bulk"; sources: ExternalSessionSource[] }
+  | { cmd: "session_import_bulk"; sources?: ExternalSessionSource[]; items?: ExternalSessionSelection[] }
   | { cmd: "memory_read"; path: string }
   | { cmd: "memory_refresh" }
   | { cmd: "memory_delete"; path: string }

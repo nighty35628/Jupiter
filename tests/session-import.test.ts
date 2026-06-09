@@ -1,8 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildImportedSessionName, parseExternalSessionFile } from "../src/session-import.js";
+import {
+  buildImportedSessionName,
+  discoverExternalSessionCandidates,
+  parseExternalSessionFile,
+} from "../src/session-import.js";
 
 describe("session import parsers", () => {
   it("parses Claude sessions into Jupiter messages", () => {
@@ -92,6 +96,48 @@ describe("session import parsers", () => {
       { role: "assistant", content: "On it." },
     ]);
     expect(buildImportedSessionName("codex", tmp, imported)).toBe("codex-Fix the deploy race");
+  });
+
+  it("discovers importable sessions while excluding Claude subagents by default", () => {
+    const home = mkdtempSync(join(tmpdir(), "jupiter-session-import-home-"));
+    fixtures.push(home);
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+
+    try {
+      const projectDir = join(home, ".claude", "projects", "-tmp-proj");
+      const subagentDir = join(projectDir, "parent-session", "subagents");
+      mkdirSync(projectDir, { recursive: true });
+      mkdirSync(subagentDir, { recursive: true });
+      writeFileSync(
+        join(projectDir, "main.jsonl"),
+        `${JSON.stringify({
+          cwd: "/tmp/proj",
+          message: { role: "user", content: "Main session" },
+        })}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(subagentDir, "agent-abc.jsonl"),
+        `${JSON.stringify({
+          cwd: "/tmp/proj",
+          message: { role: "user", content: "Subagent session" },
+        })}\n`,
+        "utf8",
+      );
+
+      const candidates = discoverExternalSessionCandidates();
+
+      expect(candidates.map((item) => item.summary)).toEqual(["Main session"]);
+      expect(candidates.some((item) => item.path.includes("subagents"))).toBe(false);
+    } finally {
+      if (originalHome === undefined) process.env.HOME = undefined;
+      else process.env.HOME = originalHome;
+      if (originalUserProfile === undefined) process.env.USERPROFILE = undefined;
+      else process.env.USERPROFILE = originalUserProfile;
+    }
   });
 });
 
