@@ -136,6 +136,21 @@ describe("desktop Composer source search", () => {
     setLang("en");
   });
 
+  it("keeps hero composer input text left-aligned on the new-chat empty screen", () => {
+    const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+    const heroTextareaRule =
+      css.match(/\.empty-state \.composer-wrap--hero \.composer textarea \{[\s\S]*?\n\}/)?.[0] ??
+      "";
+    const heroBackdropRule =
+      css.match(
+        /\.empty-state \.composer-wrap--hero \.composer-backdrop \{[\s\S]*?\n\}/,
+      )?.[0] ?? "";
+
+    expect(heroTextareaRule).not.toContain("text-align: center");
+    expect(heroBackdropRule).not.toContain("justify-items: center");
+    expect(heroBackdropRule).not.toContain("text-align: center");
+  });
+
   it("opens the source search entry from the search button beside plus", () => {
     const onMentionQuery = vi.fn();
     const onOpenSourceSearch = vi.fn();

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./CommandPalette", () => ({
@@ -548,6 +550,18 @@ describe("Desktop App reducer — subagents", () => {
 });
 
 describe("Desktop App window controls", () => {
+  it("keeps titlebar actions clickable at the fullscreen edge on Windows", () => {
+    const css = readFileSync(resolve(__dirname, "styles.css"), "utf8");
+    const rightRule = css.match(/\.titlebar \.tb-right \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const winControlsRule = css.match(/\.win-controls \{[\s\S]*?\n\}/)?.[0] ?? "";
+
+    expect(rightRule).toContain("padding-right:");
+    expect(rightRule).toContain("position: relative");
+    expect(rightRule).toContain("z-index:");
+    expect(winControlsRule).toContain("position: relative");
+    expect(winControlsRule).toContain("z-index:");
+  });
+
   it("treats macOS zoom state as fullscreen", async () => {
     const win = {
       isFullscreen: vi.fn(async () => true),

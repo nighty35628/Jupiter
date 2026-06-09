@@ -705,6 +705,9 @@ html[data-platform="macos"] .titlebar .tb-left {
 .titlebar .tb-right {
   display: flex;
   align-items: stretch;
+  position: relative;
+  z-index: 2;
+  padding-right: 6px;
 }
 
 .titlebar .grow {
@@ -778,6 +781,8 @@ html[data-platform="macos"] .titlebar .tb-left {
   align-items: stretch;
   border-left: 1px solid var(--border);
   margin-left: 4px;
+  position: relative;
+  z-index: 3;
 }
 .win-ctrl {
   width: 46px;
@@ -13087,15 +13092,14 @@ html[data-platform="macos"] .app {
 
 .empty-state .composer-wrap--hero .composer textarea {
   min-height: 96px;
-  text-align: center;
 }
 
 .empty-state .composer-wrap--hero .composer-backdrop {
   min-height: 96px;
   display: grid;
   align-items: center;
-  justify-items: center;
-  text-align: center;
+  justify-items: stretch;
+  text-align: left;
 }
 
 .empty-state .composer-wrap--hero .composer-textarea-wrap {
@@ -13104,7 +13108,7 @@ html[data-platform="macos"] .app {
 }
 
 .empty-state .composer-wrap--hero .composer textarea::placeholder {
-  text-align: center;
+  text-align: left;
 }
 
 .empty-suggestion {
