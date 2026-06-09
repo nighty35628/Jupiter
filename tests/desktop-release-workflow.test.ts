@@ -11,20 +11,29 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain("tagName: ${{ steps.tag.outputs.name }}");
     expect(releaseWorkflow).toContain("releaseName: Jupiter");
     expect(releaseWorkflow).toContain("releaseDraft: false");
-    expect(releaseWorkflow).toContain('label: "linux-x64"');
-    expect(releaseWorkflow).toContain('label: "linux-arm64"');
-    expect(releaseWorkflow).toContain('label: "windows-arm64"');
+    expect(releaseWorkflow).toContain('"label":"linux-x64"');
+    expect(releaseWorkflow).toContain('"label":"linux-arm64"');
+    expect(releaseWorkflow).toContain('"label":"windows-arm64"');
     expect(releaseWorkflow).toContain("ubuntu-24.04-arm");
     expect(releaseWorkflow).toContain("aarch64-unknown-linux-gnu");
     expect(releaseWorkflow).toContain("windows-11-arm");
     expect(releaseWorkflow).toContain("aarch64-pc-windows-msvc");
-    expect(releaseWorkflow).toContain('bundles: "--bundles deb"');
-    expect(releaseWorkflow).toContain('bundles: "--bundles dmg"');
-    expect(releaseWorkflow).toContain('bundles: "--bundles nsis"');
+    expect(releaseWorkflow).toContain('"bundles":"--bundles deb"');
+    expect(releaseWorkflow).toContain('"bundles":"--bundles dmg"');
+    expect(releaseWorkflow).toContain('"bundles":"--bundles nsis"');
     expect(releaseWorkflow).toContain(
       "assetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]",
     );
     expect(releaseWorkflow).not.toContain("releaseAssetNamePattern");
+  });
+
+  it("supports single-target manual dispatches for release asset backfills", () => {
+    expect(releaseWorkflow).toContain("target_label:");
+    expect(releaseWorkflow).toContain("Resolve target matrix");
+    expect(releaseWorkflow).toContain("TARGET_LABEL:");
+    expect(releaseWorkflow).toContain("jq -c --arg label");
+    expect(releaseWorkflow).toContain("Unknown target_label");
+    expect(releaseWorkflow).toContain("fromJSON(needs.resolve-matrix.outputs.targets)");
   });
 
   it("verifies the bundled Node architecture for Linux packages", () => {
@@ -50,7 +59,7 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).not.toContain("WINDOWS_CERTIFICATE");
     expect(releaseWorkflow).not.toContain("signtool.FullName sign");
     expect(releaseWorkflow).not.toContain("Verify Windows Authenticode signatures");
-    expect(releaseWorkflow).toContain('bundles: "--bundles nsis"');
+    expect(releaseWorkflow).toContain('"bundles":"--bundles nsis"');
   });
 
   it("does not require macOS signing verification for unsigned builds", () => {
