@@ -46,9 +46,11 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain("src-tauri/binaries/node.exe");
   });
 
-  it("skips root lifecycle scripts for Linux ARM64 to avoid native tree-sitter binding builds", () => {
+  it("skips root lifecycle scripts for ARM64 targets to avoid native tree-sitter binding builds", () => {
     expect(releaseWorkflow).toContain("shell: bash");
-    expect(releaseWorkflow).toContain('if [ "${{ matrix.target.label }}" = "linux-arm64" ]; then');
+    expect(releaseWorkflow).toContain(
+      'if [ "${{ matrix.target.label }}" = "linux-arm64" ] || [ "${{ matrix.target.label }}" = "windows-arm64" ]; then',
+    );
     expect(releaseWorkflow).toContain("npm ci --ignore-scripts");
     expect(releaseWorkflow).toContain("npm --prefix dashboard ci --ignore-scripts");
   });

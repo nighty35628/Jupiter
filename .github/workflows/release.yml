@@ -121,7 +121,7 @@ jobs:
       - name: Install root deps
         shell: bash
         run: |
-          if [ "${{ matrix.target.label }}" = "linux-arm64" ]; then
+          if [ "${{ matrix.target.label }}" = "linux-arm64" ] || [ "${{ matrix.target.label }}" = "windows-arm64" ]; then
             npm ci --ignore-scripts
             npm --prefix dashboard ci --ignore-scripts
           else
