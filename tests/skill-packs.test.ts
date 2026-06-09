@@ -8,6 +8,7 @@ import {
   DEFAULT_SKILL_PACK_REGISTRY_URL,
   checkSkillPackUpdates,
   configuredSkillPackRegistryUrl,
+  configuredSkillPackSources,
   installSkillPackUpdates,
   managedSkillPackManifestPath,
   searchSkillPacks,
@@ -141,6 +142,41 @@ describe("skill pack update channel", () => {
       "https://api.github.com/repos/openai/skills/contents/skills/.curated?ref=main",
     );
     expect(configuredSkillPackRegistryUrl({})).toBe(DEFAULT_SKILL_PACK_REGISTRY_URL);
+  });
+
+  it("loads multiple skill-pack sources from env while preserving the legacy single-url setting", () => {
+    const sources = configuredSkillPackSources({
+      JUPITER_SKILL_PACK_REGISTRY_URL: "https://legacy.example/skill-packs.json",
+      JUPITER_SKILL_PACK_SOURCES:
+        "jupiter=https://updates.jupiter.test/skill-packs.json,community=https://skills.example/index.json",
+    });
+
+    expect(sources).toEqual([
+      {
+        id: "jupiter",
+        name: "jupiter",
+        url: "https://updates.jupiter.test/skill-packs.json",
+        trusted: true,
+      },
+      {
+        id: "community",
+        name: "community",
+        url: "https://skills.example/index.json",
+        trusted: false,
+      },
+    ]);
+    expect(
+      configuredSkillPackSources({
+        JUPITER_SKILL_PACK_REGISTRY_URL: "https://legacy.example/skill-packs.json",
+      }),
+    ).toEqual([
+      {
+        id: "legacy",
+        name: "legacy",
+        url: "https://legacy.example/skill-packs.json",
+        trusted: true,
+      },
+    ]);
   });
 
   it("searches Codex GitHub curated skills without a Jupiter-managed manifest", async () => {
@@ -324,6 +360,68 @@ describe("skill pack update channel", () => {
     expect(existsSync(managedSkillPackManifestPath(home))).toBe(true);
   });
 
+  it("searches multiple skill-pack sources and prefers trusted exact matches", async () => {
+    const jupiterUrl = "https://updates.jupiter.test/skill-packs.json";
+    const communityUrl = "https://skills.example/index.json";
+    const fetchImpl = makeFetch({
+      [jupiterUrl]: {
+        schema: 1,
+        packs: [
+          {
+            id: "documents",
+            version: "1.0.0",
+            url: "https://updates.jupiter.test/documents.bundle.json",
+            description: "Official documents pack",
+            skills: ["documents"],
+          },
+        ],
+      },
+      [communityUrl]: {
+        schema: 1,
+        packs: [
+          {
+            id: "documents",
+            version: "2.0.0",
+            url: "https://skills.example/documents.bundle.json",
+            description: "Community documents pack",
+            skills: ["documents"],
+          },
+          {
+            id: "browser",
+            version: "1.0.0",
+            url: "https://skills.example/browser.bundle.json",
+            description: "Browser automation pack",
+            skills: ["browser"],
+          },
+        ],
+      },
+    });
+
+    const result = await searchSkillPacks("documents", {
+      homeDir: home,
+      sources: [
+        { id: "jupiter", name: "Jupiter", url: jupiterUrl, trusted: true },
+        { id: "community", name: "Community", url: communityUrl, trusted: false },
+      ],
+      fetchImpl,
+      bundledPacks: [],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.sources).toEqual([
+      expect.objectContaining({ id: "jupiter", trusted: true }),
+      expect.objectContaining({ id: "community", trusted: false }),
+    ]);
+    expect(result.matches[0]).toMatchObject({
+      id: "documents",
+      sourceId: "jupiter",
+      sourceName: "Jupiter",
+      trusted: true,
+      latestVersion: "1.0.0",
+    });
+    expect(result.matches).toHaveLength(1);
+  });
+
   it("rejects bundle files that escape the managed pack directory", async () => {
     const bundle = {
       schema: 1,
@@ -409,6 +507,52 @@ describe("skill pack update channel", () => {
         join(home, ".jupiter", "skill-packs", "managed", "documents", "skills", "documents"),
       ),
     ).toBe(false);
+  });
+
+  it("installs an exact pack from a selected third-party source", async () => {
+    const jupiterUrl = "https://updates.jupiter.test/skill-packs.json";
+    const communityUrl = "https://skills.example/index.json";
+    const browserUrl = "https://skills.example/browser.bundle.json";
+    const fetchImpl = makeFetch({
+      [jupiterUrl]: {
+        schema: 1,
+        packs: [],
+      },
+      [communityUrl]: {
+        schema: 1,
+        packs: [{ id: "browser", version: "1.0.0", url: browserUrl }],
+      },
+      [browserUrl]: {
+        schema: 1,
+        id: "browser",
+        version: "1.0.0",
+        files: [
+          {
+            path: "skills/browser/SKILL.md",
+            content: "---\ndescription: Browser\n---\nBrowser body\n",
+          },
+        ],
+      },
+    });
+
+    const installed = await installSkillPackUpdates({
+      homeDir: home,
+      sources: [
+        { id: "jupiter", name: "Jupiter", url: jupiterUrl, trusted: true },
+        { id: "community", name: "Community", url: communityUrl, trusted: false },
+      ],
+      fetchImpl,
+      bundledPacks: [],
+      packRequests: [{ id: "browser", sourceId: "community" }],
+    });
+
+    expect(installed.ok).toBe(true);
+    expect(installed.installed).toEqual([
+      { id: "browser", version: "1.0.0", sourceId: "community" },
+    ]);
+    expect(
+      existsSync(join(home, ".jupiter", "skill-packs", "managed", "browser", "skills", "browser")),
+    ).toBe(true);
   });
 
   it("/skill update --check reports update status through postInfo", async () => {

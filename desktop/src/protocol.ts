@@ -447,6 +447,22 @@ export type WebSearchEngineName =
   | "brave"
   | "ollama";
 
+export type BrowserAutomationStatus =
+  | {
+      state: "available";
+      browser: "chrome" | "edge" | "chromium";
+      name: string;
+      executablePath: string;
+    }
+  | { state: "unavailable" };
+
+export type SkillPackSourceInfo = {
+  id: string;
+  name: string;
+  url: string;
+  trusted: boolean;
+};
+
 export type SettingsEvent = {
   type: "$settings";
   reasoningEffort: ReasoningEffort;
@@ -461,6 +477,8 @@ export type SettingsEvent = {
   desktopCloseBehavior?: "closeToTray" | "closeToQuit";
   webSearchEngine?: WebSearchEngineName;
   webSearchEndpoint?: string;
+  browserAutomation?: BrowserAutomationStatus;
+  skillPackSources?: SkillPackSourceInfo[];
   webSearchApiKeys?: {
     metaso?: string;
     baidu?: string;
@@ -541,6 +559,7 @@ export type SettingsPatch = {
   ollamaApiKey?: string | null;
   braveApiKey?: string | null;
   subagentModels?: Record<string, "flash" | "pro">;
+  skillPackSources?: SkillPackSourceInfo[];
   /** Per-model context-window override (tokens). Keys are model ids; values are the prompt-side token cap. */
   contextTokens?: Record<string, number>;
   showSystemEvents?: boolean;

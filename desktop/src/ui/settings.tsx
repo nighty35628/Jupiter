@@ -15,6 +15,7 @@ import type {
   MemoryEntryInfo,
   MemoryWriteInput,
   SettingsPatch,
+  SkillPackSourceInfo,
   SkillInfo,
   SkillRootInfo,
 } from "../protocol";
@@ -37,6 +38,9 @@ import {
 } from "../theme";
 import { displayWorkspacePath } from "../workspace-display";
 import { Shortcut, type ShortcutKey } from "./shortcut";
+
+const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
+const EDGE_DOWNLOAD_URL = "https://www.microsoft.com/edge/download";
 
 export type PageId =
   | "general"
@@ -285,6 +289,7 @@ export function SettingsModal({
                   onSignOutApiKey={onSignOutApiKey}
                 />
                 <WebSearchSection settings={settings} onSave={onSave} />
+                <BrowserAutomationSection settings={settings} />
                 <QQChannelSection
                   qq={qq}
                   configureOpen={qqConfigureOpen}
@@ -332,6 +337,7 @@ export function SettingsModal({
             )}
             {page === "skills" && (
               <PageSkills
+                settings={settings}
                 skills={skills}
                 roots={skillRoots}
                 subagentModels={settings.subagentModels ?? {}}
@@ -339,6 +345,7 @@ export function SettingsModal({
                 onRemovePath={onRemoveSkillPath}
                 onCreate={onCreateSkill}
                 onSetModel={onSetSkillModel}
+                onSaveSettings={onSave}
               />
             )}
             {page === "memory" && (
@@ -956,6 +963,55 @@ function WebSearchSection({
         </select>
       </div>
       <WebSearchEngineCredentials settings={settings} onSave={onSave} />
+    </section>
+  );
+}
+
+function BrowserAutomationSection({ settings }: { settings: SettingsType }) {
+  const status = settings.browserAutomation ?? { state: "unavailable" };
+  const isAvailable = status.state === "available";
+
+  return (
+    <section className="section">
+      <div className="stitle">{t("settings.browserAutomationSection")}</div>
+      <div className="setting-row">
+        <div className="l">
+          <div className="n">{t("settings.browserAutomation")}</div>
+          <div className="h">
+            {isAvailable
+              ? t("settings.browserAutomationAvailable", { name: status.name })
+              : t("settings.browserAutomationFallback")}
+          </div>
+          <div className="h">
+            {isAvailable
+              ? t("settings.browserAutomationAvailableHint")
+              : t("settings.browserAutomationFallbackHint")}
+          </div>
+          {isAvailable && <code>{status.executablePath}</code>}
+        </div>
+        {!isAvailable && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                void openUrl(CHROME_DOWNLOAD_URL);
+              }}
+            >
+              <span>{t("settings.browserAutomationInstallChrome")}</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                void openUrl(EDGE_DOWNLOAD_URL);
+              }}
+            >
+              <span>{t("settings.browserAutomationInstallEdge")}</span>
+            </button>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -1645,6 +1701,7 @@ function PageMCP({
 }
 
 function PageSkills({
+  settings,
   skills,
   roots,
   subagentModels,
@@ -1652,7 +1709,9 @@ function PageSkills({
   onRemovePath,
   onCreate,
   onSetModel,
+  onSaveSettings,
 }: {
+  settings: SettingsType;
   skills: SkillInfo[];
   roots: SkillRootInfo[];
   subagentModels: Record<string, "flash" | "pro">;
@@ -1660,10 +1719,44 @@ function PageSkills({
   onRemovePath: (path: string) => void;
   onCreate: (name: string, scope: "project" | "global") => void;
   onSetModel: (name: string, model: "flash" | "pro" | null) => void;
+  onSaveSettings: (patch: SettingsPatch) => void;
 }) {
   const [pathDraft, setPathDraft] = useState("");
+  const [sourceDraft, setSourceDraft] = useState("");
   const [skillName, setSkillName] = useState("");
   const [scope, setScope] = useState<"project" | "global">("project");
+  const sources = settings.skillPackSources ?? [];
+  const sourceIdForUrl = (url: string): string => {
+    try {
+      const host = new URL(url).hostname.split(".").filter(Boolean)[0] ?? "source";
+      return host.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "source";
+    } catch {
+      return "source";
+    }
+  };
+  const uniqueSourceId = (base: string): string => {
+    const used = new Set(sources.map((source) => source.id));
+    if (!used.has(base)) return base;
+    for (let index = 2; ; index++) {
+      const next = `${base}-${index}`;
+      if (!used.has(next)) return next;
+    }
+  };
+  const addSource = () => {
+    const url = sourceDraft.trim();
+    if (!url) return;
+    if (sources.some((source) => source.url === url)) {
+      setSourceDraft("");
+      return;
+    }
+    const id = uniqueSourceId(sourceIdForUrl(url));
+    const next: SkillPackSourceInfo = { id, name: id, url, trusted: false };
+    onSaveSettings({ skillPackSources: [...sources, next] });
+    setSourceDraft("");
+  };
+  const removeSource = (id: string) => {
+    onSaveSettings({ skillPackSources: sources.filter((source) => source.id !== id) });
+  };
   const addPath = () => {
     const next = pathDraft.trim();
     if (!next) return;
@@ -1678,6 +1771,66 @@ function PageSkills({
   };
   return (
     <>
+      <section className="section">
+        <div className="stitle">{t("settings.skillPackSources")}</div>
+        <div className="inline-form">
+          <input
+            className="field mono"
+            value={sourceDraft}
+            onChange={(e) => setSourceDraft(e.target.value)}
+            placeholder="https://example.com/skill-packs.json"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addSource();
+            }}
+          />
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!sourceDraft.trim()}
+            onClick={addSource}
+          >
+            <I.plus size={12} />
+            <span>{t("settings.skillPackSourceAdd")}</span>
+          </button>
+        </div>
+        {sources.length === 0 ? (
+          <div className="muted-card">{t("settings.skillPackSourcesDefault")}</div>
+        ) : (
+          <div className="skill-root-grid">
+            {sources.map((source) => (
+              <div className="scard skill-root" key={source.id}>
+                <div className="top">
+                  <span className="ico">
+                    <I.zap size={14} />
+                  </span>
+                  <div className="mcp-spec-body">
+                    <div className="nm">{source.name}</div>
+                    <div className="sub mcp-spec-summary" title={source.url}>
+                      {source.url}
+                    </div>
+                  </div>
+                  <span
+                    className="status-pill"
+                    data-status={source.trusted ? "connected" : "configured"}
+                  >
+                    {source.trusted
+                      ? t("settings.skillPackSourceTrusted")
+                      : t("settings.skillPackSourceThirdParty")}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn ghost mcp-remove"
+                    title={t("settings.skillPackSourceRemove")}
+                    onClick={() => removeSource(source.id)}
+                  >
+                    <I.trash size={12} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
       <section className="section">
         <div className="stitle">{t("settings.skillRoots")}</div>
         <div className="inline-form">

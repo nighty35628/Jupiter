@@ -15,6 +15,7 @@ import {
 } from "./index/config.js";
 import { type McpServerSpec, parseMcpSpec } from "./mcp/spec.js";
 import { normalizeQQAllowlist, normalizeQQOpenId } from "./qq/access.js";
+import type { SkillPackSource } from "./skill-packs.js";
 import { normalizeTelegramAllowlist, normalizeTelegramUserId } from "./telegram/access.js";
 import {
   type NormalizedToolRateLimitConfig,
@@ -295,6 +296,7 @@ export interface JupiterConfig {
   semantic?: SemanticEmbeddingUserConfig;
   skills?: {
     paths?: string[];
+    sources?: Array<Partial<SkillPackSource>>;
   };
   /** Per-skill model override for `runAs: subagent` skills, keyed by skill name. Empty / missing entry → spawn site's default. */
   subagentModels?: Record<string, "flash" | "pro">;
@@ -965,6 +967,56 @@ export function saveSkillPaths(
   const cfg = readConfig(path);
   const normalized = normalizeSkillPaths(paths, baseDir);
   cfg.skills = { ...(cfg.skills ?? {}), paths: normalized };
+  writeConfig(cfg, path);
+  return normalized;
+}
+
+const SKILL_PACK_SOURCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
+
+function normalizeSkillPackSource(value: unknown): SkillPackSource | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Partial<SkillPackSource>;
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  const name = typeof raw.name === "string" ? raw.name.trim() : "";
+  const url = typeof raw.url === "string" ? raw.url.trim() : "";
+  if (!SKILL_PACK_SOURCE_ID.test(id) || !name || !url) return null;
+  return { id, name, url, trusted: raw.trusted === true };
+}
+
+export function loadSkillPackSources(path: string = defaultConfigPath()): SkillPackSource[] {
+  const raw = readConfig(path).skills?.sources;
+  if (!Array.isArray(raw)) return [];
+  const out: SkillPackSource[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    const source = normalizeSkillPackSource(value);
+    if (!source || seen.has(source.id)) continue;
+    seen.add(source.id);
+    out.push(source);
+  }
+  return out;
+}
+
+export function saveSkillPackSources(
+  sources: readonly unknown[],
+  path: string = defaultConfigPath(),
+): SkillPackSource[] {
+  const normalized: SkillPackSource[] = [];
+  const seen = new Set<string>();
+  for (const value of sources) {
+    const source = normalizeSkillPackSource(value);
+    if (!source || seen.has(source.id)) continue;
+    seen.add(source.id);
+    normalized.push(source);
+  }
+  const cfg = readConfig(path);
+  const nextSkills = { ...(cfg.skills ?? {}) };
+  if (normalized.length > 0) {
+    nextSkills.sources = normalized;
+  } else {
+    nextSkills.sources = undefined;
+  }
+  cfg.skills = nextSkills.paths || nextSkills.sources ? nextSkills : undefined;
   writeConfig(cfg, path);
   return normalized;
 }

@@ -2,6 +2,7 @@ import {
   addSkillPath,
   defaultConfigPath,
   loadResolvedSkillPaths,
+  loadSkillPackSources,
   loadSkillPaths,
   removeSkillPath,
 } from "@/config.js";
@@ -53,12 +54,15 @@ const skill: SlashHandler = (args, _loop, ctx) => {
   if (sub === "update" || sub === "upgrade") {
     const checkOnly = args.includes("--check") || (args[1] ?? "").toLowerCase() === "check";
     const post = ctx.postInfo ?? (() => undefined);
+    const configuredSources = loadSkillPackSources(configPath);
+    const sourceOptions = configuredSources.length > 0 ? { sources: configuredSources } : {};
     void (async () => {
       if (checkOnly) {
         post(
           formatSkillPackStatus(
             await checkSkillPackUpdates({
               homeDir: ctx.homeDir,
+              ...sourceOptions,
             }),
           ),
         );
@@ -68,6 +72,7 @@ const skill: SlashHandler = (args, _loop, ctx) => {
         formatSkillPackInstall(
           await installSkillPackUpdates({
             homeDir: ctx.homeDir,
+            ...sourceOptions,
           }),
         ),
       );

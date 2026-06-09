@@ -291,6 +291,13 @@ export const I = {
       <path d="M12 20V8M6 12l6-6 6 6M4 4h16" />
     </Ic>
   ),
+  importSession: (p: IconProps) => (
+    <Ic {...p}>
+      <rect x="3" y="5" width="8" height="14" rx="2" />
+      <rect x="13" y="5" width="8" height="14" rx="2" />
+      <path d="M7 12h8M12 9l3 3-3 3" />
+    </Ic>
+  ),
   history: (p: IconProps) => (
     <Ic {...p}>
       <path d="M3 12a9 9 0 1 0 3-6.7L3 8M12 7v5l3 2" />

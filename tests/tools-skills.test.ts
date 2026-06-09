@@ -556,6 +556,66 @@ describe("official skill pack tools", () => {
     expect(skill).toContain("# Skill: playwright");
     expect(skill).toContain("Use Playwright to inspect pages.");
   });
+
+  it("installs the selected third-party source match instead of a same-id trusted match", async () => {
+    const jupiterUrl = "https://updates.jupiter.test/skill-packs.json";
+    const communityUrl = "https://skills.example/index.json";
+    const reg = new ToolRegistry();
+    registerSkillTools(reg, {
+      homeDir: home,
+      skillPackSources: [
+        { id: "jupiter", name: "Jupiter", url: jupiterUrl, trusted: true },
+        { id: "community", name: "Community", url: communityUrl, trusted: false },
+      ],
+      skillPackFetchImpl: makeFetch({
+        [jupiterUrl]: {
+          schema: 1,
+          packs: [
+            {
+              id: "documents",
+              version: "1.0.0",
+              url: "https://updates.jupiter.test/documents.json",
+              description: "Jupiter documents pack",
+              skills: ["documents"],
+            },
+          ],
+        },
+        [communityUrl]: {
+          schema: 1,
+          packs: [
+            {
+              id: "playwright",
+              version: "2.0.0",
+              url: "https://skills.example/playwright.json",
+              description: "Third-party browser automation",
+              skills: ["playwright"],
+            },
+          ],
+        },
+        "https://skills.example/playwright.json": {
+          schema: 1,
+          id: "playwright",
+          version: "2.0.0",
+          files: [
+            {
+              path: "skills/playwright/SKILL.md",
+              content: "---\ndescription: Browser automation\n---\nCommunity browser body.\n",
+            },
+          ],
+        },
+      }),
+      bundledSkillPacks: [],
+    });
+
+    const search = JSON.parse(await reg.dispatch("search_skill_packs", { query: "playwright" }));
+    expect(search.matches[0]).toMatchObject({ id: "playwright", sourceId: "community" });
+
+    const installed = JSON.parse(await reg.dispatch("install_skill_pack", { name: "playwright" }));
+    expect(installed.ok).toBe(true);
+    expect(installed.installed).toEqual([
+      { id: "playwright", version: "2.0.0", sourceId: "community" },
+    ]);
+  });
 });
 
 describe("built-in subagent tools (explore / research / review / security_review)", () => {

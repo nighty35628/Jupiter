@@ -198,7 +198,7 @@ export function Sidebar({
   onImportSession,
   onOpenSettings,
   onOpenSettingsPage = () => {},
-  onOpenCommands,
+  onOpenCommands: _onOpenCommands,
   onRemoveWorkspace = () => {},
 }: {
   sessions: SessionInfo[];
@@ -662,7 +662,7 @@ export function Sidebar({
           </span>
         )}
         {editing ? null : (
-          <>
+          <div className="session-actions" aria-hidden={false}>
             <button
               type="button"
               className="pin-btn"
@@ -718,7 +718,7 @@ export function Sidebar({
             >
               <I.x size={12} />
             </button>
-          </>
+          </div>
         )}
       </div>
     );
@@ -961,15 +961,7 @@ export function Sidebar({
             setPendingImport({ x: rect.right, y: rect.bottom });
           }}
         >
-          <I.upload size={14} />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title={t("sidebarPanel.commandPalette")}
-          onClick={onOpenCommands}
-        >
-          <I.history size={14} />
+          <I.importSession size={14} />
         </button>
       </div>
 

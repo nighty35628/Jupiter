@@ -11,15 +11,15 @@ const FAQS = [
   {
     q: { zh: '需要付费吗？', en: 'Is it free?' },
     a: {
-      zh: 'Jupiter 本身 MIT 开源，完全免费。但需要付费的 DeepSeek API Key。参考定价：V4-Flash $0.07/Mtok 未命中、$0.014/Mtok 命中，长会话下成本通常只到通用工具的 1/3。',
-      en: 'Jupiter itself is MIT-licensed and free. The DeepSeek API key is paid: V4-Flash is $0.07/Mtok uncached and $0.014/Mtok cached. In long sessions the bill typically lands at ~1/3 of comparable generic tooling.',
+      zh: 'Jupiter 本身按 GPLv3+ 开源，并通过项目 CLA 管理贡献。DeepSeek API Key 需要付费。参考定价：V4-Flash $0.07/Mtok 未命中、$0.014/Mtok 命中，长会话下成本通常只到通用工具的 1/3。',
+      en: 'Jupiter itself is GPLv3+ open source and uses a project CLA for contributions. The DeepSeek API key is paid: V4-Flash is $0.07/Mtok uncached and $0.014/Mtok cached. In long sessions the bill typically lands at ~1/3 of comparable generic tooling.',
     },
   },
   {
     q: { zh: '需要 IDE 插件吗？', en: 'Will there be an IDE plugin?' },
     a: {
-      zh: '不会做。Jupiter 是 terminal-first。diff 留给 git diff，文件树留给 ls。桌面端是配套的可视化伴侣，不是 Cursor 替代品。',
-      en: 'No. Jupiter is terminal-first. `git diff` does diffs; `ls` does file trees. The desktop is a visual companion to the CLI, not a Cursor replacement.',
+      zh: '第一版重点不是 IDE 插件。Jupiter 的 CLI 和桌面端共用同一套循环、协议和本地状态；桌面端提供多标签会话、资料库、浏览器、终端和 diff 面板，不是传统编辑器插件的替代品。',
+      en: 'The first priority is not an IDE plugin. Jupiter shares one loop, protocol, and local state across CLI and desktop; the desktop adds tabbed sessions, a workspace library, browser, terminal, and diff panels rather than replacing your editor plugin.',
     },
   },
   {

@@ -43,6 +43,7 @@ import {
   loadMaxIterPerTurn,
   loadMouseWheelRows,
   loadReasoningEffort,
+  loadSkillPackSources,
   loadTheme,
   markEditModeHintShown,
   markMouseClipboardHintShown,
@@ -1006,6 +1007,7 @@ function AppInner({
     if (tools && !tools.has("run_skill")) {
       registerSkillTools(tools, {
         projectRoot: codeMode?.rootDir,
+        skillPackSources: loadSkillPackSources(),
         subagentRunner: async (skill, task, signal) => {
           const result = await spawnSubagent({
             client,

@@ -10,6 +10,7 @@ const PERSIST_KEY_SIDE = "jupiter.sideWidth";
 const PERSIST_KEY_CTX = "jupiter.ctxWidth";
 const PERSIST_KEY_BOTTOM = "jupiter.bottomHeight";
 const DEFAULT_SIDEBAR_WIDTH = 254;
+const DEFAULT_BOTTOM_HEIGHT = 180;
 
 export function useResizable(
   side: "side" | "ctx",
@@ -128,7 +129,7 @@ export function useBottomResizable(collapsed: boolean): {
     } catch {
       /* localStorage not available */
     }
-    return 300;
+    return DEFAULT_BOTTOM_HEIGHT;
   });
 
   const draggingRef = useRef(false);

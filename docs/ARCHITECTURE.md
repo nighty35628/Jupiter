@@ -6,9 +6,9 @@ Jupiter is **opinionated, not general**. Every abstraction is justified by a
 DeepSeek-specific behavior or economic property. If it's generic, we don't
 ship it.
 
-The product north star: **coding agent that stays cheap enough to leave on**.
-A tool that quietly burns $200/month on a background project is one nobody
-uses. Every subsystem below is answerable to that goal.
+The product north star: **cache-first AI workbench that stays cheap enough for
+long sessions**. A tool that quietly burns $200/month on a background project is
+one nobody uses. Every subsystem below is answerable to that goal.
 
 ## The four pillars
 

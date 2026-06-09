@@ -146,21 +146,21 @@ function Hero() {
         <div>
           {lang === 'en' ? (
             <h1>
-              A <em>DeepSeek</em>-native<br/>
-              coding <em>agent</em>,<br/>
-              for your terminal.
+              A <em>cache-first</em><br/>
+              AI workbench,<br/>
+              for real coding tasks.
             </h1>
           ) : (
             <h1>
-              为终端而生的<br/>
-              <em>DeepSeek</em> 原生<br/>
-              编程 <em>Agent</em>。
+              省钱缓存优先的<br/>
+              <em>AI 工作台</em>，<br/>
+              面向真实工程任务。
             </h1>
           )}
           <p className="lede">
             {t({
-              zh: <>Jupiter 直接对接 <b>api.deepseek.com</b>，围绕 DeepSeek 的字节稳定 prefix-cache 设计了 append-only 的运行循环 —— 长会话能把缓存命中保持在 90%+，输入 token 成本降到 1/5。终端优先，留它一直跑着。</>,
-              en: <>Jupiter talks straight to <b>api.deepseek.com</b>. The loop is append-only, engineered around DeepSeek's byte-stable prefix cache — long sessions hold 90%+ cache hit and input-token cost collapses to ~1/5. Terminal-first, leave it running.</>,
+              zh: <>Jupiter 覆盖仓库理解、跨文件编辑、终端执行、测试验证、diff 审查、Git/PR 辅助、MCP 工具、Skills、浏览器验证和远程消息通道，同时加入独特的 DeepSeek 缓存机制、工作区资料库和顶栏标签页。</>,
+              en: <>Jupiter covers repository understanding, cross-file edits, terminal execution, test verification, diff review, Git/PR assistance, MCP tools, Skills, browser verification, and remote channels, then adds DeepSeek-aware caching, workspace libraries, and top-bar tabs.</>,
             }, lang)}
           </p>
           <div className="hero-actions">
@@ -173,9 +173,9 @@ function Hero() {
           </div>
           <div className="hero-stats">
             <div className="hero-stat"><b>94<span className="metric-unit">%</span></b><span className="metric-label">Cache Hit</span></div>
-            <div className="hero-stat"><b>2.5<span className="metric-unit">×</span></b><span className="metric-label">Cost Down</span></div>
-            <div className="hero-stat"><b>2837</b><span className="metric-label">Tests</span></div>
-            <div className="hero-stat"><b>MIT</b><span className="metric-label">License</span></div>
+            <div className="hero-stat"><b>Library</b><span className="metric-label">Local Sources</span></div>
+            <div className="hero-stat"><b>Tabs</b><span className="metric-label">Parallel Sessions</span></div>
+            <div className="hero-stat"><b>GPLv3+</b><span className="metric-label">License</span></div>
           </div>
         </div>
         <div style={{position:'relative'}}>

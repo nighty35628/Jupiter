@@ -7,25 +7,33 @@
 
 ## 中文
 
-Jupiter 是一个本地优先的 AI 工作台，把长期项目里的对话、代码、资料、终端、浏览器、MCP 工具和远程消息通道放在同一个桌面环境里。
-它既可以作为桌面端工作台使用，也保留 CLI/TUI 和浏览器仪表盘能力；核心组织方式是“工作区”，而不是一次性聊天窗口。
+Jupiter 的定位很简单：它是一个省钱缓存优先的 AI 工作台，覆盖现代 coding agent 应有的完整能力面，
+同时围绕 DeepSeek 的缓存机制、本地资料库和桌面多会话体验重新设计。
 
-Jupiter 适合需要反复阅读文件、运行命令、验证页面、审查 diff、保存资料、切换会话并持续推进任务的开发和研究工作。
-它的目标不是替代编辑器，而是把 AI 协作最常用的上下文集中到一个可恢复、可检查、可迁移的本地工作面板里。
+你可以让它理解整个仓库、回答代码问题、跨文件修改、开发功能、修复 bug、做重构迁移、生成和运行测试、
+执行终端命令、审查 diff、辅助 Git/PR 工作流、调用 MCP 工具、使用 Skills、打开浏览器验证页面，
+并通过桌面、CLI/TUI 和远程消息通道持续推进任务。Jupiter 的区别在于四件事：独特的缓存机制尽量把长会话成本压到最低；
+独特的工作区资料库把网页、文件和研究材料沉淀到本地；顶栏标签页让多个会话可以像浏览器标签一样并行打开；
+常规 agent 能力则尽量做完整、直接、可迁移。
 
-### 0.99.1 重点
+### 0.99.2 重点
 
-- 修复桌面发布包里的飞书依赖打包问题：`@larksuiteoapi/node-sdk` 现在会随 CLI bundle 一起内联，避免安装后的桌面端在启动飞书通道时缺失运行时依赖。
-- 修复 desktop CLI chunk 在 ESM 环境直接导入时缺少 `__dirname` 的问题，并新增 bundle smoke test 防回归。
-- 设置页新增 API key 退出登录入口；退出后会清除保存的 key、重置 setup 状态，并同步清理当前进程环境变量。
-- 桌面端、根包、Tauri 配置、CHANGELOG 和 GitHub Release notes 统一升级到 `0.99.1`。
+- 桌面设置页新增浏览器自动化状态检测：优先识别 Chrome、Edge 或 Chromium，未检测到时保留 WebView fallback 并提供安装入口。
+- Skills 支持配置多个 skill pack source，安装、搜索和更新会保留来源信息，并区分可信来源和第三方来源。
+- 桌面多会话和侧栏交互做了细节修复：顶栏标签会跟随运行中工作区状态更新，侧栏会话操作按钮不再挤占状态信息，底部面板默认高度更紧凑。
+- README 和文档刷新为“缓存优先 AI 工作台”的中英双语定位说明，版本元数据与 Release notes 统一升级到 `0.99.2`。
 
-### 0.99.0 重点
+### 产品定位
 
-- 飞书通道进入完整工作流：桌面设置页、CLI/TUI `/feishu` 命令、自动启动、群聊 @ 策略和最终回复回传都已接入。
-- 桌面端支持通过飞书进行轻量远程控制，包括查看状态、列出/切换会话、创建新会话、列出/切换工作区。
-- QQ、飞书、Telegram 等消息通道可以把远程输入送入当前 Jupiter 会话，并把助手最终回复发送回来源通道。
-- 版本元数据、CHANGELOG 和 GitHub Release notes 统一升级到 `0.99.0`，发布说明继续保持中英双语。
+- **极致省钱的缓存机制**：Jupiter 的运行循环围绕 DeepSeek prefix cache 设计，尽量保持长会话前缀稳定，
+  让反复阅读、工具调用和多轮修改不必每次都重新支付完整输入成本。
+- **工作区资料库**：每个工作区都可以保存网页、搜索结果、本地文件和摘录。资料会落到本地，方便后续论文、
+  PPT、报告、产品调研或长期项目继续复用。
+- **完整工程 agent 能力面**：Jupiter 覆盖代码理解与问答、跨文件编辑、功能开发、bug 修复、重构迁移、
+  测试生成与执行、终端命令、构建验证、diff 审查、Git/PR 辅助、MCP 工具、Skills、记忆、检查点、浏览器验证
+  和远程消息通道，不要求用户重新学习一套陌生范式。
+- **顶栏标签页多开会话**：桌面端把会话放到顶栏标签页里，可以在不同工作区、任务和上下文之间快速切换，
+  适合并行维护多个任务，而不是被单个聊天窗口锁住。
 
 ### 适合什么场景
 
@@ -39,13 +47,14 @@ Jupiter 适合需要反复阅读文件、运行命令、验证页面、审查 di
 
 **桌面工作台**
 
-桌面端提供对话区、侧栏、文件入口、终端、内置浏览器、审查/Diff 面板、底部工具区和设置页。
+桌面端提供对话区、顶栏标签页、侧栏、文件入口、终端、内置浏览器、审查/Diff 面板、底部工具区和设置页。
 对话会和当前工作区、会话状态、工具调用、文件操作、浏览器验证和远程消息来源结合起来。
 
-**长期会话**
+**省钱缓存与长期会话**
 
-Jupiter 支持长时间运行的会话、多对话切换和会话状态管理。会话元数据记录工作区、标题、归档、置顶、已读/未读和完成状态，
-让 AI 对话可以像项目任务一样被恢复、整理和继续推进。
+Jupiter 支持长时间运行的会话、多对话切换和会话状态管理。缓存优先的循环让长上下文更适合持续工作；
+会话元数据记录工作区、标题、归档、置顶、已读/未读和完成状态，让 AI 对话可以像项目任务一样被恢复、
+整理和继续推进。
 
 **资料库与浏览器**
 
@@ -136,36 +145,42 @@ npm --prefix desktop run dev -- --host 127.0.0.1
 
 ## ENGLISH
 
-Jupiter is a local-first AI workbench that brings conversations, code, research material, terminal output,
-browser verification, MCP tools, and remote messaging channels into one desktop environment. It can be used as
-a desktop workbench while still preserving CLI/TUI and browser-dashboard surfaces. Its main unit is the
-workspace, not a one-off chat window.
+Jupiter has a simple position: it is a cache-first AI workbench that covers the full capability surface expected
+from modern coding agents, then redesigns the experience around DeepSeek cache economics, a local workspace
+library, and desktop multi-session work.
 
-Jupiter is built for development and research work that requires repeated file reading, command execution,
-page verification, diff review, source collection, session switching, and task continuation. It is not meant
-to replace your editor; it concentrates the context AI collaboration usually needs into a restorable local
-surface.
+You can ask Jupiter to understand a repository, answer codebase questions, edit across files, build features,
+fix bugs, perform refactors and migrations, generate and run tests, execute terminal commands, review diffs,
+assist Git/PR workflows, call MCP tools, use Skills, open a browser for verification, and keep pushing tasks
+forward from desktop, CLI/TUI, and remote messaging channels. Jupiter differs in four places: its cache
+mechanism is built to make long sessions as cheap as possible; its workspace library saves web pages, files,
+and research material locally; its top-bar tabs let multiple sessions stay open like browser tabs; and its
+regular agent capabilities stay complete, direct, and easy to transfer from other tools.
 
-### 0.99.1 Highlights
+### 0.99.2 Highlights
 
-- Fixed Feishu dependency bundling in desktop release packages: `@larksuiteoapi/node-sdk` is now inlined into
-  the CLI bundle so installed desktop builds do not miss the runtime dependency when starting the Feishu channel.
-- Fixed desktop CLI chunk imports in ESM environments that were missing `__dirname`, with bundle smoke-test
-  coverage to prevent regressions.
-- Added an API-key sign-out path in settings; signing out clears the saved key, resets setup state, and removes
-  the current process environment key.
-- Desktop, root package, Tauri config, CHANGELOG, and GitHub Release notes are aligned on `0.99.1`.
+- Desktop settings now detect browser automation readiness: Jupiter prefers Chrome, Edge, or Chromium when
+  available, keeps the WebView fallback when none is detected, and exposes install shortcuts.
+- Skills can use multiple configured skill pack sources. Search, install, and update flows preserve source
+  metadata and distinguish trusted sources from third-party sources.
+- Desktop multi-session details were tightened: top tabs follow live workspace state, sidebar session actions no
+  longer collide with status metadata, and the bottom panel starts at a more compact height.
+- README and docs were refreshed around the cache-first AI workbench positioning, with version metadata and
+  Release notes aligned on `0.99.2`.
 
-### 0.99.0 Highlights
+### Product Positioning
 
-- Feishu Channel now has a complete workflow: desktop settings, CLI/TUI `/feishu` commands, auto-start,
-  group @mention policy, and final assistant replies back to Feishu.
-- Desktop can be lightly controlled from Feishu, including status, session list/switch/new, and workspace
-  list/switch commands.
-- QQ, Feishu, and Telegram channels can route remote messages into the active Jupiter session and send the
-  assistant's final reply back to the source channel.
-- Version metadata, CHANGELOG, and GitHub Release notes are aligned on `0.99.0`, with release notes kept
-  bilingual.
+- **Cost-first cache mechanism**: Jupiter's runtime loop is designed around DeepSeek prefix cache behavior. It
+  keeps long-session prefixes stable so repeated reading, tool calls, and multi-turn edits do not pay the full
+  input-token cost every time.
+- **Workspace library**: each workspace can save web pages, search results, local files, and excerpts. Sources
+  are stored locally so papers, decks, reports, product research, and long-running projects can reuse them later.
+- **Complete engineering-agent capability surface**: Jupiter covers code understanding and Q&A, cross-file
+  edits, feature work, bug fixing, refactors, migrations, test generation and execution, terminal commands,
+  build verification, diff review, Git/PR assistance, MCP tools, Skills, memory, checkpoints, browser
+  verification, and remote messaging channels.
+- **Top-bar tabs for parallel sessions**: desktop sessions live in top-bar tabs, so different workspaces, tasks,
+  and contexts can stay open side by side instead of being trapped in a single chat window.
 
 ### What Jupiter Is For
 
@@ -181,15 +196,16 @@ surface.
 
 **Desktop workbench**
 
-The desktop app provides a conversation area, sidebars, files, terminal, in-app browser, review/Diff panels,
-bottom tools, and settings. Conversations are connected to the current workspace, session state, tool calls,
-file operations, browser verification, and remote message sources.
+The desktop app provides a conversation area, top-bar tabs, sidebars, files, terminal, in-app browser,
+review/Diff panels, bottom tools, and settings. Conversations are connected to the current workspace, session
+state, tool calls, file operations, browser verification, and remote message sources.
 
-**Long-running sessions**
+**Cost-saving cache and long-running sessions**
 
-Jupiter supports long-running sessions, conversation switching, and session state management. Session metadata
-tracks workspace, title, archive state, pin state, read/unread state, and completion state so conversations can
-be restored, organized, and continued like project tasks.
+Jupiter supports long-running sessions, conversation switching, and session state management. The cache-first
+loop makes long context more suitable for ongoing work. Session metadata tracks workspace, title, archive state,
+pin state, read/unread state, and completion state so conversations can be restored, organized, and continued
+like project tasks.
 
 **Workspace library and browser**
 

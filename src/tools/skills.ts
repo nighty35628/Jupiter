@@ -3,6 +3,7 @@
 import { join } from "node:path";
 import {
   type SkillPackSearchMatch,
+  type SkillPackSource,
   type SkillPackVersion,
   installSkillPackUpdates,
   managedSkillPacksDir,
@@ -34,8 +35,10 @@ export interface SkillToolsOptions {
   onSkillInstalled?: SkillInstalledHook;
   /** Per-skill model override for `runAs: subagent` skills — sourced from config.json's `subagentModels`. */
   subagentModels?: Record<string, "flash" | "pro">;
-  /** Test seam / enterprise override for the Codex skill-pack update channel. */
+  /** Test seam / enterprise override for the skill-pack update channel. */
   skillPackRegistryUrl?: string;
+  /** Multiple skill-pack sources. When set, installs preserve the selected source id. */
+  skillPackSources?: readonly SkillPackSource[];
   /** Test seam for skill-pack registry and bundle fetches. */
   skillPackFetchImpl?: typeof fetch;
   /** Test seam for local bundled pack versions. Production discovers bundled resources on disk. */
@@ -105,6 +108,7 @@ function skillPackToolOptions(opts: SkillToolsOptions) {
   return {
     homeDir: opts.homeDir,
     registryUrl: opts.skillPackRegistryUrl,
+    sources: opts.skillPackSources,
     fetchImpl: opts.skillPackFetchImpl,
     bundledPacks: opts.bundledSkillPacks,
   };
@@ -262,7 +266,7 @@ export function registerSkillTools(
   registry.register({
     name: "search_skill_packs",
     description:
-      "Search the Codex skill-pack channel before authoring a new skill. Use this FIRST when the user asks to install/add/get a skill by name (e.g. 'install playwright skill', 'add documents skill'). Returns channel matches plus local built-in/managed pack status.",
+      "Search configured skill-pack sources before authoring a new skill. Use this FIRST when the user asks to install/add/get a skill by name (e.g. 'install playwright skill', 'add documents skill'). Returns source matches plus local built-in/managed pack status.",
     readOnly: true,
     parallelSafe: true,
     parameters: {
@@ -286,7 +290,7 @@ export function registerSkillTools(
   registry.register({
     name: "install_skill_pack",
     description:
-      "Install a skill pack from the Codex skill-pack channel. Use after `search_skill_packs` finds a suitable match. Do not use this to author brand-new ad-hoc skills; use `install_skill` only when the channel has no match.",
+      "Install a skill pack from configured skill-pack sources. Use after `search_skill_packs` finds a suitable match. Do not use this to author brand-new ad-hoc skills; use `install_skill` only when the configured sources have no match.",
     parameters: {
       type: "object",
       properties: {
@@ -309,8 +313,8 @@ export function registerSkillTools(
         return JSON.stringify({
           error:
             search.matches.length === 0
-              ? `no Codex skill pack matched ${JSON.stringify(name)}`
-              : `ambiguous Codex skill pack query ${JSON.stringify(name)} — retry with an exact id`,
+              ? `no skill pack matched ${JSON.stringify(name)}`
+              : `ambiguous skill pack query ${JSON.stringify(name)} — retry with an exact id`,
           matches: search.matches.slice(0, 8),
         });
       }
@@ -322,13 +326,15 @@ export function registerSkillTools(
           installed: [],
           alreadyAvailable: true,
           currentVersion: target.currentVersion,
-          note: "This Codex skill pack is already available. Invoke its skills with run_skill when needed.",
+          note: "This skill pack is already available. Invoke its skills with run_skill when needed.",
         });
       }
 
       const installed = await installSkillPackUpdates({
         ...skillPackToolOptions(opts),
-        packIds: [target.id],
+        ...(opts.skillPackSources && target.sourceId
+          ? { packRequests: [{ id: target.id, sourceId: target.sourceId }] }
+          : { packIds: [target.id] }),
       });
       if (installed.ok && installed.installed.length > 0) {
         for (const pack of installed.installed) {
@@ -347,7 +353,7 @@ export function registerSkillTools(
         ...installed,
         id: target.id,
         note: installed.ok
-          ? "Installed Codex skill pack. Its skills are readable by run_skill in this session; the pinned Skills index refreshes on /new or relaunch."
+          ? "Installed skill pack. Its skills are readable by run_skill in this session; the pinned Skills index refreshes on /new or relaunch."
           : undefined,
       });
     },
@@ -360,7 +366,7 @@ export function registerSkillTools(
   registry.register({
     name: "install_skill",
     description:
-      "Fallback authoring tool for saving a brand-new custom skill when the Codex skill-pack channel has no suitable match. For user requests like 'install/add/get <name> skill', call `search_skill_packs` first, then `install_skill_pack` if there is a channel match. Use this only to create an ad-hoc reusable playbook from scratch. Runnable immediately (same turn); appears in the pinned Skills index on next `/new` or launch.",
+      "Fallback authoring tool for saving a brand-new custom skill when configured skill-pack sources have no suitable match. For user requests like 'install/add/get <name> skill', call `search_skill_packs` first, then `install_skill_pack` if there is a source match. Use this only to create an ad-hoc reusable playbook from scratch. Runnable immediately (same turn); appears in the pinned Skills index on next `/new` or launch.",
     parameters: {
       type: "object",
       properties: {

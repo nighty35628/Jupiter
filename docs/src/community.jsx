@@ -41,8 +41,8 @@ function Community() {
           en: '<em>Community-driven</em>, fully open source.',
         }, lang)}
         sub={t({
-          zh: 'MIT 协议、公开 Roadmap、公开 Discussions。欢迎一起把推理型 Agent 的工程基线推得更高。',
-          en: 'MIT-licensed, public roadmap, open Discussions. Help push the engineering baseline for reasoning-type agents higher.',
+          zh: 'GPLv3+ 协议、项目 CLA、公开 Roadmap 和公开 Discussions。欢迎一起把推理型 Agent 的工程基线推得更高。',
+          en: 'GPLv3+ licensed with a project CLA, public roadmap, and open Discussions. Help push the engineering baseline for reasoning-type agents higher.',
         }, lang)}
       />
 

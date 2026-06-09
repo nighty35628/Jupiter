@@ -21,8 +21,8 @@ function Footer() {
           </a>
           <p style={{color:'var(--cream-mute)', fontSize:13, marginTop:14, lineHeight:1.65, maxWidth:340}}>
             {t({
-              zh: 'DeepSeek 原生的终端编程 Agent · 围绕 prefix-cache 稳定性设计 · 长会话长期跑。',
-              en: 'DeepSeek-native AI coding agent for your terminal. Engineered around prefix-cache stability — leave it running.',
+              zh: '省钱缓存优先的 AI 工作台 · 完整工程 agent 能力 · 资料库、本地会话与顶栏标签页。',
+              en: 'Cache-first AI workbench with full coding-agent workflows, workspace libraries, local sessions, and top-bar tabs.',
             }, lang)}
           </p>
           <div style={{display:'flex', gap:10, marginTop:18}}>
@@ -59,7 +59,7 @@ function Footer() {
         </div>
       </div>
       <div className="footer-bottom">
-        <span>© 2026 esengine · MIT License</span>
+        <span>© 2026 esengine · GPLv3+ License</span>
         <span className="spacer"></span>
         <span>{t({
           zh: 'Independent open-source project · 与 DeepSeek 官方无关',

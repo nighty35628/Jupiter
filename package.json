@@ -1,7 +1,7 @@
 {
   "name": "jupiter",
-  "version": "0.99.1",
-  "description": "Jupiter workbench: local AI coding desktop and CLI fork with MCP and skills configuration.",
+  "version": "0.99.2",
+  "description": "Jupiter: a cache-first AI workbench with full coding-agent workflows, workspace libraries, and tabbed desktop sessions.",
   "type": "module",
   "bin": {
     "jupiter": "dist/cli/index.js",

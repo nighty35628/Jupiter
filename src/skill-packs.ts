@@ -17,6 +17,7 @@ export const SKILL_PACKS_DIRNAME = "skill-packs";
 export const SKILL_PACKS_MANAGED_DIRNAME = "managed";
 export const SKILL_PACKS_BUNDLED_DIRNAME = "bundled";
 export const SKILL_PACK_REGISTRY_URL_ENV = "JUPITER_SKILL_PACK_REGISTRY_URL";
+export const SKILL_PACK_SOURCES_ENV = "JUPITER_SKILL_PACK_SOURCES";
 export const CODEX_SKILL_PACK_REGISTRY_URL =
   "https://api.github.com/repos/openai/skills/contents/skills/.curated?ref=main";
 export const DEFAULT_SKILL_PACK_REGISTRY_URL = CODEX_SKILL_PACK_REGISTRY_URL;
@@ -27,6 +28,14 @@ const SAFE_RELATIVE_PATH = /^[^/\\](?:.*[^/\\])?$/;
 export interface SkillPackVersion {
   id: string;
   version: string;
+  sourceId?: string;
+}
+
+export interface SkillPackSource {
+  id: string;
+  name: string;
+  url: string;
+  trusted: boolean;
 }
 
 export interface SkillPackManifestEntry extends SkillPackVersion {
@@ -59,6 +68,9 @@ export interface SkillPackUpdateEntry {
   currentVersion: string | null;
   latestVersion: string;
   url: string;
+  sourceId?: string;
+  sourceName?: string;
+  trusted?: boolean;
   source?: "github";
   rootPath?: string;
   sha256?: string;
@@ -79,9 +91,16 @@ export type SkillPackInstallResult =
 export interface SkillPackUpdateOptions {
   homeDir?: string;
   registryUrl?: string;
+  sources?: readonly SkillPackSource[];
   fetchImpl?: typeof fetch;
   bundledPacks?: readonly SkillPackVersion[];
   packIds?: readonly string[];
+  packRequests?: readonly SkillPackInstallRequest[];
+}
+
+export interface SkillPackInstallRequest {
+  id: string;
+  sourceId?: string;
 }
 
 export interface SkillPackSearchMatch {
@@ -91,6 +110,9 @@ export interface SkillPackSearchMatch {
   latestVersion: string | null;
   updateAvailable: boolean;
   source: "channel" | "local";
+  sourceId?: string;
+  sourceName?: string;
+  trusted?: boolean;
   url?: string;
   sha256?: string;
   description?: string;
@@ -104,6 +126,7 @@ export type SkillPackSearchResult =
       ok: true;
       query: string;
       registryUrl: string;
+      sources: SkillPackSource[];
       matches: SkillPackSearchMatch[];
       warning?: string;
     }
@@ -111,6 +134,7 @@ export type SkillPackSearchResult =
       ok: false;
       query: string;
       registryUrl: string;
+      sources: SkillPackSource[];
       error: string;
       matches: SkillPackSearchMatch[];
     };
@@ -120,10 +144,97 @@ interface JsonReadResult {
   value: unknown;
 }
 
+interface SourceManifestResult {
+  source: SkillPackSource;
+  manifest: SkillPackRegistryManifest;
+}
+
 export function configuredSkillPackRegistryUrl(
   env: Record<string, string | undefined> = process.env,
 ): string {
   return env[SKILL_PACK_REGISTRY_URL_ENV]?.trim() || DEFAULT_SKILL_PACK_REGISTRY_URL;
+}
+
+function sourceIdFromUrl(url: string): string {
+  try {
+    const host = new URL(url).hostname.split(".").filter(Boolean)[0];
+    return isPackId(host) ? host : "source";
+  } catch {
+    return "source";
+  }
+}
+
+function normalizeSourceId(value: string, fallback: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return isPackId(normalized) ? normalized : fallback;
+}
+
+function uniqueSourceId(id: string, seen: Set<string>): string {
+  if (!seen.has(id)) {
+    seen.add(id);
+    return id;
+  }
+  for (let index = 2; ; index++) {
+    const next = `${id}-${index}`;
+    if (!seen.has(next) && isPackId(next)) {
+      seen.add(next);
+      return next;
+    }
+  }
+}
+
+function parseSkillPackSourceToken(
+  token: string,
+  index: number,
+  seen: Set<string>,
+): SkillPackSource | null {
+  const raw = token.trim();
+  if (!raw) return null;
+  const eq = raw.indexOf("=");
+  const label = eq >= 0 ? raw.slice(0, eq).trim() : "";
+  const url = (eq >= 0 ? raw.slice(eq + 1) : raw).trim();
+  if (!url) return null;
+  const fallback = normalizeSourceId(label || sourceIdFromUrl(url), `source-${index + 1}`);
+  const id = uniqueSourceId(fallback, seen);
+  return {
+    id,
+    name: label || id,
+    url,
+    trusted: index === 0,
+  };
+}
+
+export function configuredSkillPackSources(
+  env: Record<string, string | undefined> = process.env,
+): SkillPackSource[] {
+  const rawSources = env[SKILL_PACK_SOURCES_ENV]?.trim();
+  const seen = new Set<string>();
+  if (rawSources) {
+    return rawSources
+      .split(",")
+      .map((token, index) => parseSkillPackSourceToken(token, index, seen))
+      .filter((source): source is SkillPackSource => Boolean(source));
+  }
+  const legacyUrl = configuredSkillPackRegistryUrl(env);
+  return [
+    {
+      id: "legacy",
+      name: "legacy",
+      url: legacyUrl,
+      trusted: true,
+    },
+  ];
+}
+
+function skillPackSourcesForOptions(opts: SkillPackUpdateOptions): SkillPackSource[] {
+  if (opts.sources && opts.sources.length > 0) return [...opts.sources];
+  if (opts.registryUrl) {
+    return [{ id: "legacy", name: "legacy", url: opts.registryUrl, trusted: true }];
+  }
+  return configuredSkillPackSources();
 }
 
 export function managedSkillPacksDir(homeDir: string = homedir()): string {
@@ -420,29 +531,105 @@ async function fetchManifest(
   }
 }
 
+async function fetchSourceManifest(
+  source: SkillPackSource,
+  fetchImpl: typeof fetch,
+): Promise<SourceManifestResult> {
+  const result = await readJson(source.url, fetchImpl);
+  if (!result) throw new Error("skill pack update channel is unreachable");
+  const manifest = parseManifest(result.value) ?? parseGitHubSkillDirectoryManifest(result.value);
+  if (!manifest) throw new Error("skill pack manifest is invalid");
+  return { source, manifest };
+}
+
+async function fetchSourceManifests(opts: SkillPackUpdateOptions): Promise<{
+  sources: SkillPackSource[];
+  manifests: SourceManifestResult[];
+  errors: string[];
+}> {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  const sources = skillPackSourcesForOptions(opts);
+  if (!fetchImpl) return { sources, manifests: [], errors: ["fetch is unavailable"] };
+  const manifests: SourceManifestResult[] = [];
+  const errors: string[] = [];
+  for (const source of sources) {
+    try {
+      manifests.push(await fetchSourceManifest(source, fetchImpl));
+    } catch (err) {
+      errors.push(`${source.id}: ${(err as Error).message}`);
+    }
+  }
+  return { sources, manifests, errors };
+}
+
+function updateEntryFromManifestPack(
+  pack: SkillPackManifestEntry,
+  source: SkillPackSource,
+  local: Map<string, string>,
+): SkillPackUpdateEntry {
+  const currentVersion = local.get(pack.id) ?? null;
+  return {
+    id: pack.id,
+    currentVersion,
+    latestVersion: pack.version,
+    url: pack.url,
+    sourceId: source.id,
+    sourceName: source.name,
+    trusted: source.trusted,
+    source: pack.source,
+    rootPath: pack.rootPath,
+    sha256: pack.sha256,
+    description: pack.description,
+    skills: pack.skills,
+    keywords: pack.keywords,
+    updateAvailable: isUpdateAvailable(pack.version, currentVersion),
+  };
+}
+
+async function allSourceUpdateEntries(opts: SkillPackUpdateOptions): Promise<{
+  sources: SkillPackSource[];
+  entries: SkillPackUpdateEntry[];
+  errors: string[];
+}> {
+  const homeDir = opts.homeDir ?? homedir();
+  const fetched = await fetchSourceManifests(opts);
+  const local = latestLocalVersions(homeDir, opts.bundledPacks);
+  const entries: SkillPackUpdateEntry[] = [];
+  for (const { source, manifest } of fetched.manifests) {
+    for (const pack of manifest.packs) {
+      entries.push(updateEntryFromManifestPack(pack, source, local));
+    }
+  }
+  return { sources: fetched.sources, entries, errors: fetched.errors };
+}
+
+function pickPreferredSourceEntry(
+  current: SkillPackUpdateEntry | undefined,
+  next: SkillPackUpdateEntry,
+): SkillPackUpdateEntry {
+  if (!current) return next;
+  if (Boolean(current.trusted) !== Boolean(next.trusted)) return next.trusted ? next : current;
+  if (next.updateAvailable !== current.updateAvailable)
+    return next.updateAvailable ? next : current;
+  return current;
+}
+
+function dedupeUpdateEntries(entries: readonly SkillPackUpdateEntry[]): SkillPackUpdateEntry[] {
+  const byId = new Map<string, SkillPackUpdateEntry>();
+  for (const entry of entries) {
+    byId.set(entry.id, pickPreferredSourceEntry(byId.get(entry.id), entry));
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
 export async function checkSkillPackUpdates(
   opts: SkillPackUpdateOptions = {},
 ): Promise<SkillPackUpdateStatus> {
-  const homeDir = opts.homeDir ?? homedir();
-  const manifestResult = await fetchManifest(opts);
-  if (!manifestResult.ok) return { ok: false, error: manifestResult.error, packs: [] };
-  const local = latestLocalVersions(homeDir, opts.bundledPacks);
-  const packs = manifestResult.manifest.packs.map((pack) => {
-    const currentVersion = local.get(pack.id) ?? null;
-    return {
-      id: pack.id,
-      currentVersion,
-      latestVersion: pack.version,
-      url: pack.url,
-      source: pack.source,
-      rootPath: pack.rootPath,
-      sha256: pack.sha256,
-      description: pack.description,
-      skills: pack.skills,
-      keywords: pack.keywords,
-      updateAvailable: isUpdateAvailable(pack.version, currentVersion),
-    };
-  });
+  const result = await allSourceUpdateEntries(opts);
+  const packs = dedupeUpdateEntries(result.entries);
+  if (result.errors.length > 0 && packs.length === 0) {
+    return { ok: false, error: result.errors.join("; "), packs: [] };
+  }
   return { ok: true, packs };
 }
 
@@ -484,34 +671,40 @@ export async function searchSkillPacks(
   opts: SkillPackUpdateOptions = {},
 ): Promise<SkillPackSearchResult> {
   const homeDir = opts.homeDir ?? homedir();
-  const registryUrl = opts.registryUrl ?? configuredSkillPackRegistryUrl();
+  const sources = skillPackSourcesForOptions(opts);
+  const registryUrl = opts.registryUrl ?? sources.map((source) => source.url).join(",");
   const local = latestLocalVersions(homeDir, opts.bundledPacks);
   const byId = new Map<string, SkillPackSearchMatch>();
   let warning: string | undefined;
 
-  const manifestResult = await fetchManifest(opts);
-  if (manifestResult.ok) {
-    for (const pack of manifestResult.manifest.packs) {
-      const currentVersion = local.get(pack.id) ?? null;
-      const match = skillPackMatchesQuery(pack, query);
-      if (!match.matches) continue;
-      byId.set(pack.id, {
-        id: pack.id,
-        installed: currentVersion !== null,
-        currentVersion,
-        latestVersion: pack.version,
-        updateAvailable: isUpdateAvailable(pack.version, currentVersion),
-        source: "channel",
-        url: pack.url,
-        sha256: pack.sha256,
-        description: pack.description,
-        skills: pack.skills,
-        keywords: pack.keywords,
-        exact: match.exact,
-      });
+  const sourceEntries = await allSourceUpdateEntries(opts);
+  if (sourceEntries.errors.length > 0) warning = sourceEntries.errors.join("; ");
+  for (const pack of sourceEntries.entries) {
+    const match = skillPackMatchesQuery(pack, query);
+    if (!match.matches) continue;
+    const next: SkillPackSearchMatch = {
+      id: pack.id,
+      installed: pack.currentVersion !== null,
+      currentVersion: pack.currentVersion,
+      latestVersion: pack.latestVersion,
+      updateAvailable: pack.updateAvailable,
+      source: "channel",
+      sourceId: pack.sourceId,
+      sourceName: pack.sourceName,
+      trusted: pack.trusted,
+      url: pack.url,
+      sha256: pack.sha256,
+      description: pack.description,
+      skills: pack.skills,
+      keywords: pack.keywords,
+      exact: match.exact,
+    };
+    const current = byId.get(pack.id);
+    if (!current || Boolean(next.trusted) !== Boolean(current.trusted)) {
+      if (!current || next.trusted) byId.set(pack.id, next);
+    } else if (next.updateAvailable && !current.updateAvailable) {
+      byId.set(pack.id, next);
     }
-  } else {
-    warning = manifestResult.error;
   }
 
   for (const [id, version] of local) {
@@ -536,11 +729,11 @@ export async function searchSkillPacks(
   });
 
   if (warning && matches.length === 0) {
-    return { ok: false, query, registryUrl, error: warning, matches };
+    return { ok: false, query, registryUrl, sources, error: warning, matches };
   }
   return warning
-    ? { ok: true, query, registryUrl, warning, matches }
-    : { ok: true, query, registryUrl, matches };
+    ? { ok: true, query, registryUrl, sources, warning, matches }
+    : { ok: true, query, registryUrl, sources, matches };
 }
 
 function assertSafeBundlePath(packDir: string, path: string): string {
@@ -649,6 +842,19 @@ export async function installSkillPackUpdates(
   if (!fetchImpl) return { ok: false, error: "fetch is unavailable", installed: [], packs: [] };
   const status = await checkSkillPackUpdates(opts);
   if (!status.ok) return { ok: false, error: status.error, installed: [], packs: status.packs };
+  const rawRequests = opts.packRequests ?? [];
+  const exactRequests = rawRequests.filter(
+    (request) =>
+      isPackId(request.id) && (request.sourceId === undefined || isPackId(request.sourceId)),
+  );
+  if (rawRequests.length > 0 && exactRequests.length !== rawRequests.length) {
+    return {
+      ok: false,
+      error: "invalid skill pack request",
+      installed: [],
+      packs: status.packs,
+    };
+  }
   const rawPackIds = opts.packIds ?? [];
   const requested = new Set(rawPackIds.filter(isPackId));
   if (rawPackIds.length > 0 && requested.size !== rawPackIds.length) {
@@ -671,9 +877,40 @@ export async function installSkillPackUpdates(
       };
     }
   }
-  const updates = status.packs.filter(
-    (pack) => pack.updateAvailable && (requested.size === 0 || requested.has(pack.id)),
-  );
+  let candidatePacks = status.packs;
+  if (exactRequests.length > 0) {
+    const sourceEntries = await allSourceUpdateEntries(opts);
+    candidatePacks = sourceEntries.entries;
+    const missing = exactRequests.filter(
+      (request) =>
+        !candidatePacks.some(
+          (pack) =>
+            pack.id === request.id &&
+            (request.sourceId === undefined || pack.sourceId === request.sourceId),
+        ),
+    );
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        error: `skill pack not found in update channel: ${missing
+          .map((request) => (request.sourceId ? `${request.sourceId}/${request.id}` : request.id))
+          .join(", ")}`,
+        installed: [],
+        packs: status.packs,
+      };
+    }
+  }
+  const updates = candidatePacks.filter((pack) => {
+    if (!pack.updateAvailable) return false;
+    if (exactRequests.length > 0) {
+      return exactRequests.some(
+        (request) =>
+          pack.id === request.id &&
+          (request.sourceId === undefined || pack.sourceId === request.sourceId),
+      );
+    }
+    return requested.size === 0 || requested.has(pack.id);
+  });
   const installed: SkillPackVersion[] = [];
   try {
     for (const pack of updates) {
@@ -694,7 +931,11 @@ export async function installSkillPackUpdates(
       );
       rmSync(packDir, { recursive: true, force: true });
       renameOrCopy(tmpDir, packDir);
-      installed.push({ id: bundle.id, version: bundle.version });
+      installed.push({
+        id: bundle.id,
+        version: bundle.version,
+        ...(exactRequests.length > 0 && pack.sourceId ? { sourceId: pack.sourceId } : {}),
+      });
     }
     if (installed.length > 0) writeManagedManifest(homeDir, installed);
     return { ok: true, installed, packs: status.packs };

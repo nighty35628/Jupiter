@@ -308,6 +308,29 @@ describe("App streaming events", () => {
     expect(document.querySelector(".wd-pop")?.textContent).toContain("jupiter-streaming-test");
   });
 
+  it("updates the top tab title when the workspace changes", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-one", "/tmp/Alpha");
+
+    await waitFor(() => {
+      expect(document.querySelector(".tabbar .tab .label")?.textContent).toBe("Alpha");
+    });
+
+    await emitRpc({
+      type: "$settings",
+      tabId: "tab-one",
+      workspaceDir: "/tmp/Beta",
+      recentWorkspaces: [],
+      model: "deepseek-v4-flash",
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector(".tabbar .tab .label")?.textContent).toBe("Beta");
+    });
+  });
+
   it("does not show the startup splash again when switching to a newly opened tab", async () => {
     splashMockState.shouldShow = true;
     render(<App />);

@@ -11,7 +11,7 @@
     "arch.title.line1": "Jupiter Architecture",
     "arch.title.line2": "how it works under the hood",
     "arch.sub":
-      "Jupiter is <strong>opinionated, not general</strong>. Every abstraction is justified by a DeepSeek-specific behavior or economic property. The product north star: a coding agent that stays cheap enough to leave on.",
+      "Jupiter is <strong>opinionated, not general</strong>. Every abstraction is justified by a DeepSeek-specific behavior or economic property. The product north star: a cache-first AI workbench that stays cheap enough for long sessions.",
 
     "arch.toc.title": "On this page",
     "arch.toc.philosophy": "Design philosophy",
@@ -34,7 +34,7 @@
     "ph.body1":
       "Jupiter is <strong>opinionated, not general</strong>. Every abstraction is justified by a DeepSeek-specific behavior or economic property. If it's generic, we don't ship it.",
     "ph.body2":
-      "The product north star: <strong>coding agent that stays cheap enough to leave on</strong>. A tool that quietly burns $200/month on a background project is one nobody uses. Every subsystem below is answerable to that goal.",
+      "The product north star: <strong>cache-first AI workbench that stays cheap enough for long sessions</strong>. A tool that quietly burns $200/month on a background project is one nobody uses. Every subsystem below is answerable to that goal.",
 
     "p1.title": "Pillar 1 — Cache-First Loop",
     "p1.problem":

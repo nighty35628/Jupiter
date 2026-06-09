@@ -58,6 +58,7 @@ import {
   loadRecentWorkspaces,
   loadResolvedSkillPaths,
   loadShowSystemEvents,
+  loadSkillPackSources,
   loadSubagentModels,
   loadTavilyApiKey,
   loadWorkspaceDir,
@@ -80,6 +81,7 @@ import {
   savePromptHistory,
   saveReasoningEffort,
   saveShowSystemEvents,
+  saveSkillPackSources,
   saveSubagentModels,
   saveWorkspaceDir,
   writeConfig,
@@ -106,6 +108,7 @@ import {
   pauseGate,
 } from "../../core/pause-gate.js";
 import { autoResolveVerdict } from "../../core/pause-policy.js";
+import { detectBrowserAutomation } from "../../desktop/browser-automation.js";
 import {
   feishuRemoteCommandBypassesBusy,
   feishuRemoteDesktopHelpText,
@@ -304,6 +307,7 @@ type InMessage = { tabId?: string } & (
       ollamaApiKey?: string | null;
       braveApiKey?: string | null;
       subagentModels?: Record<string, "flash" | "pro">;
+      skillPackSources?: ReturnType<typeof loadSkillPackSources>;
       contextTokens?: Record<string, number>;
       showSystemEvents?: boolean;
       processCardsDefaultOpen?: boolean;
@@ -387,6 +391,8 @@ interface SettingsEvent {
     | "brave"
     | "ollama";
   webSearchEndpoint?: string;
+  browserAutomation?: ReturnType<typeof detectBrowserAutomation>;
+  skillPackSources?: ReturnType<typeof loadSkillPackSources>;
   webSearchApiKeys?: {
     metaso?: string;
     baidu?: string;
@@ -1030,6 +1036,8 @@ function emitSettings(tab: Tab): void {
       desktopCloseBehavior: loadDesktopCloseBehavior(),
       webSearchEngine: readWebSearchEngine(),
       webSearchEndpoint: readConfig().webSearchEndpoint,
+      browserAutomation: detectBrowserAutomation(),
+      skillPackSources: loadSkillPackSources(),
       webSearchApiKeys: collectWebSearchApiKeyPrefixes(),
       subagentModels: loadSubagentModels(),
       contextTokens: readConfig().contextTokens,
@@ -4921,6 +4929,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         if (msg.subagentModels !== undefined) {
           saveSubagentModels(msg.subagentModels);
           emitSkills(tab);
+        }
+        if (msg.skillPackSources !== undefined) {
+          saveSkillPackSources(msg.skillPackSources);
         }
         if (msg.contextTokens !== undefined) {
           const cfg = readConfig();

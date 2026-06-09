@@ -8,6 +8,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings as SettingsType, UsageStats } from "../App";
 import { setLang } from "../i18n";
@@ -205,6 +206,39 @@ describe("SettingsModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 
     expect(onSignOutApiKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows detected browser automation status in integrations", () => {
+    renderSettings({
+      settings: {
+        browserAutomation: {
+          state: "available",
+          browser: "chrome",
+          name: "Google Chrome",
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        },
+      },
+    });
+
+    fireEvent.click(screen.getByText("Integrations"));
+
+    expect(screen.getByText("Browser automation")).toBeTruthy();
+    expect(screen.getByText("Enabled through Google Chrome.")).toBeTruthy();
+    expect(screen.getByText(/Google Chrome.app/)).toBeTruthy();
+  });
+
+  it("shows browser install guidance when automation is unavailable", () => {
+    renderSettings({
+      settings: { browserAutomation: { state: "unavailable" } },
+    });
+
+    fireEvent.click(screen.getByText("Integrations"));
+    fireEvent.click(screen.getByRole("button", { name: "Install Chrome" }));
+    fireEvent.click(screen.getByRole("button", { name: "Install Edge" }));
+
+    expect(screen.getByText("WebView fallback active.")).toBeTruthy();
+    expect(openUrl).toHaveBeenCalledWith("https://www.google.com/chrome/");
+    expect(openUrl).toHaveBeenCalledWith("https://www.microsoft.com/edge/download");
   });
 
   it("saves the model memory confirmation setting", () => {

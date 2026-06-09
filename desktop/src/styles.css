@@ -1354,10 +1354,8 @@ html[data-platform="macos"] .titlebar .tb-left {
 }
 .workspace-group-row {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 24px;
+  display: block;
   align-items: center;
-  gap: 2px;
 }
 .workspace-group-head {
   width: 100%;
@@ -1366,7 +1364,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   grid-template-columns: 22px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
-  padding: 5px 8px;
+  padding: 5px 32px 5px 8px;
   border-radius: 7px;
   border: 1px solid transparent;
   background: transparent;
@@ -1413,6 +1411,9 @@ html[data-platform="macos"] .titlebar .tb-left {
   font-weight: 650;
 }
 .workspace-menu-btn {
+  position: absolute;
+  top: 50%;
+  right: 5px;
   width: 22px;
   height: 22px;
   display: inline-flex;
@@ -1424,6 +1425,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   color: var(--muted);
   cursor: pointer;
   opacity: 0;
+  transform: translateY(-50%);
   transition: opacity 120ms, background 120ms, color 120ms;
 }
 .workspace-menu-btn[data-pinned="true"] {
@@ -1519,7 +1521,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   opacity: 0.62;
 }
 .session-item[data-has-state="true"] .body {
-  padding-right: 22px;
+  padding-right: 0;
 }
 .session-state {
   position: absolute;
@@ -1532,6 +1534,7 @@ html[data-platform="macos"] .titlebar .tb-left {
   justify-content: center;
   transform: translateY(-50%);
   pointer-events: none;
+  transition: opacity 120ms;
 }
 .session-busy-spinner {
   width: 11px;
@@ -1574,50 +1577,43 @@ html[data-platform="macos"] .titlebar .tb-left {
 .session-item .body .meta .workspace.no-workspace {
   color: var(--muted-2);
 }
+.session-item[data-busy="true"] .body .meta {
+  opacity: 0;
+}
 @container (max-width: 180px) {
   .session-item .body .meta .workspace,
   .session-item .body .meta .sep {
     display: none;
   }
 }
-.session-item .delete-btn {
+.session-actions {
   position: absolute;
-  top: 5px;
-  right: 34px;
-  width: 22px;
-  height: 22px;
-  display: flex;
+  top: 3px;
+  right: 4px;
+  bottom: 3px;
+  z-index: 2;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
+  justify-content: flex-end;
+  gap: 2px;
+  padding-left: 22px;
+  border-radius: 6px;
   opacity: 0;
-  transition: opacity 120ms, background 120ms, color 120ms;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0,
+      color-mix(in oklch, var(--panel) 0%, transparent) 4px,
+      color-mix(in oklch, var(--panel) 92%, white 8%) 22px,
+      color-mix(in oklch, var(--panel) 96%, white 4%) 100%
+    );
+  transition: opacity 120ms;
 }
-.session-item .rename-btn {
-  position: absolute;
-  top: 5px;
-  right: 60px;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 120ms, background 120ms, color 120ms;
-}
+.session-item .delete-btn,
+.session-item .rename-btn,
 .session-item .pin-btn {
-  position: absolute;
-  top: 5px;
-  right: 86px;
+  position: relative;
   width: 22px;
   height: 22px;
   display: flex;
@@ -1628,12 +1624,19 @@ html[data-platform="macos"] .titlebar .tb-left {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  opacity: 0;
   transition: opacity 120ms, background 120ms, color 120ms;
 }
 .session-item .pin-btn[data-pinned="true"] {
-  opacity: 1;
   color: var(--accent);
+}
+.session-item:hover .session-actions,
+.session-item:focus-within .session-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.session-item:hover .session-state,
+.session-item:focus-within .session-state {
+  opacity: 0;
 }
 .session-item:hover .delete-btn,
 .session-item:focus-within .delete-btn,
@@ -1644,7 +1647,6 @@ html[data-platform="macos"] .titlebar .tb-left {
 .session-item:hover .pin-btn,
 .session-item:focus-within .pin-btn,
 .session-item .pin-btn:focus-visible {
-  opacity: 1;
   background: var(--panel-2);
 }
 .session-item .delete-btn:hover {

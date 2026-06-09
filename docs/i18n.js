@@ -19,11 +19,11 @@
       "nav.github": "GitHub",
 
       "hero.status": "live · v{version}",
-      "hero.badge": "DeepSeek · cache-first · MIT",
-      "hero.title.line1": "DeepSeek-native",
-      "hero.title.line2": "AI coding agent in your terminal",
+      "hero.badge": "Cache-first · Library · GPLv3+",
+      "hero.title.line1": "Cache-first",
+      "hero.title.line2": "AI workbench for real coding tasks",
       "hero.sub":
-        "Engineered around DeepSeek's prefix-cache so token costs stay low across long sessions. Custom cell-diff renderer. MCP first-class. Open source.",
+        "Repository understanding, cross-file edits, terminal execution, tests, diff review, Git/PR help, MCP tools, Skills, and browser verification, redesigned around DeepSeek-aware cache economics, workspace libraries, and top-bar tabs.",
       "hero.copy": "Copy",
       "hero.copy.done": "Copied",
       "hero.cta.start": "Get started →",
@@ -61,7 +61,7 @@
         "Every layer is tuned around DeepSeek's specific cache mechanic and pricing. Coupling to one backend is the feature, not a limitation.",
       "why.oss.title": "Open community",
       "why.oss.body":
-        "MIT licensed and community-developed. Scoped <code>good first issue</code> tickets with code pointers and acceptance criteria. Real PRs from real contributors.",
+        "GPLv3+ licensed with a project CLA. Scoped <code>good first issue</code> tickets with code pointers and acceptance criteria. Real PRs from real contributors.",
 
       "qs.title": "Quick start (60 seconds)",
       "qs.step1.title": "Get a DeepSeek API key",
@@ -188,7 +188,7 @@
       "foot.issues": "Issues",
       "foot.discuss": "Discussions",
       "foot.contributors": "Contributors",
-      "foot.copyright": "© 2026 Jupiter · MIT License",
+      "foot.copyright": "© 2026 Jupiter · GPLv3+ License",
     },
 
     zh: {
@@ -200,11 +200,11 @@
       "nav.github": "GitHub",
 
       "hero.status": "运行中 · v{version}",
-      "hero.badge": "DeepSeek · 缓存优先 · MIT",
-      "hero.title.line1": "DeepSeek 原生",
-      "hero.title.line2": "终端里的 AI 编程代理",
+      "hero.badge": "省钱缓存 · 资料库 · GPLv3+",
+      "hero.title.line1": "省钱缓存优先",
+      "hero.title.line2": "面向真实工程任务的 AI 工作台",
       "hero.sub":
-        "围绕 DeepSeek 前缀缓存设计，长会话下 token 成本始终维持在低位。自研 cell-diff 渲染器，MCP 一等公民，完全开源。",
+        "覆盖仓库理解、跨文件编辑、终端执行、测试、diff 审查、Git/PR 辅助、MCP 工具、Skills 和浏览器验证，同时加入 DeepSeek 缓存机制、工作区资料库和顶栏标签页。",
       "hero.copy": "复制",
       "hero.copy.done": "已复制",
       "hero.cta.start": "开始使用 →",
@@ -242,7 +242,7 @@
         "每一层都为 DeepSeek 特定的缓存机制和定价调过。绑死一个后端是 feature，不是限制。",
       "why.oss.title": "开放社区",
       "why.oss.body":
-        "MIT 协议，社区共建。<code>good first issue</code> 入门 issue 都带代码定位和验收标准。真实贡献者的真实 PR。",
+        "GPLv3+ 协议并使用项目 CLA。<code>good first issue</code> 入门 issue 都带代码定位和验收标准。真实贡献者的真实 PR。",
 
       "qs.title": "60 秒快速上手",
       "qs.step1.title": "获取 DeepSeek API Key",
@@ -369,7 +369,7 @@
       "foot.issues": "问题反馈",
       "foot.discuss": "讨论区",
       "foot.contributors": "贡献者",
-      "foot.copyright": "© 2026 Jupiter · MIT 协议",
+      "foot.copyright": "© 2026 Jupiter · GPLv3+ 协议",
     },
   };
 

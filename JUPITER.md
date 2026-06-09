@@ -1,7 +1,7 @@
 # Jupiter — working knowledge
 
-TypeScript project. DeepSeek-native coding agent, cache-first loop.
-MIT-licensed. Node ≥22 required.
+TypeScript project. Cache-first AI workbench with full coding-agent workflows, workspace libraries, and tabbed desktop sessions.
+GPL-3.0-or-later with project CLA. Node ≥22 required.
 
 ## Stack
 

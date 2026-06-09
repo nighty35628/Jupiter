@@ -36,6 +36,7 @@ function BottomResizeProbe({ collapsed = false }: { collapsed?: boolean }) {
       <button type="button" onMouseDown={onMouseDown}>
         drag bottom
       </button>
+      <span data-testid="bottom-height">{height}</span>
     </div>
   );
 }
@@ -76,6 +77,12 @@ describe("useResizable", () => {
     expect(localStorage.getItem("jupiter.ctxWidth")).toBe("374");
   });
 
+  it("uses a compact default bottom panel height", () => {
+    render(<BottomResizeProbe />);
+
+    expect(screen.getByTestId("bottom-height").textContent).toBe("180");
+  });
+
   it("resizes the bottom panel height by dragging upward", () => {
     Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
     render(<BottomResizeProbe />);
@@ -84,6 +91,6 @@ describe("useResizable", () => {
     fireEvent.mouseMove(window, { clientY: 500 });
     fireEvent.mouseUp(window);
 
-    expect(localStorage.getItem("jupiter.bottomHeight")).toBe("500");
+    expect(localStorage.getItem("jupiter.bottomHeight")).toBe("380");
   });
 });

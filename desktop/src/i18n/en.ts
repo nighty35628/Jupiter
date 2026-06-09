@@ -35,7 +35,7 @@ export const en = {
   },
   about: {
     sidebarLabel: "About",
-    tagline: "DeepSeek-native coding agent",
+    tagline: "Cache-first AI workbench",
     version: "Version",
     developer: "Developer",
     developerLine: "Developed by nightytech",
@@ -62,14 +62,14 @@ export const en = {
     recent: "Recent",
     noSessions: "No sessions yet",
     wallet: "wallet",
-    footHint: "cache-first agent",
+    footHint: "cache-first workbench",
   },
   toast: {
     copied: "Copied",
     copiedMd: "Conversation copied as Markdown",
     newSession: "Started a new session",
     cleared: "UI cleared",
-    aboutLine: "Jupiter v{version} · cache-first DeepSeek agent",
+    aboutLine: "Jupiter v{version} · cache-first AI workbench",
   },
   composer: {
     busy: "Jupiter is thinking…",
@@ -272,6 +272,16 @@ export const en = {
     typographySection: "Typography",
     apiSection: "DeepSeek API",
     webSearchSection: "Web Search",
+    browserAutomationSection: "Browser Automation",
+    browserAutomation: "Browser automation",
+    browserAutomationAvailable: "Enabled through {name}.",
+    browserAutomationFallback: "WebView fallback active.",
+    browserAutomationAvailableHint:
+      "Jupiter will use this installed browser for future page automation; normal browsing still opens in the sidebar WebView.",
+    browserAutomationFallbackHint:
+      "Install Chrome or Edge to enable future page automation. Jupiter will not download Chromium automatically.",
+    browserAutomationInstallChrome: "Install Chrome",
+    browserAutomationInstallEdge: "Install Edge",
     qqSection: "QQ Channel",
     qqTitle: "QQ bot integration",
     qqConnected: "Connected",
@@ -367,6 +377,13 @@ export const en = {
     mcpSpecFormat: "Format: <code>name=command args</code> or <code>name=https://host/sse</code>",
     mcpAdd: "Add",
     // Skills
+    skillPackSources: "Skill sources",
+    skillPackSourceAdd: "Add source",
+    skillPackSourceRemove: "Remove source",
+    skillPackSourceTrusted: "trusted",
+    skillPackSourceThirdParty: "third-party",
+    skillPackSourcesDefault:
+      "Using Jupiter's default skill source. Add a manifest URL to search third-party sources.",
     skillRoots: "Skill roots",
     skillPathAdd: "Add path",
     skillPathRemove: "Remove path",

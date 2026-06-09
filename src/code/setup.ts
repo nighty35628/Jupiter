@@ -9,6 +9,7 @@ import {
   loadMemoryGlobalEnabled,
   loadProjectShellAllowed,
   loadResolvedSkillPaths,
+  loadSkillPackSources,
   loadSubagentModels,
   loadToolRateLimit,
   readConfig,
@@ -116,6 +117,7 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
   registerSkillTools(tools, {
     projectRoot: opts.rootDir,
     customSkillPaths: loadResolvedSkillPaths(opts.rootDir),
+    skillPackSources: loadSkillPackSources(opts.configPath),
     subagentModels: loadSubagentModels(),
     onSkillInstalled: opts.onSkillInstalled,
     subagentRunner: async (skill, task, signal) => {

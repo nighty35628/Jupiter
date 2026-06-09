@@ -33,6 +33,7 @@ import {
   loadRateLimit,
   loadReasoningEffort,
   loadSemanticEmbeddingUserConfig,
+  loadSkillPackSources,
   loadSubagentModels,
   loadTheme,
   loadToolRateLimit,
@@ -52,6 +53,7 @@ import {
   savePromptHistory,
   saveReasoningEffort,
   saveSemanticEmbeddingConfig,
+  saveSkillPackSources,
   saveSubagentModels,
   saveTheme,
   searchEnabled,
@@ -1078,6 +1080,61 @@ describe("config", () => {
       saveSubagentModels({}, path);
       expect(loadSubagentModels(path)).toEqual({});
       expect(readConfig(path).subagentModels).toBeUndefined();
+    });
+  });
+
+  describe("skill pack sources", () => {
+    it("round-trips enabled sources and defaults missing trusted to false", () => {
+      saveSkillPackSources(
+        [
+          {
+            id: "jupiter",
+            name: "Jupiter",
+            url: "https://updates.jupiter.test/skill-packs.json",
+            trusted: true,
+          },
+          {
+            id: "community",
+            name: "Community",
+            url: "https://skills.example/index.json",
+          },
+        ],
+        path,
+      );
+
+      expect(loadSkillPackSources(path)).toEqual([
+        {
+          id: "jupiter",
+          name: "Jupiter",
+          url: "https://updates.jupiter.test/skill-packs.json",
+          trusted: true,
+        },
+        {
+          id: "community",
+          name: "Community",
+          url: "https://skills.example/index.json",
+          trusted: false,
+        },
+      ]);
+    });
+
+    it("drops invalid skill pack source entries", () => {
+      writeConfig(
+        {
+          skills: {
+            sources: [
+              { id: "bad space", name: "Bad", url: "https://bad.example/index.json" },
+              { id: "ok", name: "OK", url: "https://ok.example/index.json" },
+              { id: "missing-url", name: "Missing" },
+            ] as any,
+          },
+        },
+        path,
+      );
+
+      expect(loadSkillPackSources(path)).toEqual([
+        { id: "ok", name: "OK", url: "https://ok.example/index.json", trusted: false },
+      ]);
     });
   });
 

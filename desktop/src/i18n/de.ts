@@ -40,7 +40,7 @@ export const de: typeof en = {
   about: {
     ...en.about,
     sidebarLabel: "Über",
-    tagline: "DeepSeek-nativer Coding-Agent",
+    tagline: "Cache-First-AI-Workbench",
     version: "Version",
     developer: "Entwickler",
     developerLine: "Entwickelt von nightytech",
@@ -69,7 +69,7 @@ export const de: typeof en = {
     recent: "Zuletzt",
     noSessions: "Noch keine Sitzungen",
     wallet: "Wallet",
-    footHint: "Cache-First-Agent",
+    footHint: "Cache-First-Workbench",
   },
   toast: {
     ...en.toast,
@@ -77,7 +77,7 @@ export const de: typeof en = {
     copiedMd: "Unterhaltung als Markdown kopiert",
     newSession: "Neue Sitzung gestartet",
     cleared: "UI geleert",
-    aboutLine: "Jupiter v{version} · Cache-First-DeepSeek-Agent",
+    aboutLine: "Jupiter v{version} · Cache-First-AI-Workbench",
   },
   composer: {
     ...en.composer,
@@ -283,6 +283,16 @@ export const de: typeof en = {
     typographySection: "Typografie",
     apiSection: "DeepSeek API",
     webSearchSection: "Websuche",
+    browserAutomationSection: "Browser-Automation",
+    browserAutomation: "Browser-Automation",
+    browserAutomationAvailable: "Über {name} aktiviert.",
+    browserAutomationFallback: "WebView-Fallback aktiv.",
+    browserAutomationAvailableHint:
+      "Jupiter nutzt diesen installierten Browser künftig für Seitenautomatisierung; normales Browsing öffnet weiter in der Seitenleisten-WebView.",
+    browserAutomationFallbackHint:
+      "Installiere Chrome oder Edge, um künftige Seitenautomatisierung zu aktivieren. Jupiter lädt Chromium nicht automatisch herunter.",
+    browserAutomationInstallChrome: "Chrome installieren",
+    browserAutomationInstallEdge: "Edge installieren",
     qqSection: "QQ-Kanal",
     qqTitle: "QQ-Bot-Integration",
     qqConnected: "Verbunden",
@@ -378,6 +388,13 @@ export const de: typeof en = {
     mcpSpecLabel: "Spec-String",
     mcpSpecFormat: "Format: <code>name=befehl args</code> oder <code>name=https://host/sse</code>",
     mcpAdd: "Hinzufügen",
+    skillPackSources: "Skill-Quellen",
+    skillPackSourceAdd: "Quelle hinzufügen",
+    skillPackSourceRemove: "Quelle entfernen",
+    skillPackSourceTrusted: "vertrauenswürdig",
+    skillPackSourceThirdParty: "Drittanbieter",
+    skillPackSourcesDefault:
+      "Jupiter nutzt die Standard-Skill-Quelle. Füge eine Manifest-URL hinzu, um Drittanbieter-Quellen zu durchsuchen.",
     skillRoots: "Skill-Pfade",
     skillPathAdd: "Pfad hinzufügen",
     skillPathRemove: "Pfad entfernen",

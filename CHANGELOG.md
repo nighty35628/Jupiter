@@ -3,6 +3,36 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.2] — 2026-06-09
+
+### 中文
+
+**浏览器自动化可见性。** 桌面设置页现在会显示浏览器自动化状态，优先识别 Chrome、Edge 或 Chromium。
+未检测到支持浏览器时，Jupiter 会继续使用 WebView fallback，并提供 Chrome 与 Edge 安装入口，方便后续浏览器验证流程接入真实浏览器。
+
+**多来源 Skills。** Skills 支持配置多个 skill pack source，来源可以来自配置文件、桌面设置或
+`JUPITER_SKILL_PACK_SOURCES`。搜索、安装和更新流程会保留 source id、来源名称和 trusted 标记，让内置来源与第三方来源更清晰。
+
+**桌面会话细节修复。** 顶栏标签会跟随运行中会话的工作区状态更新；侧栏会话操作按钮改为悬浮操作区，避免和忙碌状态、时间等元数据互相挤压；
+底部面板默认高度调整为更紧凑的 180px。README 与文档刷新为“缓存优先 AI 工作台”的中英双语定位说明。
+桌面端、根包、Tauri 配置、CHANGELOG 和 GitHub Release notes 版本统一升级为 `0.99.2`。
+
+### English
+
+**Browser automation visibility.** Desktop settings now show browser automation readiness, preferring Chrome,
+Edge, or Chromium when available. When no supported browser is detected, Jupiter keeps the WebView fallback and
+offers Chrome and Edge install shortcuts for future real-browser verification flows.
+
+**Multi-source Skills.** Skills can now use multiple skill pack sources from config, desktop settings, or
+`JUPITER_SKILL_PACK_SOURCES`. Search, install, and update flows preserve source id, source name, and trusted
+metadata so bundled and third-party sources are easier to distinguish.
+
+**Desktop session polish.** Top tabs now follow live workspace state for running sessions; sidebar session
+actions move into an overlay area so busy status and timestamps do not collide with buttons; the bottom panel
+defaults to a more compact 180px height. README and docs were refreshed around the cache-first AI workbench
+positioning. Desktop, root package, Tauri config, CHANGELOG, and GitHub Release notes versions are aligned on
+`0.99.2`.
+
 ## [0.99.1] — 2026-06-09
 
 ### 中文

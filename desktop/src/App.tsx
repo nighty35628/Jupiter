@@ -43,6 +43,7 @@ import {
 } from "./notifications";
 import { parseOneShotPlanCommand } from "./one-shot-plan";
 import type {
+  BrowserAutomationStatus,
   CheckpointVerdict,
   ChoiceVerdict,
   ConfirmationChoice,
@@ -58,6 +59,7 @@ import type {
   PlanVerdict,
   RevisionVerdict,
   SettingsPatch,
+  SkillPackSourceInfo,
   SkillInfo,
   SkillRootInfo,
   SourceIngestResultEvent,
@@ -346,6 +348,8 @@ export type Settings = {
     | "brave"
     | "ollama";
   webSearchEndpoint?: string;
+  browserAutomation?: BrowserAutomationStatus;
+  skillPackSources?: SkillPackSourceInfo[];
   webSearchApiKeys?: {
     metaso?: string;
     baidu?: string;
@@ -1728,6 +1732,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           desktopCloseBehavior: ev.desktopCloseBehavior,
           webSearchEngine: ev.webSearchEngine,
           webSearchEndpoint: ev.webSearchEndpoint,
+          browserAutomation: ev.browserAutomation,
+          skillPackSources: ev.skillPackSources,
           webSearchApiKeys: ev.webSearchApiKeys,
           subagentModels: ev.subagentModels,
           contextTokens: ev.contextTokens,
@@ -5696,6 +5702,17 @@ export function App() {
   const activeBusy = Boolean(activeRuntimeSnapshot?.busy || activeTabMeta?.busy);
   const activeWorkspaceDir = activeRuntimeSnapshot?.workspaceDir ?? activeTabMeta?.workspaceDir;
   const activeRecentWorkspaces = activeRuntimeSnapshot?.recentWorkspaces ?? [];
+  const displayTabs = useMemo(
+    () =>
+      tabs.map((tab) => {
+        const snapshot = runtimeSnapshots[tab.id];
+        const workspaceDir = snapshot?.workspaceDir ?? tab.workspaceDir;
+        const busy = snapshot?.busy ?? tab.busy;
+        if (workspaceDir === tab.workspaceDir && busy === tab.busy) return tab;
+        return { ...tab, workspaceDir, busy };
+      }),
+    [runtimeSnapshots, tabs],
+  );
   const sidebarSessionActivity = useMemo(() => {
     const activity: Record<string, { busy: boolean }> = {};
     for (const snapshot of Object.values(runtimeSnapshots)) {
@@ -5848,7 +5865,7 @@ export function App() {
               onToggleCtx={onToggleCtx}
               onToggleBottom={onToggleBottom}
               onToggleCurrency={onToggleCurrency}
-              tabsList={tabs}
+              tabsList={displayTabs}
               activeTabId={activeTabId}
               setActiveTabId={setActiveTabId}
             />
