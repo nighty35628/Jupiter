@@ -89,7 +89,8 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 安装包文件名会标出平台：
 
-- Windows: `Jupiter_<version>_windows-x64.exe`
+- Windows x64: `Jupiter_<version>_windows-x64.exe`
+- Windows ARM64: `Jupiter_<version>_windows-arm64.exe`
 - macOS Intel: `Jupiter_<version>_macos-x64.dmg`
 - macOS Apple Silicon: `Jupiter_<version>_macos-arm64.dmg`
 - Linux x64: `Jupiter_<version>_linux-x64.deb`
@@ -227,7 +228,8 @@ Desktop installers are published on GitHub Releases:
 
 Asset names include platform labels:
 
-- Windows: `Jupiter_<version>_windows-x64.exe`
+- Windows x64: `Jupiter_<version>_windows-x64.exe`
+- Windows ARM64: `Jupiter_<version>_windows-arm64.exe`
 - macOS Intel: `Jupiter_<version>_macos-x64.dmg`
 - macOS Apple Silicon: `Jupiter_<version>_macos-arm64.dmg`
 - Linux x64: `Jupiter_<version>_linux-x64.deb`

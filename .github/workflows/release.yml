@@ -25,12 +25,13 @@ jobs:
       matrix:
         target:
           # Release assets intentionally stay installer-focused:
-          # Linux gets per-arch .deb packages, macOS gets per-arch DMGs, Windows gets NSIS.
+          # Linux gets per-arch .deb packages, macOS gets per-arch DMGs, Windows gets per-arch NSIS installers.
           - { os: ubuntu-22.04, label: "linux-x64", rust: "x86_64-unknown-linux-gnu", tauri: "x86_64-unknown-linux-gnu", bundles: "--bundles deb" }
           - { os: ubuntu-24.04-arm, label: "linux-arm64", rust: "aarch64-unknown-linux-gnu", tauri: "aarch64-unknown-linux-gnu", bundles: "--bundles deb" }
           - { os: macos-15-intel, label: "macos-x64", rust: "x86_64-apple-darwin", tauri: "x86_64-apple-darwin", bundles: "--bundles dmg" }
           - { os: macos-14, label: "macos-arm64", rust: "aarch64-apple-darwin", tauri: "aarch64-apple-darwin", bundles: "--bundles dmg" }
           - { os: windows-latest, label: "windows-x64", rust: "x86_64-pc-windows-msvc", tauri: "x86_64-pc-windows-msvc", bundles: "--bundles nsis" }
+          - { os: windows-11-arm, label: "windows-arm64", rust: "aarch64-pc-windows-msvc", tauri: "aarch64-pc-windows-msvc", bundles: "--bundles nsis" }
     runs-on: ${{ matrix.target.os }}
     # secrets.* isn't accessible from step-level if:, so expose presence as a
     # job-level env. Treat "true"/"false" strings as booleans downstream.
@@ -124,6 +125,20 @@ jobs:
         run: |
           expected_arch="$(node -p 'process.arch')"
           bundled_arch="$(src-tauri/binaries/node -p 'process.arch')"
+          echo "bundled Node arch: $bundled_arch"
+          echo "expected arch: $expected_arch"
+          if [ "$bundled_arch" != "$expected_arch" ]; then
+            echo "Expected $expected_arch Node, got: $bundled_arch" >&2
+            exit 1
+          fi
+
+      - name: Verify bundled Node matches host arch (Windows)
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        shell: bash
+        run: |
+          expected_arch="$(node -p 'process.arch')"
+          bundled_arch="$(src-tauri/binaries/node.exe -p 'process.arch')"
           echo "bundled Node arch: $bundled_arch"
           echo "expected arch: $expected_arch"
           if [ "$bundled_arch" != "$expected_arch" ]; then

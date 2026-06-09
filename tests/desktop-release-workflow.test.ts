@@ -13,8 +13,11 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain("releaseDraft: false");
     expect(releaseWorkflow).toContain('label: "linux-x64"');
     expect(releaseWorkflow).toContain('label: "linux-arm64"');
+    expect(releaseWorkflow).toContain('label: "windows-arm64"');
     expect(releaseWorkflow).toContain("ubuntu-24.04-arm");
     expect(releaseWorkflow).toContain("aarch64-unknown-linux-gnu");
+    expect(releaseWorkflow).toContain("windows-11-arm");
+    expect(releaseWorkflow).toContain("aarch64-pc-windows-msvc");
     expect(releaseWorkflow).toContain('bundles: "--bundles deb"');
     expect(releaseWorkflow).toContain('bundles: "--bundles dmg"');
     expect(releaseWorkflow).toContain('bundles: "--bundles nsis"');
@@ -27,6 +30,11 @@ describe("desktop release packaging", () => {
   it("verifies the bundled Node architecture for Linux packages", () => {
     expect(releaseWorkflow).toContain("Verify bundled Node matches host arch (Linux)");
     expect(releaseWorkflow).toContain("bundled_arch=");
+  });
+
+  it("verifies the bundled Node architecture for Windows packages", () => {
+    expect(releaseWorkflow).toContain("Verify bundled Node matches host arch (Windows)");
+    expect(releaseWorkflow).toContain("src-tauri/binaries/node.exe");
   });
 
   it("skips root lifecycle scripts for Linux ARM64 to avoid native tree-sitter binding builds", () => {
@@ -85,6 +93,7 @@ describe("Linux installer", () => {
 describe("README installer guidance", () => {
   it("documents platform-specific release names, unsigned Windows, and the macOS quarantine command", () => {
     expect(readme).toContain("Jupiter_<version>_windows-x64.exe");
+    expect(readme).toContain("Jupiter_<version>_windows-arm64.exe");
     expect(readme).toContain("Jupiter_<version>_macos-arm64.dmg");
     expect(readme).toContain("Jupiter_<version>_linux-arm64.deb");
     expect(readme).toContain("current Windows installers are unsigned");
