@@ -32,6 +32,7 @@ const xtermMockState = vi.hoisted(() => {
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
+    options?: Record<string, unknown>;
     writes: string[] = [];
     disposed = false;
     dataHandlers: Array<(data: string) => void> = [];

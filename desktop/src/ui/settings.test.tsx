@@ -102,6 +102,7 @@ function renderSettings({
       memoryDetail={null}
       archivedSessions={archivedSessions}
       qq={null}
+      feishu={null}
       initialPage={initialPage}
       onClose={vi.fn()}
       onSave={onSave}
@@ -111,6 +112,11 @@ function renderSettings({
       onDisconnectQQ={vi.fn()}
       onSaveQQConfig={vi.fn()}
       onOpenQQApplyLink={vi.fn()}
+      onLoadFeishu={vi.fn()}
+      onConnectFeishu={vi.fn()}
+      onDisconnectFeishu={vi.fn()}
+      onSaveFeishuConfig={vi.fn()}
+      onOpenFeishuApplyLink={vi.fn()}
       onPickWorkspace={vi.fn()}
       onAddMcpSpec={vi.fn()}
       onRemoveMcpSpec={vi.fn()}

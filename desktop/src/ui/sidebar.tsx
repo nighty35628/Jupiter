@@ -184,7 +184,6 @@ export function Sidebar({
   importSources,
   activeName,
   workspaceDir,
-  recentWorkspaces,
   onNewChat,
   onLoadSession,
   onDeleteSession,

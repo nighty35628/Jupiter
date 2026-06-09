@@ -77,6 +77,7 @@ function initialState(): Parameters<typeof reduce>[0] {
     externalImportSources: [],
     settings: null,
     qq: null,
+    feishu: null,
     balance: null,
     mentionResults: null,
     mentionPreview: null,

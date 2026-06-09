@@ -21,7 +21,7 @@ export function JumpBar({ messages, virtuosoRef }: JumpBarProps) {
       messages
         .map((m, index) => ({ ...m, index }))
         .filter(
-          (m): m is { kind: "user"; text: string; turn: number } =>
+          (m): m is { index: number; kind: "user"; text: string; turn: number } =>
             m.kind === "user" && typeof m.text === "string" && typeof m.turn === "number",
         )
         .map((m) => ({ index: m.index, turn: m.turn, text: m.text.slice(0, 80) })),

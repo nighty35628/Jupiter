@@ -88,6 +88,8 @@ export const ja = {
     commandPalette: "コマンドパレット",
     addContext: "コンテキストを追加",
     searchSources: "ソースを検索",
+    switchWorkspace: "ワークスペース切替",
+    switchWorkspaceWithName: "ワークスペース切替: {workspace}",
     insertFile: "ファイルを挿入 (@メンション)",
     insertImage: "画像を挿入 (@メンション)",
     switchModel: "モデル切替",
