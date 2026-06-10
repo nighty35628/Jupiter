@@ -6,6 +6,7 @@ import { buildCodeToolset } from "../../code/setup.js";
 import {
   DEFAULT_MODEL,
   bridgeEndpointEnv,
+  loadEngineeringLifecycleMode,
   loadModel,
   normalizeMcpConfig,
   readConfig,
@@ -131,6 +132,7 @@ export async function codeCommand(opts: CodeOptions = {}): Promise<void> {
   const codeRebuildSystem = () =>
     codeSystemPrompt(currentRoot, {
       hasSemanticSearch: semanticEnabled,
+      engineeringLifecycleMode: loadEngineeringLifecycleMode(),
       systemAppend: opts.systemAppend,
       systemAppendFile: systemAppendFileContents,
       modelId: resolvedModel,

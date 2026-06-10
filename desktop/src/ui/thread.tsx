@@ -173,6 +173,61 @@ function ToolGroupShell({
   );
 }
 
+type UsedLibrarySource = {
+  sourceId: string;
+  title: string;
+  url?: string;
+  path?: string;
+};
+
+function parseUsedLibrarySources(segments: AssistantSegment[]): UsedLibrarySource[] {
+  const seen = new Set<string>();
+  const sources: UsedLibrarySource[] = [];
+  for (const segment of segments) {
+    if (segment.kind !== "tool" || segment.name !== "library_read" || segment.ok === false) {
+      continue;
+    }
+    if (!segment.result) continue;
+    try {
+      const parsed = JSON.parse(segment.result) as Partial<UsedLibrarySource>;
+      const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+      const sourceId = typeof parsed.sourceId === "string" ? parsed.sourceId : title;
+      if (!title || !sourceId || seen.has(sourceId)) continue;
+      seen.add(sourceId);
+      sources.push({
+        sourceId,
+        title,
+        url: typeof parsed.url === "string" ? parsed.url : undefined,
+        path: typeof parsed.path === "string" ? parsed.path : undefined,
+      });
+    } catch {
+      /* ignore malformed tool output */
+    }
+  }
+  return sources;
+}
+
+function UsedSourcesStrip({ sources }: { sources: UsedLibrarySource[] }) {
+  if (sources.length === 0) return null;
+  return (
+    <div className="used-sources-strip">
+      <span className="used-sources-label">{t("thread.usedSources")}</span>
+      <div className="used-sources-list">
+        {sources.map((source) => (
+          <span
+            key={source.sourceId}
+            className="used-source-chip"
+            title={source.url ?? source.path ?? source.title}
+          >
+            <I.bookmark size={10} />
+            <span>{source.title}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export const AssistantMsg = memo(function AssistantMsg({
   segments,
   pending,
@@ -212,6 +267,7 @@ export const AssistantMsg = memo(function AssistantMsg({
       /* ignore */
     }
   };
+  const usedSources = parseUsedLibrarySources(segments);
   // Render tool segments — consecutive tools get grouped into a collapsible section
   const rendered: ReactNode[] = [];
 
@@ -394,6 +450,7 @@ export const AssistantMsg = memo(function AssistantMsg({
           {time ? <span className="time">{time}</span> : null}
         </div>
         {rendered}
+        <UsedSourcesStrip sources={usedSources} />
         {content ? (
           <div className="msg-actions">
             <RollbackButton

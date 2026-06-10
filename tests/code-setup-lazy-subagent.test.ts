@@ -30,6 +30,8 @@ describe("buildCodeToolset", () => {
   it("builds without DEEPSEEK_API_KEY set", async () => {
     const toolset = await buildCodeToolset({ rootDir: tmpRoot });
     expect(toolset.tools.size).toBeGreaterThan(0);
+    expect(toolset.tools.has("library_search")).toBe(true);
+    expect(toolset.tools.has("library_read")).toBe(true);
     await toolset.jobs.shutdown();
   });
 

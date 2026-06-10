@@ -2,7 +2,7 @@ import type { ToolInterceptor } from "../tools.js";
 import type { PlanStep, StepEvidence } from "../tools/plan.js";
 import { classifyLifecycleToolCall } from "./lifecycle-policy.js";
 
-export type EngineeringLifecycleMode = "off" | "strict";
+export type EngineeringLifecycleMode = "off" | "on_demand" | "strict";
 export type EngineeringLifecycleState =
   | "idle"
   | "armed"
@@ -51,7 +51,7 @@ export class EngineeringLifecycleRuntime {
 
   setMode(mode: EngineeringLifecycleMode): void {
     this._mode = mode;
-    if (mode === "off") {
+    if (mode === "off" || mode === "on_demand") {
       this.reset();
       return;
     }
@@ -59,7 +59,7 @@ export class EngineeringLifecycleRuntime {
   }
 
   observeUserPrompt(_text: string): void {
-    if (this._mode === "off") return;
+    if (this._mode !== "strict") return;
     if (this._state === "complete" || this._state === "cancelled") {
       this.reset();
     }
@@ -67,7 +67,7 @@ export class EngineeringLifecycleRuntime {
   }
 
   recordPlanProposed(steps?: readonly PlanStep[]): void {
-    if (this._mode === "off") return;
+    if (this._mode !== "strict") return;
     this._state = "planning";
     this._planSteps = [...(steps ?? [])];
     this._completedStepIds.clear();
@@ -75,7 +75,7 @@ export class EngineeringLifecycleRuntime {
   }
 
   recordPlanApproved(steps?: readonly PlanStep[]): void {
-    if (this._mode === "off") return;
+    if (this._mode !== "strict") return;
     this._state = "approved";
     this._planSteps = [...(steps ?? this._planSteps)];
     this._completedStepIds.clear();
@@ -83,7 +83,7 @@ export class EngineeringLifecycleRuntime {
   }
 
   recordPlanRevised(remainingSteps: readonly PlanStep[]): void {
-    if (this._mode === "off") return;
+    if (this._mode !== "strict") return;
 
     const donePrefix = this._planSteps.filter((step) => this._completedStepIds.has(step.id));
     const merged: PlanStep[] = [...donePrefix];
@@ -101,13 +101,14 @@ export class EngineeringLifecycleRuntime {
   }
 
   recordCheckpointReached(): void {
-    if (this._mode === "off") return;
+    if (this._mode !== "strict") return;
     if (this._state === "approved" || this._state === "executing") {
       this._state = "checkpoint";
     }
   }
 
   recordStepCompleted(stepId: string): void {
+    if (this._mode !== "strict") return;
     if (!stepId) return;
     this._completedStepIds.add(stepId);
     this._mutatedSinceLastStep = false;
@@ -119,7 +120,7 @@ export class EngineeringLifecycleRuntime {
   }
 
   recordToolResult(name: string, args: Record<string, unknown>, result: string): void {
-    if (this._mode === "off") return;
+    if (this._mode !== "strict") return;
     if (!isLifecycleMutationToolCall(name, args)) return;
     if (!toolResultLooksSuccessful(result)) return;
     if (this._state === "approved" || this._state === "executing") {
@@ -143,7 +144,7 @@ export class EngineeringLifecycleRuntime {
   }
 
   guardToolCall: ToolInterceptor = (name, args) => {
-    if (this._mode === "off") return null;
+    if (this._mode !== "strict") return null;
     if (name === "mark_step_complete") return this.guardStepCompletion(args);
     if (!isHighRiskLifecycleToolCall(name, args)) return null;
 

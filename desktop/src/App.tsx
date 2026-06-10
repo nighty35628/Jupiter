@@ -65,10 +65,16 @@ import type {
   SkillRootInfo,
   SourceIngestResultEvent,
   SourceSearchResultsEvent,
+  StorageScanEvent,
   SubagentEvent,
   SubagentRunInfo,
 } from "./protocol";
 import type { QQDesktopSettingsState } from "./qq-settings";
+import {
+  PANEL_SHORTCUT_MODES,
+  matchDesktopShortcut,
+  tabIndexFromShortcutAction,
+} from "./shortcuts";
 import {
   type SlashSettingsCommand,
   buildSlashSettingsDescriptors,
@@ -94,7 +100,12 @@ import {
 import { AboutModal } from "./ui/about";
 import { AppContextMenu } from "./ui/app-context-menu";
 import { parseEditResult } from "./ui/cards";
-import { Composer, type SlashCmd } from "./ui/composer";
+import {
+  Composer,
+  type ComposerSendPayload,
+  type EditMode as DesktopEditMode,
+  type SlashCmd,
+} from "./ui/composer";
 import {
   nextContextInfoToggle,
   nextContextSidebarToggle,
@@ -363,6 +374,7 @@ export type Settings = {
   subagentModels?: Record<string, "flash" | "pro">;
   /** Per-model context-window override (tokens). */
   contextTokens?: Record<string, number>;
+  libraryRetrievalMode?: "off" | "on_demand" | "always";
   showSystemEvents?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
@@ -370,6 +382,10 @@ export type Settings = {
   promptHistory?: string[];
   version: string;
 };
+
+function desktopEditMode(mode?: Settings["editMode"]): DesktopEditMode {
+  return mode === "auto" || mode === "yolo" ? mode : "review";
+}
 
 export type BalanceInfoItem = {
   currency: string;
@@ -397,6 +413,7 @@ type State = {
   ready: boolean;
   needsSetup: boolean;
   busy: boolean;
+  transientStatus: string | null;
   model?: string;
   currentSession?: string;
   messages: ChatMessage[];
@@ -428,6 +445,7 @@ type State = {
   memory: MemoryEntryInfo[];
   memoryDetail: MemoryDetail | null;
   librarySources: LibrarySource[];
+  storageScan: StorageScanEvent | null;
   sourceSearchResults: SourceSearchResultsEvent | null;
   sourceIngestResult: SourceIngestResultEvent | null;
   jobs: JobInfo[];
@@ -784,6 +802,7 @@ function reduceRaw(state: State, action: Action): State {
         ...state,
         ready: false,
         busy: false,
+        transientStatus: null,
         activeSkill: null,
         queuedSends: [],
         sideChats: [],
@@ -802,6 +821,7 @@ function reduceRaw(state: State, action: Action): State {
       return {
         ...state,
         busy: action.busy,
+        transientStatus: action.busy ? state.transientStatus : null,
         activeSkill: action.busy ? state.activeSkill : null,
       };
     case "settings_patch":
@@ -818,6 +838,7 @@ function reduceRaw(state: State, action: Action): State {
       return {
         ...state,
         busy: false,
+        transientStatus: null,
         currentSession: undefined,
         messages: [],
         pendingConfirms: [],
@@ -834,6 +855,7 @@ function reduceRaw(state: State, action: Action): State {
         queuedSends: [],
         sideChats: [],
         librarySources: [],
+        storageScan: null,
         sourceSearchResults: null,
         sourceIngestResult: null,
         retryNonce: 0,
@@ -1231,6 +1253,7 @@ function applySessionSnapshot(
       messages: nextMessages,
       usage,
       sessionFiles,
+      transientStatus: null,
     };
   }
   const keepLiveMessages =
@@ -1239,6 +1262,7 @@ function applySessionSnapshot(
   return {
     ...state,
     busy: ev.busy ?? false,
+    transientStatus: keepLiveMessages ? state.transientStatus : null,
     currentSession: sessionName,
     messages: nextMessages,
     pendingConfirms: keepLiveMessages ? state.pendingConfirms : [],
@@ -1451,6 +1475,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         busy: false,
+        transientStatus: null,
         activeSkill: null,
         pendingConfirms: [],
         pendingPathAccess: [],
@@ -1666,6 +1691,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return { ...state, sourceIngestResult: ev };
     case "$library_sources":
       return { ...state, librarySources: ev.sources };
+    case "$storage_scan":
+      return { ...state, storageScan: ev };
+    case "$storage_cleanup":
+      return { ...state, storageScan: ev.scan };
     case "$jobs":
       return { ...state, jobs: ev.items };
     case "$balance":
@@ -1714,6 +1743,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         ...state,
         busy: wsChanged ? false : state.busy,
         messages: wsChanged ? [] : state.messages,
+        transientStatus: wsChanged ? null : state.transientStatus,
         pendingConfirms: wsChanged ? [] : state.pendingConfirms,
         pendingPathAccess: wsChanged ? [] : state.pendingPathAccess,
         pendingChoices: wsChanged ? [] : state.pendingChoices,
@@ -1743,6 +1773,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           webSearchApiKeys: ev.webSearchApiKeys,
           subagentModels: ev.subagentModels,
           contextTokens: ev.contextTokens,
+          libraryRetrievalMode: ev.libraryRetrievalMode,
           showSystemEvents: ev.showSystemEvents,
           processCardsDefaultOpen: ev.processCardsDefaultOpen,
           memoryConfirmWrites: ev.memoryConfirmWrites,
@@ -1796,6 +1827,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         busy: false,
+        transientStatus: null,
         activeSkill: null,
         messages: [
           ...settled,
@@ -1810,11 +1842,12 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     }
     case "model.turn.started":
       if (latestAssistantIndexForLiveTurn(state.messages, ev.turn) >= 0) {
-        return { ...state, model: ev.model };
+        return { ...state, model: ev.model, transientStatus: null };
       }
       return {
         ...state,
         model: ev.model,
+        transientStatus: null,
         messages: [
           ...state.messages,
           { kind: "assistant", turn: ev.turn, segments: [], pending: true },
@@ -1838,7 +1871,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           };
         const next = [...state.messages];
         next[assistantIndex] = updated;
-        return { ...state, messages: next };
+        return { ...state, transientStatus: null, messages: next };
       }
       let segments: AssistantSegment[] = [];
       if (ev.channel === "content") segments = appendTextSegment(segments, "text", ev.text);
@@ -1848,6 +1881,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         busy: true,
+        transientStatus: null,
         messages: [
           ...state.messages,
           { kind: "assistant", turn: ev.turn, segments, pending: true },
@@ -1900,7 +1934,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           ],
         };
       }
-      return { ...state, usage };
+      return { ...state, transientStatus: null, usage };
     }
     case "tool.preparing": {
       for (let i = state.messages.length - 1; i >= 0; i--) {
@@ -2014,7 +2048,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "status":
       return {
         ...state,
-        messages: [...state.messages, { kind: "status", text: ev.text }],
+        transientStatus: ev.text,
       };
     case "warning":
       // High-severity only — eventize already drops "low". Inline divider only.
@@ -2180,6 +2214,7 @@ function TabRuntimeInner({
     ready: false,
     needsSetup: false,
     busy: false,
+    transientStatus: null,
     messages: [],
     pendingConfirms: [],
     pendingPathAccess: [],
@@ -2208,6 +2243,7 @@ function TabRuntimeInner({
     memory: [],
     memoryDetail: null,
     librarySources: [],
+    storageScan: null,
     sourceSearchResults: null,
     sourceIngestResult: null,
     jobs: [],
@@ -2671,6 +2707,11 @@ function TabRuntimeInner({
     [sendRpc],
   );
   const signOutApiKey = useCallback(() => sendRpc({ cmd: "settings_sign_out" }), [sendRpc]);
+  const scanStorage = useCallback(() => sendRpc({ cmd: "storage_scan" }), [sendRpc]);
+  const cleanStorage = useCallback(
+    (itemIds: string[]) => sendRpc({ cmd: "storage_cleanup", itemIds }),
+    [sendRpc],
+  );
   const addMcpSpec = useCallback(
     (spec: string) => sendRpc({ cmd: "mcp_specs_add", spec }),
     [sendRpc],
@@ -2829,9 +2870,10 @@ function TabRuntimeInner({
   }, [state.settings?.workspaceDir, markMentionPicked]);
 
   const send = useCallback(
-    (override?: string) => {
+    (override?: string, payload?: ComposerSendPayload) => {
       const text = (override ?? draft).trim();
-      if (!text || !state.ready || state.busy) return;
+      const hiddenMentions = payload?.hiddenMentions?.filter(Boolean) ?? [];
+      if ((!text && hiddenMentions.length === 0) || !state.ready || state.busy) return;
 
       const settingsCommand = parseSlashSettingsCommand(text);
       if (settingsCommand) {
@@ -2848,8 +2890,8 @@ function TabRuntimeInner({
             t: "push_status",
             text:
               getLang() === "zh-CN"
-                ? "▸ /plan 已开启：下一条普通消息会先生成计划，批准后执行。"
-                : "▸ /plan armed: the next normal message will produce a plan before execution.",
+                ? "▸ /plan 已开启：下一条普通消息只生成计划/spec，不执行；确认后下一轮再执行。"
+                : "▸ /plan armed: the next normal message will produce a spec/plan only. It will not execute until you approve in a later message.",
           });
           if (!override) setDraft("");
           return;
@@ -2958,13 +3000,26 @@ function TabRuntimeInner({
       }
 
       const clientId = `c-${Date.now()}`;
-      const planOneShot = oneShotPlanArmed;
-      if (planOneShot) setOneShotPlanArmed(false);
-      addLibraryFilesFromMessage(text);
-      recordAbortDraft("user_input", text);
+      const planFirst = oneShotPlanArmed;
+      if (oneShotPlanArmed) setOneShotPlanArmed(false);
+      const hiddenMentionText = hiddenMentions.map((mention) => `@${mention}`).join(" ");
+      const wireText = text
+        ? hiddenMentionText
+          ? `${text}\n\n${hiddenMentionText}`
+          : text
+        : hiddenMentionText;
+      const displayText = text || (getLang() === "zh-CN" ? "图片附件" : "Image attachment");
+      addLibraryFilesFromMessage(wireText);
+      recordAbortDraft("user_input", wireText);
       markOptimisticBusy();
-      dispatch({ t: "send_user", text, clientId });
-      sendRpc({ cmd: "user_input", text, clientId, planOneShot });
+      dispatch({ t: "send_user", text: displayText, clientId });
+      sendRpc({
+        cmd: "user_input",
+        text: wireText,
+        displayText,
+        clientId,
+        planOneShot: planFirst,
+      });
       if (!override) setDraft("");
     },
     [
@@ -3399,28 +3454,44 @@ function TabRuntimeInner({
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
+      const shortcut = matchDesktopShortcut(e);
+      const panelMode = shortcut ? PANEL_SHORTCUT_MODES[shortcut] : undefined;
       if (mod && (e.key === "a" || e.key === "A")) {
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag !== "INPUT" && tag !== "TEXTAREA") e.preventDefault();
         return;
       }
-      if (mod && (e.key === "l" || e.key === "L")) {
+      if (shortcut === "focus-composer") {
         e.preventDefault();
         composerRef.current?.focus();
-      } else if (mod && (e.key === "n" || e.key === "N")) {
+      } else if (shortcut === "new-chat") {
         e.preventDefault();
         newChat();
-      } else if (mod && (e.key === "o" || e.key === "O")) {
+      } else if (shortcut === "pick-workspace") {
         e.preventDefault();
         setWdAnchor(undefined);
         setWdOpen((v) => !v);
-      } else if (mod && e.key === ",") {
+      } else if (shortcut === "settings") {
         e.preventDefault();
         if (settingsCardOpen) setSettingsCardOpen(false);
         else setSettingsCardOpen(true);
-      } else if (mod && (e.key === "j" || e.key === "J")) {
+      } else if (shortcut === "keyboard-shortcuts") {
+        e.preventDefault();
+        openSettingsAt("shortcuts");
+      } else if (shortcut === "jobs") {
         e.preventDefault();
         setJobsOpen((v) => !v);
+      } else if (shortcut === "toggle-bottom-bar") {
+        e.preventDefault();
+        toggleBottomPanel();
+      } else if (panelMode) {
+        e.preventDefault();
+        openContextPanelMode(panelMode);
+      } else if (shortcut === "stop-current-run" && state.busy) {
+        if (settingsOpen || settingsCardOpen || aboutOpen || jobsOpen || wdOpen || palette.open)
+          return;
+        e.preventDefault();
+        abort();
       } else if (e.key === "Escape" && state.busy) {
         const target = e.target as HTMLElement | null;
         if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
@@ -3467,11 +3538,15 @@ function TabRuntimeInner({
     resolvePathAccess,
     abort,
     newChat,
+    openContextPanelMode,
+    openSettingsAt,
+    toggleBottomPanel,
     settingsOpen,
     settingsCardOpen,
     aboutOpen,
     jobsOpen,
     wdOpen,
+    palette.open,
   ]);
 
   const commands = buildCommands({
@@ -3712,7 +3787,7 @@ function TabRuntimeInner({
     <Composer
       draft={draft}
       setDraft={setDraft}
-      onSend={() => send()}
+      onSend={(payload) => send(undefined, payload)}
       onAbort={abort}
       disabled={!state.ready}
       busy={state.busy}
@@ -3734,8 +3809,10 @@ function TabRuntimeInner({
         }
       }}
       onEffortChange={applyReasoningEffort}
-      editMode={state.settings?.editMode ?? "review"}
+      editMode={desktopEditMode(state.settings?.editMode)}
       onEditModeChange={applyEditMode}
+      planArmed={oneShotPlanArmed}
+      onPlanArmedChange={setOneShotPlanArmed}
       workspaceDir={state.settings?.workspaceDir}
       slashCommands={allSlashCommands}
       onMentionQuery={queryMentions}
@@ -3816,11 +3893,14 @@ function TabRuntimeInner({
         : undefined,
       Footer: () => (
         <div className="thread-bottom-spacer">
-          <ThinkingBottomIndicator active={shouldShowThinkingFooter(state.messages, state.busy)} />
+          <ThinkingBottomIndicator
+            active={shouldShowThinkingFooter(state.messages, state.busy)}
+            label={state.transientStatus}
+          />
         </div>
       ),
     }),
-    [state.activePlan, state.busy, state.messages],
+    [state.activePlan, state.busy, state.messages, state.transientStatus],
   );
 
   return (
@@ -4298,6 +4378,7 @@ function TabRuntimeInner({
                 memory={state.memory}
                 memoryDetail={state.memoryDetail}
                 archivedSessions={state.archivedSessions}
+                storageScan={state.storageScan}
                 qq={state.qq}
                 feishu={state.feishu}
                 onClose={() => setSettingsOpen(false)}
@@ -4340,6 +4421,8 @@ function TabRuntimeInner({
                   sendRpc({ cmd: "session_delete_archived", name })
                 }
                 onClearArchivedSessions={() => sendRpc({ cmd: "session_clear_archived" })}
+                onScanStorage={scanStorage}
+                onCleanStorage={cleanStorage}
                 onOpenAbout={() => {
                   setSettingsOpen(false);
                   setAboutOpen(true);
@@ -5661,28 +5744,45 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && (e.key === "t" || e.key === "T")) {
+      const shortcut = matchDesktopShortcut(e);
+      const tabIndex = shortcut ? tabIndexFromShortcutAction(shortcut) : null;
+      if (shortcut === "new-tab") {
         e.preventDefault();
         openTab();
-      } else if (mod && (e.key === "w" || e.key === "W") && activeTabId && tabs.length > 1) {
+      } else if (shortcut === "close-tab" && activeTabId && tabs.length > 1) {
         e.preventDefault();
         closeTab(activeTabId);
-      } else if (mod && e.key === "Tab") {
+      } else if (shortcut === "switch-next-tab" || shortcut === "switch-prev-tab") {
         if (tabs.length <= 1) return;
         e.preventDefault();
         const idx = tabs.findIndex((t) => t.id === activeTabId);
-        const next = e.shiftKey ? (idx - 1 + tabs.length) % tabs.length : (idx + 1) % tabs.length;
+        const next =
+          shortcut === "switch-prev-tab"
+            ? (idx - 1 + tabs.length) % tabs.length
+            : (idx + 1) % tabs.length;
         const target = tabs[next];
         if (target) setActiveTabId(target.id);
-      } else if (mod && (e.key === "b" || e.key === "B")) {
-        if (e.altKey) {
-          e.preventDefault();
-          onToggleCtx();
-        } else {
-          e.preventDefault();
-          onToggleSide();
-        }
+      } else if (shortcut === "previous-tab" || shortcut === "next-tab") {
+        if (tabs.length <= 1) return;
+        e.preventDefault();
+        const idx = tabs.findIndex((t) => t.id === activeTabId);
+        const next =
+          shortcut === "previous-tab"
+            ? (idx - 1 + tabs.length) % tabs.length
+            : (idx + 1) % tabs.length;
+        const target = tabs[next];
+        if (target) setActiveTabId(target.id);
+      } else if (tabIndex !== null) {
+        const target = tabs[tabIndex];
+        if (!target) return;
+        e.preventDefault();
+        setActiveTabId(target.id);
+      } else if (shortcut === "toggle-right-sidebar") {
+        e.preventDefault();
+        onToggleCtx();
+      } else if (shortcut === "toggle-left-sidebar") {
+        e.preventDefault();
+        onToggleSide();
       }
     };
     window.addEventListener("keydown", onKey);

@@ -2,13 +2,20 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Toast } from "../CommandPalette";
 import { setLang } from "../i18n";
 import { Composer, clipboardFileMentionPaths } from "./composer";
 
+vi.mock("@tauri-apps/api/core", () => ({
+  convertFileSrc: (path: string) => `asset://${path}`,
+  invoke: vi.fn(async (cmd: string) => {
+    if (cmd === "save_clipboard_image") return "/tmp/jupiter-pasted-images/pasted.png";
+    return undefined;
+  }),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 afterEach(() => {
@@ -61,13 +68,42 @@ describe("desktop permission mode copy", () => {
     expect(document.body.textContent).not.toMatch(/YOLO/i);
   });
 
-  it("does not expose the legacy read-only plan permission as a mode option", () => {
+  it("keeps plan out of the persistent permission mode menu", () => {
     renderComposer({ editMode: "review" });
 
     fireEvent.click(screen.getByRole("button", { name: "权限模式" }));
 
-    expect(document.body.textContent).not.toContain("只读模式");
     expect(document.querySelectorAll(".composer-mode-option").length).toBe(3);
+    expect(document.querySelector('.composer-mode-option[data-mode="plan"]')).toBeNull();
+  });
+
+  it("arms one-shot plan from the plus menu instead of changing permission mode", () => {
+    const onEditModeChange = vi.fn();
+    const onPlanArmedChange = vi.fn();
+    renderComposer({ editMode: "review", onEditModeChange, onPlanArmedChange });
+
+    fireEvent.click(screen.getByRole("button", { name: "添加上下文" }));
+    fireEvent.click(screen.getByRole("button", { name: /计划/ }));
+
+    expect(onPlanArmedChange).toHaveBeenCalledWith(true);
+    expect(onEditModeChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the plus menu compact and removes the duplicate image attach entry", () => {
+    renderComposer({ editMode: "review" });
+
+    fireEvent.click(screen.getByRole("button", { name: "添加上下文" }));
+
+    const menu = document.querySelector(".composer-plus-menu");
+    expect(menu).toBeTruthy();
+    expect(menu?.querySelectorAll(".composer-menu-item").length).toBe(4);
+    expect(document.body.textContent).toContain("添加文件");
+    expect(document.body.textContent).toContain("提及工作区文件");
+    expect(document.body.textContent).not.toContain("插入图片");
+
+    const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+    const plusMenuRule = css.match(/\.composer-plus-menu,\n\.composer-mode-menu \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(plusMenuRule).toContain("width: 200px");
   });
 
   it("renders the active permission mode with a dedicated icon", () => {
@@ -98,6 +134,36 @@ describe("desktop permission mode copy", () => {
 
     expect(document.body.textContent).toContain("完全控制");
     expect(document.body.textContent).not.toMatch(/YOLO/i);
+  });
+
+  it("shows pasted images as thumbnails without inserting @ paths into the textarea", async () => {
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "paste.png", { type: "image/png" });
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: { length: 0 },
+        getData: () => "",
+        items: [{ type: "image/png", getAsFile: () => imageFile }],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByAltText("pasted image")).toBeTruthy();
+    });
+    expect(textarea.value).toBe("");
+    expect(document.body.textContent).not.toContain("@/tmp/jupiter-pasted-images");
+    expect(onMentionPicked).toHaveBeenCalledWith("/tmp/jupiter-pasted-images/pasted.png");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["/tmp/jupiter-pasted-images/pasted.png"],
+    });
   });
 });
 
@@ -145,10 +211,16 @@ describe("desktop Composer source search", () => {
       css.match(
         /\.empty-state \.composer-wrap--hero \.composer-backdrop \{[\s\S]*?\n\}/,
       )?.[0] ?? "";
+    const heroTextareaWrapRule =
+      css.match(
+        /\.empty-state \.composer-wrap--hero \.composer-textarea-wrap \{[\s\S]*?\n\}/,
+      )?.[0] ?? "";
 
     expect(heroTextareaRule).not.toContain("text-align: center");
+    expect(heroBackdropRule).not.toContain("align-items: center");
     expect(heroBackdropRule).not.toContain("justify-items: center");
     expect(heroBackdropRule).not.toContain("text-align: center");
+    expect(heroTextareaWrapRule).not.toContain("align-items: center");
   });
 
   it("opens the source search entry from the search button beside plus", () => {
@@ -182,5 +254,22 @@ describe("desktop Composer clipboard files", () => {
     );
 
     expect(paths).toEqual(["src/App.tsx", "docs/hello world.md"]);
+  });
+
+  it("extracts Tauri clipboard file paths instead of falling back to pasted filenames", () => {
+    const paths = clipboardFileMentionPaths(
+      {
+        files: {
+          length: 1,
+          0: { name: "paper.pdf", path: "/repo/docs/paper.pdf" },
+          item: (index: number) =>
+            index === 0 ? ({ name: "paper.pdf", path: "/repo/docs/paper.pdf" } as File) : null,
+        },
+        getData: (type: string) => (type === "text/plain" ? "paper.pdf" : ""),
+      } as unknown as DataTransfer,
+      "/repo",
+    );
+
+    expect(paths).toEqual(["docs/paper.pdf"]);
   });
 });

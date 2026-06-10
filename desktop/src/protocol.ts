@@ -228,6 +228,43 @@ export type LibrarySourcesEvent = {
   sources: LibrarySource[];
 };
 
+export type StorageCleanupTier = "safe" | "optional" | "review";
+export type StorageCleanupKind = "cache" | "conversation" | "library" | "workspace" | "config";
+
+export type StorageItem = {
+  id: string;
+  tier: StorageCleanupTier;
+  kind?: StorageCleanupKind;
+  title: string;
+  description: string;
+  path?: string;
+  sizeBytes: number;
+  cleanup: "delete" | "none";
+};
+
+export type StorageScanEvent = {
+  type: "$storage_scan";
+  scannedAt: number;
+  totalBytes: number;
+  safeBytes: number;
+  optionalBytes: number;
+  reviewBytes: number;
+  items: StorageItem[];
+};
+
+export type StorageCleanupEvent = {
+  type: "$storage_cleanup";
+  freedBytes: number;
+  results: Array<{
+    id: string;
+    title?: string;
+    sizeBytes?: number;
+    status: "cleaned" | "skipped" | "failed";
+    error?: string;
+  }>;
+  scan: StorageScanEvent;
+};
+
 export type TabOpenedEvent = {
   type: "$tab_opened";
   workspaceDir: string;
@@ -509,6 +546,7 @@ export type SettingsEvent = {
   };
   subagentModels?: Record<string, "flash" | "pro">;
   contextTokens?: Record<string, number>;
+  libraryRetrievalMode?: "off" | "on_demand" | "always";
   showSystemEvents?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
@@ -581,6 +619,7 @@ export type SettingsPatch = {
   skillPackSources?: SkillPackSourceInfo[];
   /** Per-model context-window override (tokens). Keys are model ids; values are the prompt-side token cap. */
   contextTokens?: Record<string, number>;
+  libraryRetrievalMode?: "off" | "on_demand" | "always";
   showSystemEvents?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
@@ -758,6 +797,8 @@ export type IncomingEvent = { tabId?: string } & (
   | SourceSearchResultsEvent
   | SourceIngestResultEvent
   | LibrarySourcesEvent
+  | StorageScanEvent
+  | StorageCleanupEvent
   | TabOpenedEvent
   | TabClosedEvent
   | McpSpecsEvent
@@ -783,7 +824,7 @@ export type IncomingEvent = { tabId?: string } & (
 );
 
 export type OutgoingCommand = { tabId?: string } & (
-  | { cmd: "user_input"; text: string; clientId?: string; planOneShot?: boolean }
+  | { cmd: "user_input"; text: string; clientId?: string; displayText?: string; planOneShot?: boolean }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
@@ -847,6 +888,8 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "library_add"; source: Omit<LibrarySource, "id" | "addedAt" | "updatedAt"> }
   | { cmd: "library_remove"; id: string }
   | { cmd: "library_refresh"; id: string }
+  | { cmd: "storage_scan" }
+  | { cmd: "storage_cleanup"; itemIds: string[] }
   | { cmd: "tab_open"; workspaceDir?: string }
   | { cmd: "tab_close" }
   | { cmd: "tab_activate"; tabId: string }

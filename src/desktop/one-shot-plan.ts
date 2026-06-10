@@ -19,11 +19,15 @@ export function parseOneShotPlanCommand(input: string): OneShotPlanCommand | nul
 
 export function buildOneShotPlanPrompt(text: string): string {
   return [
-    "One-shot Plan mode is active for this request.",
+    "Plan-only mode is active for this request.",
     "",
-    "First investigate only as needed, then call `submit_plan` with a concrete implementation plan before doing any mutating work.",
-    "Do not modify files, run non-read-only shell commands, or use tools that change external state before the plan is approved.",
-    "After the user approves the plan, continue executing the original request in the same turn.",
+    "This turn is for planning only. Investigate with read-only tools only if needed, then write a complete SPEC / execution plan as the assistant response.",
+    "Do not modify files, run non-read-only shell commands, or use tools that change external state.",
+    "Do not call `submit_plan`; do not open an approval gate; do not execute the plan in this turn.",
+    "The spec should get as close as possible to execution: goals, assumptions, concrete steps, files/modules likely touched, risks/open questions, and verification.",
+    "If a blocking requirement is unclear, ask focused questions instead of executing.",
+    "End by asking the user to reply in the next message if they want you to execute.",
+    "Wait for the user's next message before doing any implementation.",
     "",
     "User request:",
     text.trim(),

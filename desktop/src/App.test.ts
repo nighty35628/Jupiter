@@ -54,6 +54,7 @@ function initialState(): Parameters<typeof reduce>[0] {
     ready: false,
     needsSetup: false,
     busy: false,
+    transientStatus: null,
     messages: [],
     pendingConfirms: [],
     pendingPathAccess: [],
@@ -467,6 +468,31 @@ describe("Desktop App reducer — side chat", () => {
     expect(next.messages).toEqual([
       { kind: "status", text: "≫ btw\nshort answer" },
     ]);
+  });
+
+  it("does not append transient kernel statuses to the main transcript", () => {
+    const next = reduce(
+      {
+        ...initialState(),
+        busy: true,
+        messages: [{ kind: "assistant", turn: 1, pending: true, segments: [] }],
+      },
+      {
+        t: "incoming",
+        event: {
+          type: "status",
+          id: 1,
+          ts: "2026-06-10T00:00:00.000Z",
+          turn: 1,
+          text: "tool result uploaded · model thinking before next response…",
+        },
+      },
+    );
+
+    expect(next.messages).toEqual([
+      { kind: "assistant", turn: 1, pending: true, segments: [] },
+    ]);
+    expect(next.transientStatus).toBe("tool result uploaded · model thinking before next response…");
   });
 
   it("drops stale sidebar btw answers after their temporary chat is gone", () => {

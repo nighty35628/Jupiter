@@ -5,6 +5,7 @@ import {
   loadEndpoint,
   loadFilesystemOutlineThresholdBytes,
   loadJavaSourceEnabled,
+  loadLibraryRetrievalMode,
   loadMemoryConfirmWrites,
   loadMemoryGlobalEnabled,
   loadProjectShellAllowed,
@@ -22,6 +23,7 @@ import { registerCodeQueryTools } from "../tools/code-query.js";
 import { registerFilesystemTools } from "../tools/filesystem.js";
 import { registerJavaSourceTool } from "../tools/java-source.js";
 import { JobRegistry } from "../tools/jobs.js";
+import { registerLibraryTools } from "../tools/library.js";
 import { registerMemoryTools } from "../tools/memory.js";
 import { registerOpenUrlTool } from "../tools/open-url.js";
 import { registerPlanTool } from "../tools/plan.js";
@@ -87,6 +89,10 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
       projectRoot: root,
       confirmWrites: () => loadMemoryConfirmWrites(opts.configPath),
       globalEnabled: () => loadMemoryGlobalEnabled(opts.configPath),
+    });
+    registerLibraryTools(tools, {
+      workspaceDir: root,
+      retrievalMode: () => loadLibraryRetrievalMode(opts.configPath),
     });
     registerCodeQueryTools(tools, { rootDir: root });
   };

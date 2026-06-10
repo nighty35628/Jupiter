@@ -30,6 +30,7 @@ import {
   type DesktopCloseBehavior,
   type DesktopOpenTab,
   type EditMode,
+  type LibraryRetrievalMode,
   bridgeEndpointEnv,
   clearApiKey,
   isPlausibleKey,
@@ -42,8 +43,10 @@ import {
   loadEditMode,
   loadEditor,
   loadEndpoint,
+  loadEngineeringLifecycleMode,
   loadExaApiKey,
   loadFeishuConfig,
+  loadLibraryRetrievalMode,
   loadMaxIterPerTurn,
   loadMemoryConfirmWrites,
   loadMemoryGlobalEnabled,
@@ -74,6 +77,7 @@ import {
   saveEditMode,
   saveEditor,
   saveFeishuConfig,
+  saveLibraryRetrievalMode,
   saveMemoryConfirmWrites,
   saveMemoryGlobalEnabled,
   saveModel,
@@ -117,6 +121,7 @@ import {
 import {
   type LibrarySource,
   addLibrarySourceForWorkspace,
+  extractLibraryFileContentForWorkspace,
   listLibrarySourcesForWorkspace,
   removeLibrarySourceForWorkspace,
   updateLibrarySourceContentForWorkspace,
@@ -154,6 +159,12 @@ import {
   shouldRouteQQForTab,
   takeQQPendingInteraction,
 } from "../../desktop/qq-turn-routing.js";
+import {
+  type StorageCleanupResult,
+  type StorageScan,
+  cleanupJupiterStorage,
+  scanJupiterStorage,
+} from "../../desktop/storage-manager.js";
 import { loadDotenv } from "../../env.js";
 import { FeishuChannel } from "../../feishu/channel.js";
 import { type ResolvedHook, formatHookOutcomeMessage, loadHooks, runHooks } from "../../hooks.js";
@@ -227,7 +238,13 @@ export function desktopUserAbortLoopOptions(): LoopAbortOptions | undefined {
 }
 
 type InMessage = { tabId?: string } & (
-  | { cmd: "user_input"; text: string; clientId?: string; planOneShot?: boolean }
+  | {
+      cmd: "user_input";
+      text: string;
+      clientId?: string;
+      displayText?: string;
+      planOneShot?: boolean;
+    }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
@@ -279,6 +296,8 @@ type InMessage = { tabId?: string } & (
   | { cmd: "library_add"; source: Omit<LibrarySource, "id" | "addedAt" | "updatedAt"> }
   | { cmd: "library_remove"; id: string }
   | { cmd: "library_refresh"; id: string }
+  | { cmd: "storage_scan" }
+  | { cmd: "storage_cleanup"; itemIds: string[] }
   | { cmd: "new_chat"; workspaceDir?: string; openInNewTab?: boolean }
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_sign_out" }
@@ -316,6 +335,7 @@ type InMessage = { tabId?: string } & (
       subagentModels?: Record<string, "flash" | "pro">;
       skillPackSources?: ReturnType<typeof loadSkillPackSources>;
       contextTokens?: Record<string, number>;
+      libraryRetrievalMode?: LibraryRetrievalMode;
       showSystemEvents?: boolean;
       processCardsDefaultOpen?: boolean;
       memoryConfirmWrites?: boolean;
@@ -411,6 +431,7 @@ interface SettingsEvent {
   };
   subagentModels?: Record<string, "flash" | "pro">;
   contextTokens?: Record<string, number>;
+  libraryRetrievalMode?: LibraryRetrievalMode;
   showSystemEvents?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
@@ -547,6 +568,9 @@ interface LibrarySourcesEvent {
   workspaceDir: string;
   sources: LibrarySource[];
 }
+
+type StorageScanEvent = StorageScan;
+type StorageCleanupEvent = StorageCleanupResult;
 
 interface TabOpenedEvent {
   type: "$tab_opened";
@@ -835,6 +859,8 @@ type EmittableEvent =
   | SourceSearchResultsEvent
   | SourceIngestResultEvent
   | LibrarySourcesEvent
+  | StorageScanEvent
+  | StorageCleanupEvent
   | RetryResultEvent
   | BtwResultEvent
   | TabOpenedEvent
@@ -1026,7 +1052,7 @@ function collectWebSearchApiKeyPrefixes(): {
 
 function emitSettings(tab: Tab): void {
   const ep = loadEndpoint();
-  const editMode = loadEditMode();
+  const editMode = loadDesktopEditMode();
   if (tab.toolset) applyPlanMode(tab.toolset.tools, editMode);
   const recent = loadRecentWorkspaces().filter((p) => p !== tab.rootDir);
   emit(
@@ -1049,6 +1075,7 @@ function emitSettings(tab: Tab): void {
       webSearchApiKeys: collectWebSearchApiKeyPrefixes(),
       subagentModels: loadSubagentModels(),
       contextTokens: readConfig().contextTokens,
+      libraryRetrievalMode: loadLibraryRetrievalMode(),
       showSystemEvents: loadShowSystemEvents(),
       processCardsDefaultOpen: loadProcessCardsDefaultOpen(),
       memoryConfirmWrites: loadMemoryConfirmWrites(),
@@ -1058,6 +1085,11 @@ function emitSettings(tab: Tab): void {
     },
     tab.id,
   );
+}
+
+function loadDesktopEditMode(): Exclude<EditMode, "plan"> {
+  const editMode = loadEditMode();
+  return editMode === "plan" ? "review" : editMode;
 }
 
 function emitQQSettings(tab: Tab): void {
@@ -1329,6 +1361,26 @@ function emitLibrary(tab: Tab): void {
       {
         type: "$error",
         message: `library_list failed: ${(err as Error).message}`,
+      },
+      tab.id,
+    );
+  }
+}
+
+function emitStorageScan(tab: Tab): void {
+  try {
+    emit(
+      scanJupiterStorage({
+        workspaceDir: tab.rootDir,
+        recentWorkspaces: loadRecentWorkspaces(),
+      }),
+      tab.id,
+    );
+  } catch (err) {
+    emit(
+      {
+        type: "$error",
+        message: `storage_scan failed: ${(err as Error).message}`,
       },
       tab.id,
     );
@@ -1763,7 +1815,7 @@ function emitDesktopSubagentEvent(tab: Tab, ev: SubagentEvent): void {
 function buildRuntimeFor(tab: Tab): RuntimeState {
   if (!tab.toolset) throw new Error("buildRuntimeFor called before initTabToolset finished");
   const toolset = tab.toolset;
-  applyPlanMode(toolset.tools, loadEditMode());
+  applyPlanMode(toolset.tools, loadDesktopEditMode());
   const ep = loadEndpoint();
   const client = new DeepSeekClient({ apiKey: ep.apiKey, baseUrl: ep.baseUrl });
   const prefix = new ImmutablePrefix({
@@ -2247,11 +2299,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       codeShowEdit: (args) => desktopCodeShowEdit(tab, args),
       codeApply: () => "nothing pending to apply.",
       codeDiscard: () => "nothing pending to discard.",
-      planMode: loadEditMode() === "plan",
-      editMode: loadEditMode(),
+      planMode: false,
+      editMode: loadDesktopEditMode(),
       setEditMode: (mode) => {
-        saveEditMode(mode);
-        if (tab.toolset) applyPlanMode(tab.toolset.tools, mode);
+        const desktopMode = mode === "plan" ? "review" : mode;
+        saveEditMode(desktopMode);
+        if (tab.toolset) applyPlanMode(tab.toolset.tools, desktopMode);
         emitSettings(tab);
       },
       jobs: tab.toolset?.jobs,
@@ -2479,6 +2532,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     if (tab.toolset) {
       tab.system = codeSystemPrompt(tab.rootDir, {
         hasSemanticSearch: tab.toolset.semantic.enabled,
+        engineeringLifecycleMode: loadEngineeringLifecycleMode(),
+        libraryRetrievalMode: loadLibraryRetrievalMode(),
         modelId: tab.currentModel,
       });
       if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
@@ -3084,6 +3139,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     installDesktopEditInterceptor(tab);
     tab.system = codeSystemPrompt(tab.rootDir, {
       hasSemanticSearch: toolset.semantic.enabled,
+      engineeringLifecycleMode: loadEngineeringLifecycleMode(),
+      libraryRetrievalMode: loadLibraryRetrievalMode(),
       modelId: tab.currentModel,
     });
     if (loadApiKey()) {
@@ -3206,7 +3263,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     text: string,
     fromQQ = false,
     clientId?: string,
-    opts: { planOneShot?: boolean; fromFeishu?: boolean } = {},
+    opts: { displayText?: string; planOneShot?: boolean; fromFeishu?: boolean } = {},
   ): Promise<void> {
     if (!tab.runtime) return;
     const rt = tab.runtime;
@@ -3283,7 +3340,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           }
           for (const kev of rt.eventizer.consume(ev, rt.ctx)) {
             emit(
-              kev.type === "user.message" && clientId ? { ...kev, text, clientId } : kev,
+              kev.type === "user.message" && clientId
+                ? { ...kev, text: opts.displayText ?? text, clientId }
+                : kev,
               tab.id,
             );
           }
@@ -3415,6 +3474,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     installDesktopEditInterceptor(tab);
     tab.system = codeSystemPrompt(target, {
       hasSemanticSearch: tab.toolset.semantic.enabled,
+      engineeringLifecycleMode: loadEngineeringLifecycleMode(),
+      libraryRetrievalMode: loadLibraryRetrievalMode(),
       modelId: tab.currentModel,
     });
     if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
@@ -3447,7 +3508,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab.oneShotPlanPreviousPlanMode !== null) {
         tools.setPlanMode(tab.oneShotPlanPreviousPlanMode);
       } else {
-        applyPlanMode(tools, loadEditMode());
+        applyPlanMode(tools, loadDesktopEditMode());
       }
     }
     tab.oneShotPlanActive = false;
@@ -4002,10 +4063,6 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     if (msg.cmd === "plan_response") {
       const tab = forgetGate(msg.id);
-      const oneShot = tab?.oneShotPlanGateIds.has(msg.id) ?? false;
-      if (tab && oneShot && msg.response.type !== "refine") {
-        restoreOneShotPlanGuard(tab);
-      }
       if (tab && msg.response.type === "cancel") {
         tab.completedStepIds.clear();
         tab.planTotalSteps = 0;
@@ -4739,10 +4796,38 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       emitLibrary(tab);
       return;
     }
+    if (msg.cmd === "storage_scan") {
+      emitStorageScan(tab);
+      return;
+    }
+    if (msg.cmd === "storage_cleanup") {
+      try {
+        const result = cleanupJupiterStorage({
+          workspaceDir: tab.rootDir,
+          recentWorkspaces: loadRecentWorkspaces(),
+          itemIds: Array.isArray(msg.itemIds) ? msg.itemIds : [],
+        });
+        emit(result, tab.id);
+        emitArchivedSessions(tab);
+        emitLibrary(tab);
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `storage_cleanup failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
     if (msg.cmd === "library_add") {
       try {
+        const needsWebFetch =
+          msg.source.kind === "web" && Boolean(msg.source.url) && !msg.source.contentText;
+        const needsFileExtract = msg.source.kind === "file" && !msg.source.contentText;
         const input =
-          msg.source.kind === "web" && msg.source.url
+          needsWebFetch || needsFileExtract
             ? { ...msg.source, ingestStatus: "pending" as const }
             : msg.source;
         const saved = addLibrarySourceForWorkspace(tab.rootDir, input);
@@ -4764,6 +4849,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               ingestStatus: "error",
             });
           }
+          emitLibrary(tab);
+        } else if (saved.kind === "file" && saved.path && !saved.contentText) {
+          extractLibraryFileContentForWorkspace(tab.rootDir, saved.id);
           emitLibrary(tab);
         }
       } catch (err) {
@@ -4819,6 +4907,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               ingestStatus: "error",
             });
           }
+        } else if (source?.kind === "file" && source.path) {
+          updateLibrarySourceContentForWorkspace(tab.rootDir, source.id, {
+            ingestStatus: "pending",
+            contentError: undefined,
+          });
+          emitLibrary(tab);
+          extractLibraryFileContentForWorkspace(tab.rootDir, source.id);
         }
         emitLibrary(tab);
       } catch (err) {
@@ -4859,8 +4954,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           tab.runtime?.loop.configure({ reasoningEffort: msg.reasoningEffort });
         }
         if (msg.editMode !== undefined) {
-          saveEditMode(msg.editMode);
-          if (tab.toolset) applyPlanMode(tab.toolset.tools, msg.editMode);
+          const desktopMode = msg.editMode === "plan" ? "review" : msg.editMode;
+          saveEditMode(desktopMode);
+          if (tab.toolset) applyPlanMode(tab.toolset.tools, desktopMode);
         }
         if (msg.budgetUsd !== undefined) {
           tab.budgetUsd = msg.budgetUsd ?? undefined;
@@ -4953,18 +5049,22 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           cfg.contextTokens = msg.contextTokens;
           writeConfig(cfg);
         }
+        if (msg.libraryRetrievalMode !== undefined) {
+          saveLibraryRetrievalMode(msg.libraryRetrievalMode);
+          if (tab.toolset) {
+            tab.system = codeSystemPrompt(tab.rootDir, {
+              hasSemanticSearch: tab.toolset.semantic.enabled,
+              engineeringLifecycleMode: loadEngineeringLifecycleMode(),
+              libraryRetrievalMode: loadLibraryRetrievalMode(),
+              modelId: tab.currentModel,
+            });
+            if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
+          }
+        }
         if (msg.model !== undefined) {
           const next = msg.model.trim();
           if (next) {
-            tab.currentModel = next;
-            saveModel(next);
-            if (tab.toolset) {
-              tab.system = codeSystemPrompt(tab.rootDir, {
-                hasSemanticSearch: tab.toolset.semantic.enabled,
-                modelId: tab.currentModel,
-              });
-              if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
-            }
+            applyDesktopModel(tab, next);
           }
         }
         emitSettings(tab);
@@ -5377,6 +5477,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         }
       }
       void runTurn(tab, msg.text, false, msg.clientId, {
+        displayText: msg.displayText,
         planOneShot: msg.planOneShot === true,
       });
     }

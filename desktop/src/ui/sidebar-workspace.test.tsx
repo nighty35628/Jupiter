@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./sidebar";
@@ -491,6 +493,7 @@ describe("desktop Sidebar workspace grouping", () => {
 
     expect(row.closest(".session-item")?.getAttribute("data-unread")).toBe("true");
     expect(row.closest(".session-item")?.querySelector(".session-state-dot")).toBeTruthy();
+    expect(row.closest(".session-item")?.querySelector(".time")).toBeNull();
     expect(onMarkSessionRead).toHaveBeenCalledWith("desktop-alpha");
     expect(onMarkSessionUnread).not.toHaveBeenCalled();
   });
@@ -527,6 +530,20 @@ describe("desktop Sidebar workspace grouping", () => {
     const row = screen.getByTitle(/Alpha chat/).closest(".session-item");
     expect(row?.querySelector(".session-busy-spinner")).toBeTruthy();
     expect(row?.querySelector(".session-state-dot")).toBeNull();
+    expect(row?.querySelector(".time")).toBeNull();
+  });
+
+  it("reserves and feather-fades the right-edge session state slot", () => {
+    const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+    const stateBodyRule =
+      css.match(/\.session-item\[data-has-state="true"\] \.body \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const stateRule = css.match(/\.session-state \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const stateBeforeRule = css.match(/\.session-state::before \{[\s\S]*?\n\}/)?.[0] ?? "";
+
+    expect(stateBodyRule).toMatch(/padding-right:\s*(2[4-9]|[3-9]\d)px/);
+    expect(stateRule).toContain("isolation: isolate");
+    expect(stateBeforeRule).toContain("linear-gradient");
+    expect(stateBeforeRule).toContain("var(--session-row-bg)");
   });
 
   it("marks completed busy sessions unread", () => {

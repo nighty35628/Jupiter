@@ -84,6 +84,8 @@ export { ToolRegistry } from "./tools.js";
 export type { ToolDefinition, ToolCallContext } from "./tools.js";
 export { registerFilesystemTools } from "./tools/filesystem.js";
 export type { FilesystemToolsOptions } from "./tools/filesystem.js";
+export { registerLibraryTools } from "./tools/library.js";
+export type { LibraryToolsOptions } from "./tools/library.js";
 export { registerMemoryTools } from "./tools/memory.js";
 export type { MemoryToolsOptions } from "./tools/memory.js";
 export { ChoiceRequestedError, registerChoiceTool } from "./tools/choice.js";

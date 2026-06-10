@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import type React from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { t, type TKey } from "../i18n";
 import { I } from "../icons";
@@ -20,9 +20,10 @@ import {
 import { fmtElapsed } from "./live";
 
 export type ReasoningEffort = "low" | "medium" | "high" | "max";
-export type EditMode = "review" | "auto" | "yolo" | "plan";
+export type EditMode = "review" | "auto" | "yolo";
 
 type ModeEntry = { k: EditMode; label: TKey; icon: React.ReactNode; hint: TKey };
+export type ComposerSendPayload = { hiddenMentions?: string[] };
 
 const EFFORTS: readonly ReasoningEffort[] = ["low", "medium", "high", "max"];
 
@@ -77,6 +78,13 @@ export type Chip =
   | { kind: "at"; label: string }
   | { kind: "slash"; label: string };
 
+type ImageAttachment = {
+  id: string;
+  path: string;
+  previewUrl: string;
+  name: string;
+};
+
 /** For long paths show only the filename; truncate filename if it's still too long. */
 function chipLabel(label: string, maxLen = 32): string {
   if (label.length <= maxLen) return label;
@@ -85,6 +93,10 @@ function chipLabel(label: string, maxLen = 32): string {
   const filename = segments[segments.length - 1]!;
   if (filename.length <= maxLen) return filename;
   return filename.slice(0, maxLen - 1) + "…";
+}
+
+function basename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
 }
 
 type Popup =
@@ -217,6 +229,15 @@ function looksLikeLocalPath(value: string): boolean {
   return /^(\/|~\/|[A-Za-z]:[\\/]|\\\\)/.test(value.trim());
 }
 
+function clipboardFileObjectPath(file: File): string | null {
+  const candidate =
+    (file as File & { path?: unknown }).path ??
+    (file as File & { webkitRelativePath?: unknown }).webkitRelativePath;
+  if (typeof candidate !== "string") return null;
+  const trimmed = candidate.trim();
+  return looksLikeLocalPath(trimmed) ? trimmed : null;
+}
+
 function normalizeMentionPath(picked: string, workspaceDir?: string): string {
   const normalizedPicked = picked.replace(/\\/g, "/");
   const normalizedWorkspace = workspaceDir?.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -241,6 +262,13 @@ export function clipboardFileMentionPaths(
     if (!trimmed || trimmed.startsWith("#")) continue;
     const path = fileUrlToPath(trimmed);
     if (path) rawPaths.push(path);
+  }
+
+  if (rawPaths.length === 0 && data.files?.length) {
+    for (const file of Array.from(data.files as ArrayLike<File>)) {
+      const path = clipboardFileObjectPath(file);
+      if (path) rawPaths.push(path);
+    }
   }
 
   if (rawPaths.length === 0 && data.files?.length) {
@@ -282,6 +310,8 @@ export function Composer({
   onEffortChange,
   editMode,
   onEditModeChange,
+  planArmed = false,
+  onPlanArmedChange,
   textareaRef,
   slashCommands,
   onMentionQuery,
@@ -302,7 +332,7 @@ export function Composer({
 }: {
   draft: string;
   setDraft: React.Dispatch<React.SetStateAction<string>>;
-  onSend: () => void;
+  onSend: (payload?: ComposerSendPayload) => void;
   onAbort: () => void;
   disabled?: boolean;
   busy?: boolean;
@@ -315,6 +345,8 @@ export function Composer({
   onEffortChange: (effort: ReasoningEffort) => void;
   editMode: EditMode;
   onEditModeChange: (mode: EditMode) => void;
+  planArmed?: boolean;
+  onPlanArmedChange?: (armed: boolean) => void;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   slashCommands: SlashCmd[];
   onMentionQuery?: (q: string, nonce: number) => void;
@@ -339,6 +371,7 @@ export function Composer({
 }) {
   const [popup, setPopup] = useState<Popup>(null);
   const [pickedChips, setPickedChips] = useState<Map<string, Chip["kind"]>>(new Map());
+  const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
   const chips = useMemo(() => {
     const result: Chip[] = [];
     for (const [label, kind] of pickedChips) {
@@ -414,6 +447,20 @@ export function Composer({
   };
 
   const insertMention = (picked: string) => insertMentions([picked]);
+
+  const addImageAttachment = (path: string) => {
+    const normalized = normalizeMentionPath(path, workspaceDir);
+    const attachment: ImageAttachment = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      path: normalized,
+      previewUrl: convertFileSrc(path),
+      name: basename(path),
+    };
+    setImageAttachments((prev) => [...prev, attachment]);
+    onMentionPicked?.(normalized);
+    setPopup(null);
+    textareaRef.current?.focus();
+  };
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -500,7 +547,7 @@ export function Composer({
         bytes: buffer,
         extension: guessImageExtension(file.type),
       });
-      insertMention(savedPath);
+      addImageAttachment(savedPath);
     } catch (err) {
       console.error("clipboard image paste failed", err);
     }
@@ -683,10 +730,21 @@ export function Composer({
 
   const recordSendAndReset = () => {
     const trimmed = draft.trim();
+    if (!trimmed) return;
     historyRef.current.push(trimmed);
     if (historyRef.current.length > 100) historyRef.current.shift();
     setBrowseIdx(-1);
     onHistoryPush?.(trimmed, [...historyRef.current]);
+  };
+
+  const submitNow = () => {
+    const hiddenMentions = imageAttachments.map((attachment) => attachment.path);
+    const hasPayload = Boolean(draft.trim()) || hiddenMentions.length > 0;
+    if (disabled || !hasPayload || busy) return;
+    recordSendAndReset();
+    onSend(hiddenMentions.length > 0 ? { hiddenMentions } : undefined);
+    setPickedChips(new Map());
+    setImageAttachments([]);
   };
 
   const navigateHistory = (dir: -1 | 1) => {
@@ -801,10 +859,8 @@ export function Composer({
           onQueueWhileBusy(text);
           setPickedChips(new Map());
         }
-      } else if (!disabled && draft.trim()) {
-        recordSendAndReset();
-        onSend();
-        setPickedChips(new Map());
+      } else {
+        submitNow();
       }
     }
   };
@@ -852,6 +908,27 @@ export function Composer({
         ) : null}
 
         <div className="composer">
+          {imageAttachments.length > 0 ? (
+            <div className="composer-attachments">
+              {imageAttachments.map((attachment) => (
+                <div key={attachment.id} className="composer-image-attachment" title={attachment.path}>
+                  <img src={attachment.previewUrl} alt="pasted image" />
+                  <button
+                    type="button"
+                    className="composer-attachment-remove"
+                    aria-label={t("composer.removeAttachment")}
+                    title={t("composer.removeAttachment")}
+                    onClick={() =>
+                      setImageAttachments((prev) => prev.filter((item) => item.id !== attachment.id))
+                    }
+                  >
+                    <I.x size={10} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           {chips.length > 0 ? (
             <div className="composer-tags">
               {chips.map((c, i) => (
@@ -950,26 +1027,26 @@ export function Composer({
                     <button
                       type="button"
                       className="composer-menu-item"
-                      onClick={() => {
-                        setPlusMenuOpen(false);
-                        void attachFile("image");
-                      }}
-                    >
-                      <span className="ico"><I.image size={14} /></span>
-                      <span className="copy">
-                        <span className="title">{t("composer.insertImage")}</span>
-                        <span className="hint">{t("composer.imageFilterName")}</span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="composer-menu-item"
                       onClick={openMentionMenu}
                     >
                       <span className="ico"><I.at size={14} /></span>
                       <span className="copy">
                         <span className="title">{t("composer.mentionFiles")}</span>
                         <span className="hint">@</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="composer-menu-item"
+                      onClick={() => {
+                        onPlanArmedChange?.(!planArmed);
+                        setPlusMenuOpen(false);
+                      }}
+                    >
+                      <span className="ico"><I.list size={14} /></span>
+                      <span className="copy">
+                        <span className="title">{t("editMode.plan")}</span>
+                        <span className="hint">{t("editMode.planDesc")}</span>
                       </span>
                     </button>
                     <button
@@ -995,6 +1072,19 @@ export function Composer({
               >
                 <I.search size={15} />
               </button>
+
+              {planArmed ? (
+                <button
+                  type="button"
+                  className="composer-plan-armed"
+                  title={t("editMode.planDesc")}
+                  onClick={() => onPlanArmedChange?.(false)}
+                >
+                  <I.list size={12} />
+                  <span>{t("editMode.plan")}</span>
+                  <I.x size={10} />
+                </button>
+              ) : null}
 
               <PermissionModeMenu
                 mode={editMode}
@@ -1067,14 +1157,8 @@ export function Composer({
               <button
                 type="button"
                 className="send-btn"
-                disabled={disabled || !draft.trim()}
-                onClick={() => {
-                  if (!disabled && draft.trim()) {
-                    recordSendAndReset();
-                    onSend();
-                    setPickedChips(new Map());
-                  }
-                }}
+                disabled={disabled || (!draft.trim() && imageAttachments.length === 0)}
+                onClick={submitNow}
               >
                 <I.send size={14} />
               </button>

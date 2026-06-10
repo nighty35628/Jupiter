@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { EngineeringLifecycleMode, LibraryRetrievalMode } from "../config.js";
 import { applyMemoryStack } from "../memory/user.js";
 import { TUI_FORMATTING_RULES, escalationContract } from "../prompt-fragments.js";
 
@@ -146,6 +147,49 @@ You have BOTH \`semantic_search\` (vector index) and \`search_content\` (literal
 
 If \`semantic_search\` returns nothing useful (low scores, off-topic), THEN fall back to \`search_content\`. Don't go the other way — grepping a paraphrased question wastes turns.`;
 
+function libraryRetrievalRouting(mode: LibraryRetrievalMode = "on_demand"): string {
+  if (mode === "off") {
+    return `
+
+# Workspace library retrieval
+
+Workspace library retrieval is disabled by user setting. Do not call \`library_search\` or \`library_read\`; answer from the conversation and other available tools only unless the user changes the setting.`;
+  }
+  if (mode === "always") {
+    return `
+
+# Workspace library retrieval
+
+Always search the workspace library before answering substantive user requests. First call \`library_search\` with the user's request, then call \`library_read\` for the most relevant result chunks before answering. Cite only sources actually read. If no useful results are found, say that the workspace library did not contain relevant saved material and proceed normally.`;
+  }
+  return `
+
+# Workspace library retrieval
+
+You can use \`library_search\` and \`library_read\` to consult the current workspace library when relevant: saved sources, imported web pages, local files added to the library, references, notes, or requests like "use the library", "based on my sources", or "根据资料库". Cite only sources actually read.`;
+}
+
+function engineeringWorkflowPolicy(mode: EngineeringLifecycleMode = "on_demand"): string {
+  if (mode === "off") return "";
+  const strictLine =
+    mode === "strict"
+      ? "\nStrict mode is enabled: for matching engineering tasks, you MUST call `run_skill` with the matching skill before implementation, and high-risk mutations require `submit_plan` approval."
+      : "\nOn-demand mode is enabled: use these workflows when they fit the user's task, while keeping small, obvious changes lightweight.";
+  return `
+
+# Engineering workflow policy
+${strictLine}
+
+Use the Superpowers skills through \`run_skill\` when their trigger matches the task:
+- \`test-driven-development\` — before implementing a feature, bugfix, refactor, or behavior change. Write or update a failing test first, watch it fail for the expected reason, then implement the minimal fix and rerun tests.
+- \`systematic-debugging\` — when investigating a bug, failed test, crash, regression, or unexpected behavior. Find the root cause before proposing fixes.
+- \`writing-plans\` — before large multi-step implementation work when a written spec or clear requirements already exist.
+- \`verification-before-completion\` — before claiming code changes are complete, fixed, or ready to merge.
+- \`requesting-code-review\` — before merging or finishing major feature work when the change has meaningful risk.
+
+For expensive or multi-file changes, use \`submit_plan\` as the approval gate before mutating files. Do not apply these workflows to ordinary Q&A, explanations, translation, writing tasks, library-only answers, or tiny edits where the workflow would add more overhead than value.`;
+}
+
 export interface CodeSystemPromptOptions {
   /** True when semantic_search is registered for this run. Adds an
    *  explicit routing fragment so the model picks it for intent-style
@@ -159,13 +203,19 @@ export interface CodeSystemPromptOptions {
   systemAppendFile?: string;
   /** Model the loop will run on — interpolated into the escalation contract so the model can name itself correctly when asked (#582). */
   modelId?: string;
-  /** Back-compat no-op: lifecycle is runtime-only so strict/off do not change the cache prefix. */
-  engineeringLifecycleMode?: "off" | "strict";
+  /** Engineering workflow guidance. `off` omits the prompt fragment; `strict` uses stronger wording. */
+  engineeringLifecycleMode?: EngineeringLifecycleMode;
+  /** Workspace library retrieval policy. Default on-demand. */
+  libraryRetrievalMode?: LibraryRetrievalMode;
 }
 
 export function codeSystemPrompt(rootDir: string, opts: CodeSystemPromptOptions = {}): string {
   const codeBase = codeSystemBase(opts.modelId ?? DEFAULT_CODE_MODEL);
-  const base = opts.hasSemanticSearch ? `${codeBase}${SEMANTIC_SEARCH_ROUTING}` : codeBase;
+  const withLibrary = `${codeBase}${libraryRetrievalRouting(opts.libraryRetrievalMode)}`;
+  const withLifecycle = `${withLibrary}${engineeringWorkflowPolicy(opts.engineeringLifecycleMode)}`;
+  const base = opts.hasSemanticSearch
+    ? `${withLifecycle}${SEMANTIC_SEARCH_ROUTING}`
+    : withLifecycle;
   const withMemory = applyMemoryStack(base, rootDir);
   const gitignorePath = join(rootDir, ".gitignore");
   let result = withMemory;

@@ -2,7 +2,7 @@ export interface LifecyclePlanSuggestionRequest {
   text: string;
   codeMode: boolean;
   planMode: boolean;
-  lifecycleMode: "off" | "strict";
+  lifecycleMode: "off" | "on_demand" | "strict";
 }
 
 export function shouldSuggestPlanForEngineeringIntent(

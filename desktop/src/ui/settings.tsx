@@ -9,6 +9,7 @@ import {
 } from "../feishu-settings";
 import { getLangLabel, getSupportedLangs, setLang, t, useLang } from "../i18n";
 import { I } from "../icons";
+import { DESKTOP_SHORTCUTS } from "../shortcuts";
 import type {
   McpSpecInfo,
   MemoryDetail,
@@ -18,6 +19,8 @@ import type {
   SkillPackSourceInfo,
   SkillInfo,
   SkillRootInfo,
+  StorageItem,
+  StorageScanEvent,
 } from "../protocol";
 import {
   type QQDesktopSettingsState,
@@ -37,7 +40,7 @@ import {
   themeForStyle,
 } from "../theme";
 import { displayWorkspacePath } from "../workspace-display";
-import { Shortcut, type ShortcutKey } from "./shortcut";
+import { Shortcut } from "./shortcut";
 
 const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
 const EDGE_DOWNLOAD_URL = "https://www.microsoft.com/edge/download";
@@ -50,6 +53,7 @@ export type PageId =
   | "skills"
   | "memory"
   | "archives"
+  | "storage"
   | "appearance"
   | "billing"
   | "shortcuts";
@@ -62,6 +66,7 @@ const PAGE_META: ReadonlyArray<{ id: PageId; icon: keyof typeof I }> = [
   { id: "skills", icon: "zap" },
   { id: "memory", icon: "bookmark" },
   { id: "archives", icon: "archive" },
+  { id: "storage", icon: "database" },
   { id: "appearance", icon: "sun" },
   { id: "billing", icon: "coin" },
   { id: "shortcuts", icon: "cpu" },
@@ -90,6 +95,7 @@ export function SettingsModal({
   memory,
   memoryDetail,
   archivedSessions,
+  storageScan,
   qq,
   feishu,
   onClose,
@@ -124,6 +130,8 @@ export function SettingsModal({
   onRestoreArchivedSession,
   onDeleteArchivedSession,
   onClearArchivedSessions,
+  onScanStorage,
+  onCleanStorage,
   onOpenAbout,
 }: {
   settings: SettingsType;
@@ -148,6 +156,7 @@ export function SettingsModal({
   memory: MemoryEntryInfo[];
   memoryDetail: MemoryDetail | null;
   archivedSessions: SessionInfo[];
+  storageScan: StorageScanEvent | null;
   qq: QQDesktopSettingsState | null;
   feishu: FeishuDesktopSettingsState | null;
   onClose: () => void;
@@ -190,6 +199,8 @@ export function SettingsModal({
   onRestoreArchivedSession: (name: string) => void;
   onDeleteArchivedSession: (name: string) => void;
   onClearArchivedSessions: () => void;
+  onScanStorage: () => void;
+  onCleanStorage: (itemIds: string[]) => void;
   onOpenAbout: () => void;
 }) {
   const [page, setPage] = useState<PageId>(initialPage ?? "general");
@@ -213,6 +224,9 @@ export function SettingsModal({
   useEffect(() => {
     if (page === "archives") onRefreshArchivedSessions();
   }, [onRefreshArchivedSessions, page]);
+  useEffect(() => {
+    if (page === "storage") onScanStorage();
+  }, [onScanStorage, page]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -369,6 +383,13 @@ export function SettingsModal({
                 onRestore={onRestoreArchivedSession}
                 onDelete={onDeleteArchivedSession}
                 onClear={onClearArchivedSessions}
+              />
+            )}
+            {page === "storage" && (
+              <PageStorage
+                scan={storageScan}
+                onRefresh={onScanStorage}
+                onClean={onCleanStorage}
               />
             )}
             {page === "rules" && <PageRules settings={settings} onSave={onSave} />}
@@ -837,6 +858,36 @@ function PageGeneral({
               onClick={() => onSave({ processCardsDefaultOpen: false })}
             >
               {t("settings.collapsed")}
+            </button>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="l">
+            <div className="n">{t("settings.libraryRetrievalMode")}</div>
+            <div className="h">{t("settings.libraryRetrievalModeHint")}</div>
+            <div className="h warn">{t("settings.libraryRetrievalAlwaysWarning")}</div>
+          </div>
+          <div className="seg-ctrl" role="group" aria-label={t("settings.libraryRetrievalMode")}>
+            <button
+              type="button"
+              data-on={settings.libraryRetrievalMode === "off"}
+              onClick={() => onSave({ libraryRetrievalMode: "off" })}
+            >
+              {t("settings.libraryRetrievalOff")}
+            </button>
+            <button
+              type="button"
+              data-on={(settings.libraryRetrievalMode ?? "on_demand") === "on_demand"}
+              onClick={() => onSave({ libraryRetrievalMode: "on_demand" })}
+            >
+              {t("settings.libraryRetrievalOnDemand")}
+            </button>
+            <button
+              type="button"
+              data-on={settings.libraryRetrievalMode === "always"}
+              onClick={() => onSave({ libraryRetrievalMode: "always" })}
+            >
+              {t("settings.libraryRetrievalAlways")}
             </button>
           </div>
         </div>
@@ -2048,6 +2099,152 @@ function PageArchives({
   );
 }
 
+function formatStorageBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[unit]}`;
+}
+
+function storageTierLabel(tier: StorageItem["tier"]): string {
+  if (tier === "safe") return t("settings.storageTierSafe");
+  if (tier === "optional") return t("settings.storageTierOptional");
+  return t("settings.storageTierReview");
+}
+
+function PageStorage({
+  scan,
+  onRefresh,
+  onClean,
+}: {
+  scan: StorageScanEvent | null;
+  onRefresh: () => void;
+  onClean: (itemIds: string[]) => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    setSelected((prev) => {
+      if (!scan) return prev;
+      const cleanable = new Set(
+        scan.items.filter((item) => item.cleanup === "delete").map((item) => item.id),
+      );
+      const next = new Set([...prev].filter((id) => cleanable.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [scan]);
+  const cleanableItems = scan?.items.filter((item) => item.cleanup === "delete") ?? [];
+  const selectedBytes = cleanableItems
+    .filter((item) => selected.has(item.id))
+    .reduce((sum, item) => sum + item.sizeBytes, 0);
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const cleanSelected = () => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    onClean(ids);
+    setSelected(new Set());
+  };
+  return (
+    <>
+      <section className="section">
+        <div className="setting-row">
+          <div className="l">
+            <div className="n">{t("settings.storageTitle")}</div>
+            <div className="h">{t("settings.storageHint")}</div>
+          </div>
+          <div className="settings-row-actions">
+            <button type="button" className="btn" onClick={onRefresh}>
+              <I.refresh size={12} />
+              <span>{t("settings.storageRefresh")}</span>
+            </button>
+            <button
+              type="button"
+              className="btn danger"
+              disabled={selected.size === 0}
+              onClick={cleanSelected}
+            >
+              <I.trash size={12} />
+              <span>{t("settings.storageCleanSelected")}</span>
+            </button>
+          </div>
+        </div>
+        {scan ? (
+          <div className="storage-summary-grid">
+            <div className="storage-summary-card">
+              <div className="l">{t("settings.storageTotal")}</div>
+              <div className="v">{formatStorageBytes(scan.totalBytes)}</div>
+            </div>
+            <div className="storage-summary-card safe">
+              <div className="l">{t("settings.storageSafe")}</div>
+              <div className="v">{formatStorageBytes(scan.safeBytes)}</div>
+            </div>
+            <div className="storage-summary-card optional">
+              <div className="l">{t("settings.storageOptional")}</div>
+              <div className="v">{formatStorageBytes(scan.optionalBytes)}</div>
+            </div>
+            <div className="storage-summary-card review">
+              <div className="l">{t("settings.storageReview")}</div>
+              <div className="v">{formatStorageBytes(scan.reviewBytes)}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="muted-card">{t("settings.storageEmpty")}</div>
+        )}
+      </section>
+      {scan ? (
+        <section className="section">
+          <div className="storage-cleanbar">
+            <span>{t("settings.storageSelected")}</span>
+            <strong>{formatStorageBytes(selectedBytes)}</strong>
+          </div>
+          <div className="storage-item-list">
+            {scan.items.map((item) => {
+              const cleanable = item.cleanup === "delete";
+              return (
+                <label className="storage-item" data-tier={item.tier} key={item.id}>
+                  <span className="storage-check">
+                    {cleanable ? (
+                      <input
+                        type="checkbox"
+                        aria-label={item.title}
+                        checked={selected.has(item.id)}
+                        onChange={() => toggle(item.id)}
+                      />
+                    ) : (
+                      <I.info size={13} />
+                    )}
+                  </span>
+                  <span className="storage-item-main">
+                    <span className="storage-item-title">
+                      {item.title}
+                      <span className="storage-tier">{storageTierLabel(item.tier)}</span>
+                    </span>
+                    <span className="storage-item-desc">{item.description}</span>
+                    {item.path ? <span className="mono-path">{item.path}</span> : null}
+                  </span>
+                  <span className="storage-item-size">{formatStorageBytes(item.sizeBytes)}</span>
+                </label>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+    </>
+  );
+}
+
 function PageMemory({
   settings,
   entries,
@@ -2522,21 +2719,11 @@ function PageBilling({
 }
 
 function PageShortcuts() {
-  const rows: { nm: string; keys: ShortcutKey[] }[] = [
-    { nm: t("settings.shortcutNewChat"), keys: ["mod", "N"] },
-    { nm: t("settings.shortcutNewTab"), keys: ["mod", "T"] },
-    { nm: t("settings.shortcutCloseTab"), keys: ["mod", "W"] },
-    { nm: t("settings.shortcutCommandPalette"), keys: ["mod", "K"] },
-    { nm: t("settings.shortcutFocusComposer"), keys: ["mod", "L"] },
-    { nm: t("settings.shortcutSwitchTab"), keys: ["mod", "tab"] },
-    { nm: t("settings.shortcutAbort"), keys: ["esc"] },
-    { nm: t("settings.shortcutSettings"), keys: ["mod", ","] },
-  ];
   return (
     <section className="section">
       <div className="kbd-grid">
-        {rows.map((s, i) => (
-          <SectionRow key={i} nm={s.nm} keys={s.keys} />
+        {DESKTOP_SHORTCUTS.map((s) => (
+          <SectionRow key={s.id} nm={t(s.labelKey)} keys={[...s.keys]} />
         ))}
       </div>
     </section>

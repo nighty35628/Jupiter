@@ -18,12 +18,15 @@ describe("desktop one-shot plan mode", () => {
     expect(parseOneShotPlanCommand("/plan cancel")).toEqual({ type: "cancel" });
   });
 
-  it("builds a model-only prompt that requires submit_plan before execution", () => {
+  it("builds a plan-only prompt that writes a spec and waits for the next turn", () => {
     const prompt = buildOneShotPlanPrompt("实现设置入口");
 
-    expect(prompt).toContain("One-shot Plan mode");
-    expect(prompt).toContain("submit_plan");
+    expect(prompt).toContain("Plan-only mode");
+    expect(prompt).toContain("Do not call `submit_plan`");
+    expect(prompt).toContain("SPEC");
     expect(prompt).toContain("Do not modify files");
+    expect(prompt).toContain("Wait for the user's next message");
+    expect(prompt).not.toContain("After the user approves the plan, continue executing");
     expect(prompt).toContain("实现设置入口");
   });
 });

@@ -44,9 +44,10 @@ export function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return value === "low" || value === "medium" || value === "high" || value === "max";
 }
 
-export type EngineeringLifecycleMode = "off" | "strict";
+export type EngineeringLifecycleMode = "off" | "on_demand" | "strict";
 export type HistoryScrollMode = "auto" | "native" | "app";
 export type DiffDisplay = "summary" | "full" | "none";
+export type LibraryRetrievalMode = "off" | "on_demand" | "always";
 
 export type EmbeddingProvider = "ollama" | "openai-compat";
 
@@ -300,6 +301,8 @@ export interface JupiterConfig {
   };
   /** Per-skill model override for `runAs: subagent` skills, keyed by skill name. Empty / missing entry → spawn site's default. */
   subagentModels?: Record<string, "flash" | "pro">;
+  /** Workspace library retrieval policy. Default on_demand lets the model call library tools when relevant. */
+  libraryRetrievalMode?: LibraryRetrievalMode;
   /** Enable the `java_source` tool for finding and decompiling Java class source. Default off. */
   javaSource?: boolean;
   /** Per-model context-window override (tokens). Keys are model ids; values are prompt-side token caps. */
@@ -317,7 +320,7 @@ export interface JupiterConfig {
   proxy?: ProxyConfig;
   rateLimit?: RateLimitConfig;
   toolRateLimit?: ToolRateLimitConfig;
-  /** Host-enforced engineering lifecycle. Defaults to off so opt-outs pay zero prefix cost. */
+  /** Engineering workflow guidance. `strict` also enables host-enforced high-risk lifecycle rails. */
   engineeringLifecycle?: {
     mode?: EngineeringLifecycleMode;
   };
@@ -1343,13 +1346,13 @@ export function saveEditMode(mode: EditMode, path: string = defaultConfigPath())
   writeConfig(cfg, path);
 }
 
-/** Unknown values fall back to "off" so bad config keeps the zero-cost default. */
+/** Unknown values fall back to "on_demand" so engineering workflows are available by default. */
 export function loadEngineeringLifecycleMode(
   path: string = defaultConfigPath(),
 ): EngineeringLifecycleMode {
   const v = readConfig(path).engineeringLifecycle?.mode;
-  if (v === "off" || v === "strict") return v;
-  return "off";
+  if (v === "off" || v === "on_demand" || v === "strict") return v;
+  return "on_demand";
 }
 
 /** Bytes above which `read_file` flips to outline mode. Returns `undefined` so callers can apply the registered default; non-positive / non-numeric config values fall through to the default too. */
@@ -1463,6 +1466,20 @@ export function saveDesktopCloseBehavior(
 ): void {
   const cfg = readConfig(path);
   cfg.desktopCloseBehavior = behavior;
+  writeConfig(cfg, path);
+}
+
+export function loadLibraryRetrievalMode(path: string = defaultConfigPath()): LibraryRetrievalMode {
+  const raw = readConfig(path).libraryRetrievalMode;
+  return raw === "off" || raw === "always" || raw === "on_demand" ? raw : "on_demand";
+}
+
+export function saveLibraryRetrievalMode(
+  mode: LibraryRetrievalMode,
+  path: string = defaultConfigPath(),
+): void {
+  const cfg = readConfig(path);
+  cfg.libraryRetrievalMode = mode;
   writeConfig(cfg, path);
 }
 

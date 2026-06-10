@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { t, useLang } from "./i18n";
+import { matchesDesktopShortcut, shortcutKeys } from "./shortcuts";
 import { rankItems } from "./ui/fuzzy";
 import type { ShortcutKey } from "./ui/shortcut";
 
@@ -35,8 +36,7 @@ export function useCommandPalette(active: boolean = true) {
     // Skip in background tabs — each TabRuntime calls this hook, so without the gate Cmd+K toggles every tab's palette at once.
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && (e.key === "k" || e.key === "K")) {
+      if (matchesDesktopShortcut(e, "command-palette")) {
         e.preventDefault();
         setOpen((v) => !v);
       } else if (e.key === "Escape") {
@@ -75,7 +75,7 @@ export function buildCommands(handlers: CommandHandlers): Command[] {
       label: t("palette.newChat"),
       hint: t("palette.newChatHint"),
       icon: <FilePlus size={13} />,
-      shortcut: ["mod", "N"],
+      shortcut: shortcutKeys("new-chat"),
       run: handlers.newChat,
     },
     {
@@ -84,7 +84,7 @@ export function buildCommands(handlers: CommandHandlers): Command[] {
       label: t("palette.newTab"),
       hint: t("palette.newTabHint"),
       icon: <Plus size={13} />,
-      shortcut: ["mod", "T"],
+      shortcut: shortcutKeys("new-tab"),
       run: handlers.newTab,
     },
   ];
@@ -95,7 +95,7 @@ export function buildCommands(handlers: CommandHandlers): Command[] {
       label: t("palette.closeTab"),
       hint: t("palette.closeTabHint"),
       icon: <SquareX size={13} />,
-      shortcut: ["mod", "W"],
+      shortcut: shortcutKeys("close-tab"),
       run: handlers.closeTab,
     });
   }
@@ -104,7 +104,7 @@ export function buildCommands(handlers: CommandHandlers): Command[] {
     group: "nav",
     label: t("palette.focusComposer"),
     icon: <FocusIcon size={13} />,
-    shortcut: ["mod", "L"],
+    shortcut: shortcutKeys("focus-composer"),
     run: handlers.focusComposer,
   });
   if (handlers.busy) {
@@ -114,7 +114,7 @@ export function buildCommands(handlers: CommandHandlers): Command[] {
       label: t("palette.abort"),
       hint: t("palette.abortHint"),
       icon: <StopCircle size={13} />,
-      shortcut: ["esc"],
+      shortcut: shortcutKeys("abort-streaming"),
       run: handlers.abort,
     });
   }

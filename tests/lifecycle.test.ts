@@ -77,6 +77,30 @@ describe("EngineeringLifecycleRuntime", () => {
     expect(lifecycle.guardToolCall("delete_file", { path: "src/old.ts" })).toBeNull();
   });
 
+  it("treats on-demand mode as prompt guidance only, not host-enforced lifecycle state", () => {
+    const lifecycle = new EngineeringLifecycleRuntime({ mode: "on_demand" });
+
+    lifecycle.observeUserPrompt("Refactor the shell and filesystem tool gates");
+    lifecycle.recordPlanApproved([
+      { id: "step-1", title: "Refactor", action: "Change code.", risk: "med" },
+    ]);
+    lifecycle.recordToolResult(
+      "write_file",
+      { path: "src/format.ts" },
+      "▸ edit blocks: 1/1 applied\n  ✓ created     src/format.ts",
+    );
+    lifecycle.recordStepCompleted("step-1");
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      mode: "on_demand",
+      state: "idle",
+      planSteps: [],
+      completedStepIds: [],
+      mutatedSinceLastStep: false,
+    });
+    expect(lifecycle.guardToolCall("delete_file", { path: "src/old.ts" })).toBeNull();
+  });
+
   it("allows high-risk mutations after plan approval and then requires step evidence", () => {
     const lifecycle = new EngineeringLifecycleRuntime({ mode: "strict" });
     lifecycle.observeUserPrompt("Refactor the shell and filesystem tool gates");

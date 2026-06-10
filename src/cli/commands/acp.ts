@@ -29,6 +29,8 @@ import {
   loadApiKey,
   loadEditMode,
   loadEndpoint,
+  loadEngineeringLifecycleMode,
+  loadLibraryRetrievalMode,
   loadMaxIterPerTurn,
   loadModel,
   loadReasoningEffort,
@@ -173,6 +175,8 @@ async function buildSession(opts: {
   );
   const system = codeSystemPrompt(opts.rootDir, {
     hasSemanticSearch: toolset.semantic.enabled,
+    engineeringLifecycleMode: loadEngineeringLifecycleMode(),
+    libraryRetrievalMode: loadLibraryRetrievalMode(),
     modelId: model,
     systemAppend: opts.systemAppend,
   });

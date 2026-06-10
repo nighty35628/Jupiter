@@ -572,6 +572,7 @@ export function Sidebar({
     const pinnedSession = Boolean(s.pinnedAt);
     const busySession = busySessionSet.has(s.name);
     const unreadSession = Boolean(s.unread) && !active;
+    const showSessionState = busySession || unreadSession;
     const mtime = Date.parse(s.mtime);
     const updated = Number.isFinite(mtime) ? relative(now - mtime) : s.mtime;
     const editing = editingName === s.name;
@@ -655,11 +656,13 @@ export function Sidebar({
           ) : (
             <span className="title">{prettyName(s)}</span>
           )}
-          <span className="meta">
-            <span className="time">{updated}</span>
-          </span>
+          {showSessionState ? null : (
+            <span className="meta">
+              <span className="time">{updated}</span>
+            </span>
+          )}
         </div>
-        {editing || (!busySession && !unreadSession) ? null : (
+        {editing || !showSessionState ? null : (
           <span className="session-state" aria-hidden="true">
             {busySession ? (
               <span className="session-busy-spinner" />

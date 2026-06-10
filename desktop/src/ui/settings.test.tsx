@@ -68,6 +68,9 @@ function renderSettings({
   onDeleteArchivedSession = vi.fn(),
   onClearArchivedSessions = vi.fn(),
   initialPage,
+  storageScan = null,
+  onScanStorage = vi.fn(),
+  onCleanStorage = vi.fn(),
 }: {
   settings?: Partial<SettingsType>;
   onOpenAbout?: () => void;
@@ -83,7 +86,10 @@ function renderSettings({
   onRestoreArchivedSession?: (name: string) => void;
   onDeleteArchivedSession?: (name: string) => void;
   onClearArchivedSessions?: () => void;
-  initialPage?: "memory" | "archives";
+  initialPage?: "memory" | "archives" | "shortcuts" | "storage";
+  storageScan?: any;
+  onScanStorage?: () => void;
+  onCleanStorage?: (itemIds: string[]) => void;
 } = {}) {
   render(
     <SettingsModal
@@ -108,6 +114,7 @@ function renderSettings({
       memory={memory}
       memoryDetail={null}
       archivedSessions={archivedSessions}
+      storageScan={storageScan}
       qq={null}
       feishu={null}
       initialPage={initialPage}
@@ -143,6 +150,8 @@ function renderSettings({
       onRestoreArchivedSession={onRestoreArchivedSession}
       onDeleteArchivedSession={onDeleteArchivedSession}
       onClearArchivedSessions={onClearArchivedSessions}
+      onScanStorage={onScanStorage}
+      onCleanStorage={onCleanStorage}
       onOpenAbout={onOpenAbout}
     />,
   );
@@ -181,6 +190,76 @@ describe("SettingsModal", () => {
     expect(onClearArchivedSessions).toHaveBeenCalledTimes(1);
   });
 
+  it("renders expanded desktop shortcut declarations from the shortcuts page", () => {
+    renderSettings({ initialPage: "shortcuts" });
+
+    expect(screen.getByText("Switch to tab 1")).toBeTruthy();
+    expect(screen.getByText("Previous tab")).toBeTruthy();
+    expect(screen.getByText("Stop current run")).toBeTruthy();
+    expect(screen.getByText("Open Files panel")).toBeTruthy();
+    expect(screen.getByText("Open Terminal panel")).toBeTruthy();
+    expect(screen.getByText("Toggle bottom bar")).toBeTruthy();
+    expect(screen.getByText("Keyboard shortcuts")).toBeTruthy();
+  });
+
+  it("scans and cleans selected Jupiter storage items from the storage settings page", () => {
+    const onScanStorage = vi.fn();
+    const onCleanStorage = vi.fn();
+    renderSettings({
+      initialPage: "storage",
+      onScanStorage,
+      onCleanStorage,
+      storageScan: {
+        type: "$storage_scan",
+        scannedAt: 1_000,
+        totalBytes: 4_500,
+        safeBytes: 1_000,
+        optionalBytes: 2_000,
+        reviewBytes: 1_500,
+        items: [
+          {
+            id: "safe:jupiter-cache",
+            tier: "safe",
+            title: "Jupiter cache",
+            description: "Temporary files that can be regenerated.",
+            path: "/tmp/.jupiter/cache",
+            sizeBytes: 1_000,
+            cleanup: "delete",
+          },
+          {
+            id: "optional:archived-sessions",
+            tier: "optional",
+            title: "Archived conversations",
+            description: "Archived transcripts.",
+            path: "/tmp/.jupiter/sessions/archive",
+            sizeBytes: 2_000,
+            cleanup: "delete",
+          },
+          {
+            id: "review:workspace-meta:abc",
+            tier: "review",
+            title: "Workspace metadata",
+            description: "Open and review manually.",
+            path: "/tmp/work/.jupiter",
+            sizeBytes: 1_500,
+            cleanup: "none",
+          },
+        ],
+      },
+    });
+
+    expect(onScanStorage).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("heading", { name: "Storage" })).toBeTruthy();
+    expect(screen.getByText("Jupiter cache")).toBeTruthy();
+    expect(screen.getByText("Archived conversations")).toBeTruthy();
+    expect(screen.getByText("Workspace metadata")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Jupiter cache/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Clean selected/ }));
+
+    expect(onCleanStorage).toHaveBeenCalledWith(["safe:jupiter-cache"]);
+  });
+
   it("shows the settings body scrollbar only while the user is scrolling", () => {
     vi.useFakeTimers();
     renderSettings();
@@ -217,6 +296,24 @@ describe("SettingsModal", () => {
     );
 
     expect(onSave).toHaveBeenCalledWith({ processCardsDefaultOpen: true });
+  });
+
+  it("saves the workspace library retrieval mode and warns about always-on token use", () => {
+    const onSave = vi.fn();
+    renderSettings({ onSave });
+
+    const group = screen.getByRole("group", {
+      name: /Workspace library retrieval|资料库检索/,
+    });
+    expect(
+      within(group).getByRole("button", { name: /on demand|按需/ }).getAttribute("data-on"),
+    ).toBe("true");
+
+    fireEvent.click(within(group).getByRole("button", { name: /always|始终/ }));
+
+    expect(onSave).toHaveBeenCalledWith({ libraryRetrievalMode: "always" });
+    expect(screen.getByText(/Always mode can increase token usage|始终模式会增加 token 使用量/))
+      .toBeTruthy();
   });
 
   it("signs out of the current API key from the integrations page", () => {

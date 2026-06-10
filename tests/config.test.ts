@@ -23,6 +23,7 @@ import {
   loadFilesystemOutlineThresholdBytes,
   loadIndexConfig,
   loadIndexUserConfig,
+  loadLibraryRetrievalMode,
   loadModel,
   loadMouseWheelRows,
   loadPricingOverride,
@@ -50,6 +51,7 @@ import {
   saveDesktopOpenTabs,
   saveEditMode,
   saveIndexConfig,
+  saveLibraryRetrievalMode,
   savePromptHistory,
   saveReasoningEffort,
   saveSemanticEmbeddingConfig,
@@ -630,20 +632,22 @@ describe("config", () => {
     expect(loadEditMode(path)).toBe("review");
   });
 
-  it("loadEngineeringLifecycleMode defaults to 'off' when unset", () => {
-    expect(loadEngineeringLifecycleMode(path)).toBe("off");
+  it("loadEngineeringLifecycleMode defaults to 'on_demand' when unset", () => {
+    expect(loadEngineeringLifecycleMode(path)).toBe("on_demand");
   });
 
-  it("loadEngineeringLifecycleMode accepts off and strict", () => {
+  it("loadEngineeringLifecycleMode accepts off, on_demand, and strict", () => {
     writeConfig({ engineeringLifecycle: { mode: "off" } }, path);
     expect(loadEngineeringLifecycleMode(path)).toBe("off");
+    writeConfig({ engineeringLifecycle: { mode: "on_demand" } }, path);
+    expect(loadEngineeringLifecycleMode(path)).toBe("on_demand");
     writeConfig({ engineeringLifecycle: { mode: "strict" } }, path);
     expect(loadEngineeringLifecycleMode(path)).toBe("strict");
   });
 
-  it("loadEngineeringLifecycleMode coerces unknown values back to 'off'", () => {
+  it("loadEngineeringLifecycleMode coerces unknown values back to 'on_demand'", () => {
     writeConfig({ engineeringLifecycle: { mode: "garbage" as any } }, path);
-    expect(loadEngineeringLifecycleMode(path)).toBe("off");
+    expect(loadEngineeringLifecycleMode(path)).toBe("on_demand");
   });
 
   it("loadFilesystemOutlineThresholdBytes returns undefined when unset (caller applies default)", () => {
@@ -914,6 +918,23 @@ describe("config", () => {
       // so an explicit `/search-engine mojeek` later still rejects loudly.
       writeConfig({ webSearchEngine: "mojeek" as unknown as "bing" }, path);
       expect(webSearchEngine(path)).toBe("bing");
+    });
+  });
+
+  describe("libraryRetrievalMode", () => {
+    it("defaults to on_demand and preserves known modes", () => {
+      expect(loadLibraryRetrievalMode(path)).toBe("on_demand");
+      for (const mode of ["off", "on_demand", "always"] as const) {
+        writeConfig({ libraryRetrievalMode: mode }, path);
+        expect(loadLibraryRetrievalMode(path)).toBe(mode);
+      }
+    });
+
+    it("saves the selected mode and ignores unknown values on read", () => {
+      saveLibraryRetrievalMode("always", path);
+      expect(readConfig(path).libraryRetrievalMode).toBe("always");
+      writeConfig({ libraryRetrievalMode: "eager" as never }, path);
+      expect(loadLibraryRetrievalMode(path)).toBe("on_demand");
     });
   });
 

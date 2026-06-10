@@ -12,6 +12,7 @@ vi.mock("./cards", () => ({
 }));
 
 import {
+  AssistantMsg,
   ChoiceApprovalCard,
   ConfirmApprovalCard,
   PathAccessApprovalCard,
@@ -77,6 +78,40 @@ function makePathPrompt(
 }
 
 afterEach(cleanup);
+
+describe("AssistantMsg library references", () => {
+  it("shows sources actually read through library_read in this turn", () => {
+    render(
+      <AssistantMsg
+        segments={[
+          {
+            kind: "tool",
+            callId: "call-1",
+            name: "library_read",
+            args: JSON.stringify({ sourceId: "src-1", chunkId: "src-1:0" }),
+            startedAt: Date.now(),
+            result: JSON.stringify({
+              sourceId: "src-1",
+              title: "Research Brief",
+              url: "https://example.test/brief",
+              text: "Grounding evidence.",
+            }),
+            ok: true,
+          },
+          { kind: "text", text: "Here is the grounded answer." },
+        ]}
+        pending={false}
+        onApproveConfirm={vi.fn()}
+        onRejectConfirm={vi.fn()}
+        onAlwaysAllowConfirm={vi.fn()}
+        pendingConfirms={[]}
+      />,
+    );
+
+    expect(screen.getByText("Used sources")).toBeTruthy();
+    expect(screen.getByText("Research Brief")).toBeTruthy();
+  });
+});
 
 describe("ChoiceApprovalCard", () => {
   it("renders choice options and resolves the picked option", () => {

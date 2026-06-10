@@ -160,6 +160,24 @@ describe("codeSystemPrompt", () => {
     });
   });
 
+  describe("workspace library retrieval routing", () => {
+    it("defaults to on-demand library retrieval guidance", () => {
+      const out = codeSystemPrompt(root);
+      expect(out).toMatch(/workspace library/i);
+      expect(out).toMatch(/when relevant/i);
+    });
+
+    it("forces a library search in always mode and disables tools in off mode", () => {
+      const always = codeSystemPrompt(root, { libraryRetrievalMode: "always" });
+      expect(always).toMatch(/always search the workspace library/i);
+      expect(always).toMatch(/library_search/);
+
+      const off = codeSystemPrompt(root, { libraryRetrievalMode: "off" });
+      expect(off).toMatch(/disabled by user setting/i);
+      expect(off).toMatch(/do not call `library_search`/i);
+    });
+  });
+
   describe("modelId interpolation (#582)", () => {
     it("defaults to flash when modelId is omitted (back-compat)", () => {
       const out = codeSystemPrompt(root);
@@ -177,19 +195,40 @@ describe("codeSystemPrompt", () => {
   });
 
   describe("system append", () => {
-    it("keeps engineering lifecycle mode cache-neutral", () => {
-      const bare = codeSystemPrompt(root);
-      const off = codeSystemPrompt(root, { engineeringLifecycleMode: "off" });
-      const strict = codeSystemPrompt(root, { engineeringLifecycleMode: "strict" });
+    it("adds on-demand engineering workflow guidance by default", () => {
+      const out = codeSystemPrompt(root);
 
-      expect(bare).toBe(off);
-      expect(strict).toBe(off);
-      expect(strict).not.toMatch(/# Engineering lifecycle contract/);
+      expect(out).toMatch(/# Engineering workflow policy/);
+      expect(out).toMatch(/on-demand/i);
+      expect(out).toMatch(/test-driven-development/);
+      expect(out).toMatch(/systematic-debugging/);
+      expect(out).toMatch(/verification-before-completion/);
+      expect(out).toMatch(/Do not apply these workflows to ordinary Q&A/i);
     });
 
-    it("keeps immutable prefix fingerprints identical across lifecycle modes", () => {
+    it("omits engineering workflow guidance when lifecycle mode is off", () => {
+      const off = codeSystemPrompt(root, { engineeringLifecycleMode: "off" });
+
+      expect(off).not.toMatch(/# Engineering workflow policy/);
+      expect(off).not.toMatch(/Do not apply these workflows to ordinary Q&A/i);
+    });
+
+    it("uses stricter wording in strict engineering lifecycle mode", () => {
+      const strict = codeSystemPrompt(root, { engineeringLifecycleMode: "strict" });
+
+      expect(strict).toMatch(/# Engineering workflow policy/);
+      expect(strict).toMatch(/strict/i);
+      expect(strict).toMatch(/MUST call `run_skill`/);
+      expect(strict).toMatch(/submit_plan/);
+    });
+
+    it("changes immutable prefix fingerprints only when workflow guidance is enabled", () => {
       const off = new ImmutablePrefix({
         system: codeSystemPrompt(root, { engineeringLifecycleMode: "off" }),
+        toolSpecs: [],
+      });
+      const onDemand = new ImmutablePrefix({
+        system: codeSystemPrompt(root, { engineeringLifecycleMode: "on_demand" }),
         toolSpecs: [],
       });
       const strict = new ImmutablePrefix({
@@ -197,7 +236,9 @@ describe("codeSystemPrompt", () => {
         toolSpecs: [],
       });
 
-      expect(strict.fingerprint).toBe(off.fingerprint);
+      expect(onDemand.fingerprint).not.toBe(off.fingerprint);
+      expect(strict.fingerprint).not.toBe(off.fingerprint);
+      expect(strict.fingerprint).not.toBe(onDemand.fingerprint);
     });
 
     it("does not add a User System Append section when neither option is provided", () => {
