@@ -123,6 +123,10 @@ export interface SlashContext {
   switchCwd?: (newPath: string) => { ok: boolean; info: string; clear?: boolean };
   /** Root for workflow run storage. Tests inject this; production falls back to codeRoot or process.cwd(). */
   workflowRoot?: string;
+  /** Test/integration override for `/workflow start`; production uses the built-in executor. */
+  workflowExecuteAgent?: (
+    input: import("../../../workflows/runner.js").WorkflowAgentInput,
+  ) => Promise<import("../../../workflows/runner.js").WorkflowAgentResult>;
   /** Diff config.mcp[] vs live bridges → add/close clients accordingly. Wired from chat.tsx mcpRuntime. */
   reloadMcp?: () => Promise<{
     added: string[];

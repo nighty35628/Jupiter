@@ -1,8 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { BUILT_IN_WORKFLOWS, getWorkflowTemplate } from "../../../../workflows/catalog.js";
+import { createResearchWorkflowAgentExecutor } from "../../../../workflows/research-executor.js";
+import { getResearchWorkflowPlan } from "../../../../workflows/research.js";
+import { runWorkflow } from "../../../../workflows/runner.js";
+import { createWorkflowStore } from "../../../../workflows/store.js";
 import type { WorkflowRun } from "../../../../workflows/types.js";
 import type { SlashHandler } from "../dispatch.js";
+import type { SlashContext } from "../types.js";
 
 const workflows: SlashHandler = () => {
   const lines = ["Built-in workflows"];
@@ -16,7 +21,7 @@ const workflow: SlashHandler = (args, _loop, ctx) => {
   const sub = (args[0] ?? "status").toLowerCase();
   switch (sub) {
     case "start":
-      return startWorkflow(args.slice(1), ctx.workflowRoot ?? ctx.codeRoot ?? process.cwd());
+      return startWorkflow(args.slice(1), ctx, ctx.workflowRoot ?? ctx.codeRoot ?? process.cwd());
     case "status":
       return workflowStatus(ctx.workflowRoot ?? ctx.codeRoot ?? process.cwd());
     case "open":
@@ -28,41 +33,43 @@ const workflow: SlashHandler = (args, _loop, ctx) => {
   }
 };
 
-function startWorkflow(args: readonly string[], root: string) {
+function startWorkflow(args: readonly string[], ctx: SlashContext, root: string) {
   const workflowId = args[0] ?? "deep-fact-check";
   const template = getWorkflowTemplate(workflowId);
   if (!template) return { info: `unknown workflow: ${workflowId}` };
-  const now = new Date().toISOString();
-  const run: WorkflowRun = {
-    id: `wf-${Date.now().toString(36)}`,
-    workflowId: template.id,
-    workflowVersion: template.version,
-    title: template.title,
-    status: "completed",
-    phase: "completed",
-    input: { prompt: args.slice(1).join(" ") },
-    startedAt: now,
-    completedAt: now,
-    tokenUsage: { prompt: 0, completion: 0, total: 0 },
-    agents: template.phases.map((phase) => ({
-      id: `${phase.id}`,
-      label: phase.title,
-      status: "completed",
-      phase: phase.id,
-      summary: phase.detail,
-      tokenUsage: { prompt: 0, completion: 0, total: 0 },
-      startedAt: now,
-      completedAt: now,
-    })),
-    logs: [{ ts: now, message: "created local workflow run" }],
-    sources: [],
-    result: { summary: `${template.title} queued for real execution in a future runner.` },
-  };
-  writeWorkflowRuns(root, [
-    run,
-    ...readWorkflowRuns(root).filter((existing) => existing.id !== run.id),
-  ]);
-  return { info: `started ${run.id}: ${template.title}` };
+  const runId = `wf-${Date.now().toString(36)}`;
+  const userPrompt = args.slice(1).join(" ").trim();
+  const plan = getResearchWorkflowPlan(template.id);
+  const executeAgent =
+    ctx.workflowExecuteAgent ??
+    (plan
+      ? createResearchWorkflowAgentExecutor({
+          plan,
+          userPrompt,
+          workspaceDir: ctx.codeRoot ?? root,
+          configPath: ctx.configPath,
+        })
+      : async (input) => ({
+          summary: `${input.phase} checked`,
+          tokenUsage: { prompt: 0, completion: 0, total: 0 },
+          sources: [],
+        }));
+
+  void runWorkflow({
+    runId,
+    template,
+    input: { prompt: userPrompt },
+    store: createWorkflowStore(root),
+    executeAgent,
+  })
+    .then((run) => {
+      ctx.postInfo?.(`workflow ${run.status}: ${run.id} ${run.title}`);
+    })
+    .catch((error: Error) => {
+      ctx.postInfo?.(`workflow failed: ${runId} ${error.message}`);
+    });
+
+  return { info: `started ${runId}: ${template.title}` };
 }
 
 function workflowStatus(root: string) {

@@ -31,12 +31,13 @@ export interface RunWorkflowOptions {
   readonly emit?: (event: WorkflowEvent) => void;
   readonly signal?: AbortSignal;
   readonly now?: () => string;
+  readonly runId?: string;
 }
 
 export async function runWorkflow(options: RunWorkflowOptions): Promise<WorkflowRun> {
   const now = options.now ?? (() => new Date().toISOString());
   let run: WorkflowRun = {
-    id: `wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    id: options.runId ?? `wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     workflowId: options.template.id,
     workflowVersion: options.template.version,
     title: options.template.title,

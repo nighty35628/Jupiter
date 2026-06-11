@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleSlash } from "../src/cli/ui/slash/dispatch.js";
 import { CacheFirstLoop, DeepSeekClient, ImmutablePrefix } from "../src/index.js";
+import type { WorkflowAgentInput } from "../src/workflows/runner.js";
 import type { WorkflowRun } from "../src/workflows/types.js";
 
 let root: string;
@@ -94,4 +95,46 @@ describe("/workflow slash commands", () => {
       handleSlash("workflow", ["open", "wf-1"], makeLoop(), { workflowRoot: root }).info,
     ).toContain("canceled");
   });
+
+  it("starts a research workflow in the background", async () => {
+    const posted: string[] = [];
+    const result = handleSlash(
+      "workflow",
+      ["start", "open-source-project-selection", "compare", "browser", "automation"],
+      makeLoop(),
+      {
+        workflowRoot: root,
+        postInfo: (text) => posted.push(text),
+        workflowExecuteAgent: async (input: WorkflowAgentInput) => ({
+          summary: `${input.phase} checked`,
+          tokenUsage: { prompt: 3, completion: 2, total: 5 },
+          sources: [{ title: input.phase, url: `https://example.com/${input.phase}` }],
+        }),
+      },
+    );
+
+    expect(result.info).toContain("started");
+    const id = result.info?.match(/wf-[a-z0-9-]+/)?.[0];
+    expect(id).toBeTruthy();
+
+    const run = await waitForRun(id!);
+    expect(run.status).toBe("completed");
+    expect(run.workflowId).toBe("open-source-project-selection");
+    expect(run.sources.length).toBeGreaterThan(0);
+    expect(posted.at(-1)).toContain("completed");
+  });
 });
+
+async function waitForRun(id: string): Promise<WorkflowRun> {
+  const file = join(root, ".jupiter", "workflows", "runs.json");
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    if (existsSync(file)) {
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as { runs?: WorkflowRun[] };
+      const run = parsed.runs?.find((entry) => entry.id === id);
+      if (run?.status === "completed" || run?.status === "failed") return run;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`workflow run did not finish: ${id}`);
+}

@@ -1,3 +1,4 @@
+import { getResearchWorkflowPlan } from "./research.js";
 import type {
   JsonSchema,
   WorkflowCategory,
@@ -67,13 +68,25 @@ function workflow(
     inputSchema: TEXT_INPUT_SCHEMA,
     outputSchema: REPORT_OUTPUT_SCHEMA,
     permissions,
-    phases: [
-      { id: "scope", title: "Scope", detail: "Clarify inputs and constraints." },
-      { id: "parallel-checks", title: "Parallel checks", detail: "Run focused checks." },
-      { id: "synthesis", title: "Synthesis", detail: "Merge findings into a final report." },
-    ],
+    phases: phasesFor(id),
     suggestedTriggers: triggerPhrases.map((phrase) => ({ phrase, confidence: 0.75 })),
   };
+}
+
+function phasesFor(id: string): WorkflowTemplate["phases"] {
+  const researchPlan = getResearchWorkflowPlan(id);
+  if (researchPlan) {
+    return researchPlan.checks.map((check) => ({
+      id: check.id,
+      title: check.title,
+      detail: check.prompt,
+    }));
+  }
+  return [
+    { id: "scope", title: "Scope", detail: "Clarify inputs and constraints." },
+    { id: "parallel-checks", title: "Parallel checks", detail: "Run focused checks." },
+    { id: "synthesis", title: "Synthesis", detail: "Merge findings into a final report." },
+  ];
 }
 
 export const BUILT_IN_WORKFLOWS: readonly WorkflowTemplate[] = [
