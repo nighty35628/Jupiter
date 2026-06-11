@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 const linuxInstaller = readFileSync("install-linux.sh", "utf8");
 const readme = readFileSync("README.md", "utf8");
-const desktopReleaseNotesPath = ".github/release-notes/desktop-v0.99.9.md";
+const desktopReleaseNotesPath = ".github/release-notes/desktop-v1.0.0.md";
 
 describe("desktop release packaging", () => {
   it("publishes platform installers for the Jupiter desktop release", () => {
@@ -16,6 +16,7 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain('"label":"windows-arm64"');
     expect(releaseWorkflow).toContain("ubuntu-22.04-arm");
     expect(releaseWorkflow).toContain("aarch64-unknown-linux-gnu");
+    expect(releaseWorkflow).toContain('"args":"--bundles deb"');
     expect(releaseWorkflow).toContain("windows-11-arm");
     expect(releaseWorkflow).toContain("aarch64-pc-windows-msvc");
     expect(releaseWorkflow).toContain('"bundles":"--bundles deb"');
@@ -71,8 +72,7 @@ describe("desktop release packaging", () => {
   });
 
   it("documents release triggering against the Jupiter remote", () => {
-    expect(releaseWorkflow).toContain("git push jupiter desktop-vX.Y.Z");
-    expect(releaseWorkflow).not.toContain("git push origin desktop-vX.Y.Z");
+    expect(releaseWorkflow).toContain("git push origin desktop-vX.Y.Z");
   });
 
   it("requires bilingual release notes before publishing a desktop release", () => {

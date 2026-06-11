@@ -3,7 +3,7 @@ name: Release desktop
 # Tag namespace: `desktop-v<semver>` triggers desktop Tauri bundles.
 # Plain `v<semver>` tags are reserved for the npm CLI release (see
 # publish-npm.yml) — they intentionally do NOT trigger this workflow.
-# Bump the desktop with: `git tag desktop-vX.Y.Z && git push jupiter desktop-vX.Y.Z`.
+# Bump the desktop with: `git tag desktop-vX.Y.Z && git push origin desktop-vX.Y.Z`.
 on:
   push:
     tags: ["desktop-v*"]
@@ -37,12 +37,12 @@ jobs:
         run: |
           targets="$(cat <<'JSON'
           [
-            {"os":"ubuntu-22.04","label":"linux-x64","rust":"x86_64-unknown-linux-gnu","tauri":"x86_64-unknown-linux-gnu","bundles":"--bundles deb"},
-            {"os":"ubuntu-22.04-arm","label":"linux-arm64","rust":"aarch64-unknown-linux-gnu","tauri":"aarch64-unknown-linux-gnu","bundles":"--bundles deb"},
-            {"os":"macos-15-intel","label":"macos-x64","rust":"x86_64-apple-darwin","tauri":"x86_64-apple-darwin","bundles":"--bundles dmg"},
-            {"os":"macos-14","label":"macos-arm64","rust":"aarch64-apple-darwin","tauri":"aarch64-apple-darwin","bundles":"--bundles dmg"},
-            {"os":"windows-latest","label":"windows-x64","rust":"x86_64-pc-windows-msvc","tauri":"x86_64-pc-windows-msvc","bundles":"--bundles nsis"},
-            {"os":"windows-11-arm","label":"windows-arm64","rust":"aarch64-pc-windows-msvc","tauri":"aarch64-pc-windows-msvc","bundles":"--bundles nsis"}
+            {"os":"ubuntu-22.04","label":"linux-x64","rust":"x86_64-unknown-linux-gnu","tauri":"x86_64-unknown-linux-gnu","verifyTarget":"x86_64-unknown-linux-gnu","bundles":"--bundles deb","args":"--target x86_64-unknown-linux-gnu --bundles deb"},
+            {"os":"ubuntu-22.04-arm","label":"linux-arm64","rust":"aarch64-unknown-linux-gnu","tauri":"","verifyTarget":"","bundles":"--bundles deb","args":"--bundles deb"},
+            {"os":"macos-15-intel","label":"macos-x64","rust":"x86_64-apple-darwin","tauri":"x86_64-apple-darwin","verifyTarget":"x86_64-apple-darwin","bundles":"--bundles dmg","args":"--target x86_64-apple-darwin --bundles dmg"},
+            {"os":"macos-14","label":"macos-arm64","rust":"aarch64-apple-darwin","tauri":"aarch64-apple-darwin","verifyTarget":"aarch64-apple-darwin","bundles":"--bundles dmg","args":"--target aarch64-apple-darwin --bundles dmg"},
+            {"os":"windows-latest","label":"windows-x64","rust":"x86_64-pc-windows-msvc","tauri":"x86_64-pc-windows-msvc","verifyTarget":"x86_64-pc-windows-msvc","bundles":"--bundles nsis","args":"--target x86_64-pc-windows-msvc --bundles nsis"},
+            {"os":"windows-11-arm","label":"windows-arm64","rust":"aarch64-pc-windows-msvc","tauri":"aarch64-pc-windows-msvc","verifyTarget":"aarch64-pc-windows-msvc","bundles":"--bundles nsis","args":"--target aarch64-pc-windows-msvc --bundles nsis"}
           ]
           JSON
           )"
@@ -209,7 +209,7 @@ jobs:
           assetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
           releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}
+          args: ${{ matrix.target.args }}
 
       - name: Build Tauri bundle (macOS, signed + notarized)
         if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_CERT == 'true'
@@ -231,19 +231,25 @@ jobs:
           assetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
           releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target.tauri }} ${{ matrix.target.bundles }}
+          args: ${{ matrix.target.args }}
 
       - name: Verify requested installer exists
         working-directory: desktop
         shell: bash
         env:
           LABEL: ${{ matrix.target.label }}
-          TARGET: ${{ matrix.target.tauri }}
+          TARGET: ${{ matrix.target.verifyTarget }}
         run: |
+          if [ -n "$TARGET" ]; then
+            release_dir="src-tauri/target/$TARGET/release"
+          else
+            release_dir="src-tauri/target/release"
+          fi
+
           case "$LABEL" in
-            linux-*) pattern="src-tauri/target/$TARGET/release/bundle/deb/*.deb" ;;
-            macos-*) pattern="src-tauri/target/$TARGET/release/bundle/dmg/*.dmg" ;;
-            windows-*) pattern="src-tauri/target/$TARGET/release/bundle/nsis/*.exe" ;;
+            linux-*) pattern="$release_dir/bundle/deb/*.deb" ;;
+            macos-*) pattern="$release_dir/bundle/dmg/*.dmg" ;;
+            windows-*) pattern="$release_dir/bundle/nsis/*.exe" ;;
             *) echo "unknown label: $LABEL" >&2; exit 1 ;;
           esac
           shopt -s nullglob
