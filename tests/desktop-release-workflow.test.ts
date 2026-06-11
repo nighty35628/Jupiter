@@ -47,6 +47,11 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain("src-tauri/binaries/node.exe");
   });
 
+  it("skips Rust target caching for Linux ARM64 to avoid glibc-incompatible cached build scripts", () => {
+    expect(releaseWorkflow).toContain("if: matrix.target.label != 'linux-arm64'");
+    expect(releaseWorkflow).toContain("uses: Swatinem/rust-cache@v2");
+  });
+
   it("skips root lifecycle scripts for ARM64 targets to avoid native tree-sitter binding builds", () => {
     expect(releaseWorkflow).toContain("shell: bash");
     expect(releaseWorkflow).toContain(

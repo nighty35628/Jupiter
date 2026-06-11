@@ -102,6 +102,7 @@ jobs:
           targets: ${{ matrix.target.rust }}
 
       - name: Rust cache
+        if: matrix.target.label != 'linux-arm64'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri -> target
