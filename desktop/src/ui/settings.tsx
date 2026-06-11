@@ -2,6 +2,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { Balance, SessionInfo, Settings as SettingsType, UsageStats } from "../App";
 import {
+  type DingTalkDesktopSettingsState,
+  describeDingTalkRowSummary,
+  getDingTalkConnectIntent,
+  getDingTalkStatusLabel,
+} from "../dingtalk-settings";
+import {
   type FeishuDesktopSettingsState,
   describeFeishuRowSummary,
   getFeishuConnectIntent,
@@ -98,6 +104,7 @@ export function SettingsModal({
   storageScan,
   qq,
   feishu,
+  dingtalk,
   onClose,
   onSave,
   onSaveApiKey,
@@ -112,6 +119,11 @@ export function SettingsModal({
   onDisconnectFeishu,
   onSaveFeishuConfig,
   onOpenFeishuApplyLink,
+  onLoadDingTalk,
+  onConnectDingTalk,
+  onDisconnectDingTalk,
+  onSaveDingTalkConfig,
+  onOpenDingTalkApplyLink,
   onPickWorkspace,
   onAddMcpSpec,
   onRemoveMcpSpec,
@@ -159,6 +171,7 @@ export function SettingsModal({
   storageScan: StorageScanEvent | null;
   qq: QQDesktopSettingsState | null;
   feishu: FeishuDesktopSettingsState | null;
+  dingtalk: DingTalkDesktopSettingsState | null;
   onClose: () => void;
   onSave: (patch: SettingsPatch) => void;
   onSaveApiKey: (key: string) => void;
@@ -181,6 +194,15 @@ export function SettingsModal({
     requireMentionInGroup?: boolean;
   }) => void;
   onOpenFeishuApplyLink: () => void;
+  onLoadDingTalk: () => void;
+  onConnectDingTalk: () => void;
+  onDisconnectDingTalk: () => void;
+  onSaveDingTalkConfig: (patch: {
+    clientId?: string;
+    clientSecret?: string;
+    requireMentionInGroup?: boolean;
+  }) => void;
+  onOpenDingTalkApplyLink: () => void;
   onPickWorkspace: () => void;
   onAddMcpSpec: (spec: string) => void;
   onRemoveMcpSpec: (spec: string) => void;
@@ -206,6 +228,7 @@ export function SettingsModal({
   const [page, setPage] = useState<PageId>(initialPage ?? "general");
   const [qqConfigureOpen, setQQConfigureOpen] = useState(false);
   const [feishuConfigureOpen, setFeishuConfigureOpen] = useState(false);
+  const [dingtalkConfigureOpen, setDingTalkConfigureOpen] = useState(false);
   const [settingsBodyScrolling, setSettingsBodyScrolling] = useState(false);
   const settingsBodyScrollTimerRef = useRef<number | null>(null);
   const markSettingsBodyScrolling = () => {
@@ -339,6 +362,23 @@ export function SettingsModal({
                     onConnectFeishu();
                   }}
                   onOpenApplyLink={onOpenFeishuApplyLink}
+                />
+                <DingTalkChannelSection
+                  dingtalk={dingtalk}
+                  configureOpen={dingtalkConfigureOpen}
+                  onOpenConfigure={() => {
+                    onLoadDingTalk();
+                    setDingTalkConfigureOpen(true);
+                  }}
+                  onCloseConfigure={() => setDingTalkConfigureOpen(false)}
+                  onConnect={onConnectDingTalk}
+                  onDisconnect={onDisconnectDingTalk}
+                  onSaveConfig={onSaveDingTalkConfig}
+                  onSaveAndConnect={(patch) => {
+                    onSaveDingTalkConfig(patch);
+                    onConnectDingTalk();
+                  }}
+                  onOpenApplyLink={onOpenDingTalkApplyLink}
                 />
                 <PageMCP
                   specs={mcpSpecs}
@@ -764,6 +804,187 @@ export function FeishuChannelSection({
               }}
             >
               {t("settings.feishuSaveAndConnect")}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function DingTalkChannelSection({
+  dingtalk,
+  configureOpen,
+  onOpenConfigure,
+  onCloseConfigure,
+  onConnect,
+  onDisconnect,
+  onSaveConfig,
+  onSaveAndConnect,
+  onOpenApplyLink,
+}: {
+  dingtalk: DingTalkDesktopSettingsState | null;
+  configureOpen: boolean;
+  onOpenConfigure: () => void;
+  onCloseConfigure: () => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onSaveConfig: (patch: {
+    clientId?: string;
+    clientSecret?: string;
+    requireMentionInGroup?: boolean;
+  }) => void;
+  onSaveAndConnect: (patch: {
+    clientId?: string;
+    clientSecret?: string;
+    requireMentionInGroup?: boolean;
+  }) => void;
+  onOpenApplyLink: () => void;
+}) {
+  const current = dingtalk ?? {
+    clientId: undefined,
+    clientSecret: undefined,
+    enabled: false,
+    configured: false,
+    requireMentionInGroup: true,
+    runtimeState: "disconnected" as const,
+  };
+  const [clientId, setClientId] = useState(current.clientId ?? "");
+  const [clientSecret, setClientSecret] = useState(current.clientSecret ?? "");
+  const [requireMentionInGroup, setRequireMentionInGroup] = useState(current.requireMentionInGroup);
+
+  useEffect(() => {
+    setClientId(current.clientId ?? "");
+    setClientSecret(current.clientSecret ?? "");
+    setRequireMentionInGroup(current.requireMentionInGroup);
+  }, [current.clientId, current.clientSecret, current.requireMentionInGroup, configureOpen]);
+
+  const savePatch = { clientId, clientSecret, requireMentionInGroup };
+
+  return (
+    <section className="section">
+      <div className="stitle">{t("settings.dingtalkSection")}</div>
+      {!configureOpen ? (
+        <div className="setting-row qq-setting-row">
+          <div className="l">
+            <div className="n">{t("settings.dingtalkTitle")}</div>
+            <div className="h">{describeDingTalkRowSummary(current)}</div>
+          </div>
+          <div className="qq-row-actions">
+            <button
+              type="button"
+              className={`btn qq-status-btn qq-status-${
+                current.runtimeState === "connected"
+                  ? "on"
+                  : current.runtimeState === "connecting"
+                    ? "connecting"
+                    : current.runtimeState === "failed"
+                      ? "failed"
+                      : "off"
+              }`}
+              onClick={() => {
+                if (getDingTalkConnectIntent(current) === "configure") {
+                  onOpenConfigure();
+                  return;
+                }
+                if (current.runtimeState === "connected") {
+                  onDisconnect();
+                  return;
+                }
+                onConnect();
+              }}
+            >
+              {getDingTalkStatusLabel(current)}
+            </button>
+            <button type="button" className="btn" onClick={onOpenConfigure}>
+              {t("settings.dingtalkConfigure")}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="qq-config-card">
+          <div className="qq-config-head">
+            <div>
+              <div className="n">{t("settings.dingtalkConfigureTitle")}</div>
+              <div className="h">{t("settings.dingtalkConfigureHint")}</div>
+            </div>
+            <button type="button" className="btn" onClick={onCloseConfigure}>
+              {t("settings.dingtalkBack")}
+            </button>
+          </div>
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.dingtalkClientId")}</div>
+            </div>
+            <input
+              className="field mono"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="DingTalk Client ID / AppKey"
+            />
+          </div>
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.dingtalkClientSecret")}</div>
+            </div>
+            <input
+              className="field mono"
+              type="password"
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              placeholder="DingTalk Client Secret"
+            />
+          </div>
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.dingtalkGroupPolicy")}</div>
+              <div className="h">{t("settings.dingtalkGroupPolicyHint")}</div>
+            </div>
+            <div className="seg-ctrl">
+              <button
+                type="button"
+                data-on={requireMentionInGroup}
+                onClick={() => setRequireMentionInGroup(true)}
+              >
+                {t("settings.dingtalkGroupMentionRequired")}
+              </button>
+              <button
+                type="button"
+                data-on={!requireMentionInGroup}
+                onClick={() => setRequireMentionInGroup(false)}
+              >
+                {t("settings.dingtalkGroupAllMessages")}
+              </button>
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.dingtalkApplyLabel")}</div>
+            </div>
+            <button type="button" className="btn" onClick={onOpenApplyLink}>
+              {t("settings.dingtalkApplyAction")}
+            </button>
+          </div>
+          <div className="qq-config-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                onSaveConfig(savePatch);
+                onCloseConfigure();
+              }}
+            >
+              {t("settings.dingtalkSave")}
+            </button>
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => {
+                onSaveAndConnect(savePatch);
+                onCloseConfigure();
+              }}
+            >
+              {t("settings.dingtalkSaveAndConnect")}
             </button>
           </div>
         </div>

@@ -10,6 +10,7 @@ describe("desktop QQ remote commands", () => {
 
   it("parses the desktop-aligned QQ command subset", () => {
     expect(parseQQRemoteDesktopCommand("/help", skills)).toEqual({ kind: "help" });
+    expect(parseQQRemoteDesktopCommand("/status", skills)).toEqual({ kind: "status" });
     expect(parseQQRemoteDesktopCommand("/new", skills)).toEqual({ kind: "new" });
     expect(parseQQRemoteDesktopCommand("/abort", skills)).toEqual({ kind: "abort" });
     expect(parseQQRemoteDesktopCommand("/compact", skills)).toEqual({ kind: "compact" });
@@ -37,19 +38,47 @@ describe("desktop QQ remote commands", () => {
     });
   });
 
+  it("parses session and workspace commands for remote navigation", () => {
+    expect(parseQQRemoteDesktopCommand("/session list", skills)).toEqual({
+      kind: "session_list",
+    });
+    expect(parseQQRemoteDesktopCommand("/session switch 2", skills)).toEqual({
+      kind: "session_switch",
+      target: "2",
+    });
+    expect(parseQQRemoteDesktopCommand("/session new", skills)).toEqual({
+      kind: "session_new",
+    });
+    expect(parseQQRemoteDesktopCommand("/workspace list", skills)).toEqual({
+      kind: "workspace_list",
+    });
+    expect(parseQQRemoteDesktopCommand("/workspace switch /tmp/demo", skills)).toEqual({
+      kind: "workspace_switch",
+      target: "/tmp/demo",
+    });
+  });
+
   it("does not treat UI-only or ambiguous slash text as QQ desktop commands", () => {
     expect(parseQQRemoteDesktopCommand("/theme", skills)).toBeNull();
     expect(parseQQRemoteDesktopCommand("/skill qq", skills)).toBeNull();
     expect(parseQQRemoteDesktopCommand("/btw", skills)).toBeNull();
     expect(parseQQRemoteDesktopCommand("/effort impossible", skills)).toBeNull();
     expect(parseQQRemoteDesktopCommand("/plan maybe", skills)).toBeNull();
+    expect(parseQQRemoteDesktopCommand("/session switch", skills)).toBeNull();
+    expect(parseQQRemoteDesktopCommand("/workspace switch", skills)).toBeNull();
     expect(parseQQRemoteDesktopCommand("/unknown", skills)).toBeNull();
   });
 
   it("allows only help/new/abort/effort to bypass busy", () => {
     expect(qqRemoteCommandBypassesBusy({ kind: "help" })).toBe(true);
+    expect(qqRemoteCommandBypassesBusy({ kind: "status" })).toBe(true);
     expect(qqRemoteCommandBypassesBusy({ kind: "new" })).toBe(true);
     expect(qqRemoteCommandBypassesBusy({ kind: "abort" })).toBe(true);
+    expect(qqRemoteCommandBypassesBusy({ kind: "session_list" })).toBe(true);
+    expect(qqRemoteCommandBypassesBusy({ kind: "workspace_list" })).toBe(true);
+    expect(qqRemoteCommandBypassesBusy({ kind: "session_new" })).toBe(false);
+    expect(qqRemoteCommandBypassesBusy({ kind: "session_switch", target: "1" })).toBe(false);
+    expect(qqRemoteCommandBypassesBusy({ kind: "workspace_switch", target: "1" })).toBe(false);
     expect(qqRemoteCommandBypassesBusy({ kind: "model", value: "flash" })).toBe(false);
     expect(qqRemoteCommandBypassesBusy({ kind: "effort", value: "high" })).toBe(true);
     expect(qqRemoteCommandBypassesBusy({ kind: "plan", value: "auto" })).toBe(false);
@@ -62,10 +91,14 @@ describe("desktop QQ remote commands", () => {
   it("mentions the supported remote subset in /help text", () => {
     const help = qqRemoteDesktopHelpText(skills);
     expect(help).toContain("/help");
+    expect(help).toContain("/status");
     expect(help).toContain("/new");
     expect(help).toContain("/abort");
     expect(help).toContain("/compact");
     expect(help).toContain("/retry");
+    expect(help).toContain("/session list");
+    expect(help).toContain("/session switch <number|session-name>");
+    expect(help).toContain("/workspace switch <number|path>");
     expect(help).toContain("/model <flash|pro|deepseek-v4-flash|deepseek-v4-pro>");
     expect(help).toContain("/effort <low|medium|high|max>");
     expect(help).toContain("/plan <review|auto|yolo>");

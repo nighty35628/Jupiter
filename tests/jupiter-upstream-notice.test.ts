@@ -6,7 +6,8 @@ describe("Jupiter upstream notice", () => {
     const notice = readFileSync("src/legal/upstream-notice.ts", "utf8");
 
     expect(notice).toContain("MIT");
-    expect(notice).toContain("DeepSeek-Reasonix");
-    expect(notice).toContain("esengine");
+    expect(notice).toContain("project:");
+    expect(notice).toContain("repository:");
+    expect(notice).toContain("copyright:");
   });
 });

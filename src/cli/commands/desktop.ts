@@ -33,6 +33,7 @@ import {
   type LibraryRetrievalMode,
   bridgeEndpointEnv,
   clearApiKey,
+  disableDesktopUpdatePrompts,
   isPlausibleKey,
   isReasoningEffort,
   loadApiKey,
@@ -40,6 +41,7 @@ import {
   loadBraveApiKey,
   loadDesktopCloseBehavior,
   loadDesktopOpenTabs,
+  loadDingTalkConfig,
   loadEditMode,
   loadEditor,
   loadEndpoint,
@@ -74,6 +76,7 @@ import {
   saveBaseUrl,
   saveDesktopCloseBehavior,
   saveDesktopOpenTabs,
+  saveDingTalkConfig,
   saveEditMode,
   saveEditor,
   saveFeishuConfig,
@@ -88,6 +91,7 @@ import {
   saveSkillPackSources,
   saveSubagentModels,
   saveWorkspaceDir,
+  skipDesktopUpdateVersion,
   writeConfig,
 } from "../../config.js";
 import {
@@ -113,6 +117,11 @@ import {
 } from "../../core/pause-gate.js";
 import { autoResolveVerdict } from "../../core/pause-policy.js";
 import { detectBrowserAutomation } from "../../desktop/browser-automation.js";
+import {
+  dingtalkRemoteCommandBypassesBusy,
+  dingtalkRemoteDesktopHelpText,
+  parseDingTalkRemoteDesktopCommand,
+} from "../../desktop/dingtalk-remote-commands.js";
 import {
   feishuRemoteCommandBypassesBusy,
   feishuRemoteDesktopHelpText,
@@ -165,6 +174,12 @@ import {
   cleanupJupiterStorage,
   scanJupiterStorage,
 } from "../../desktop/storage-manager.js";
+import {
+  DESKTOP_UPDATE_RELEASE_URLS,
+  type DesktopUpdateCheckResult,
+  checkDesktopUpdate,
+} from "../../desktop/update-check.js";
+import { DingTalkChannel } from "../../dingtalk/channel.js";
 import { loadDotenv } from "../../env.js";
 import { FeishuChannel } from "../../feishu/channel.js";
 import { type ResolvedHook, formatHookOutcomeMessage, loadHooks, runHooks } from "../../hooks.js";
@@ -192,10 +207,10 @@ import {
   moveSessionToArchive,
   patchSessionMeta,
   patchSessionWorkspaceIfMissing,
+  renameSession,
   restoreArchivedSession,
   sessionIsUnread,
   sessionPath,
-  timestampSuffix,
 } from "../../memory/session.js";
 import { QQChannel } from "../../qq/channel.js";
 import {
@@ -205,7 +220,11 @@ import {
   importExternalSession,
   importExternalSessions,
 } from "../../session-import.js";
-import { generateSessionTitle, shouldAutoNameSession } from "../../session-title.js";
+import {
+  generateSessionTitle,
+  makeSessionNameFromTitle,
+  shouldAutoNameSession,
+} from "../../session-title.js";
 import { SkillStore, skillDisplayDescription } from "../../skills.js";
 import { countTokensBounded } from "../../tokenizer.js";
 import type { ChoiceOption } from "../../tools/choice.js";
@@ -365,6 +384,18 @@ type InMessage = { tabId?: string } & (
       appSecret?: string;
       requireMentionInGroup?: boolean;
     }
+  | { cmd: "dingtalk_connect" }
+  | { cmd: "dingtalk_disconnect" }
+  | { cmd: "dingtalk_status_get" }
+  | {
+      cmd: "dingtalk_config_save";
+      clientId?: string;
+      clientSecret?: string;
+      requireMentionInGroup?: boolean;
+    }
+  | { cmd: "update_check"; manual?: boolean }
+  | { cmd: "update_skip"; version: string }
+  | { cmd: "update_disable_prompts" }
   | { cmd: "mention_query"; query: string; nonce: number }
   | { cmd: "mention_preview"; path: string; nonce: number }
   | { cmd: "mention_picked"; path: string }
@@ -468,6 +499,18 @@ interface FeishuSettingsEvent {
   runtimeState: "disconnected" | "connecting" | "connected" | "failed";
   lastError?: string;
   appIdPreview?: string;
+}
+
+interface DingTalkSettingsEvent {
+  type: "$dingtalk_settings";
+  clientId?: string;
+  clientSecret?: string;
+  enabled: boolean;
+  configured: boolean;
+  requireMentionInGroup: boolean;
+  runtimeState: "disconnected" | "connecting" | "connected" | "failed";
+  lastError?: string;
+  clientIdPreview?: string;
 }
 
 interface BalanceInfoItem {
@@ -831,6 +874,16 @@ type CompactResultEvent = {
   tailBudget?: number;
 };
 
+type UpdateCheckEvent =
+  | ({ type: "$update_check" } & DesktopUpdateCheckResult)
+  | {
+      type: "$update_check";
+      mode: "auto" | "manual";
+      status: "checking";
+      currentVersion: string;
+      releaseUrls: typeof DESKTOP_UPDATE_RELEASE_URLS;
+    };
+
 /** Direct fd write — bypasses Node's stream layer (and its piped-output
  *  block buffering) so every JSON line reaches Rust the moment it's
  *  produced, not whenever the next 8 KB flushes. */
@@ -858,6 +911,8 @@ type EmittableEvent =
   | SettingsEvent
   | QQSettingsEvent
   | FeishuSettingsEvent
+  | DingTalkSettingsEvent
+  | UpdateCheckEvent
   | BalanceEvent
   | MentionResultsEvent
   | MentionPreviewEvent
@@ -927,6 +982,19 @@ export function writeAllSync(
 function emit(ev: EmittableEvent, tabId?: string): void {
   const payload = tabId ? { ...ev, tabId } : ev;
   writeAllSync(1, Buffer.from(`${JSON.stringify(payload)}\n`, "utf8"));
+}
+
+async function emitDesktopUpdateCheck(manual: boolean): Promise<void> {
+  const mode = manual ? "manual" : "auto";
+  emit({
+    type: "$update_check",
+    mode,
+    status: "checking",
+    currentVersion: VERSION,
+    releaseUrls: DESKTOP_UPDATE_RELEASE_URLS,
+  });
+  const result = await checkDesktopUpdate({ currentVersion: VERSION, manual });
+  emit({ type: "$update_check", ...result });
 }
 
 function tailLines(s: string, n: number): string {
@@ -1748,9 +1816,14 @@ interface Tab {
 }
 
 let tabCounter = 0;
+let desktopSessionCounter = 0;
 function nextTabId(): string {
   tabCounter++;
   return `t${tabCounter}`;
+}
+
+function desktopSessionTimestampSuffix(): string {
+  return new Date().toISOString().replace(/[^\d]/g, "").slice(0, 17);
 }
 
 function isRetiredNoWorkspacePath(path: string | undefined): boolean {
@@ -1775,14 +1848,35 @@ function repairRetiredSessionWorkspace(
   return repaired;
 }
 
-function mintSessionFor(rootDir: string): string {
-  const name = `desktop-${timestampSuffix()}-${tabCounter}`;
+export function mintSessionFor(rootDir: string): string {
+  desktopSessionCounter++;
+  const name = `desktop-${desktopSessionTimestampSuffix()}-${tabCounter}-${desktopSessionCounter}`;
   try {
     patchSessionMeta(name, { workspace: rootDir });
   } catch {
     // session meta is for filtering only — failure shouldn't block chat
   }
   return name;
+}
+
+export function applyGeneratedDesktopSessionTitle(opts: {
+  sessionName: string;
+  title: string;
+  workspace: string;
+  onRenamed?: (nextName: string) => void;
+}): string {
+  let targetSession = opts.sessionName;
+  const nextName = makeSessionNameFromTitle(opts.title, { currentName: opts.sessionName });
+  if (nextName && nextName !== opts.sessionName && renameSession(opts.sessionName, nextName)) {
+    targetSession = nextName;
+    opts.onRenamed?.(nextName);
+  }
+  patchSessionMeta(targetSession, {
+    summary: opts.title,
+    autoTitleGenerated: true,
+    workspace: opts.workspace,
+  });
+  return targetSession;
 }
 
 function emitDesktopSubagentEvent(tab: Tab, ev: SubagentEvent): void {
@@ -2028,6 +2122,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     routing: createQQTurnRoutingState(),
   };
 
+  const dingtalkRuntime = {
+    channel: null as DingTalkChannel | null,
+    runtimeState: "disconnected" as "disconnected" | "connecting" | "connected" | "failed",
+    lastError: undefined as string | undefined,
+    routing: createQQTurnRoutingState(),
+  };
+
   function currentQqSettings(): QQSettingsEvent {
     const base = loadDesktopQQState();
     return {
@@ -2057,6 +2158,25 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     };
   }
 
+  function currentDingTalkSettings(): DingTalkSettingsEvent {
+    const config = loadDingTalkConfig();
+    return {
+      type: "$dingtalk_settings",
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+      enabled: config.enabled === true,
+      configured: Boolean(config.clientId && config.clientSecret),
+      requireMentionInGroup: config.requireMentionInGroup,
+      runtimeState: dingtalkRuntime.runtimeState,
+      lastError: dingtalkRuntime.lastError,
+      clientIdPreview: config.clientId
+        ? config.clientId.length > 8
+          ? `${config.clientId.slice(0, 8)}...`
+          : config.clientId
+        : undefined,
+    };
+  }
+
   function activeDesktopTab(): Tab | undefined {
     return (lastActiveTabId ? tabs.get(lastActiveTabId) : undefined) ?? first;
   }
@@ -2069,8 +2189,16 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     for (const tab of tabs.values()) emit(currentFeishuSettings(), tab.id);
   }
 
+  function broadcastDingTalkSettings(): void {
+    for (const tab of tabs.values()) emit(currentDingTalkSettings(), tab.id);
+  }
+
   function emitFeishuSettings(tab: Tab): void {
     emit(currentFeishuSettings(), tab.id);
+  }
+
+  function emitDingTalkSettings(tab: Tab): void {
+    emit(currentDingTalkSettings(), tab.id);
   }
 
   function setQQRuntimeState(
@@ -2091,6 +2219,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     feishuRuntime.runtimeState = runtimeState;
     feishuRuntime.lastError = lastError;
     broadcastFeishuSettings();
+  }
+
+  function setDingTalkRuntimeState(
+    runtimeState: "disconnected" | "connecting" | "connected" | "failed",
+    lastError?: string,
+  ): void {
+    dingtalkRuntime.runtimeState = runtimeState;
+    dingtalkRuntime.lastError = lastError;
+    broadcastDingTalkSettings();
   }
 
   function sendQQInfo(message: string, tabOverride?: Tab): void {
@@ -2124,6 +2261,25 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           {
             type: "$error",
             message: `feishu send failed: ${(err as Error).message}`,
+          },
+          active.id,
+        );
+      }
+    });
+  }
+
+  function sendDingTalkInfo(message: string, tabOverride?: Tab): void {
+    const tab = tabOverride ?? activeDesktopTab();
+    if (tab) {
+      emitStatus(tab, message);
+    }
+    void dingtalkRuntime.channel?.sendResponse(message).catch((err) => {
+      const active = activeDesktopTab();
+      if (active) {
+        emit(
+          {
+            type: "$error",
+            message: `dingtalk send failed: ${(err as Error).message}`,
           },
           active.id,
         );
@@ -2166,6 +2322,23 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   }
 
   function emitFeishuNotice(message: string, tabOverride?: Tab): void {
+    const tab = tabOverride ?? activeDesktopTab();
+    if (tab) {
+      emit(
+        {
+          type: "warning",
+          id: Date.now(),
+          ts: new Date().toISOString(),
+          turn: 0,
+          text: message,
+          severity: "high",
+        },
+        tab.id,
+      );
+    }
+  }
+
+  function emitDingTalkNotice(message: string, tabOverride?: Tab): void {
     const tab = tabOverride ?? activeDesktopTab();
     if (tab) {
       emit(
@@ -2339,6 +2512,28 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         },
         status: () => currentQqSettings().runtimeState,
       },
+      feishu: {
+        connect: async () => {
+          await startDesktopFeishu(true);
+          return "Feishu connected";
+        },
+        disconnect: async () => {
+          await stopDesktopFeishu(true);
+          return "Feishu disconnected";
+        },
+        status: () => currentFeishuSettings().runtimeState,
+      },
+      dingtalk: {
+        connect: async () => {
+          await startDesktopDingTalk(true);
+          return "DingTalk connected";
+        },
+        disconnect: async () => {
+          await stopDesktopDingTalk(true);
+          return "DingTalk disconnected";
+        },
+        status: () => currentDingTalkSettings().runtimeState,
+      },
       sessionId: tab.currentSession,
     });
 
@@ -2445,6 +2640,18 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       case "help":
         sendQQInfo(qqRemoteDesktopHelpText(availableSkillNamesForTab(tab)), tab);
         return true;
+      case "status":
+        sendQQInfo(
+          [
+            `QQ: ${qqRuntime.runtimeState}`,
+            `Workspace: ${tab.rootDir}`,
+            `Session: ${tab.currentSession || "(none)"}`,
+            `Model: ${tab.currentModel}`,
+            `Busy: ${tab.aborter ? "yes" : "no"}`,
+          ].join("\n"),
+          tab,
+        );
+        return true;
       case "abort":
         abortTurn(tab, { discardCurrentTurn: true });
         cancelPendingGates(tab);
@@ -2454,6 +2661,57 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         startNewChatInTab(tab);
         sendQQInfo("Started a new desktop conversation in the current tab.", tab);
         return true;
+      case "session_list":
+        sendQQInfo(formatRemoteSessionList(tab), tab);
+        return true;
+      case "session_switch": {
+        const hit = resolveRemoteSessionTarget(tab, cmd.target);
+        if (!hit) {
+          sendQQInfo(`Session not found: ${cmd.target}\n\n${formatRemoteSessionList(tab)}`, tab);
+          return true;
+        }
+        const workspace = repairRetiredSessionWorkspace(
+          hit.name,
+          loadSessionMeta(hit.name).workspace,
+          defaultDesktopRoot(),
+        );
+        const targetWorkspace =
+          typeof workspace === "string" ? resolveDesktopRoot(workspace) : tab.rootDir;
+        const load = () =>
+          loadSessionIntoTab(tab, hit.name, {
+            abortTurn,
+            cancelPendingGates,
+            persistOpenTabs,
+          });
+        if (resolve(targetWorkspace) !== resolve(tab.rootDir)) {
+          void switchWorkspace(tab, targetWorkspace).then(() => {
+            load();
+            sendQQInfo(`Switched to session: ${hit.summary || hit.name}`, tab);
+          });
+        } else {
+          load();
+          sendQQInfo(`Switched to session: ${hit.summary || hit.name}`, tab);
+        }
+        return true;
+      }
+      case "session_new":
+        startNewChatInTab(tab);
+        sendQQInfo("Started a new desktop session in the current workspace.", tab);
+        return true;
+      case "workspace_list":
+        sendQQInfo(formatRemoteWorkspaceList(tab), tab);
+        return true;
+      case "workspace_switch": {
+        const target = resolveRemoteWorkspaceTarget(tab, cmd.target);
+        if (!target) {
+          sendQQInfo(`Workspace not found: ${cmd.target}`, tab);
+          return true;
+        }
+        void switchWorkspace(tab, target).then(() => {
+          sendQQInfo(`Switched workspace to: ${resolveDesktopRoot(target)}`, tab);
+        });
+        return true;
+      }
       case "compact":
         if (!tab.runtime) {
           sendQQInfo("Desktop is not configured yet.", tab);
@@ -2724,6 +2982,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     return handleRemotePauseReply(feishuRuntime.routing, tab, text);
   }
 
+  function handleDingTalkPauseReply(tab: Tab, text: string): boolean {
+    return handleRemotePauseReply(dingtalkRuntime.routing, tab, text);
+  }
+
   function formatRemotePauseRequest(
     tab: Tab,
     kind: string,
@@ -2809,8 +3071,28 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
   }
 
+  function handleDingTalkPauseRequest(
+    tab: Tab,
+    kind: string,
+    payload: Record<string, unknown>,
+  ): void {
+    if (!dingtalkRuntime.channel || !shouldRouteQQForTab(dingtalkRuntime.routing, tab.id)) return;
+    const message = formatRemotePauseRequest(tab, kind, payload);
+    if (message) {
+      void dingtalkRuntime.channel.sendResponse(message).catch((err) => {
+        emit(
+          {
+            type: "$error",
+            message: `dingtalk send failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      });
+    }
+  }
+
   function stripRemoteChannelPrefix(text: string): string {
-    return text.replace(/^\[(?:Feishu|QQ)]\s*/i, "").trim();
+    return text.replace(/^\[(?:Feishu|QQ|DingTalk)]\s*/i, "").trim();
   }
 
   function remoteSessionCandidates(tab: Tab): SessionListItem[] {
@@ -2959,6 +3241,207 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         void switchWorkspace(tab, target).then(() => {
           sendFeishuInfo(`Switched workspace to: ${resolveDesktopRoot(target)}`, tab);
         });
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  function handleDingTalkRemoteDesktopCommand(tab: Tab, text: string): boolean {
+    const cmd = parseDingTalkRemoteDesktopCommand(text, availableSkillNamesForTab(tab));
+    if (!cmd) return false;
+    if (tab.aborter && !dingtalkRemoteCommandBypassesBusy(cmd)) {
+      sendDingTalkInfo(
+        "Session is busy. Wait for the current turn or reply to the pending prompt.",
+        tab,
+      );
+      return true;
+    }
+    switch (cmd.kind) {
+      case "help":
+        sendDingTalkInfo(dingtalkRemoteDesktopHelpText(availableSkillNamesForTab(tab)), tab);
+        return true;
+      case "status":
+        sendDingTalkInfo(
+          [
+            `DingTalk: ${dingtalkRuntime.runtimeState}`,
+            `Workspace: ${tab.rootDir}`,
+            `Session: ${tab.currentSession || "(none)"}`,
+            `Model: ${tab.currentModel}`,
+            `Busy: ${tab.aborter ? "yes" : "no"}`,
+          ].join("\n"),
+          tab,
+        );
+        return true;
+      case "abort":
+        abortTurn(tab, { discardCurrentTurn: true });
+        cancelPendingGates(tab);
+        sendDingTalkInfo("Stopped the current desktop conversation.", tab);
+        return true;
+      case "new":
+      case "session_new":
+        startNewChatInTab(tab);
+        sendDingTalkInfo("Started a new desktop session in the current workspace.", tab);
+        return true;
+      case "session_list":
+        sendDingTalkInfo(formatRemoteSessionList(tab), tab);
+        return true;
+      case "session_switch": {
+        const hit = resolveRemoteSessionTarget(tab, cmd.target);
+        if (!hit) {
+          sendDingTalkInfo(
+            `Session not found: ${cmd.target}\n\n${formatRemoteSessionList(tab)}`,
+            tab,
+          );
+          return true;
+        }
+        const workspace = repairRetiredSessionWorkspace(
+          hit.name,
+          loadSessionMeta(hit.name).workspace,
+          defaultDesktopRoot(),
+        );
+        const targetWorkspace =
+          typeof workspace === "string" ? resolveDesktopRoot(workspace) : tab.rootDir;
+        const load = () =>
+          loadSessionIntoTab(tab, hit.name, {
+            abortTurn,
+            cancelPendingGates,
+            persistOpenTabs,
+          });
+        if (resolve(targetWorkspace) !== resolve(tab.rootDir)) {
+          void switchWorkspace(tab, targetWorkspace).then(() => {
+            load();
+            sendDingTalkInfo(`Switched to session: ${hit.summary || hit.name}`, tab);
+          });
+        } else {
+          load();
+          sendDingTalkInfo(`Switched to session: ${hit.summary || hit.name}`, tab);
+        }
+        return true;
+      }
+      case "workspace_list":
+        sendDingTalkInfo(formatRemoteWorkspaceList(tab), tab);
+        return true;
+      case "workspace_switch": {
+        const target = resolveRemoteWorkspaceTarget(tab, cmd.target);
+        if (!target) {
+          sendDingTalkInfo(`Workspace not found: ${cmd.target}`, tab);
+          return true;
+        }
+        void switchWorkspace(tab, target).then(() => {
+          sendDingTalkInfo(`Switched workspace to: ${resolveDesktopRoot(target)}`, tab);
+        });
+        return true;
+      }
+      case "compact":
+        if (!tab.runtime) {
+          sendDingTalkInfo("Desktop is not configured yet.", tab);
+          return true;
+        }
+        void tab.runtime.loop
+          .manualCompactHistory()
+          .then((result) => {
+            if (result.folded) emitCurrentSessionLoaded(tab);
+            emitCompactResult(tab, result);
+            emitCtxBreakdown(tab);
+            sendDingTalkInfo("Compacted the current desktop conversation history.", tab);
+          })
+          .catch((err: Error) => {
+            emit({ type: "$error", message: `/compact failed: ${err.message}` }, tab.id);
+            void dingtalkRuntime.channel
+              ?.sendResponse(`/compact failed: ${err.message}`)
+              .catch(() => undefined);
+          });
+        return true;
+      case "retry": {
+        if (!tab.runtime) {
+          sendDingTalkInfo("Desktop is not configured yet.", tab);
+          return true;
+        }
+        const prev = tab.runtime.loop.retryLastUser();
+        if (!prev) {
+          sendDingTalkInfo(
+            "There is no previous local user message to retry in this desktop conversation.",
+            tab,
+          );
+          return true;
+        }
+        void runTurn(tab, prev, false, undefined, { fromDingTalk: true });
+        return true;
+      }
+      case "model": {
+        if (!cmd.value) {
+          sendDingTalkInfo(
+            `Current model: ${tab.currentModel}. Use /model flash, /model pro, /model deepseek-v4-flash, or /model deepseek-v4-pro.`,
+            tab,
+          );
+          return true;
+        }
+        const next = normalizeQQRemoteModel(cmd.value);
+        if (!next) {
+          sendDingTalkInfo(
+            "Unsupported desktop model. Use /model flash, /model pro, /model deepseek-v4-flash, or /model deepseek-v4-pro.",
+            tab,
+          );
+          return true;
+        }
+        applyDesktopModel(tab, next);
+        sendDingTalkInfo(`Switched desktop model to ${next}.`, tab);
+        return true;
+      }
+      case "effort":
+        if (!cmd.value) {
+          sendDingTalkInfo(
+            `Current reasoning effort: ${loadReasoningEffort()}. Use /effort low, /effort medium, /effort high, or /effort max.`,
+            tab,
+          );
+          return true;
+        }
+        saveReasoningEffort(cmd.value);
+        tab.runtime?.loop.configure({ reasoningEffort: cmd.value });
+        emitSettings(tab);
+        sendDingTalkInfo(`Switched desktop reasoning effort to ${cmd.value}.`, tab);
+        return true;
+      case "plan":
+        if (!cmd.value) {
+          sendDingTalkInfo(
+            `Current plan mode: ${loadEditMode()}. Use /plan review, /plan auto, or /plan yolo.`,
+            tab,
+          );
+          return true;
+        }
+        saveEditMode(cmd.value);
+        if (tab.toolset) applyPlanMode(tab.toolset.tools, cmd.value);
+        emitSettings(tab);
+        sendDingTalkInfo(`Switched desktop plan mode to ${cmd.value}.`, tab);
+        return true;
+      case "btw":
+        if (!tab.runtime) {
+          sendDingTalkInfo("Desktop is not configured yet.", tab);
+          return true;
+        }
+        runBtwOnTab(tab, cmd.text, undefined, {
+          onAnswer: (answer) =>
+            void dingtalkRuntime.channel?.sendResponse(`≫ btw\n${answer}`).catch(() => undefined),
+          onError: (message) =>
+            void dingtalkRuntime.channel?.sendResponse(message).catch(() => undefined),
+        });
+        return true;
+      case "skill": {
+        if (!tab.runtime) {
+          sendDingTalkInfo("Desktop is not configured yet.", tab);
+          return true;
+        }
+        const payload = buildSkillPayload(tab, cmd.name, cmd.args);
+        if (!payload) {
+          emit({ type: "$error", message: `skill not found: ${cmd.name}` }, tab.id);
+          void dingtalkRuntime.channel
+            ?.sendResponse(`skill not found: ${cmd.name}`)
+            .catch(() => undefined);
+          return true;
+        }
+        void runTurn(tab, payload, false, undefined, { fromDingTalk: true });
         return true;
       }
       default:
@@ -3134,6 +3617,93 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       saveFeishuConfig({ ...current, enabled: false });
     }
     setFeishuRuntimeState("disconnected");
+  }
+
+  async function startDesktopDingTalk(shouldPersistEnabled = true): Promise<void> {
+    const current = loadDingTalkConfig();
+    if (!(current.clientId && current.clientSecret)) {
+      throw new Error("DingTalk Client ID and Client Secret are required.");
+    }
+    if (dingtalkRuntime.channel) {
+      setDingTalkRuntimeState("connected");
+      return;
+    }
+    setDingTalkRuntimeState("connecting");
+    const channel = new DingTalkChannel({
+      config: current,
+      onSubmitMessage: (text) => {
+        const tab = activeDesktopTab();
+        if (!tab) return;
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        const remoteText = stripRemoteChannelPrefix(trimmed);
+        if (handleDingTalkRemoteDesktopCommand(tab, remoteText)) return;
+        const decision = classifyDesktopQQIngress({
+          hasPendingInteraction: hasQQPendingInteraction(dingtalkRuntime.routing, tab.id),
+          isBusy: !!tab.aborter,
+        });
+        if (decision === "pause_reply") {
+          handleDingTalkPauseReply(tab, remoteText);
+          return;
+        }
+        if (decision === "busy") {
+          void channel
+            .sendResponse(
+              "Session is busy. Wait for the current turn or reply to the pending prompt.",
+            )
+            .catch(() => undefined);
+          return;
+        }
+        emit(
+          {
+            type: "user.message",
+            id: Date.now(),
+            ts: new Date().toISOString(),
+            turn: 0,
+            text: trimmed,
+          },
+          tab.id,
+        );
+        void runTurn(tab, trimmed, false, undefined, { fromDingTalk: true });
+      },
+      onError: (message) => {
+        const tab = activeDesktopTab();
+        setDingTalkRuntimeState("failed", message);
+        if (tab) emit({ type: "$error", message: `DingTalk: ${message}` }, tab.id);
+      },
+      onInfo: (message) => emitDingTalkNotice(`DingTalk: ${message}`),
+    });
+    try {
+      await channel.start();
+      dingtalkRuntime.channel = channel;
+      if (shouldPersistEnabled) saveDingTalkConfig({ ...current, enabled: true });
+      setDingTalkRuntimeState("connected");
+    } catch (err) {
+      await channel.stop().catch(() => undefined);
+      dingtalkRuntime.channel = null;
+      if (shouldPersistEnabled) saveDingTalkConfig({ ...current, enabled: false });
+      setDingTalkRuntimeState("failed", (err as Error).message);
+      throw err;
+    }
+  }
+
+  async function stopDesktopDingTalk(shouldDisable = true): Promise<void> {
+    const channel = dingtalkRuntime.channel;
+    dingtalkRuntime.channel = null;
+    clearQQTurnRouting(dingtalkRuntime.routing);
+    if (channel) {
+      try {
+        await channel.stop();
+      } catch (err) {
+        setDingTalkRuntimeState("failed", (err as Error).message);
+        throw err;
+      }
+    }
+    if (shouldDisable) {
+      const current = loadDingTalkConfig();
+      saveDingTalkConfig({ ...current, enabled: false });
+    }
+    setDingTalkRuntimeState("disconnected");
   }
 
   /** Synchronous tab construction — no I/O. All cheap, disk-only events (`$settings`, `$sessions`, `$memory`, `$skills`, `$mcp_specs`) can fire against this immediately. The heavy bits (`buildCodeToolset`, MCP probes, runtime construction) happen in `initTabToolset` so the UI shell paints without waiting for them. */
@@ -3315,7 +3885,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     text: string,
     fromQQ = false,
     clientId?: string,
-    opts: { displayText?: string; planOneShot?: boolean; fromFeishu?: boolean } = {},
+    opts: {
+      displayText?: string;
+      planOneShot?: boolean;
+      fromFeishu?: boolean;
+      fromDingTalk?: boolean;
+    } = {},
   ): Promise<void> {
     if (!tab.runtime) return;
     const rt = tab.runtime;
@@ -3324,8 +3899,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.aborter = new AbortController();
     if (opts.planOneShot) beginOneShotPlanGuard(tab);
     const fromFeishu = opts.fromFeishu === true;
+    const fromDingTalk = opts.fromDingTalk === true;
     if (fromQQ) markQQTurnStarted(qqRuntime.routing, tab.id);
     if (fromFeishu) markQQTurnStarted(feishuRuntime.routing, tab.id);
+    if (fromDingTalk) markQQTurnStarted(dingtalkRuntime.routing, tab.id);
     if (fromQQ && qqRuntime.channel && shouldRouteQQForTab(qqRuntime.routing, tab.id)) {
       void qqRuntime.channel.sendTurnReceipt().catch((err) => {
         emit(
@@ -3348,6 +3925,21 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         );
       });
     }
+    if (
+      fromDingTalk &&
+      dingtalkRuntime.channel &&
+      shouldRouteQQForTab(dingtalkRuntime.routing, tab.id)
+    ) {
+      void dingtalkRuntime.channel.sendTurnReceipt().catch((err) => {
+        emit(
+          {
+            type: "$error",
+            message: `dingtalk turn receipt failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      });
+    }
     let lastAssistantText = "";
     const sessionAtTurnStart = tab.currentSession;
     const sessionMetaBeforeTurn = sessionAtTurnStart ? loadSessionMeta(sessionAtTurnStart) : {};
@@ -3365,6 +3957,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emit({ type: "$turn_complete" }, tab.id);
         if (fromQQ) markQQTurnFinished(qqRuntime.routing, tab.id);
         if (fromFeishu) markQQTurnFinished(feishuRuntime.routing, tab.id);
+        if (fromDingTalk) markQQTurnFinished(dingtalkRuntime.routing, tab.id);
         return;
       }
     }
@@ -3438,6 +4031,22 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               );
             });
           }
+          if (
+            fromDingTalk &&
+            lastAssistantText &&
+            dingtalkRuntime.channel &&
+            shouldRouteQQForTab(dingtalkRuntime.routing, tab.id)
+          ) {
+            await dingtalkRuntime.channel.sendResponse(lastAssistantText).catch((err) => {
+              emit(
+                {
+                  type: "$error",
+                  message: `dingtalk send failed: ${(err as Error).message}`,
+                },
+                tab.id,
+              );
+            });
+          }
           const sessionName = tab.currentSession;
           if (sessionName) {
             const metaBeforeStats = loadSessionMeta(sessionName);
@@ -3459,9 +4068,16 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
                 (title) => {
                   if (!title) return;
                   try {
-                    patchSessionMeta(sessionName, {
-                      summary: title,
-                      autoTitleGenerated: true,
+                    applyGeneratedDesktopSessionTitle({
+                      sessionName,
+                      title,
+                      workspace: tab.rootDir,
+                      onRenamed: (nextName) => {
+                        if (tab.currentSession !== sessionName) return;
+                        tab.currentSession = nextName;
+                        rt.loop.sessionName = nextName;
+                        rt.loop.log.setSessionPath(sessionPath(nextName));
+                      },
                     });
                     emitCurrentSessionReconciled(tab);
                     emitSessions(tab);
@@ -3501,6 +4117,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         }
         if (fromQQ) markQQTurnFinished(qqRuntime.routing, tab.id);
         if (fromFeishu) markQQTurnFinished(feishuRuntime.routing, tab.id);
+        if (fromDingTalk) markQQTurnFinished(dingtalkRuntime.routing, tab.id);
         tab.switching = false;
       }
     });
@@ -3682,6 +4299,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     shuttingDown = true;
     await stopDesktopQQ(false).catch(() => undefined);
     await stopDesktopFeishu(false).catch(() => undefined);
+    await stopDesktopDingTalk(false).catch(() => undefined);
     await Promise.allSettled(
       [...tabs.values()].map((t) => t.toolset?.jobs.shutdown(1500) ?? Promise.resolve()),
     );
@@ -3738,6 +4356,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
       emit(
         {
@@ -3756,6 +4375,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleDingTalkPauseRequest(tab, req.kind, payload as Record<string, unknown>);
       }
       return;
     }
@@ -3770,6 +4390,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
       emit(
         {
@@ -3791,6 +4412,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleDingTalkPauseRequest(tab, req.kind, payload as Record<string, unknown>);
       }
       return;
     }
@@ -3803,6 +4425,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
       emit(
         {
@@ -3817,6 +4440,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleDingTalkPauseRequest(tab, req.kind, payload as Record<string, unknown>);
       }
       return;
     }
@@ -3832,6 +4456,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         if (tab.oneShotPlanActive) tab.oneShotPlanGateIds.add(req.id);
         setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
       emit(
         {
@@ -3846,6 +4471,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleDingTalkPauseRequest(tab, req.kind, payload as Record<string, unknown>);
       }
       return;
     }
@@ -3860,6 +4486,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         tab.completedStepIds.add(payload.stepId);
         setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
       emit(
         {
@@ -3887,6 +4514,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleDingTalkPauseRequest(tab, req.kind, payload as Record<string, unknown>);
       }
       return;
     }
@@ -3899,6 +4527,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         setQQPendingInteraction(qqRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
+        setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
       emit(
         {
@@ -3913,6 +4542,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
+        handleDingTalkPauseRequest(tab, req.kind, payload as Record<string, unknown>);
       }
       return;
     }
@@ -4087,6 +4717,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   } else {
     broadcastFeishuSettings();
   }
+  const dingtalkConfig = loadDingTalkConfig();
+  if (dingtalkConfig.enabled && dingtalkConfig.clientId && dingtalkConfig.clientSecret) {
+    void startDesktopDingTalk(false).catch(() => undefined);
+  } else {
+    broadcastDingTalkSettings();
+  }
+  void emitDesktopUpdateCheck(false).catch(() => undefined);
 
   const rl = createInterface({ input: stdin });
   rl.on("line", async (line) => {
@@ -4268,6 +4905,28 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         }
         emitCtxBreakdown(t);
       }
+      void emitDesktopUpdateCheck(false).catch(() => undefined);
+      return;
+    }
+    if (msg.cmd === "update_check") {
+      void emitDesktopUpdateCheck(msg.manual === true).catch((err) => {
+        emit({
+          type: "$update_check",
+          mode: msg.manual === true ? "manual" : "auto",
+          status: "error",
+          currentVersion: VERSION,
+          message: (err as Error).message,
+          releaseUrls: DESKTOP_UPDATE_RELEASE_URLS,
+        });
+      });
+      return;
+    }
+    if (msg.cmd === "update_skip") {
+      skipDesktopUpdateVersion(msg.version);
+      return;
+    }
+    if (msg.cmd === "update_disable_prompts") {
+      disableDesktopUpdatePrompts();
       return;
     }
     if (msg.cmd === "jobs_list") {
@@ -5350,6 +6009,91 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           {
             type: "$error",
             message: `feishu_disconnect failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "dingtalk_config_save") {
+      try {
+        const current = loadDingTalkConfig();
+        saveDingTalkConfig({
+          ...current,
+          clientId: msg.clientId?.trim() || undefined,
+          clientSecret: msg.clientSecret?.trim() || undefined,
+          requireMentionInGroup: msg.requireMentionInGroup ?? current.requireMentionInGroup,
+        });
+        emitDingTalkSettings(tab);
+        emitStatus(tab, "DingTalk settings saved");
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `dingtalk_config_save failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "dingtalk_status_get") {
+      emitDingTalkSettings(tab);
+      return;
+    }
+    if (msg.cmd === "dingtalk_connect") {
+      try {
+        emitStatus(tab, "DingTalk connecting");
+        void startDesktopDingTalk(true).then(
+          () => {
+            emitStatus(tab, "DingTalk connected");
+            emitDingTalkSettings(tab);
+          },
+          (err) => {
+            emit(
+              {
+                type: "$error",
+                message: `dingtalk_connect failed: ${(err as Error).message}`,
+              },
+              tab.id,
+            );
+            emitDingTalkSettings(tab);
+          },
+        );
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `dingtalk_connect failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "dingtalk_disconnect") {
+      try {
+        void stopDesktopDingTalk(true).then(
+          () => {
+            emitStatus(tab, "DingTalk disabled");
+            emitDingTalkSettings(tab);
+          },
+          (err) => {
+            emit(
+              {
+                type: "$error",
+                message: `dingtalk_disconnect failed: ${(err as Error).message}`,
+              },
+              tab.id,
+            );
+            emitDingTalkSettings(tab);
+          },
+        );
+      } catch (err) {
+        emit(
+          {
+            type: "$error",
+            message: `dingtalk_disconnect failed: ${(err as Error).message}`,
           },
           tab.id,
         );

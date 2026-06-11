@@ -636,9 +636,9 @@ Do not:
 
 Docs are the fallback, not the main path:
 - QQ Bot apply page: https://q.qq.com/qqbot/openclaw/login.html
-- Official config guide (zh): https://esengine.github.io/DeepSeek-Jupiter/configuration.html?lang=zh
-- QQ guide (zh): https://github.com/esengine/DeepSeek-Jupiter/blob/main/docs/qq-connect.zh-CN.md
-- Non-official fallback mirror for the QQ guide: https://cdn.jsdelivr.net/gh/esengine/DeepSeek-Jupiter@main/docs/qq-connect.zh-CN.md
+- Official config guide (zh): https://nighty35628.github.io/Jupiter/configuration.html?lang=zh
+- QQ guide (zh): https://github.com/nighty35628/Jupiter/blob/main/docs/qq-connect.zh-CN.md
+- Non-official fallback mirror for the QQ guide: https://cdn.jsdelivr.net/gh/nighty35628/Jupiter@main/docs/qq-connect.zh-CN.md
 
 Use this skill when the user needs help getting QQ working.`;
 

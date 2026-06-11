@@ -356,8 +356,8 @@ function Config() {
             <Ic.Sparkle size={13}/>
             <span>
               {t({
-                zh: <>所有路径与命令均来自 <a href="https://github.com/esengine/DeepSeek-Jupiter" target="_blank" rel="noreferrer" style={{color:'var(--accent)', textDecoration:'none'}}>esengine/DeepSeek-Jupiter</a>。</>,
-                en: <>Every path and command shown lives in <a href="https://github.com/esengine/DeepSeek-Jupiter" target="_blank" rel="noreferrer" style={{color:'var(--accent)', textDecoration:'none'}}>esengine/DeepSeek-Jupiter</a>.</>,
+                zh: <>所有路径与命令均来自 <a href="https://github.com/nighty35628/Jupiter" target="_blank" rel="noreferrer" style={{color:'var(--accent)', textDecoration:'none'}}>nighty35628/Jupiter</a>。</>,
+                en: <>Every path and command shown lives in <a href="https://github.com/nighty35628/Jupiter" target="_blank" rel="noreferrer" style={{color:'var(--accent)', textDecoration:'none'}}>nighty35628/Jupiter</a>.</>,
               }, lang)}
             </span>
           </div>

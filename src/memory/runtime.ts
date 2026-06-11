@@ -206,6 +206,11 @@ export class AppendOnlyLog {
   get sessionPath(): string | null {
     return this._sessionPath;
   }
+
+  setSessionPath(path: string | null): void {
+    this._sessionPath = path;
+    this._fullHistoryCache = null;
+  }
 }
 
 export class VolatileScratch {

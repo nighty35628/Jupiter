@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { type ReactNode, forwardRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -186,7 +187,7 @@ async function emitRpc(line: Record<string, unknown>) {
 async function emitBootstrap(
   tabId = "tab-1",
   workspaceDir = "/tmp/jupiter-streaming-test",
-  opts: { busy?: boolean } = {},
+  opts: { busy?: boolean; promptHistory?: string[] } = {},
 ) {
   await emitRpc({
     type: "$tab_opened",
@@ -215,7 +216,7 @@ async function emitBootstrap(
     processCardsDefaultOpen: false,
     memoryConfirmWrites: false,
     memoryGlobalEnabled: true,
-    promptHistory: [],
+    promptHistory: opts.promptHistory ?? [],
     version: "test",
   });
   await emitRpc({ type: "$ready", tabId });
@@ -278,6 +279,8 @@ beforeEach(() => {
   tauri.invoke.mockImplementation(tauri.defaultInvoke);
   vi.mocked(openDialog).mockReset();
   vi.mocked(openDialog).mockResolvedValue(null as never);
+  vi.mocked(openUrl).mockReset();
+  vi.mocked(openUrl).mockResolvedValue(undefined);
   localStorage.clear();
   splashMockState.shouldShow = false;
   splashMockState.shouldShowCalls = 0;
@@ -308,6 +311,18 @@ describe("App streaming events", () => {
     expect(document.querySelector(".wd-pop")?.textContent).toContain("jupiter-streaming-test");
   });
 
+  it("does not show recent prompt history as blank-chat suggestions", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-new", "/tmp/jupiter-streaming-test", {
+      promptHistory: ["最近刚问过的私密问题"],
+    });
+
+    expect(screen.queryByText("最近刚问过的私密问题")).toBeNull();
+    expect(document.querySelectorAll(".empty-suggestion")).toHaveLength(4);
+  });
+
   it("updates the top tab title when the workspace changes", async () => {
     render(<App />);
 
@@ -329,6 +344,47 @@ describe("App streaming events", () => {
     await waitFor(() => {
       expect(document.querySelector(".tabbar .tab .label")?.textContent).toBe("Beta");
     });
+  });
+
+  it("shows a global update prompt with release-source and suppression actions", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-update", "/tmp/jupiter-streaming-test");
+
+    await emitRpc({
+      type: "$update_check",
+      mode: "auto",
+      status: "available",
+      currentVersion: "0.99.9",
+      latestVersion: "0.99.10",
+      releaseUrls: {
+        gitee: "https://gitee.com/nighty35628/jupiter/releases",
+        github: "https://github.com/nighty35628/Jupiter/releases/latest",
+      },
+    });
+
+    expect(screen.getByText(/0.99.9.*0.99.10|0.99.10.*0.99.9/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /gitee/i }));
+    expect(openUrl).toHaveBeenCalledWith("https://gitee.com/nighty35628/jupiter/releases");
+
+    fireEvent.click(screen.getByRole("button", { name: /skip this version|跳过当前版本/i }));
+    expect(sentRpcCommands()).toContainEqual({ cmd: "update_skip", version: "0.99.10" });
+
+    await emitRpc({
+      type: "$update_check",
+      mode: "auto",
+      status: "available",
+      currentVersion: "0.99.9",
+      latestVersion: "0.99.10",
+      releaseUrls: {
+        gitee: "https://gitee.com/nighty35628/jupiter/releases",
+        github: "https://github.com/nighty35628/Jupiter/releases/latest",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /don't remind again|不再提示/i }));
+    expect(sentRpcCommands()).toContainEqual({ cmd: "update_disable_prompts" });
   });
 
   it("does not show the startup splash again when switching to a newly opened tab", async () => {

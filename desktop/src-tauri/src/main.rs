@@ -919,6 +919,45 @@ fn save_clipboard_image(bytes: Vec<u8>, extension: Option<String>) -> Result<Str
     Ok(path.to_string_lossy().into_owned())
 }
 
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode_utf8(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).ok()
+}
+
+fn file_url_to_path(raw: &str) -> Option<String> {
+    let mut rest = raw.trim().strip_prefix("file://")?;
+    rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    if let Some(local) = rest.strip_prefix("localhost") {
+        rest = local;
+    }
+    if !rest.starts_with('/') {
+        return None;
+    }
+    percent_decode_utf8(rest)
+}
+
 fn parse_clipboard_file_paths(raw: &str) -> Vec<String> {
     let mut paths = Vec::new();
     for line in raw.lines() {
@@ -926,10 +965,11 @@ fn parse_clipboard_file_paths(raw: &str) -> Vec<String> {
         if trimmed.is_empty() {
             continue;
         }
-        if paths.iter().any(|path| path == trimmed) {
+        let path = file_url_to_path(trimmed).unwrap_or_else(|| trimmed.to_string());
+        if paths.iter().any(|existing| existing == &path) {
             continue;
         }
-        paths.push(trimmed.to_string());
+        paths.push(path);
     }
     paths
 }
@@ -950,6 +990,15 @@ function pushPath(value) {
   if (!path || paths.includes(path)) return;
   paths.push(path);
 }
+try {
+  const urls = pb.readObjectsForClassesOptions($([$.NSURL.class]), $({}));
+  if (urls) {
+    for (let i = 0; i < urls.count; i++) {
+      const url = urls.objectAtIndex(i);
+      if (url && url.isFileURL && url.path) pushPath(url.path);
+    }
+  }
+} catch (_) {}
 const files = pb.propertyListForType('NSFilenamesPboardType');
 if (files) {
   for (const file of ObjC.deepUnwrap(files)) {
@@ -962,6 +1011,8 @@ for (const type of ['public.file-url', 'CorePasteboardFlavorType 0x6675726C']) {
   const url = $.NSURL.URLWithString(raw);
   if (url && url.path) {
     pushPath(url.path);
+  } else {
+    pushPath(raw);
   }
 }
 console.log(paths.join('\n'));
@@ -974,7 +1025,9 @@ console.log(paths.join('\n'));
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("read clipboard failed: {stderr}"));
     }
-    Ok(parse_clipboard_file_paths(&String::from_utf8_lossy(&output.stdout)))
+    Ok(parse_clipboard_file_paths(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1119,8 +1172,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        docx_xml_to_text, parse_desktop_close_behavior, persisted_window_state_flags,
-        sanitize_image_extension, DesktopCloseBehavior,
+        docx_xml_to_text, parse_clipboard_file_paths, parse_desktop_close_behavior,
+        persisted_window_state_flags, sanitize_image_extension, DesktopCloseBehavior,
     };
     use serde_json::json;
     use tauri_plugin_window_state::StateFlags;
@@ -1151,6 +1204,15 @@ mod tests {
     #[test]
     fn rejects_overlong_extensions() {
         assert_eq!(sanitize_image_extension(Some("verylongext")), "png");
+    }
+
+    #[test]
+    fn clipboard_file_paths_decode_file_urls_and_dedupe() {
+        let parsed = parse_clipboard_file_paths(
+            "file:///Users/jrc/Desktop/%E6%8A%A5%E5%91%8A.pdf\nfile://localhost/Users/jrc/Desktop/%E6%8A%A5%E5%91%8A.pdf\n/Users/jrc/Desktop/报告.pdf\n",
+        );
+
+        assert_eq!(parsed, vec!["/Users/jrc/Desktop/报告.pdf"]);
     }
 
     #[test]

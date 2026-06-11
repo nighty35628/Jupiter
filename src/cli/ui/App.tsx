@@ -58,6 +58,8 @@ import {
 import { Eventizer } from "../../core/eventize.js";
 import { pauseGate } from "../../core/pause-gate.js";
 import { autoResolveVerdict, shouldAutoResolveCheckpoint } from "../../core/pause-policy.js";
+import type { DingTalkChannel } from "../../dingtalk/channel.js";
+import { useDingTalkChannel } from "../../dingtalk/use-dingtalk-channel.js";
 import type { FeishuChannel } from "../../feishu/channel.js";
 import { useFeishuChannel } from "../../feishu/use-feishu-channel.js";
 import { formatHookOutcomeMessage, runHooks } from "../../hooks.js";
@@ -314,6 +316,7 @@ export interface AppProps {
   /** Pre-created QQ channel (started before TUI mounts). */
   qqChannel?: QQChannel;
   feishuChannel?: FeishuChannel;
+  dingtalkChannel?: DingTalkChannel;
   telegramChannel?: TelegramChannel;
   /** Ref filled by App on mount so QQ messages flow into the TUI input queue. */
   qqSubmitRef?: { current: ((text: string) => void) | null };
@@ -321,6 +324,8 @@ export interface AppProps {
   qqErrorRef?: { current: ((msg: string) => void) | null };
   feishuSubmitRef?: { current: ((text: string) => void) | null };
   feishuErrorRef?: { current: ((msg: string) => void) | null };
+  dingtalkSubmitRef?: { current: ((text: string) => void) | null };
+  dingtalkErrorRef?: { current: ((msg: string) => void) | null };
   telegramSubmitRef?: { current: ((text: string) => void) | null };
   telegramErrorRef?: { current: ((msg: string) => void) | null };
   /** Resolved chat-history scroll mode, computed by the launcher from config/env. */
@@ -472,11 +477,14 @@ function AppInner({
   startupInfoHints,
   qqChannel,
   feishuChannel,
+  dingtalkChannel,
   telegramChannel,
   qqSubmitRef,
   qqErrorRef,
   feishuSubmitRef,
   feishuErrorRef,
+  dingtalkSubmitRef,
+  dingtalkErrorRef,
   telegramSubmitRef,
   telegramErrorRef,
   historyScrollMode,
@@ -2745,6 +2753,15 @@ function AppInner({
     feishuErrorRef,
   });
 
+  const dingtalk = useDingTalkChannel({
+    codeMode: !!codeMode,
+    initialChannel: dingtalkChannel,
+    log,
+    setQueuedSubmit,
+    dingtalkSubmitRef,
+    dingtalkErrorRef,
+  });
+
   const telegram = useTelegramChannel({
     codeMode: !!codeMode,
     initialChannel: telegramChannel,
@@ -2776,16 +2793,23 @@ function AppInner({
       const qqIncoming = qq.parseSubmit(raw);
       const feishuIncoming =
         qqIncoming?.handled || qqIncoming?.fromQQ ? null : feishu.parseSubmit(raw);
+      const dingtalkIncoming =
+        qqIncoming?.handled || qqIncoming?.fromQQ || feishuIncoming?.fromFeishu
+          ? null
+          : dingtalk.parseSubmit(raw);
       const incoming =
         qqIncoming?.handled || qqIncoming?.fromQQ
           ? qqIncoming
           : feishuIncoming?.fromFeishu
             ? feishuIncoming
-            : telegram.parseSubmit(raw);
+            : dingtalkIncoming?.fromDingTalk
+              ? dingtalkIncoming
+              : telegram.parseSubmit(raw);
       if (!incoming) return;
       let { text } = incoming;
       const fromQQ = "fromQQ" in incoming && incoming.fromQQ;
       const fromFeishu = "fromFeishu" in incoming && incoming.fromFeishu;
+      const fromDingTalk = "fromDingTalk" in incoming && incoming.fromDingTalk;
       const fromTelegram = "fromTelegram" in incoming && incoming.fromTelegram;
       if (incoming.handled) {
         return;
@@ -3033,6 +3057,11 @@ function AppInner({
             disconnect: feishu.disconnect,
             status: feishu.status,
           },
+          dingtalk: {
+            connect: dingtalk.connect,
+            disconnect: dingtalk.disconnect,
+            status: dingtalk.status,
+          },
           telegram: {
             connect: telegram.connect,
             disconnect: telegram.disconnect,
@@ -3047,9 +3076,11 @@ function AppInner({
             ? qq.sendInfo
             : fromFeishu
               ? feishu.sendInfo
-              : fromTelegram
-                ? telegram.sendInfo
-                : log.pushInfo,
+              : fromDingTalk
+                ? dingtalk.sendInfo
+                : fromTelegram
+                  ? telegram.sendInfo
+                  : log.pushInfo,
           postDoctor: (checks) => log.showDoctor(checks),
           postUsage: (args) => log.showUsageVerbose(args),
           postKeys: (args) =>
@@ -3290,6 +3321,7 @@ function AppInner({
       setBusy(true);
       qq.noteTurnFromQQ(fromQQ);
       feishu.noteTurnFromFeishu(fromFeishu);
+      dingtalk.noteTurnFromDingTalk(fromDingTalk);
       telegram.noteTurnFromTelegram(fromTelegram);
       abortedThisTurn.current = false;
       // Seal the in-progress history entry so this turn's edits open
@@ -3558,6 +3590,7 @@ function AppInner({
         }
         qq.maybeSendFinalReply(lastAssistantText);
         feishu.maybeSendFinalReply(lastAssistantText);
+        dingtalk.maybeSendFinalReply(lastAssistantText);
         telegram.maybeSendFinalReply(lastAssistantText);
       } finally {
         flush();
@@ -3575,6 +3608,7 @@ function AppInner({
         submittingRef.current = false;
         qq.clearTurnReply();
         feishu.clearTurnReply();
+        dingtalk.clearTurnReply();
         telegram.clearTurnReply();
         // Refresh balance lazily —don't block the return.
         refreshBalance();
@@ -3632,6 +3666,7 @@ function AppInner({
       getLoopStatus,
       qq,
       feishu,
+      dingtalk,
       telegram,
       isLoopActive,
       isLoopFiring,

@@ -370,6 +370,11 @@ export const EN: TranslationSchema = {
         "connect, inspect, or disconnect the Feishu channel for this session (first connect guides App ID / App Secret setup)",
       argsHint: "[connect [appId appSecret [mention|all]]|status|disconnect]",
     },
+    dingtalk: {
+      description:
+        "connect, inspect, or disconnect the DingTalk channel for this session (first connect guides Client ID / Client Secret setup)",
+      argsHint: "[connect [clientId clientSecret [mention|all]]|status|disconnect]",
+    },
     telegram: {
       description:
         "connect, inspect, or disconnect the Telegram channel for this session (first connect guides bot token setup)",
@@ -901,6 +906,33 @@ export const EN: TranslationSchema = {
       disconnected: "Feishu disconnected. Auto-start is disabled.",
       status:
         "Feishu: {connected}, auto-start {enabled}, credentials {configured}, appId {appId}, group policy {groupPolicy}, current mode {mode}.",
+      stateConnected: "connected",
+      stateDisconnected: "disconnected",
+      stateEnabled: "enabled",
+      stateDisabled: "disabled",
+      stateConfigured: "configured",
+      stateNotConfigured: "not configured",
+      groupMention: "@mention only",
+      groupAll: "all group messages",
+      none: "none",
+      modeChat: "chat",
+      modeCode: "code",
+    },
+    dingtalk: {
+      unavailable: "/dingtalk is not available in this session.",
+      connecting: "DingTalk: connecting…",
+      connectFailed: "DingTalk connect failed: {reason}",
+      disconnecting: "DingTalk: disconnecting…",
+      disconnectFailed: "DingTalk disconnect failed: {reason}",
+      usage:
+        "Usage: /dingtalk connect [clientId clientSecret [mention|all]] | /dingtalk status | /dingtalk disconnect",
+      credentialsRequired:
+        "DingTalk Client ID and Client Secret are required. Pass them to `/dingtalk connect` or configure them in settings.",
+      connected: "DingTalk connected in {mode} mode. It will auto-start on future launches.",
+      alreadyConnected: "DingTalk is already connected in {mode} mode. Auto-start is enabled.",
+      disconnected: "DingTalk disconnected. Auto-start is disabled.",
+      status:
+        "DingTalk: {connected}, auto-start {enabled}, credentials {configured}, clientId {clientId}, group policy {groupPolicy}, current mode {mode}.",
       stateConnected: "connected",
       stateDisconnected: "disconnected",
       stateEnabled: "enabled",

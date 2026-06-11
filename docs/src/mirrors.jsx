@@ -1,7 +1,7 @@
 // Smart mirror grid — probes R2 / GitHub Releases for fastest TTFB and offers
 // a per-platform installer link from whichever wins.
 
-const GH_REPO = "esengine/DeepSeek-Jupiter";
+const GH_REPO = "nighty35628/Jupiter";
 const R2_BASE = "https://pub-147fb53b9c1e4bbf891a257968619ea7.r2.dev";
 
 function buildMirrors(version) {

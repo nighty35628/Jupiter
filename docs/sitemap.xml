@@ -4,23 +4,23 @@
   xmlns:xhtml="http://www.w3.org/1999/xhtml"
 >
   <url>
-    <loc>https://esengine.github.io/DeepSeek-Jupiter/</loc>
+    <loc>https://nighty35628.github.io/Jupiter/</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
-    <xhtml:link rel="alternate" hreflang="en" href="https://esengine.github.io/DeepSeek-Jupiter/?lang=en" />
-    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://esengine.github.io/DeepSeek-Jupiter/?lang=zh" />
-    <xhtml:link rel="alternate" hreflang="x-default" href="https://esengine.github.io/DeepSeek-Jupiter/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://nighty35628.github.io/Jupiter/?lang=en" />
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://nighty35628.github.io/Jupiter/?lang=zh" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://nighty35628.github.io/Jupiter/" />
   </url>
   <url>
-    <loc>https://esengine.github.io/DeepSeek-Jupiter/configuration.html</loc>
+    <loc>https://nighty35628.github.io/Jupiter/configuration.html</loc>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
-    <xhtml:link rel="alternate" hreflang="en" href="https://esengine.github.io/DeepSeek-Jupiter/configuration.html?lang=en" />
-    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://esengine.github.io/DeepSeek-Jupiter/configuration.html?lang=zh" />
-    <xhtml:link rel="alternate" hreflang="x-default" href="https://esengine.github.io/DeepSeek-Jupiter/configuration.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://nighty35628.github.io/Jupiter/configuration.html?lang=en" />
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://nighty35628.github.io/Jupiter/configuration.html?lang=zh" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://nighty35628.github.io/Jupiter/configuration.html" />
   </url>
   <url>
-    <loc>https://esengine.github.io/DeepSeek-Jupiter/download.html</loc>
+    <loc>https://nighty35628.github.io/Jupiter/download.html</loc>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>

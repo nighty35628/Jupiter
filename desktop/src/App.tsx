@@ -23,6 +23,7 @@ import { CommandPalette, Toast, buildCommands, useCommandPalette } from "./Comma
 import { WorkspaceProvider } from "./Markdown";
 import { type AbortDraftSource, nextAbortDraftCandidate, restoreAbortedDraft } from "./abort-draft";
 import { DESKTOP_CLI_SLASH_COMMANDS, isKnownDesktopCliSlash, parseDesktopSlash } from "./cli-slash";
+import type { DingTalkDesktopSettingsState } from "./dingtalk-settings";
 import {
   type FilePreview,
   type FilePreviewTarget,
@@ -68,6 +69,8 @@ import type {
   StorageScanEvent,
   SubagentEvent,
   SubagentRunInfo,
+  UpdateCheckEvent,
+  UpdateReleaseUrls,
   WorkflowRun,
 } from "./protocol";
 import type { QQDesktopSettingsState } from "./qq-settings";
@@ -158,7 +161,6 @@ import {
   scrollVirtuosoToBottom,
 } from "./ui/virtuoso-scroll";
 import { WorkdirPop } from "./ui/workdir-pop";
-import { type JupiterUpdate, checkJupiterUpdate, installJupiterUpdate } from "./update-policy";
 import { displayWorkspaceBasename, displayWorkspacePath } from "./workspace-display";
 import { BUILT_IN_WORKFLOWS } from "../../src/workflows/catalog";
 
@@ -435,6 +437,7 @@ type State = {
   settings: Settings | null;
   qq: QQDesktopSettingsState | null;
   feishu: FeishuDesktopSettingsState | null;
+  dingtalk: DingTalkDesktopSettingsState | null;
   balance: Balance | null;
   mentionResults: MentionResults | null;
   mentionPreview: MentionPreviewState | null;
@@ -474,6 +477,21 @@ type LibrarySourceInput = Omit<LibrarySource, "id" | "addedAt">;
 function libraryStorageKeyForWorkspace(workspaceDir?: string | null): string | null {
   if (!workspaceDir) return null;
   return `jupiter.library.sources:${workspaceDir}`;
+}
+
+export function pickEmptySuggestions(
+  pool: readonly string[],
+  count = 4,
+  random: () => number = Math.random,
+): string[] {
+  const items = Array.from(new Set(pool.map((item) => item.trim()).filter(Boolean)));
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    const tmp = items[i];
+    items[i] = items[j]!;
+    items[j] = tmp!;
+  }
+  return items.slice(0, Math.max(0, Math.min(count, items.length)));
 }
 
 function librarySourceIdentity(source: LibrarySourceInput | LibrarySource): string {
@@ -1761,6 +1779,20 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           appIdPreview: ev.appIdPreview,
         },
       };
+    case "$dingtalk_settings":
+      return {
+        ...state,
+        dingtalk: {
+          clientId: ev.clientId,
+          clientSecret: ev.clientSecret,
+          enabled: ev.enabled,
+          configured: ev.configured,
+          requireMentionInGroup: ev.requireMentionInGroup,
+          runtimeState: ev.runtimeState,
+          lastError: ev.lastError,
+          clientIdPreview: ev.clientIdPreview,
+        },
+      };
     case "$settings": {
       const prevWs = state.settings?.workspaceDir;
       const wsChanged = prevWs !== undefined && prevWs !== ev.workspaceDir;
@@ -2241,6 +2273,9 @@ interface TabRuntimeProps {
   tabsList: TabMeta[];
   activeTabId: string;
   setActiveTabId: (id: string) => void;
+  updateCheck: UpdateCheckViewState;
+  onCheckUpdates: (manual: boolean) => void;
+  onOpenUpdateRelease: (source: keyof UpdateReleaseUrls) => void;
 }
 
 function TabRuntimeInner({
@@ -2279,6 +2314,9 @@ function TabRuntimeInner({
   tabsList,
   activeTabId,
   setActiveTabId,
+  updateCheck,
+  onCheckUpdates,
+  onOpenUpdateRelease,
 }: TabRuntimeProps) {
   const [state, dispatch] = useReducer(reduce, {
     ready: false,
@@ -2301,6 +2339,7 @@ function TabRuntimeInner({
     settings: null,
     qq: null,
     feishu: null,
+    dingtalk: null,
     balance: null,
     mentionResults: null,
     mentionPreview: null,
@@ -2770,6 +2809,20 @@ function TabRuntimeInner({
   const saveFeishuConfig = useCallback(
     (patch: { appId?: string; appSecret?: string; requireMentionInGroup?: boolean }) =>
       sendRpc({ cmd: "feishu_config_save", ...patch }),
+    [sendRpc],
+  );
+  const loadDingTalkSettings = useCallback(
+    () => sendRpc({ cmd: "dingtalk_status_get" }),
+    [sendRpc],
+  );
+  const connectDingTalk = useCallback(() => sendRpc({ cmd: "dingtalk_connect" }), [sendRpc]);
+  const disconnectDingTalk = useCallback(
+    () => sendRpc({ cmd: "dingtalk_disconnect" }),
+    [sendRpc],
+  );
+  const saveDingTalkConfig = useCallback(
+    (patch: { clientId?: string; clientSecret?: string; requireMentionInGroup?: boolean }) =>
+      sendRpc({ cmd: "dingtalk_config_save", ...patch }),
     [sendRpc],
   );
   const saveApiKey = useCallback(
@@ -3517,7 +3570,8 @@ function TabRuntimeInner({
     if (!active) return;
     loadQQSettings();
     loadFeishuSettings();
-  }, [active, loadQQSettings, loadFeishuSettings]);
+    loadDingTalkSettings();
+  }, [active, loadDingTalkSettings, loadQQSettings, loadFeishuSettings]);
 
   useEffect(() => {
     // Every TabRuntime stays mounted (display:none on inactive), so each registers its own keydown — without this gate Cmd+N would fire newChat() in every tab and wipe the inactive ones' sessions.
@@ -3870,13 +3924,7 @@ function TabRuntimeInner({
       onAbort={abort}
       disabled={!state.ready}
       busy={state.busy}
-      busyLabel={
-        state.busy
-          ? state.activeSkill
-            ? `Skill · ${state.activeSkill.name}`
-            : "Reasoning"
-          : undefined
-      }
+      busyLabel={state.busy ? t("app.thinkingNow") : undefined}
       busyElapsedMs={elapsed}
       textareaRef={composerRef}
       modelLabel={state.settings?.model ?? "deepseek-v4-flash"}
@@ -3994,12 +4042,11 @@ function TabRuntimeInner({
         <div className="thread-bottom-spacer">
           <ThinkingBottomIndicator
             active={shouldShowThinkingFooter(state.messages, state.busy)}
-            label={state.transientStatus}
           />
         </div>
       ),
     }),
-    [state.activePlan, state.busy, state.messages, state.transientStatus],
+    [state.activePlan, state.busy, state.messages],
   );
 
   return (
@@ -4077,7 +4124,6 @@ function TabRuntimeInner({
                     <EmptyState
                       onPick={handleEmptySuggestion}
                       workspaceDir={state.settings?.workspaceDir}
-                      promptHistory={state.settings?.promptHistory}
                       composer={renderComposer("hero")}
                     />
                   </div>
@@ -4481,7 +4527,14 @@ function TabRuntimeInner({
               }}
             />
 
-            {aboutOpen ? <AboutModal onClose={() => setAboutOpen(false)} /> : null}
+            {aboutOpen ? (
+              <AboutModal
+                onClose={() => setAboutOpen(false)}
+                updateCheck={updateCheck}
+                onCheckUpdates={onCheckUpdates}
+                onOpenRelease={onOpenUpdateRelease}
+              />
+            ) : null}
 
             {settingsOpen && state.settings ? (
               <SettingsModal
@@ -4510,6 +4563,7 @@ function TabRuntimeInner({
                 storageScan={state.storageScan}
                 qq={state.qq}
                 feishu={state.feishu}
+                dingtalk={state.dingtalk}
                 onClose={() => setSettingsOpen(false)}
                 onSave={applySettingsPatch}
                 onSaveApiKey={saveApiKey}
@@ -4527,6 +4581,13 @@ function TabRuntimeInner({
                 onSaveFeishuConfig={saveFeishuConfig}
                 onOpenFeishuApplyLink={() =>
                   openUrl("https://open.feishu.cn/app").catch(() => undefined)
+                }
+                onLoadDingTalk={loadDingTalkSettings}
+                onConnectDingTalk={connectDingTalk}
+                onDisconnectDingTalk={disconnectDingTalk}
+                onSaveDingTalkConfig={saveDingTalkConfig}
+                onOpenDingTalkApplyLink={() =>
+                  openUrl("https://open-dev.dingtalk.com/").catch(() => undefined)
                 }
                 onPickWorkspace={pickWorkspace}
                 onAddMcpSpec={addMcpSpec}
@@ -5117,35 +5178,29 @@ function MainHead({
 function EmptyState({
   onPick,
   workspaceDir,
-  promptHistory,
   composer,
 }: {
   onPick: (text: string) => void;
   workspaceDir?: string;
-  promptHistory?: string[];
   composer: ReactNode;
 }) {
-  useLang();
-  const fallbackSuggestions = [
-    t("app.empty.suggestion0"),
-    t("app.empty.suggestion1"),
-    t("app.empty.suggestion2"),
-    t("app.empty.suggestion3"),
-  ];
-  const recentSuggestions = Array.from(
-    new Set(
-      (promptHistory ?? [])
-        .map((item) => item.trim())
-        .filter((item) => item && !item.startsWith("/") && item.length <= 96),
-    ),
-  ).slice(0, 4);
-  const suggestions =
-    recentSuggestions.length > 0
-      ? [
-          ...recentSuggestions,
-          ...fallbackSuggestions.filter((item) => !recentSuggestions.includes(item)),
-        ].slice(0, 4)
-      : fallbackSuggestions;
+  const lang = useLang();
+  const suggestions = useMemo(
+    () =>
+      pickEmptySuggestions([
+        t("app.empty.suggestion0"),
+        t("app.empty.suggestion1"),
+        t("app.empty.suggestion2"),
+        t("app.empty.suggestion3"),
+        t("app.empty.suggestion4"),
+        t("app.empty.suggestion5"),
+        t("app.empty.suggestion6"),
+        t("app.empty.suggestion7"),
+        t("app.empty.suggestion8"),
+        t("app.empty.suggestion9"),
+      ]),
+    [lang],
+  );
   const wsLabel = workspaceDir ? displayWorkspaceBasename(workspaceDir) : null;
   return (
     <div className="empty-state">
@@ -5281,66 +5336,48 @@ export function NeedsSetupView({
 }
 
 function UpdateOverlay({
-  version,
-  currentVersion,
-  status,
-  progress,
-  onInstall,
+  update,
+  onOpenRelease,
+  onSkip,
+  onDisablePrompts,
   onDismiss,
 }: {
-  version: string;
-  currentVersion: string;
-  status: "idle" | "installing" | "error";
-  progress: { downloaded: number; total: number | null } | null;
-  onInstall: () => void;
+  update: AvailableUpdateEvent;
+  onOpenRelease: (source: keyof UpdateReleaseUrls) => void;
+  onSkip: () => void;
+  onDisablePrompts: () => void;
   onDismiss: () => void;
 }) {
   useLang();
-  const ratio =
-    progress && progress.total && progress.total > 0
-      ? Math.min(1, progress.downloaded / progress.total)
-      : null;
-  const statusText =
-    status === "error"
-      ? t("app.update.failed")
-      : status === "installing"
-        ? progress
-          ? ratio !== null
-            ? t("app.update.downloading", {
-                downloaded: formatBytes(progress.downloaded),
-                total: formatBytes(progress.total ?? 0),
-                pct: Math.round(ratio * 100),
-              })
-            : t("app.update.downloadingUnknown", {
-                downloaded: formatBytes(progress.downloaded),
-              })
-          : t("app.update.installing")
-        : t("app.update.clickToInstall");
   return (
     <div className="update-overlay" aria-live="polite">
       <div className="plan-banner update-overlay-card">
         <span className="ico">
-          <I.download size={14} />
+          <I.rotate size={14} />
         </span>
         <div className="body">
           <div className="t">
             {t("app.update.available", {
-              current: currentVersion,
-              latest: version,
+              current: update.currentVersion,
+              latest: update.latestVersion,
             })}
           </div>
-          <div className="s">{statusText}</div>
-          {status === "installing" && ratio !== null ? (
-            <div className="meter-mini" aria-label="download progress">
-              <span style={{ width: `${Math.round(ratio * 100)}%` }} />
-            </div>
-          ) : null}
+          <div className="s">{t("app.update.openReleaseHint")}</div>
         </div>
         <div className="prog">
-          <button type="button" onClick={onInstall} disabled={status === "installing"}>
-            {t("app.update.install")}
+          <button type="button" onClick={() => onOpenRelease("gitee")}>
+            {t("app.update.openGitee")}
           </button>
-          <button type="button" onClick={onDismiss} disabled={status === "installing"}>
+          <button type="button" onClick={() => onOpenRelease("github")}>
+            {t("app.update.openGithub")}
+          </button>
+          <button type="button" onClick={onSkip}>
+            {t("app.update.skipVersion")}
+          </button>
+          <button type="button" onClick={onDisablePrompts}>
+            {t("app.update.disablePrompts")}
+          </button>
+          <button type="button" onClick={onDismiss}>
             {t("app.update.later")}
           </button>
         </div>
@@ -5349,14 +5386,23 @@ function UpdateOverlay({
   );
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
 type TabMeta = { id: string; workspaceDir?: string; busy?: boolean };
+type AvailableUpdateEvent = Extract<UpdateCheckEvent, { status: "available" }>;
+type UpdateCheckViewState =
+  | UpdateCheckEvent
+  | {
+      type: "$update_check";
+      mode: "manual";
+      status: "idle";
+      currentVersion: string;
+      releaseUrls: UpdateReleaseUrls;
+    };
+
+const DEFAULT_UPDATE_RELEASE_URLS: UpdateReleaseUrls = {
+  gitee: "https://gitee.com/nighty35628/jupiter/releases",
+  github: "https://github.com/nighty35628/Jupiter/releases/latest",
+};
+const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 
 export function App() {
   const [tabs, setTabs] = useState<TabMeta[]>([]);
@@ -5381,12 +5427,14 @@ export function App() {
     tabsRef.current = tabs;
   }, [tabs]);
 
-  const [pendingUpdate, setPendingUpdate] = useState<JupiterUpdate | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<"idle" | "installing" | "error">("idle");
-  const [updateProgress, setUpdateProgress] = useState<{
-    downloaded: number;
-    total: number | null;
-  } | null>(null);
+  const [pendingUpdate, setPendingUpdate] = useState<AvailableUpdateEvent | null>(null);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckViewState>({
+    type: "$update_check",
+    mode: "manual",
+    status: "idle",
+    currentVersion: APP_VERSION,
+    releaseUrls: DEFAULT_UPDATE_RELEASE_URLS,
+  });
   const [currency, setCurrency] = useState<"CNY" | "USD">(() => {
     const v = localStorage.getItem("jupiter.currency");
     return v === "USD" ? "USD" : "CNY";
@@ -5602,45 +5650,44 @@ export function App() {
     setStartupRetryNonce((n) => n + 1);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const update = await checkJupiterUpdate();
-        if (!cancelled && update) setPendingUpdate(update);
-      } catch {
-        // updater not configured
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  const sendGlobalRpc = useCallback((cmd: OutgoingCommand) => {
+    invoke("rpc_send", { line: JSON.stringify(cmd) }).catch((err) =>
+      console.error(`${cmd.cmd} failed`, err),
+    );
   }, []);
 
-  const installUpdate = useCallback(async () => {
+  const checkForUpdates = useCallback(
+    (manual: boolean) => {
+      sendGlobalRpc({ cmd: "update_check", manual });
+    },
+    [sendGlobalRpc],
+  );
+
+  const openUpdateRelease = useCallback(
+    (source: keyof UpdateReleaseUrls) => {
+      const urls =
+        updateCheck.status === "available" ||
+        updateCheck.status === "up_to_date" ||
+        updateCheck.status === "suppressed" ||
+        updateCheck.status === "checking" ||
+        updateCheck.status === "error"
+          ? updateCheck.releaseUrls
+          : DEFAULT_UPDATE_RELEASE_URLS;
+      openUrl(urls[source]).catch(() => undefined);
+    },
+    [updateCheck],
+  );
+
+  const skipPendingUpdate = useCallback(() => {
     if (!pendingUpdate) return;
-    setUpdateStatus("installing");
-    setUpdateProgress(null);
-    try {
-      await installJupiterUpdate(pendingUpdate, (evt) => {
-        if (evt.event === "Started") {
-          setUpdateProgress({
-            downloaded: 0,
-            total: evt.data.contentLength ?? null,
-          });
-        } else if (evt.event === "Progress") {
-          setUpdateProgress((p) =>
-            p ? { ...p, downloaded: p.downloaded + evt.data.chunkLength } : p,
-          );
-        } else if (evt.event === "Finished") {
-          setUpdateProgress((p) => (p ? { ...p, downloaded: p.total ?? p.downloaded } : p));
-        }
-      });
-    } catch (err) {
-      console.error("update failed", err);
-      setUpdateStatus("error");
-    }
-  }, [pendingUpdate]);
+    sendGlobalRpc({ cmd: "update_skip", version: pendingUpdate.latestVersion });
+    setPendingUpdate(null);
+  }, [pendingUpdate, sendGlobalRpc]);
+
+  const disableUpdatePrompts = useCallback(() => {
+    sendGlobalRpc({ cmd: "update_disable_prompts" });
+    setPendingUpdate(null);
+  }, [sendGlobalRpc]);
 
   useEffect(() => {
     let cancelled = false;
@@ -5654,6 +5701,14 @@ export function App() {
           try {
             const ev = JSON.parse(e.payload.data) as IncomingEvent;
             const tabId = ev.tabId;
+
+            if (ev.type === "$update_check") {
+              setUpdateCheck(ev);
+              if (ev.mode === "auto" && ev.status === "available") {
+                setPendingUpdate(ev);
+              }
+              return;
+            }
 
             if (ev.type === "$tab_opened" && tabId) {
               const delayRestoredFocus = Boolean(ev.active && ev.restoringSession);
@@ -6114,6 +6169,9 @@ export function App() {
               tabsList={displayTabs}
               activeTabId={activeTabId}
               setActiveTabId={setActiveTabId}
+              updateCheck={updateCheck}
+              onCheckUpdates={checkForUpdates}
+              onOpenUpdateRelease={openUpdateRelease}
             />
           ))}
         </div>
@@ -6121,11 +6179,10 @@ export function App() {
       {tabs.length > 0 && splashOn ? <Splash onDone={() => setSplashOn(false)} /> : null}
       {pendingUpdate ? (
         <UpdateOverlay
-          version={pendingUpdate.version}
-          currentVersion={pendingUpdate.currentVersion}
-          status={updateStatus}
-          progress={updateProgress}
-          onInstall={installUpdate}
+          update={pendingUpdate}
+          onOpenRelease={openUpdateRelease}
+          onSkip={skipPendingUpdate}
+          onDisablePrompts={disableUpdatePrompts}
           onDismiss={() => setPendingUpdate(null)}
         />
       ) : null}

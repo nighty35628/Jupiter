@@ -40,11 +40,12 @@ import {
   canRollbackMessage,
   chatMessageKey,
   pathToFileUrl,
+  pickEmptySuggestions,
   readWindowExpanded,
   reduce,
   rollbackTargetForMessage,
-  shouldShowThinkingFooter,
   shouldShowSettingsChangeToast,
+  shouldShowThinkingFooter,
   toggleWindowExpanded,
 } from "./App";
 import { getThreadMaxWidth, getVisibleContextWidth } from "./ui/thread-layout";
@@ -82,6 +83,7 @@ function initialState(): Parameters<typeof reduce>[0] {
     settings: null,
     qq: null,
     feishu: null,
+    dingtalk: null,
     balance: null,
     mentionResults: null,
     mentionPreview: null,
@@ -861,6 +863,15 @@ describe("Desktop App reducer — ApprovalPrompt integration", () => {
 });
 
 describe("desktop thread layout", () => {
+  it("picks a fixed number of unique blank-chat suggestions from a fixed pool", () => {
+    expect(pickEmptySuggestions([" a ", "b", "a", "", "c"], 10, () => 0.99)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    expect(pickEmptySuggestions(["a", "b", "c", "d", "e"], 3, () => 0.99)).toEqual(["a", "b", "c"]);
+  });
+
   it("recomputes the thread cap from the latest viewport width", () => {
     const side = 244;
     const ctx = 320;

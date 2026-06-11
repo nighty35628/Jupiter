@@ -666,4 +666,19 @@ describe("desktop Composer clipboard files", () => {
 
     expect(paths).toEqual(["docs/paper.pdf"]);
   });
+
+  it("extracts plain-text local paths even when WebView exposes no file list", () => {
+    const paths = clipboardFileMentionPaths(
+      {
+        files: { length: 0 },
+        getData: (type: string) =>
+          type === "text/plain"
+            ? "/repo/docs/paper.pdf\nfile:///repo/docs/hello%20world.md"
+            : "",
+      } as unknown as DataTransfer,
+      "/repo",
+    );
+
+    expect(paths).toEqual(["docs/paper.pdf", "docs/hello world.md"]);
+  });
 });

@@ -5,7 +5,7 @@ function useGithubStats() {
   const [contributors, setContributors] = React.useState([]);
   React.useEffect(() => {
     let cancelled = false;
-    fetch("https://api.github.com/repos/esengine/DeepSeek-Jupiter")
+    fetch("https://api.github.com/repos/nighty35628/Jupiter")
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (cancelled || !j) return;
@@ -16,7 +16,7 @@ function useGithubStats() {
         });
       })
       .catch(() => {});
-    fetch("https://api.github.com/repos/esengine/DeepSeek-Jupiter/contributors?per_page=24")
+    fetch("https://api.github.com/repos/nighty35628/Jupiter/contributors?per_page=24")
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (cancelled || !Array.isArray(j)) return;
@@ -61,13 +61,13 @@ function Community() {
             </span>
           </div>
           <div style={{display:"flex", gap:10, marginTop:18, flexWrap:"wrap"}}>
-            <a className="btn btn-primary btn-sm" href="https://github.com/esengine/DeepSeek-Jupiter" target="_blank" rel="noreferrer">
+            <a className="btn btn-primary btn-sm" href="https://github.com/nighty35628/Jupiter" target="_blank" rel="noreferrer">
               <Ic.Star size={13}/> Star on GitHub
             </a>
-            <a className="btn btn-ghost btn-sm" href="https://github.com/esengine/DeepSeek-Jupiter" target="_blank" rel="noreferrer">
+            <a className="btn btn-ghost btn-sm" href="https://github.com/nighty35628/Jupiter" target="_blank" rel="noreferrer">
               <Ic.Github size={13}/> {t({ zh: '阅读源码', en: 'Read source' }, lang)}
             </a>
-            <a className="btn btn-ghost btn-sm" href="https://github.com/esengine/DeepSeek-Jupiter/discussions" target="_blank" rel="noreferrer">
+            <a className="btn btn-ghost btn-sm" href="https://github.com/nighty35628/Jupiter/discussions" target="_blank" rel="noreferrer">
               {t({ zh: '加入讨论', en: 'Join discussions' }, lang)}
             </a>
           </div>
@@ -97,7 +97,7 @@ function Community() {
             )}
             {contributors.length > 0 && (
               <a
-                href="https://github.com/esengine/DeepSeek-Jupiter/graphs/contributors"
+                href="https://github.com/nighty35628/Jupiter/graphs/contributors"
                 target="_blank"
                 rel="noreferrer"
                 className="contrib-avatar"
@@ -107,8 +107,8 @@ function Community() {
           </div>
           <p style={{color:"var(--cream-mute)", fontSize:12.5, marginTop:18, marginBottom:0, lineHeight:1.6}}>
             {t({
-              zh: <>想成为下一个？阅读 <a href="https://github.com/esengine/DeepSeek-Jupiter/blob/main/CONTRIBUTING.md" target="_blank" rel="noreferrer" style={{color:"var(--accent)", textDecoration:"none"}}>CONTRIBUTING.md</a> 并领取一个 <span className="kbd">good first issue</span>。</>,
-              en: <>Want to be next? Read <a href="https://github.com/esengine/DeepSeek-Jupiter/blob/main/CONTRIBUTING.md" target="_blank" rel="noreferrer" style={{color:"var(--accent)", textDecoration:"none"}}>CONTRIBUTING.md</a> and pick up a <span className="kbd">good first issue</span>.</>,
+              zh: <>想成为下一个？阅读 <a href="https://github.com/nighty35628/Jupiter/blob/main/CONTRIBUTING.md" target="_blank" rel="noreferrer" style={{color:"var(--accent)", textDecoration:"none"}}>CONTRIBUTING.md</a> 并领取一个 <span className="kbd">good first issue</span>。</>,
+              en: <>Want to be next? Read <a href="https://github.com/nighty35628/Jupiter/blob/main/CONTRIBUTING.md" target="_blank" rel="noreferrer" style={{color:"var(--accent)", textDecoration:"none"}}>CONTRIBUTING.md</a> and pick up a <span className="kbd">good first issue</span>.</>,
             }, lang)}
           </p>
         </div>

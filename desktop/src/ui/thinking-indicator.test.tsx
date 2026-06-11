@@ -21,10 +21,10 @@ describe("ThinkingBottomIndicator", () => {
     expect(screen.getByRole("status").textContent).toBe("正在思考");
   });
 
-  it("can show the current transient model status without adding transcript rows", () => {
+  it("keeps the visible footer label generic even when transient tool status is present", () => {
     render(<ThinkingBottomIndicator active label="tool result uploaded" />);
 
-    expect(screen.getByRole("status").textContent).toBe("tool result uploaded");
+    expect(screen.getByRole("status").textContent).toBe("Thinking");
   });
 
   it("does not render when the main turn is idle", () => {

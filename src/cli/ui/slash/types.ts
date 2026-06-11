@@ -168,6 +168,11 @@ export interface SlashContext {
     disconnect: () => Promise<string>;
     status: () => string;
   };
+  dingtalk?: {
+    connect: (args: readonly string[]) => Promise<string>;
+    disconnect: () => Promise<string>;
+    status: () => string;
+  };
   telegram?: {
     connect: (args: readonly string[]) => Promise<string>;
     disconnect: () => Promise<string>;

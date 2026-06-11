@@ -356,6 +356,11 @@ export const zhCN: TranslationSchema = {
         "连接/查看/断开飞书通道，首次连接需提供 App ID + App Secret（可选 mention/all 群聊策略）",
       argsHint: "[connect [appId appSecret [mention|all]]|status|disconnect]",
     },
+    dingtalk: {
+      description:
+        "连接/查看/断开钉钉通道，首次连接需提供 Client ID + Client Secret（可选 mention/all 群聊策略）",
+      argsHint: "[connect [clientId clientSecret [mention|all]]|status|disconnect]",
+    },
     telegram: {
       description: "连接/查看/断开 Telegram 通道，首次连接需提供 BotFather bot token",
       argsHint: "[connect [botToken]|status|disconnect]",
@@ -856,6 +861,33 @@ export const zhCN: TranslationSchema = {
       disconnected: "飞书已断开连接，自动启动已关闭。",
       status:
         "飞书：{connected}，自动启动{enabled}，凭据{configured}，appId {appId}，群聊策略 {groupPolicy}，当前模式 {mode}。",
+      stateConnected: "已连接",
+      stateDisconnected: "未连接",
+      stateEnabled: "已启用",
+      stateDisabled: "未启用",
+      stateConfigured: "已配置",
+      stateNotConfigured: "未配置",
+      groupMention: "仅 @ 提及",
+      groupAll: "所有群消息",
+      none: "无",
+      modeChat: "聊天",
+      modeCode: "代码",
+    },
+    dingtalk: {
+      unavailable: "/dingtalk 在当前会话中不可用。",
+      connecting: "钉钉：正在连接…",
+      connectFailed: "钉钉连接失败：{reason}",
+      disconnecting: "钉钉：正在断开…",
+      disconnectFailed: "钉钉断开失败：{reason}",
+      usage:
+        "用法：/dingtalk connect [clientId clientSecret [mention|all]] | /dingtalk status | /dingtalk disconnect",
+      credentialsRequired:
+        "钉钉 Client ID 和 Client Secret 不能为空。请传给 `/dingtalk connect`，或在设置中配置。",
+      connected: "钉钉已在{mode}模式下连接成功，后续启动会自动启用。",
+      alreadyConnected: "钉钉已在{mode}模式下连接，自动启动已启用。",
+      disconnected: "钉钉已断开连接，自动启动已关闭。",
+      status:
+        "钉钉：{connected}，自动启动{enabled}，凭据{configured}，clientId {clientId}，群聊策略 {groupPolicy}，当前模式 {mode}。",
       stateConnected: "已连接",
       stateDisconnected: "未连接",
       stateEnabled: "已启用",

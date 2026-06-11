@@ -3,6 +3,51 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — 2026-06-11
+
+### 中文
+
+**正式版发布。** Jupiter 1.0.0 正式发布。README 改为更清晰的正式版说明，去掉单独的“本次更新”板块，
+突出 DeepSeek desktop agent 定位、下载入口、CLI 使用、开发步骤和 Star/分享入口。
+
+**钉钉通道。** 新增 DingTalk Stream 机器人通道，支持 `/dingtalk connect/status/disconnect`
+与 `/ding` 别名；桌面设置页可配置 Client ID/AppKey、Client Secret 和群聊 @ 策略。钉钉消息会进入当前会话，
+回复优先使用 Markdown 并回退为文本，同时带单进程锁和消息去重。
+
+**桌面更新检查。** 桌面端新增 Gitee/GitHub release 检查。About 页可手动检查，启动提示可打开 Gitee 或
+GitHub release、跳过当前版本或关闭自动提示。
+
+**远程控制与会话细节。** QQ 与钉钉远程命令支持 `/status`、`/session list`、`/session switch`、
+`/session new`、`/workspace list` 和 `/workspace switch`。桌面默认会话名识别覆盖更多时间戳格式，
+底部 thinking 状态和空状态建议也做了收敛。
+
+**品牌与发布清理。** 清理关于页、反馈链接、文档站、dsnix 元数据和测试期望中的旧项目链接；本地 `origin`
+指向 `nighty35628/Jupiter`，除许可证 notice 外不再保留旧上游项目产品痕迹。桌面端、根包、
+Tauri、Cargo、CHANGELOG 和 release notes 版本统一为 `1.0.0`。
+
+### English
+
+**Official 1.0 release.** Jupiter 1.0.0 is now the official release. README was rewritten into a clearer
+release-facing document, with the per-version update block removed and the DeepSeek desktop agent positioning,
+downloads, CLI usage, development steps, and Star/share callout made explicit.
+
+**DingTalk channel.** Added the DingTalk Stream bot channel with `/dingtalk connect/status/disconnect` and
+`/ding`. Desktop settings can configure Client ID/AppKey, Client Secret, and group @mention policy. DingTalk
+messages route into the current session; replies prefer Markdown with text fallback and include single-process
+locking plus duplicate-message suppression.
+
+**Desktop update checks.** Desktop can now check Gitee and GitHub releases. About supports manual checks, while
+startup update prompts can open Gitee or GitHub releases, skip the current version, or disable automatic prompts.
+
+**Remote control and session polish.** QQ and DingTalk remote commands now support `/status`, `/session list`,
+`/session switch`, `/session new`, `/workspace list`, and `/workspace switch`. Desktop default-session title
+detection covers more timestamp formats, and the bottom thinking state plus empty-state suggestions were tightened.
+
+**Brand and release cleanup.** About links, feedback URLs, docs, dsnix metadata, and test expectations now point
+at `nighty35628/Jupiter`; local `origin` also points at the Jupiter repository. Old upstream product traces are
+removed outside the required license notices. Desktop, root package, Tauri, Cargo, CHANGELOG, and release
+notes are aligned on `1.0.0`.
+
 ## [0.99.9] — 2026-06-11
 
 ### 中文
@@ -265,7 +310,7 @@ test coverage so Desktop and CLI command behavior stay aligned.
 
 ## [0.52.0] — 2026-05-26
 
-**Ink renderer in-tree as `@esengine/ink`.** The vendored Ink fork now
+**Ink renderer in-tree as an `ink` workspace package.** The vendored Ink fork now
 lives as a workspace package (#1847), unblocking TUI-specific
 renderer tweaks (focus, IME, Static append) without forking upstream.
 TUI polish lands on top: guard ASCII IME enter commits so JP/CN IME
@@ -1366,7 +1411,7 @@ gaining real data.
 - chore(plan): document magic numbers + swap the hand-rolled
   ANSI-strip for the standard `strip-ansi` package. (#738)
 - chore: oosmetrics badges + weekly health-check workflow; point
-  Star History at the canonical DeepSeek-Jupiter slug. (#772, #773)
+  Star History at the canonical Jupiter slug. (#772, #773)
 - docs(readme): badge color pass; thank AIGC Link for XiaoHongShu
   promotions. (#726)
 
@@ -2796,7 +2841,7 @@ inline at config time.
   auto-mkdir — by then the user may not remember writing the
   config. (#362, PR #379)
 - fix(readme): website URLs corrected from `/jupiter/` to
-  `/DeepSeek-Jupiter/`. (PR #375)
+  `/Jupiter/`. (PR #375)
 
 **Chores:**
 
@@ -7158,10 +7203,10 @@ branching, and session persistence. They're not reflected as individual
 entries above because the `0.1.0` bench harness is what first produced
 *externally verifiable* evidence for their value.
 
-[0.3.0-alpha.3]: https://github.com/esengine/jupiter/releases/tag/v0.3.0-alpha.3
-[0.3.0-alpha.2]: https://github.com/esengine/jupiter/releases/tag/v0.3.0-alpha.2
-[0.3.0-alpha.1]: https://github.com/esengine/jupiter/releases/tag/v0.3.0-alpha.1
-[0.2.2]: https://github.com/esengine/jupiter/releases/tag/v0.2.2
-[0.2.1]: https://github.com/esengine/jupiter/releases/tag/v0.2.1
-[0.2.0]: https://github.com/esengine/jupiter/releases/tag/v0.2.0
-[0.1.0]: https://github.com/esengine/jupiter/releases/tag/v0.1.0
+[0.3.0-alpha.3]: https://github.com/nighty35628/Jupiter/releases/tag/v0.3.0-alpha.3
+[0.3.0-alpha.2]: https://github.com/nighty35628/Jupiter/releases/tag/v0.3.0-alpha.2
+[0.3.0-alpha.1]: https://github.com/nighty35628/Jupiter/releases/tag/v0.3.0-alpha.1
+[0.2.2]: https://github.com/nighty35628/Jupiter/releases/tag/v0.2.2
+[0.2.1]: https://github.com/nighty35628/Jupiter/releases/tag/v0.2.1
+[0.2.0]: https://github.com/nighty35628/Jupiter/releases/tag/v0.2.0
+[0.1.0]: https://github.com/nighty35628/Jupiter/releases/tag/v0.1.0

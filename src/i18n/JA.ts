@@ -377,6 +377,11 @@ export const JA: TranslationSchema = {
         "このセッションのQQチャンネルを接続、検査、または切断（初回接続時にApp ID / App Secretの設定をガイド）",
       argsHint: "[connect [appId appSecret [sandbox]]|status|disconnect]",
     },
+    dingtalk: {
+      ...EN.slash.dingtalk,
+      description:
+        "connect, inspect, or disconnect the DingTalk channel for this session (first connect guides Client ID / Client Secret setup)",
+    },
     setup: { description: "終了して `jupiter setup` を実行するよう促します" },
     semantic: {
       description: "semantic_search の状態を表示 — 構築済み？Ollama導入済み？有効化方法は？",
@@ -900,6 +905,9 @@ export const JA: TranslationSchema = {
     },
     feishu: {
       ...EN.handlers.feishu,
+    },
+    dingtalk: {
+      ...EN.handlers.dingtalk,
     },
     admin: {
       doctorNeedsTui: "/doctor は TUI コンテキストが必要です（postDoctor wired）。",

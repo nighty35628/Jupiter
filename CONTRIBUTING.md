@@ -1,13 +1,13 @@
 # Contributing to Jupiter
 
 Thanks for showing up. Jupiter is a small, opinionated codebase
-maintained primarily by [@esengine](https://github.com/esengine);
+maintained primarily by [@nighty35628](https://github.com/nighty35628);
 PRs are welcome, but read this first so the round-trip is short.
 
 ## Setup
 
 ```sh
-git clone https://github.com/esengine/jupiter
+git clone https://github.com/nighty35628/Jupiter
 cd jupiter
 npm install
 npm run dev          # tsx src/cli/index.ts — live source

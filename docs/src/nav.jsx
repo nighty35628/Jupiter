@@ -60,7 +60,7 @@ function Nav({ active }) {
               onClick={() => setLang("zh")}
             >中文</button>
           </div>
-          <a className="btn btn-ghost btn-sm" href="https://github.com/esengine/DeepSeek-Jupiter" target="_blank" rel="noreferrer">
+          <a className="btn btn-ghost btn-sm" href="https://github.com/nighty35628/Jupiter" target="_blank" rel="noreferrer">
             <Ic.Github size={13}/> GitHub
           </a>
           <a className="btn btn-primary btn-sm" href="download.html">

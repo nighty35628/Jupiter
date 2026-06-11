@@ -101,6 +101,12 @@ export const DESKTOP_CLI_SLASH_COMMANDS: readonly DesktopCliSlashCommand[] = [
     summary: "connect, inspect, or disconnect the Feishu channel",
   },
   {
+    cmd: "dingtalk",
+    argsHint: "<connect|status|disconnect>",
+    summary: "connect, inspect, or disconnect the DingTalk channel",
+    aliases: ["ding"],
+  },
+  {
     cmd: "telegram",
     argsHint: "<connect|status|disconnect>",
     summary: "connect, inspect, or disconnect the Telegram channel",

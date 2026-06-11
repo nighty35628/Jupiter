@@ -199,6 +199,14 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     argCompleter: ["connect", "status", "disconnect"],
   },
   {
+    cmd: "dingtalk",
+    group: "extend",
+    argsHint: "<connect|status|disconnect>",
+    summary: "connect, inspect, or disconnect the DingTalk channel",
+    argCompleter: ["connect", "status", "disconnect"],
+    aliases: ["ding"],
+  },
+  {
     cmd: "telegram",
     group: "extend",
     argsHint: "<connect|status|disconnect>",

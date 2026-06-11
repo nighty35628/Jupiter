@@ -318,7 +318,7 @@ export function clipboardFileMentionPaths(
     }
   }
 
-  if (rawPaths.length === 0 && data.files?.length) {
+  if (rawPaths.length === 0) {
     const plain = safeGetClipboardData(data, "text/plain");
     const lines = plain
       .split(/\r?\n/)

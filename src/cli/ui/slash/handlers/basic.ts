@@ -6,8 +6,8 @@ import { SLASH_COMMANDS, SLASH_GROUP_ORDER, orderSlashCommandsByGroup } from "..
 import type { SlashHandler } from "../dispatch.js";
 import type { SlashCommandSpec, SlashGroup } from "../types.js";
 
-const ABOUT_WEBSITE = "https://esengine.github.io/DeepSeek-Jupiter/";
-const ABOUT_REPO = "https://github.com/esengine/DeepSeek-Jupiter";
+const ABOUT_WEBSITE = "https://nighty35628.github.io/Jupiter/";
+const ABOUT_REPO = "https://github.com/nighty35628/Jupiter";
 const ABOUT_LICENSE = "MIT";
 
 const exit: SlashHandler = () => ({ exit: true });

@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://esengine.github.io/DeepSeek-Jupiter/sitemap.xml
+Sitemap: https://nighty35628.github.io/Jupiter/sitemap.xml

@@ -139,6 +139,21 @@ export interface FeishuBotConfig {
   requireMentionInGroup?: boolean;
 }
 
+export interface DingTalkBotConfig {
+  clientId?: string;
+  clientSecret?: string;
+  enabled?: boolean;
+  /** Group chats require an @mention by default; direct messages are always accepted. */
+  requireMentionInGroup?: boolean;
+}
+
+export interface DesktopUpdateConfig {
+  /** Suppress automatic update prompts. Manual checks still run. */
+  disabled?: boolean;
+  /** Latest version the user explicitly skipped. */
+  skippedVersion?: string;
+}
+
 export interface TelegramBotConfig {
   botToken?: string;
   enabled?: boolean;
@@ -331,6 +346,8 @@ export interface JupiterConfig {
   /** QQ Bot configuration */
   qq?: QQBotConfig;
   feishu?: FeishuBotConfig;
+  dingtalk?: DingTalkBotConfig;
+  desktopUpdate?: DesktopUpdateConfig;
   telegram?: TelegramBotConfig;
 }
 
@@ -616,6 +633,47 @@ export function writeConfig(cfg: JupiterConfig, path: string = defaultConfigPath
   const tmp = `${path}.${randomBytes(8).toString("hex")}.tmp`;
   atomicWriteSync(path, JSON.stringify(cfg, null, 2), tmp);
   _configCache.delete(path);
+}
+
+export function loadDesktopUpdateConfig(path: string = defaultConfigPath()): DesktopUpdateConfig {
+  const raw = readConfig(path).desktopUpdate;
+  return {
+    disabled: raw?.disabled === true,
+    skippedVersion:
+      typeof raw?.skippedVersion === "string" && raw.skippedVersion.trim()
+        ? raw.skippedVersion.trim()
+        : undefined,
+  };
+}
+
+export function saveDesktopUpdateConfig(
+  patch: DesktopUpdateConfig,
+  path: string = defaultConfigPath(),
+): DesktopUpdateConfig {
+  const cfg = readConfig(path);
+  const next: DesktopUpdateConfig = {
+    ...loadDesktopUpdateConfig(path),
+    ...patch,
+  };
+  if (next.skippedVersion !== undefined) next.skippedVersion = next.skippedVersion.trim();
+  cfg.desktopUpdate = next;
+  writeConfig(cfg, path);
+  return loadDesktopUpdateConfig(path);
+}
+
+export function skipDesktopUpdateVersion(
+  version: string,
+  path: string = defaultConfigPath(),
+): DesktopUpdateConfig {
+  const trimmed = version.trim();
+  if (!trimmed) return loadDesktopUpdateConfig(path);
+  return saveDesktopUpdateConfig({ skippedVersion: trimmed }, path);
+}
+
+export function disableDesktopUpdatePrompts(
+  path: string = defaultConfigPath(),
+): DesktopUpdateConfig {
+  return saveDesktopUpdateConfig({ disabled: true }, path);
 }
 
 /** Resolve the language from config file. */
@@ -1847,6 +1905,41 @@ export function saveFeishuConfig(
   rootCfg.feishu = {
     appId: cfg.appId,
     appSecret: cfg.appSecret,
+    enabled: cfg.enabled,
+    requireMentionInGroup: cfg.requireMentionInGroup,
+  };
+  writeConfig(rootCfg, path);
+}
+
+export interface LoadedDingTalkConfig {
+  clientId?: string;
+  clientSecret?: string;
+  enabled?: boolean;
+  requireMentionInGroup: boolean;
+}
+
+export function loadDingTalkConfig(path: string = defaultConfigPath()): LoadedDingTalkConfig {
+  const fromCfg = readConfig(path).dingtalk ?? {};
+  return {
+    clientId: process.env.DINGTALK_CLIENT_ID ?? process.env.DINGTALK_APP_KEY ?? fromCfg.clientId,
+    clientSecret:
+      process.env.DINGTALK_CLIENT_SECRET ?? process.env.DINGTALK_APP_SECRET ?? fromCfg.clientSecret,
+    enabled: fromCfg.enabled === true,
+    requireMentionInGroup:
+      boolFromEnv(process.env.DINGTALK_REQUIRE_MENTION_IN_GROUP) ??
+      fromCfg.requireMentionInGroup ??
+      true,
+  };
+}
+
+export function saveDingTalkConfig(
+  cfg: Partial<LoadedDingTalkConfig>,
+  path: string = defaultConfigPath(),
+): void {
+  const rootCfg = readConfig(path);
+  rootCfg.dingtalk = {
+    clientId: cfg.clientId,
+    clientSecret: cfg.clientSecret,
     enabled: cfg.enabled,
     requireMentionInGroup: cfg.requireMentionInGroup,
   };

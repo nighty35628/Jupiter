@@ -99,7 +99,11 @@ export function shouldAutoNameSession(
 ): boolean {
   if (!sessionName || completedTurns !== 1 || meta.autoTitleGenerated) return false;
   const name = sanitizeName(sessionName);
-  return /^default(?:-\d{12,14})?$/.test(name) || /^desktop-\d{12,14}-\d+$/.test(name);
+  return (
+    /^default(?:-\d{12,14})?$/.test(name) ||
+    /^desktop-\d{12,17}-\d+(?:-\d+)?$/.test(name) ||
+    /^\d{12,17}-\d+(?:-\d+)?$/.test(name)
+  );
 }
 
 function truncateForPrompt(text: string, max: number): string {

@@ -1,6 +1,6 @@
 {
   "name": "jupiter",
-  "version": "0.99.9",
+  "version": "1.0.0",
   "description": "Jupiter: a cache-first AI workbench with full coding-agent workflows, workspace libraries, and tabbed desktop sessions.",
   "type": "module",
   "bin": {
@@ -82,6 +82,7 @@
     "cli-highlight": "^2.1.11",
     "code-excerpt": "^4.0.0",
     "commander": "^12.1.0",
+    "dingtalk-stream": "^2.1.6-beta.1",
     "emoji-regex": "^10.4.0",
     "eventsource-parser": "^3.0.0",
     "get-east-asian-width": "^1.3.0",

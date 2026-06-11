@@ -25,4 +25,4 @@ npx jupiter@latest code my-project
 
 `jupiter` is the canonical package; `dsnix` exists purely so users can type a shorter command and run `npx dsnix@latest` without typing nine letters. Version numbers track `jupiter` 1-to-1.
 
-For docs, config, slash commands, and everything else, see the [main Jupiter README](https://github.com/esengine/DeepSeek-Jupiter#readme).
+For docs, config, slash commands, and everything else, see the [main Jupiter README](https://github.com/nighty35628/Jupiter#readme).

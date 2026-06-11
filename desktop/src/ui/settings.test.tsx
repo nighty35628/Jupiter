@@ -117,6 +117,7 @@ function renderSettings({
       storageScan={storageScan}
       qq={null}
       feishu={null}
+      dingtalk={null}
       initialPage={initialPage}
       onClose={vi.fn()}
       onSave={onSave}
@@ -132,6 +133,11 @@ function renderSettings({
       onDisconnectFeishu={vi.fn()}
       onSaveFeishuConfig={vi.fn()}
       onOpenFeishuApplyLink={vi.fn()}
+      onLoadDingTalk={vi.fn()}
+      onConnectDingTalk={vi.fn()}
+      onDisconnectDingTalk={vi.fn()}
+      onSaveDingTalkConfig={vi.fn()}
+      onOpenDingTalkApplyLink={vi.fn()}
       onPickWorkspace={vi.fn()}
       onAddMcpSpec={vi.fn()}
       onRemoveMcpSpec={vi.fn()}

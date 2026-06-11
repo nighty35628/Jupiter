@@ -17,14 +17,14 @@
     "ai",
     "alias"
   ],
-  "homepage": "https://github.com/esengine/DeepSeek-Jupiter",
+  "homepage": "https://github.com/nighty35628/Jupiter",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/esengine/DeepSeek-Jupiter.git",
+    "url": "git+https://github.com/nighty35628/Jupiter.git",
     "directory": "packages/dsnix"
   },
   "bugs": {
-    "url": "https://github.com/esengine/DeepSeek-Jupiter/issues"
+    "url": "https://github.com/nighty35628/Jupiter/issues"
   },
   "license": "GPL-3.0-or-later",
   "engines": {

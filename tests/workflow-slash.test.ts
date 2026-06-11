@@ -150,6 +150,7 @@ describe("/workflow slash commands", () => {
     expect(run.status).toBe("completed");
     expect(run.workflowId).toBe("open-source-project-selection");
     expect(run.sources.length).toBeGreaterThan(0);
+    await waitForPosted(posted, /completed/);
     expect(posted.at(-1)).toContain("completed");
     expect(events).toContain("workflow_started");
     expect(events).toContain("workflow_phase_changed");
@@ -185,9 +186,13 @@ async function waitForRun(id: string): Promise<WorkflowRun> {
   const deadline = Date.now() + 2000;
   while (Date.now() < deadline) {
     if (existsSync(file)) {
-      const parsed = JSON.parse(readFileSync(file, "utf8")) as { runs?: WorkflowRun[] };
-      const run = parsed.runs?.find((entry) => entry.id === id);
-      if (run?.status === "completed" || run?.status === "failed") return run;
+      try {
+        const parsed = JSON.parse(readFileSync(file, "utf8")) as { runs?: WorkflowRun[] };
+        const run = parsed.runs?.find((entry) => entry.id === id);
+        if (run?.status === "completed" || run?.status === "failed") return run;
+      } catch (err) {
+        if (!(err instanceof SyntaxError)) throw err;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

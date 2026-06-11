@@ -585,6 +585,72 @@ export type FeishuSettingsEvent = {
   appIdPreview?: string;
 };
 
+export type DingTalkSettingsEvent = {
+  type: "$dingtalk_settings";
+  clientId?: string;
+  clientSecret?: string;
+  enabled: boolean;
+  configured: boolean;
+  requireMentionInGroup: boolean;
+  runtimeState: "disconnected" | "connecting" | "connected" | "failed";
+  lastError?: string;
+  clientIdPreview?: string;
+};
+
+export type UpdateReleaseUrls = {
+  gitee: string;
+  github: string;
+};
+
+export type UpdateCheckEvent =
+  | {
+      type: "$update_check";
+      mode: "auto" | "manual";
+      status: "checking";
+      currentVersion: string;
+      releaseUrls: UpdateReleaseUrls;
+    }
+  | {
+      type: "$update_check";
+      mode: "auto" | "manual";
+      status: "available";
+      currentVersion: string;
+      latestVersion: string;
+      releaseTag?: string;
+      releaseName?: string;
+      source?: "gitee" | "github";
+      releaseUrls: UpdateReleaseUrls;
+    }
+  | {
+      type: "$update_check";
+      mode: "auto" | "manual";
+      status: "up_to_date";
+      currentVersion: string;
+      latestVersion: string;
+      releaseTag?: string;
+      source?: "gitee" | "github";
+      releaseUrls: UpdateReleaseUrls;
+    }
+  | {
+      type: "$update_check";
+      mode: "auto" | "manual";
+      status: "suppressed";
+      reason: "disabled" | "skipped";
+      currentVersion: string;
+      latestVersion?: string;
+      releaseTag?: string;
+      source?: "gitee" | "github";
+      releaseUrls: UpdateReleaseUrls;
+    }
+  | {
+      type: "$update_check";
+      mode: "auto" | "manual";
+      status: "error";
+      currentVersion: string;
+      message: string;
+      releaseUrls: UpdateReleaseUrls;
+    };
+
 export type BalanceInfoItem = {
   currency: string;
   total: number;
@@ -641,6 +707,12 @@ export type QQConfigPatch = {
 export type FeishuConfigPatch = {
   appId?: string;
   appSecret?: string;
+  requireMentionInGroup?: boolean;
+};
+
+export type DingTalkConfigPatch = {
+  clientId?: string;
+  clientSecret?: string;
   requireMentionInGroup?: boolean;
 };
 
@@ -793,6 +865,8 @@ export type IncomingEvent = { tabId?: string } & (
   | SettingsEvent
   | QQSettingsEvent
   | FeishuSettingsEvent
+  | DingTalkSettingsEvent
+  | UpdateCheckEvent
   | BalanceEvent
   | CheckpointRequiredEvent
   | RevisionRequiredEvent
@@ -886,6 +960,13 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "feishu_connect" }
   | { cmd: "feishu_disconnect" }
   | ({ cmd: "feishu_config_save" } & FeishuConfigPatch)
+  | { cmd: "dingtalk_status_get" }
+  | { cmd: "dingtalk_connect" }
+  | { cmd: "dingtalk_disconnect" }
+  | ({ cmd: "dingtalk_config_save" } & DingTalkConfigPatch)
+  | { cmd: "update_check"; manual?: boolean }
+  | { cmd: "update_skip"; version: string }
+  | { cmd: "update_disable_prompts" }
   | { cmd: "mention_query"; query: string; nonce: number }
   | { cmd: "mention_preview"; path: string; nonce: number }
   | { cmd: "mention_picked"; path: string }

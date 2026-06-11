@@ -1755,7 +1755,7 @@ function TabRuntime({
       cmd: "/feedback",
       desc: t("app.cmd.feedback"),
       run: () => {
-        void openUrl("https://github.com/esengine/DeepSeek-Jupiter/issues/new/choose").catch(
+        void openUrl("https://github.com/nighty35628/Jupiter/issues/new/choose").catch(
           () => undefined,
         );
       },

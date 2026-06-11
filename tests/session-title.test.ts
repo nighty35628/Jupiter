@@ -30,8 +30,12 @@ describe("session title generation", () => {
   it("only auto-names default first-turn sessions that have not been named before", () => {
     expect(shouldAutoNameSession("default-20260517123456", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("desktop-20260517123456-1", {}, 1)).toBe(true);
+    expect(shouldAutoNameSession("desktop-20260611123456789-1-2", {}, 1)).toBe(true);
+    expect(shouldAutoNameSession("20260611065427382-1-1", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("default-20260517123456", {}, 2)).toBe(false);
     expect(shouldAutoNameSession("desktop-20260517123456-1", {}, 2)).toBe(false);
+    expect(shouldAutoNameSession("desktop-20260611123456789-1-2", {}, 2)).toBe(false);
+    expect(shouldAutoNameSession("20260611065427382-1-1", {}, 2)).toBe(false);
     expect(shouldAutoNameSession("custom-session", {}, 1)).toBe(false);
     expect(shouldAutoNameSession("default-20260517123456", { autoTitleGenerated: true }, 1)).toBe(
       false,

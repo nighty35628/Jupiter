@@ -326,6 +326,11 @@ export const de: TranslationSchema = {
       description:
         "QQ-Kanal verbinden, inspizieren oder trennen (erste Verbindung führt durch App-ID / App-Secret-Setup)",
     },
+    dingtalk: {
+      ...EN.slash.dingtalk,
+      description:
+        "connect, inspect, or disconnect the DingTalk channel for this session (first connect guides Client ID / Client Secret setup)",
+    },
     setup: { ...EN.slash.setup, description: "Erinnert dich daran, `jupiter setup` auszuführen" },
     semantic: {
       ...EN.slash.semantic,
@@ -898,6 +903,9 @@ export const de: TranslationSchema = {
     },
     feishu: {
       ...EN.handlers.feishu,
+    },
+    dingtalk: {
+      ...EN.handlers.dingtalk,
     },
     admin: {
       ...EN.handlers.admin,

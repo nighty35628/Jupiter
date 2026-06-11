@@ -1,4 +1,4 @@
-const LEGACY_WORKSPACE_BASENAME = "DeepSeek-Reasonix";
+const LEGACY_WORKSPACE_BASENAME = "Jupiter";
 const DISPLAY_WORKSPACE_BASENAME = "Jupiter";
 
 export function displayWorkspaceBasename(path: string | undefined, fallback = "workspace"): string {

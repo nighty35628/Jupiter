@@ -1,17 +1,29 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect } from "react";
 import { t } from "../i18n";
 import { I } from "../icons";
-import { checkJupiterUpdate, jupiterUpdatesEnabled } from "../update-policy";
+import type { UpdateCheckEvent, UpdateReleaseUrls } from "../protocol";
 
-type CheckState =
-  | { kind: "idle" }
-  | { kind: "checking" }
-  | { kind: "disabled" }
-  | { kind: "up-to-date"; latest: string }
-  | { kind: "outdated"; latest: string }
-  | { kind: "error"; message: string };
+export type AboutUpdateCheck =
+  | UpdateCheckEvent
+  | {
+      type?: "$update_check";
+      mode: "manual";
+      status: "idle";
+      currentVersion: string;
+      releaseUrls?: UpdateReleaseUrls;
+    };
 
-export function AboutModal({ onClose }: { onClose: () => void }) {
+export function AboutModal({
+  onClose,
+  updateCheck,
+  onCheckUpdates,
+  onOpenRelease,
+}: {
+  onClose: () => void;
+  updateCheck: AboutUpdateCheck;
+  onCheckUpdates: (manual: boolean) => void;
+  onOpenRelease: (source: keyof UpdateReleaseUrls) => void;
+}) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -22,25 +34,7 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  const [check, setCheck] = useState<CheckState>({ kind: "idle" });
-
-  const checkForUpdates = useCallback(async () => {
-    if (!jupiterUpdatesEnabled()) {
-      setCheck({ kind: "disabled" });
-      return;
-    }
-    setCheck({ kind: "checking" });
-    try {
-      const update = await checkJupiterUpdate();
-      if (!update) {
-        setCheck({ kind: "up-to-date", latest: __APP_VERSION__ });
-      } else {
-        setCheck({ kind: "outdated", latest: update.version });
-      }
-    } catch (err) {
-      setCheck({ kind: "error", message: (err as Error).message });
-    }
-  }, []);
+  const checking = updateCheck.mode === "manual" && updateCheck.status === "checking";
 
   return (
     <div className="about-mask" onClick={onClose} onKeyDown={(e) => e.stopPropagation()}>
@@ -75,40 +69,49 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             className="about-check"
-            onClick={checkForUpdates}
-            disabled={check.kind === "checking"}
+            onClick={() => onCheckUpdates(true)}
+            disabled={checking}
           >
             <I.rotate size={12} />
-            <span>{check.kind === "checking" ? t("about.checking") : t("about.checkUpdates")}</span>
+            <span>{checking ? t("about.checking") : t("about.checkUpdates")}</span>
           </button>
-          <CheckStatus check={check} />
+          <CheckStatus check={updateCheck} onOpenRelease={onOpenRelease} />
         </div>
       </div>
     </div>
   );
 }
 
-function CheckStatus({ check }: { check: CheckState }) {
-  if (check.kind === "idle" || check.kind === "checking") return null;
-  if (check.kind === "disabled") {
-    return (
-      <div className="about-status">
-        <span>{t("about.updateChannelDisabled")}</span>
-      </div>
-    );
-  }
-  if (check.kind === "up-to-date") {
+function CheckStatus({
+  check,
+  onOpenRelease,
+}: {
+  check: AboutUpdateCheck;
+  onOpenRelease: (source: keyof UpdateReleaseUrls) => void;
+}) {
+  if (check.mode !== "manual") return null;
+  if (check.status === "idle" || check.status === "checking") return null;
+  if (check.status === "suppressed") return null;
+  if (check.status === "up_to_date") {
     return (
       <div className="about-status ok">
         <I.check size={12} />
-        <span>{t("about.upToDate", { version: check.latest })}</span>
+        <span>{t("about.upToDate", { version: check.latestVersion })}</span>
       </div>
     );
   }
-  if (check.kind === "outdated") {
+  if (check.status === "available") {
     return (
-      <div className="about-status warn">
-        <span>{t("about.updateAvailable", { version: check.latest })}</span>
+      <div className="about-status warn about-status-update">
+        <span>{t("about.updateAvailable", { version: check.latestVersion })}</span>
+        <span className="about-release-actions">
+          <button type="button" className="about-link" onClick={() => onOpenRelease("gitee")}>
+            {t("about.openGitee")}
+          </button>
+          <button type="button" className="about-link" onClick={() => onOpenRelease("github")}>
+            {t("about.openGithub")}
+          </button>
+        </span>
       </div>
     );
   }

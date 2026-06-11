@@ -12,6 +12,7 @@ import {
   readConfig,
   searchEnabled,
 } from "../../config.js";
+import { DingTalkChannel } from "../../dingtalk/channel.js";
 import { loadDotenv } from "../../env.js";
 import { FeishuChannel } from "../../feishu/channel.js";
 import { t } from "../../i18n/index.js";
@@ -135,6 +136,7 @@ interface RootProps extends ChatOptions {
   /** Pre-created QQ channel (started before TUI mounts). */
   qqChannel?: QQChannel;
   feishuChannel?: FeishuChannel;
+  dingtalkChannel?: DingTalkChannel;
   telegramChannel?: TelegramChannel;
   /** App fills this ref on mount so QQ messages flow into the TUI input queue. */
   qqSubmitRef: { current: ((text: string) => void) | null };
@@ -142,6 +144,8 @@ interface RootProps extends ChatOptions {
   qqErrorRef: { current: ((msg: string) => void) | null };
   feishuSubmitRef: { current: ((text: string) => void) | null };
   feishuErrorRef: { current: ((msg: string) => void) | null };
+  dingtalkSubmitRef: { current: ((text: string) => void) | null };
+  dingtalkErrorRef: { current: ((msg: string) => void) | null };
   telegramSubmitRef: { current: ((text: string) => void) | null };
   telegramErrorRef: { current: ((msg: string) => void) | null };
 }
@@ -257,11 +261,14 @@ function Root({
         dashboardToken={appProps.dashboardToken}
         qqChannel={appProps.qqChannel}
         feishuChannel={appProps.feishuChannel}
+        dingtalkChannel={appProps.dingtalkChannel}
         telegramChannel={appProps.telegramChannel}
         qqSubmitRef={appProps.qqSubmitRef}
         qqErrorRef={appProps.qqErrorRef}
         feishuSubmitRef={appProps.feishuSubmitRef}
         feishuErrorRef={appProps.feishuErrorRef}
+        dingtalkSubmitRef={appProps.dingtalkSubmitRef}
+        dingtalkErrorRef={appProps.dingtalkErrorRef}
         telegramSubmitRef={appProps.telegramSubmitRef}
         telegramErrorRef={appProps.telegramErrorRef}
         historyScrollMode={historyScrollMode}
@@ -374,13 +381,17 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
   const qqErrorRef: { current: ((msg: string) => void) | null } = { current: null };
   const feishuSubmitRef: { current: ((text: string) => void) | null } = { current: null };
   const feishuErrorRef: { current: ((msg: string) => void) | null } = { current: null };
+  const dingtalkSubmitRef: { current: ((text: string) => void) | null } = { current: null };
+  const dingtalkErrorRef: { current: ((msg: string) => void) | null } = { current: null };
   const telegramSubmitRef: { current: ((text: string) => void) | null } = { current: null };
   const telegramErrorRef: { current: ((msg: string) => void) | null } = { current: null };
   const qqRequested = cfg.qq?.enabled === true;
   const feishuRequested = cfg.feishu?.enabled === true;
+  const dingtalkRequested = cfg.dingtalk?.enabled === true;
   const telegramRequested = cfg.telegram?.enabled === true;
   let qqChannel: QQChannel | undefined;
   let feishuChannel: FeishuChannel | undefined;
+  let dingtalkChannel: DingTalkChannel | undefined;
   let telegramChannel: TelegramChannel | undefined;
   if (qqRequested) {
     const channel = new QQChannel({
@@ -409,6 +420,21 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
       process.stderr.write("Feishu bot connected\n");
     } catch (err) {
       process.stderr.write(`Feishu bot failed: ${(err as Error).message}\n`);
+    }
+  }
+  if (dingtalkRequested) {
+    const channel = new DingTalkChannel({
+      onSubmitMessage: (text) => dingtalkSubmitRef.current?.(text),
+      onError: (msg) => dingtalkErrorRef.current?.(msg),
+      onInfo: (msg) => process.stderr.write(`${msg}\n`),
+    });
+    process.stderr.write("Connecting DingTalk bot...\n");
+    try {
+      await channel.start();
+      dingtalkChannel = channel;
+      process.stderr.write("DingTalk bot connected\n");
+    } catch (err) {
+      process.stderr.write(`DingTalk bot failed: ${(err as Error).message}\n`);
     }
   }
   if (telegramRequested) {
@@ -463,11 +489,14 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
       session={resolvedSession}
       qqChannel={qqChannel}
       feishuChannel={feishuChannel}
+      dingtalkChannel={dingtalkChannel}
       telegramChannel={telegramChannel}
       qqSubmitRef={qqSubmitRef}
       qqErrorRef={qqErrorRef}
       feishuSubmitRef={feishuSubmitRef}
       feishuErrorRef={feishuErrorRef}
+      dingtalkSubmitRef={dingtalkSubmitRef}
+      dingtalkErrorRef={dingtalkErrorRef}
       telegramSubmitRef={telegramSubmitRef}
       telegramErrorRef={telegramErrorRef}
     />,
@@ -480,6 +509,7 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
     await runtime.closeAll();
     qqChannel?.stop();
     feishuChannel?.stop();
+    dingtalkChannel?.stop();
     telegramChannel?.stop();
     await drainTtyResponses();
   }

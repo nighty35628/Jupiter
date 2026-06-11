@@ -126,9 +126,7 @@ describe("buildFeedbackIssueUrl", () => {
   it("encodes the diagnostic into the body query param so the issue page opens pre-filled", () => {
     const diagnostic = buildFeedbackDiagnostic(FIXTURE);
     const url = buildFeedbackIssueUrl(diagnostic);
-    expect(url.startsWith("https://github.com/esengine/DeepSeek-Jupiter/issues/new?body=")).toBe(
-      true,
-    );
+    expect(url.startsWith("https://github.com/nighty35628/Jupiter/issues/new?body=")).toBe(true);
     const decoded = decodeURIComponent(url.split("?body=")[1] ?? "");
     expect(decoded).toBe(diagnostic);
   });
@@ -137,6 +135,6 @@ describe("buildFeedbackIssueUrl", () => {
     const huge = `${"x".repeat(20000)}`;
     const url = buildFeedbackIssueUrl(huge);
     expect(url.length).toBeLessThan(20000);
-    expect(url).toMatch(/^https:\/\/github\.com\/esengine\/DeepSeek-Jupiter\/issues\/new\?body=/);
+    expect(url).toMatch(/^https:\/\/github\.com\/nighty35628\/Jupiter\/issues\/new\?body=/);
   });
 });

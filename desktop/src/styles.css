@@ -9382,8 +9382,19 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   background: var(--card);
   border-color: var(--accent);
   box-shadow: var(--shadow-lg);
-  min-width: 360px;
-  max-width: min(560px, calc(100vw - 32px));
+  min-width: 420px;
+  max-width: min(680px, calc(100vw - 32px));
+}
+.update-overlay-card .body {
+  min-width: 0;
+}
+.update-overlay-card .prog {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 320px;
+}
+.update-overlay-card button {
+  white-space: nowrap;
 }
 
 /* ============================================================
@@ -12266,6 +12277,16 @@ html[data-platform="macos"] .splash {
   color: var(--fg);
   border: 1px solid var(--accent);
   justify-content: space-between;
+}
+.about-status-update {
+  align-items: stretch;
+  flex-direction: column;
+}
+.about-release-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .about-status.err {
   background: var(--panel);
