@@ -3,6 +3,36 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.9] — 2026-06-11
+
+### 中文
+
+**桌面附件粘贴修复。** macOS Finder 文件粘贴现在会从系统剪贴板读取 `public.file-url`
+和 `.file/id=...` 文件引用，并解析成真实路径。粘贴图片、粘贴文件、点加号添加文件/图片都统一显示为输入框上方的附件卡片，
+不再把路径直接插进正文；文件卡片也改得更紧凑。
+
+**CLI 与标题细节。** CLI 里粘贴工作区内文件路径时会自动转成相对 `@mention`，方便从终端复制路径后直接带入上下文。
+首轮会话标题生成改用低成本 flash 模型，桌面默认会话也能自动命名。
+
+**Linux ARM 兼容性。** Linux ARM64 release runner 从 Ubuntu 24.04 调整为 Ubuntu 22.04，
+降低 glibc 构建基线，方便 Debian ARM 用户安装。README 改写为更朴素的个人项目说明，桌面端、根包、
+Tauri 配置、Cargo、CHANGELOG 和 GitHub Release notes 版本统一升级为 `0.99.9`。
+
+### English
+
+**Desktop attachment paste fixes.** macOS Finder file paste now reads `public.file-url` and `.file/id=...`
+references from the system clipboard and resolves them into real paths. Pasted images, pasted files, and
+plus-button file/image picks now share attachment cards above the composer instead of inserting raw paths into
+the message body; file cards are also more compact.
+
+**CLI and title polish.** CLI pasted workspace file paths can now become relative `@mentions`, making terminal
+path copies usable as context directly. First-turn session title generation now uses the low-cost flash model,
+including desktop default sessions.
+
+**Linux ARM compatibility.** Linux ARM64 release builds now use Ubuntu 22.04 instead of Ubuntu 24.04 to lower the
+glibc build baseline for Debian ARM users. README was rewritten in a more direct personal-project voice, and the
+desktop, root package, Tauri config, Cargo, CHANGELOG, and GitHub Release notes versions are aligned on `0.99.9`.
+
 ## [0.99.3] — 2026-06-09
 
 ### 中文

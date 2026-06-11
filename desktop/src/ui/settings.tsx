@@ -40,7 +40,7 @@ import {
   themeForStyle,
 } from "../theme";
 import { displayWorkspacePath } from "../workspace-display";
-import { Shortcut } from "./shortcut";
+import { Shortcut, type ShortcutKey } from "./shortcut";
 
 const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
 const EDGE_DOWNLOAD_URL = "https://www.microsoft.com/edge/download";

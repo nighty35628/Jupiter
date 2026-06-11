@@ -43,4 +43,13 @@ describe("desktop CSP (tauri.conf.json)", () => {
     expect(match![1]).toContain("https:");
     expect(match![1]).toContain("http:");
   });
+
+  it("allows Tauri asset URLs for pasted image thumbnails", () => {
+    const match = csp.match(/img-src\s+([^;]+)/);
+    expect(match).toBeTruthy();
+    expect(match![1]).toContain("blob:");
+    expect(match![1]).toContain("asset:");
+    expect(match![1]).toContain("http://asset.localhost");
+    expect(match![1]).toContain("https://asset.localhost");
+  });
 });

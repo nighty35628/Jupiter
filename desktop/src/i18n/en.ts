@@ -91,6 +91,7 @@ export const en = {
     switchWorkspace: "Switch workspace",
     switchWorkspaceWithName: "Switch workspace: {workspace}",
     insertFile: "Add file",
+    attachmentCard: "Attachment card",
     switchModel: "Switch model",
     switchEffort: "Switch reasoning effort",
     slashHeader: "Commands — control agent, model, and session",

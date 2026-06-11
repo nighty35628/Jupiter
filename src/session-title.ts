@@ -4,6 +4,8 @@ import type { ChatMessage, ChatRequestOptions } from "./types.js";
 
 const TITLE_MODEL_MAX_TOKENS = 32;
 const TITLE_MAX_CHARS = 48;
+export const SESSION_TITLE_MODEL = "deepseek-v4-flash";
+export const SESSION_TITLE_REASONING_EFFORT = "low";
 
 export interface SessionTitleInput {
   workspace?: string;
@@ -35,15 +37,16 @@ export function buildSessionTitleMessages(input: SessionTitleInput): ChatMessage
 
 export async function generateSessionTitle(
   client: SessionTitleClient,
-  model: string,
+  _model: string,
   input: SessionTitleInput,
 ): Promise<string | null> {
   const resp = await client.chat({
-    model,
+    model: SESSION_TITLE_MODEL,
     messages: buildSessionTitleMessages(input),
     temperature: 0.2,
     maxTokens: TITLE_MODEL_MAX_TOKENS,
     thinking: "disabled",
+    reasoningEffort: SESSION_TITLE_REASONING_EFFORT,
   });
   return normalizeGeneratedSessionTitle(resp.content);
 }
@@ -95,7 +98,8 @@ export function shouldAutoNameSession(
   completedTurns: number,
 ): boolean {
   if (!sessionName || completedTurns !== 1 || meta.autoTitleGenerated) return false;
-  return /^default(?:-\d{12,14})?$/.test(sanitizeName(sessionName));
+  const name = sanitizeName(sessionName);
+  return /^default(?:-\d{12,14})?$/.test(name) || /^desktop-\d{12,14}-\d+$/.test(name);
 }
 
 function truncateForPrompt(text: string, max: number): string {

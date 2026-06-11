@@ -97,6 +97,7 @@ export const de: typeof en = {
     commandPalette: "Befehlsübersicht",
     searchSources: "Quellen suchen",
     insertFile: "Datei hinzufügen",
+    attachmentCard: "Anhangskarte",
     switchModel: "Modell wechseln",
     switchEffort: "Reasoning-Effort wechseln",
     slashHeader: "Befehle — Agent, Modell und Sitzung steuern",

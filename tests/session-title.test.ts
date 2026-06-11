@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSessionTitleMessages,
+  generateSessionTitle,
   makeSessionNameFromTitle,
   normalizeGeneratedSessionTitle,
   shouldAutoNameSession,
@@ -28,7 +29,9 @@ describe("session title generation", () => {
 
   it("only auto-names default first-turn sessions that have not been named before", () => {
     expect(shouldAutoNameSession("default-20260517123456", {}, 1)).toBe(true);
+    expect(shouldAutoNameSession("desktop-20260517123456-1", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("default-20260517123456", {}, 2)).toBe(false);
+    expect(shouldAutoNameSession("desktop-20260517123456-1", {}, 2)).toBe(false);
     expect(shouldAutoNameSession("custom-session", {}, 1)).toBe(false);
     expect(shouldAutoNameSession("default-20260517123456", { autoTitleGenerated: true }, 1)).toBe(
       false,
@@ -45,5 +48,31 @@ describe("session title generation", () => {
     expect(messages[0]!.role).toBe("system");
     expect(messages[1]!.content).toContain("Please fix the session corruption bug");
     expect(messages[1]!.content).toContain("Implemented safer JSONL rewriting");
+  });
+
+  it("uses the low-effort flash model for generated titles", async () => {
+    const calls: unknown[] = [];
+    const title = await generateSessionTitle(
+      {
+        async chat(opts) {
+          calls.push(opts);
+          return { content: "修复粘贴附件" };
+        },
+      },
+      "deepseek-v4-pro",
+      {
+        workspace: "/work/jupiter",
+        userText: "粘贴文件不生效",
+        assistantText: "修复了桌面剪贴板路径读取。",
+      },
+    );
+
+    expect(title).toBe("修复粘贴附件");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      model: "deepseek-v4-flash",
+      reasoningEffort: "low",
+      thinking: "disabled",
+    });
   });
 });

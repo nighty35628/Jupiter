@@ -78,12 +78,51 @@ export type Chip =
   | { kind: "at"; label: string }
   | { kind: "slash"; label: string };
 
-type ImageAttachment = {
+type ComposerAttachment = {
   id: string;
+  kind: "image" | "file";
   path: string;
-  previewUrl: string;
+  previewUrl?: string;
+  revokePreviewUrl?: boolean;
   name: string;
+  meta: string;
 };
+
+type ImagePreview = {
+  url: string;
+  revoke: boolean;
+};
+
+function createImagePreview(file: File): ImagePreview | undefined {
+  if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") return undefined;
+  return { url: URL.createObjectURL(file), revoke: true };
+}
+
+function revokeImagePreview(attachment: ComposerAttachment | ImagePreview | undefined) {
+  if (!attachment) return;
+  const shouldRevoke = "url" in attachment ? attachment.revoke : attachment.revokePreviewUrl;
+  const url = "url" in attachment ? attachment.url : attachment.previewUrl;
+  if (!shouldRevoke || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
+  if (!url) return;
+  URL.revokeObjectURL(url);
+}
+
+function revokeImagePreviews(attachments: ComposerAttachment[]) {
+  for (const attachment of attachments) revokeImagePreview(attachment);
+}
+
+function fileMeta(path: string): string {
+  const name = basename(path);
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot + 1).replace(/[^a-z0-9]+/gi, "") : "";
+  if (!ext) return "FILE";
+  return ext.length <= 6 ? ext.toUpperCase() : "FILE";
+}
+
+function isImagePath(path: string): boolean {
+  const clean = path.split(/[?#]/)[0] ?? path;
+  return /\.(png|jpe?g|gif|webp|svg|avif|bmp|tiff?)$/i.test(clean);
+}
 
 /** For long paths show only the filename; truncate filename if it's still too long. */
 function chipLabel(label: string, maxLen = 32): string {
@@ -218,6 +257,7 @@ function fileUrlToPath(value: string): string | null {
     const url = new URL(value);
     if (url.protocol !== "file:") return null;
     const decodedPath = decodeURIComponent(url.pathname);
+    if (decodedPath.startsWith("/.file/id=")) return null;
     if (url.hostname) return `//${url.hostname}${decodedPath}`;
     return decodedPath.replace(/^\/([A-Za-z]:\/)/, "$1");
   } catch {
@@ -227,6 +267,12 @@ function fileUrlToPath(value: string): string | null {
 
 function looksLikeLocalPath(value: string): boolean {
   return /^(\/|~\/|[A-Za-z]:[\\/]|\\\\)/.test(value.trim());
+}
+
+function looksLikeFilename(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || /[\r\n\\/]/.test(trimmed)) return false;
+  return /^[^:]+\.([A-Za-z0-9]{1,8})$/.test(trimmed);
 }
 
 function clipboardFileObjectPath(file: File): string | null {
@@ -266,6 +312,7 @@ export function clipboardFileMentionPaths(
 
   if (rawPaths.length === 0 && data.files?.length) {
     for (const file of Array.from(data.files as ArrayLike<File>)) {
+      if (!file) continue;
       const path = clipboardFileObjectPath(file);
       if (path) rawPaths.push(path);
     }
@@ -371,7 +418,7 @@ export function Composer({
 }) {
   const [popup, setPopup] = useState<Popup>(null);
   const [pickedChips, setPickedChips] = useState<Map<string, Chip["kind"]>>(new Map());
-  const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
+  const [imageAttachments, setImageAttachments] = useState<ComposerAttachment[]>([]);
   const chips = useMemo(() => {
     const result: Chip[] = [];
     for (const [label, kind] of pickedChips) {
@@ -403,6 +450,15 @@ export function Composer({
   const savedDraftRef = useRef("");
   const activeRangeRef = useRef<ActiveRange | null>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
+  const imageAttachmentsRef = useRef<ComposerAttachment[]>([]);
+
+  useEffect(() => {
+    imageAttachmentsRef.current = imageAttachments;
+  }, [imageAttachments]);
+
+  useEffect(() => {
+    return () => revokeImagePreviews(imageAttachmentsRef.current);
+  }, []);
 
   // `initialHistory` arrives asynchronously (settings load after mount).
   // Sync historyRef when it first becomes available and the user hasn't
@@ -448,18 +504,115 @@ export function Composer({
 
   const insertMention = (picked: string) => insertMentions([picked]);
 
-  const addImageAttachment = (path: string) => {
+  const insertPlainTextAtCursor = (text: string) => {
+    if (!text) return;
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? draft.length;
+    const end = textarea?.selectionEnd ?? start;
+    setDraft((current) => `${current.slice(0, start)}${text}${current.slice(end)}`);
+    requestAnimationFrame(() => {
+      const target = textareaRef.current;
+      if (!target) return;
+      const cursor = start + text.length;
+      target.selectionStart = cursor;
+      target.selectionEnd = cursor;
+      applyComposerTextareaAutosize(target);
+    });
+  };
+
+  const addImageAttachment = (path: string, preview?: ImagePreview) => {
     const normalized = normalizeMentionPath(path, workspaceDir);
-    const attachment: ImageAttachment = {
+    const attachment: ComposerAttachment = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: "image",
       path: normalized,
-      previewUrl: convertFileSrc(path),
+      previewUrl: preview?.url ?? convertFileSrc(path),
+      revokePreviewUrl: preview?.revoke,
       name: basename(path),
+      meta: fileMeta(path),
     };
     setImageAttachments((prev) => [...prev, attachment]);
     onMentionPicked?.(normalized);
     setPopup(null);
     textareaRef.current?.focus();
+  };
+
+  const addFileAttachments = (paths: string[]) => {
+    const attachments: ComposerAttachment[] = [];
+    const seen = new Set<string>();
+    for (const path of paths) {
+      const normalized = normalizeMentionPath(path, workspaceDir);
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      attachments.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${attachments.length}`,
+        kind: "file",
+        path: normalized,
+        name: basename(normalized),
+        meta: fileMeta(normalized),
+      });
+      onMentionPicked?.(normalized);
+    }
+    if (attachments.length === 0) return;
+    setImageAttachments((prev) => [...prev, ...attachments]);
+    setPopup(null);
+    textareaRef.current?.focus();
+  };
+
+  const addPathAttachments = (paths: string[]) => {
+    const imagePaths = paths.filter(isImagePath);
+    const filePaths = paths.filter((path) => !isImagePath(path));
+    if (filePaths.length > 0) addFileAttachments(filePaths);
+    for (const path of imagePaths) addImageAttachment(path);
+  };
+
+  const tryAddDesktopClipboardPaths = async (logLabel: string) => {
+    try {
+      const paths = await invoke<string[]>("read_clipboard_file_paths");
+      if (Array.isArray(paths) && paths.length > 0) {
+        addPathAttachments(paths);
+        return true;
+      }
+    } catch (err) {
+      console.error(logLabel, err);
+    }
+    return false;
+  };
+
+  const addPastedImageFile = async (file: File) => {
+    const preview = createImagePreview(file);
+    try {
+      const buffer = await file.arrayBuffer();
+      const savedPath = await invoke<string>("save_clipboard_image", {
+        bytes: buffer,
+        extension: guessImageExtension(file.type),
+      });
+      addImageAttachment(savedPath, preview);
+      return true;
+    } catch (err) {
+      revokeImagePreview(preview);
+      console.error("clipboard image paste failed", err);
+      return false;
+    }
+  };
+
+  const tryAddNavigatorClipboardImage = async () => {
+    const readClipboard = navigator.clipboard?.read;
+    if (typeof readClipboard !== "function") return false;
+    try {
+      const clipboardItems = await readClipboard.call(navigator.clipboard);
+      for (const item of clipboardItems) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+        if (!imageType) continue;
+        const blob = await item.getType(imageType);
+        return await addPastedImageFile(
+          new File([blob], "jupiter-pasted-image", { type: imageType }),
+        );
+      }
+    } catch (err) {
+      console.error("navigator clipboard image paste failed", err);
+    }
+    return false;
   };
 
   useLayoutEffect(() => {
@@ -522,7 +675,11 @@ export function Composer({
             : undefined,
       });
       if (typeof picked !== "string" || !picked) return;
-      insertMention(picked);
+      if (filter === "image" || isImagePath(picked)) {
+        addImageAttachment(picked);
+      } else {
+        addFileAttachments([picked]);
+      }
     } catch (err) {
       console.error("attach failed", err);
     }
@@ -532,25 +689,38 @@ export function Composer({
     const fileMentions = clipboardFileMentionPaths(e.clipboardData, workspaceDir);
     if (fileMentions.length > 0) {
       e.preventDefault();
-      insertMentions(fileMentions);
+      addPathAttachments(fileMentions);
       return;
     }
     const items = Array.from(e.clipboardData?.items ?? []);
-    const imageItem = items.find((item) => item.type.startsWith("image/"));
-    if (!imageItem) return;
-    const file = imageItem.getAsFile();
-    if (!file) return;
-    e.preventDefault();
-    try {
-      const buffer = await file.arrayBuffer();
-      const savedPath = await invoke<string>("save_clipboard_image", {
-        bytes: buffer,
-        extension: guessImageExtension(file.type),
-      });
-      addImageAttachment(savedPath);
-    } catch (err) {
-      console.error("clipboard image paste failed", err);
+    const files = Array.from((e.clipboardData?.files ?? []) as ArrayLike<File>);
+    const clipboardTypes = Array.from(e.clipboardData?.types ?? []);
+    const imageItem = items.find((item) => item.type?.startsWith("image/"));
+    const imageFile =
+      imageItem?.getAsFile() ??
+      files.find((file) => typeof file.type === "string" && file.type.startsWith("image/")) ??
+      null;
+    const hasFilePayload =
+      files.length > 0 || items.some((item) => item.kind === "file");
+    const hasFileClipboardType = clipboardTypes.some((type) =>
+      ["Files", "public.file-url", "CorePasteboardFlavorType 0x6675726C"].includes(type),
+    );
+    const plainText = safeGetClipboardData(e.clipboardData, "text/plain");
+    const shouldProbeDesktopFiles =
+      hasFilePayload || hasFileClipboardType || looksLikeFilename(plainText) || !plainText;
+    if (shouldProbeDesktopFiles) {
+      e.preventDefault();
+      if (await tryAddDesktopClipboardPaths("clipboard file paste failed")) return;
+      if (!imageFile) {
+        insertPlainTextAtCursor(plainText);
+        return;
+      }
     }
+    if (!imageFile) {
+      return;
+    }
+    e.preventDefault();
+    await addPastedImageFile(imageFile);
   };
 
   const openPopupAtCursor = (sigil: "/" | "@") => {
@@ -744,6 +914,7 @@ export function Composer({
     recordSendAndReset();
     onSend(hiddenMentions.length > 0 ? { hiddenMentions } : undefined);
     setPickedChips(new Map());
+    revokeImagePreviews(imageAttachments);
     setImageAttachments([]);
   };
 
@@ -770,6 +941,21 @@ export function Composer({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
+      const draftBeforePaste = draft;
+      const attachmentCountBeforePaste = imageAttachmentsRef.current.length;
+      window.setTimeout(() => {
+        const textarea = textareaRef.current;
+        const textChanged = textarea ? textarea.value !== draftBeforePaste : false;
+        const attachmentsChanged =
+          imageAttachmentsRef.current.length !== attachmentCountBeforePaste;
+        if (textChanged || attachmentsChanged) return;
+        void (async () => {
+          if (await tryAddDesktopClipboardPaths("keyboard clipboard file paste failed")) return;
+          await tryAddNavigatorClipboardImage();
+        })();
+      }, 250);
+    }
     if (popup) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -911,15 +1097,44 @@ export function Composer({
           {imageAttachments.length > 0 ? (
             <div className="composer-attachments">
               {imageAttachments.map((attachment) => (
-                <div key={attachment.id} className="composer-image-attachment" title={attachment.path}>
-                  <img src={attachment.previewUrl} alt="pasted image" />
+                <div
+                  key={attachment.id}
+                  className={
+                    attachment.kind === "image"
+                      ? "composer-image-attachment"
+                      : "composer-file-attachment"
+                  }
+                  title={attachment.path}
+                  aria-label={
+                    attachment.kind === "image"
+                      ? `Attached image ${attachment.name}`
+                      : `Attached file ${attachment.name}`
+                  }
+                >
+                  {attachment.kind === "image" && attachment.previewUrl ? (
+                    <img src={attachment.previewUrl} alt="pasted image" />
+                  ) : (
+                    <>
+                      <span className="composer-file-icon">
+                        <I.file size={17} />
+                      </span>
+                      <span className="composer-file-copy">
+                        <span className="composer-file-name">{attachment.name}</span>
+                        <span className="composer-file-meta">{attachment.meta}</span>
+                      </span>
+                    </>
+                  )}
                   <button
                     type="button"
                     className="composer-attachment-remove"
                     aria-label={t("composer.removeAttachment")}
                     title={t("composer.removeAttachment")}
                     onClick={() =>
-                      setImageAttachments((prev) => prev.filter((item) => item.id !== attachment.id))
+                      setImageAttachments((prev) => {
+                        const removed = prev.find((item) => item.id === attachment.id);
+                        revokeImagePreview(removed);
+                        return prev.filter((item) => item.id !== attachment.id);
+                      })
                     }
                   >
                     <I.x size={10} />
@@ -1021,7 +1236,7 @@ export function Composer({
                       <span className="ico"><I.paperclip size={14} /></span>
                       <span className="copy">
                         <span className="title">{t("composer.insertFile")}</span>
-                        <span className="hint">@</span>
+                        <span className="hint">{t("composer.attachmentCard")}</span>
                       </span>
                     </button>
                     <button

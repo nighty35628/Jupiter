@@ -93,6 +93,7 @@ export const zhCN: typeof en = {
     switchWorkspace: "切换工作区",
     switchWorkspaceWithName: "切换工作区：{workspace}",
     insertFile: "添加文件",
+    attachmentCard: "附件卡片",
     switchModel: "切换模型",
     switchEffort: "切换推理强度",
     slashHeader: "命令 — 控制 agent、模型与会话",

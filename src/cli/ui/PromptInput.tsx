@@ -69,6 +69,8 @@ export interface PromptInputProps {
   isHistoryMode?: boolean;
   /** True when plan mode is active — shows [PLAN] badge. */
   planMode?: boolean;
+  /** Optional one-shot normalizer for bracketed/heuristic paste payloads before display + submit. */
+  transformPaste?: (content: string) => string | null | undefined;
 }
 
 export function PromptInput({
@@ -87,6 +89,7 @@ export function PromptInput({
   model,
   isHistoryMode,
   planMode,
+  transformPaste,
 }: PromptInputProps) {
   const [cursor, setCursor] = useState(value.length);
 
@@ -119,14 +122,15 @@ export function PromptInput({
   }
 
   const registerPaste = (content: string) => {
+    const transformed = transformPaste?.(content) ?? content;
     const v = lastLocalValueRef.current;
     const c = cursorRef.current;
-    const insertion = shouldInlinePaste(content)
-      ? content
+    const insertion = shouldInlinePaste(transformed)
+      ? transformed
       : (() => {
           const id = nextPasteIdRef.current % PASTE_SENTINEL_RANGE;
           nextPasteIdRef.current = id + 1;
-          pastesRef.current.set(id, makePasteEntry(id, content));
+          pastesRef.current.set(id, makePasteEntry(id, transformed));
           return encodePasteSentinel(id);
         })();
     const next = v.slice(0, c) + insertion + v.slice(c);

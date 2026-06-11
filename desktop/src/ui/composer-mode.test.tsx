@@ -3,6 +3,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Toast } from "../CommandPalette";
@@ -13,14 +15,45 @@ vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `asset://${path}`,
   invoke: vi.fn(async (cmd: string) => {
     if (cmd === "save_clipboard_image") return "/tmp/jupiter-pasted-images/pasted.png";
+    if (cmd === "read_clipboard_file_paths") return ["/repo/docs/paper.pdf"];
     return undefined;
   }),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
+
+beforeEach(() => {
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:jupiter-pasted-preview"),
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn(),
+  });
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  if (originalCreateObjectURL) {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: originalCreateObjectURL,
+    });
+  } else {
+    delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+  }
+  if (originalRevokeObjectURL) {
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectURL,
+    });
+  } else {
+    delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
+  }
 });
 
 function renderComposer(props?: Partial<React.ComponentProps<typeof Composer>>) {
@@ -137,6 +170,7 @@ describe("desktop permission mode copy", () => {
   });
 
   it("shows pasted images as thumbnails without inserting @ paths into the textarea", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([]);
     const onSend = vi.fn();
     const onMentionPicked = vi.fn();
     const { container } = renderComposer({ onSend, onMentionPicked });
@@ -155,6 +189,9 @@ describe("desktop permission mode copy", () => {
     await waitFor(() => {
       expect(screen.getByAltText("pasted image")).toBeTruthy();
     });
+    expect((screen.getByAltText("pasted image") as HTMLImageElement).src).toBe(
+      "blob:jupiter-pasted-preview",
+    );
     expect(textarea.value).toBe("");
     expect(document.body.textContent).not.toContain("@/tmp/jupiter-pasted-images");
     expect(onMentionPicked).toHaveBeenCalledWith("/tmp/jupiter-pasted-images/pasted.png");
@@ -163,6 +200,348 @@ describe("desktop permission mode copy", () => {
 
     expect(onSend).toHaveBeenCalledWith({
       hiddenMentions: ["/tmp/jupiter-pasted-images/pasted.png"],
+    });
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:jupiter-pasted-preview");
+  });
+
+  it("handles pasted images exposed only through clipboard files", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([]);
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "paste.png", { type: "image/png" });
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: {
+          length: 1,
+          0: imageFile,
+          item: (index: number) => (index === 0 ? imageFile : null),
+        },
+        getData: () => "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByAltText("pasted image")).toBeTruthy();
+    });
+    expect((screen.getByAltText("pasted image") as HTMLImageElement).src).toBe(
+      "blob:jupiter-pasted-preview",
+    );
+    expect(textarea.value).toBe("");
+    expect(onMentionPicked).toHaveBeenCalledWith("/tmp/jupiter-pasted-images/pasted.png");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["/tmp/jupiter-pasted-images/pasted.png"],
+    });
+  });
+
+  it("shows pasted files as attachment cards without inserting @ paths into the textarea", () => {
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: { length: 1 },
+        getData: (type: string) =>
+          type === "text/uri-list" ? "file:///repo/docs/paper.pdf" : "",
+        items: [],
+      },
+    });
+
+    expect(screen.getByLabelText("Attached file paper.pdf")).toBeTruthy();
+    expect(document.body.textContent).toContain("paper.pdf");
+    expect(document.body.textContent).toContain("PDF");
+    expect(textarea.value).toBe("");
+    expect(document.body.textContent).not.toContain("@docs/paper.pdf");
+    expect(onMentionPicked).toHaveBeenCalledWith("docs/paper.pdf");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["docs/paper.pdf"],
+    });
+  });
+
+  it("falls back to desktop clipboard file paths when the browser paste event only has a filename", async () => {
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: {
+          length: 1,
+          0: { name: "paper.pdf" },
+          item: (index: number) => (index === 0 ? ({ name: "paper.pdf" } as File) : null),
+        },
+        getData: (type: string) => (type === "text/plain" ? "paper.pdf" : ""),
+        items: [{ kind: "file", type: "application/pdf", getAsFile: () => null }],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Attached file paper.pdf")).toBeTruthy();
+    });
+    expect(textarea.value).toBe("");
+    expect(document.body.textContent).not.toContain("@paper.pdf");
+    expect(onMentionPicked).toHaveBeenCalledWith("docs/paper.pdf");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["docs/paper.pdf"],
+    });
+  });
+
+  it("prefers desktop clipboard file paths over Finder icon image data", async () => {
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+    const iconImage = new File([new Uint8Array([1, 2, 3])], "icon.png", { type: "image/png" });
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: { length: 0 },
+        getData: (type: string) => (type === "text/plain" ? "paper.pdf" : ""),
+        items: [{ kind: "string", type: "image/png", getAsFile: () => iconImage }],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Attached file paper.pdf")).toBeTruthy();
+    });
+    expect(screen.queryByAltText("pasted image")).toBeNull();
+    expect(onMentionPicked).toHaveBeenCalledWith("docs/paper.pdf");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["docs/paper.pdf"],
+    });
+  });
+
+  it("falls back to desktop clipboard paths when Finder paste exposes only a filename string", async () => {
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: { length: 0 },
+        getData: (type: string) => (type === "text/plain" ? "paper.pdf" : ""),
+        items: [],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Attached file paper.pdf")).toBeTruthy();
+    });
+    expect(textarea.value).toBe("");
+    expect(onMentionPicked).toHaveBeenCalledWith("docs/paper.pdf");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["docs/paper.pdf"],
+    });
+  });
+
+  it("falls back to desktop clipboard paths when WebView exposes only a Files clipboard type", async () => {
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: { length: 0 },
+        getData: () => "",
+        items: [],
+        types: ["Files"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Attached file paper.pdf")).toBeTruthy();
+    });
+    expect(textarea.value).toBe("");
+    expect(onMentionPicked).toHaveBeenCalledWith("docs/paper.pdf");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["docs/paper.pdf"],
+    });
+  });
+
+  it("probes the desktop clipboard when WebView emits an empty paste event", async () => {
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: { length: 0 },
+        getData: () => "",
+        items: [],
+        types: [],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Attached file paper.pdf")).toBeTruthy();
+    });
+    expect(textarea.value).toBe("");
+    expect(onMentionPicked).toHaveBeenCalledWith("docs/paper.pdf");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["docs/paper.pdf"],
+    });
+  });
+
+  it("probes the desktop clipboard when WebView exposes only an empty text type", async () => {
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: { length: 0 },
+        getData: () => "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Attached file paper.pdf")).toBeTruthy();
+    });
+    expect(textarea.value).toBe("");
+    expect(onMentionPicked).toHaveBeenCalledWith("docs/paper.pdf");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["docs/paper.pdf"],
+    });
+  });
+
+  it("probes the desktop clipboard from Cmd+V when no paste event changes the textarea", async () => {
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.keyDown(textarea, { key: "v", metaKey: true });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Attached file paper.pdf")).toBeTruthy();
+    });
+    expect(textarea.value).toBe("");
+    expect(onMentionPicked).toHaveBeenCalledWith("docs/paper.pdf");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["docs/paper.pdf"],
+    });
+  });
+
+  it("keeps filename text when desktop clipboard has no file paths", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([]);
+    const setDraft = vi.fn();
+    const { container } = renderComposer({ setDraft });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: { length: 0 },
+        getData: (type: string) => (type === "text/plain" ? "paper.pdf" : ""),
+        items: [],
+      },
+    });
+
+    await waitFor(() => {
+      expect(setDraft).toHaveBeenCalled();
+    });
+    const updater = setDraft.mock.calls.at(-1)?.[0] as (current: string) => string;
+    expect(updater("")).toBe("paper.pdf");
+  });
+
+  it("adds files picked from the plus menu as attachment cards", async () => {
+    vi.mocked(openFileDialog).mockResolvedValueOnce("/repo/docs/paper.pdf");
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.click(screen.getByRole("button", { name: "添加上下文" }));
+    fireEvent.click(screen.getByRole("button", { name: /添加文件/ }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Attached file paper.pdf")).toBeTruthy();
+    });
+    expect(textarea.value).toBe("");
+    expect(document.body.textContent).not.toContain("@docs/paper.pdf");
+    expect(onMentionPicked).toHaveBeenCalledWith("docs/paper.pdf");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["docs/paper.pdf"],
+    });
+  });
+
+  it("adds images picked from the plus menu as thumbnail attachments", async () => {
+    vi.mocked(openFileDialog).mockResolvedValueOnce("/repo/images/photo.png");
+    const onSend = vi.fn();
+    const onMentionPicked = vi.fn();
+    const { container } = renderComposer({ onSend, onMentionPicked });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+
+    fireEvent.click(screen.getByRole("button", { name: "添加上下文" }));
+    fireEvent.click(screen.getByRole("button", { name: /添加文件/ }));
+
+    await waitFor(() => {
+      expect(screen.getByAltText("pasted image")).toBeTruthy();
+    });
+    expect((screen.getByAltText("pasted image") as HTMLImageElement).src).toBe(
+      "asset:///repo/images/photo.png",
+    );
+    expect(textarea.value).toBe("");
+    expect(document.body.textContent).not.toContain("@images/photo.png");
+    expect(onMentionPicked).toHaveBeenCalledWith("images/photo.png");
+
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({
+      hiddenMentions: ["images/photo.png"],
     });
   });
 });
@@ -256,6 +635,19 @@ describe("desktop Composer clipboard files", () => {
     expect(paths).toEqual(["src/App.tsx", "docs/hello world.md"]);
   });
 
+  it("ignores macOS file reference URLs so the desktop backend can resolve them", () => {
+    const paths = clipboardFileMentionPaths(
+      {
+        files: { length: 1 },
+        getData: (type: string) =>
+          type === "text/uri-list" ? "file:///.file/id=6571367.16939185" : "",
+      } as unknown as DataTransfer,
+      "/repo",
+    );
+
+    expect(paths).toEqual([]);
+  });
+
   it("extracts Tauri clipboard file paths instead of falling back to pasted filenames", () => {
     const paths = clipboardFileMentionPaths(
       {
@@ -263,7 +655,9 @@ describe("desktop Composer clipboard files", () => {
           length: 1,
           0: { name: "paper.pdf", path: "/repo/docs/paper.pdf" },
           item: (index: number) =>
-            index === 0 ? ({ name: "paper.pdf", path: "/repo/docs/paper.pdf" } as File) : null,
+            index === 0
+              ? ({ name: "paper.pdf", path: "/repo/docs/paper.pdf" } as unknown as File)
+              : null,
         },
         getData: (type: string) => (type === "text/plain" ? "paper.pdf" : ""),
       } as unknown as DataTransfer,

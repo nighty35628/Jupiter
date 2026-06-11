@@ -91,6 +91,7 @@ export const ja = {
     switchWorkspace: "ワークスペース切替",
     switchWorkspaceWithName: "ワークスペース切替: {workspace}",
     insertFile: "ファイルを追加",
+    attachmentCard: "添付カード",
     switchModel: "モデル切替",
     switchEffort: "推論努力切替",
     slashHeader: "コマンド — エージェント、モデル、セッションを制御",

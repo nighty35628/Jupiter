@@ -919,6 +919,74 @@ fn save_clipboard_image(bytes: Vec<u8>, extension: Option<String>) -> Result<Str
     Ok(path.to_string_lossy().into_owned())
 }
 
+fn parse_clipboard_file_paths(raw: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if paths.iter().any(|path| path == trimmed) {
+            continue;
+        }
+        paths.push(trimmed.to_string());
+    }
+    paths
+}
+
+#[cfg(target_os = "macos")]
+fn read_clipboard_file_paths_platform() -> Result<Vec<String>, String> {
+    use std::process::Command;
+
+    let script = r#"
+ObjC.import('AppKit');
+ObjC.import('Foundation');
+const pb = $.NSPasteboard.generalPasteboard;
+const paths = [];
+function pushPath(value) {
+  if (!value) return;
+  const unwrapped = ObjC.unwrap(value);
+  const path = String(unwrapped || '').trim();
+  if (!path || paths.includes(path)) return;
+  paths.push(path);
+}
+const files = pb.propertyListForType('NSFilenamesPboardType');
+if (files) {
+  for (const file of ObjC.deepUnwrap(files)) {
+    pushPath(file);
+  }
+}
+for (const type of ['public.file-url', 'CorePasteboardFlavorType 0x6675726C']) {
+  const raw = pb.stringForType(type);
+  if (!raw) continue;
+  const url = $.NSURL.URLWithString(raw);
+  if (url && url.path) {
+    pushPath(url.path);
+  }
+}
+console.log(paths.join('\n'));
+"#;
+    let output = Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", script])
+        .output()
+        .map_err(|e| format!("read clipboard failed: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("read clipboard failed: {stderr}"));
+    }
+    Ok(parse_clipboard_file_paths(&String::from_utf8_lossy(&output.stdout)))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_clipboard_file_paths_platform() -> Result<Vec<String>, String> {
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+fn read_clipboard_file_paths() -> Result<Vec<String>, String> {
+    read_clipboard_file_paths_platform()
+}
+
 fn purge_old_pasted_images(max_age: Duration) {
     let dir = pasted_images_dir();
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -991,6 +1059,7 @@ fn main() {
             run_terminal_command,
             read_file_preview,
             write_text_file,
+            read_clipboard_file_paths,
             save_clipboard_image
         ])
         .setup(|app| {

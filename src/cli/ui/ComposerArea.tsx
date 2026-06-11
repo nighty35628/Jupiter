@@ -54,6 +54,7 @@ export interface ComposerAreaProps {
   onOpenExternalEditor: () => void;
   onCursorChange: (cursor: number) => void;
   isHistoryMode?: boolean;
+  transformPaste?: (content: string) => string | null | undefined;
 
   // ── slash / @-mention / arg picker — derived from sub-component props
   slashMatches: SlashSuggestionsProps["matches"] | null;
@@ -98,6 +99,7 @@ export const ComposerArea: React.FC<ComposerAreaProps> = React.memo(
     onOpenExternalEditor,
     onCursorChange,
     isHistoryMode,
+    transformPaste,
     slashMatches,
     slashSelected,
     slashGroupMode,
@@ -150,6 +152,7 @@ export const ComposerArea: React.FC<ComposerAreaProps> = React.memo(
           model={model}
           isHistoryMode={isHistoryMode}
           planMode={planMode}
+          transformPaste={transformPaste}
         />
         {activeLoop ? <LoopStatusRow loop={activeLoop} /> : null}
         <StatusRow statusBar={statusBar} />

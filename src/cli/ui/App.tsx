@@ -188,6 +188,7 @@ import { replaceMcpServerSummary } from "./mcp-server-list.js";
 import { formatMcpSlowToast } from "./mcp-toast.js";
 import { openUrl } from "./open-url.js";
 import { formatLongPaste } from "./paste-collapse.js";
+import { convertPastedPathsToMentions } from "./paste-paths.js";
 import { extractOpenQuestionsSection } from "./plan-open-questions.js";
 import {
   type McpServerSummary,
@@ -589,6 +590,11 @@ function AppInner({
   });
   const { currentRootDir, setCurrentRootDir, currentRootDirRef } = useWorkspaceRoot(
     codeMode?.rootDir,
+  );
+  const transformPastedInput = useCallback(
+    (content: string) =>
+      codeMode ? (convertPastedPathsToMentions(content, currentRootDir) ?? content) : content,
+    [codeMode, currentRootDir],
   );
   const { hookList, reloadHooks } = useHookList(codeMode?.rootDir);
   // Session-scoped edit history + undo banner + /undo, /history, /show
@@ -3257,7 +3263,6 @@ function AppInner({
       if (session) {
         const existing = sessionMetaBeforeTurn;
         const patch: Parameters<typeof patchSessionMeta>[1] = {};
-        if (!existing.summary) patch.summary = text.replace(/\s+/g, " ").slice(0, 80);
         if (!existing.branch) patch.branch = detectGitBranch(currentRootDir);
         if (!existing.workspace) patch.workspace = currentRootDir;
         if (Object.keys(patch).length > 0) patchSessionMeta(session, patch);
@@ -4786,6 +4791,7 @@ function AppInner({
                   onOpenExternalEditor={handleOpenExternalEditor}
                   onCursorChange={setComposerCursor}
                   isHistoryMode={isHistoryMode}
+                  transformPaste={transformPastedInput}
                   slashMatches={slashMatches}
                   slashSelected={slashSelected}
                   slashGroupMode={slashGroupMode}

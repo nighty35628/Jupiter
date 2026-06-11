@@ -205,6 +205,7 @@ import {
   importExternalSession,
   importExternalSessions,
 } from "../../session-import.js";
+import { generateSessionTitle, shouldAutoNameSession } from "../../session-title.js";
 import { SkillStore, skillDisplayDescription } from "../../skills.js";
 import { countTokensBounded } from "../../tokenizer.js";
 import type { ChoiceOption } from "../../tools/choice.js";
@@ -3297,19 +3298,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       });
     }
     let lastAssistantText = "";
-    if (tab.currentSession) {
-      const existing = loadSessionMeta(tab.currentSession).summary;
-      if (!existing || !existing.trim()) {
-        const summary = text.replace(/\s+/g, " ").trim().slice(0, 60);
-        if (summary) {
-          try {
-            patchSessionMeta(tab.currentSession, { summary });
-          } catch {
-            // meta is for display only — failure shouldn't block the turn
-          }
-        }
-      }
-    }
+    const sessionAtTurnStart = tab.currentSession;
+    const sessionMetaBeforeTurn = sessionAtTurnStart ? loadSessionMeta(sessionAtTurnStart) : {};
     if (tab.hooks.some((h) => h.event === "UserPromptSubmit")) {
       const report = await runHooks({
         hooks: tab.hooks,
@@ -3397,9 +3387,41 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               );
             });
           }
-          patchSessionMeta(tab.currentSession, {
-            lastAssistantCompletedAt: Date.now(),
-          });
+          const sessionName = tab.currentSession;
+          if (sessionName) {
+            const metaBeforeStats = loadSessionMeta(sessionName);
+            const nextTurnCount = (metaBeforeStats.turnCount ?? 0) + (lastAssistantText ? 1 : 0);
+            patchSessionMeta(sessionName, {
+              lastAssistantCompletedAt: Date.now(),
+              ...(lastAssistantText ? { turnCount: nextTurnCount } : {}),
+            });
+            if (
+              sessionName === sessionAtTurnStart &&
+              lastAssistantText.trim() &&
+              shouldAutoNameSession(sessionName, sessionMetaBeforeTurn, nextTurnCount)
+            ) {
+              void generateSessionTitle(rt.loop.client, rt.loop.model, {
+                workspace: tab.rootDir,
+                userText: text,
+                assistantText: lastAssistantText,
+              }).then(
+                (title) => {
+                  if (!title) return;
+                  try {
+                    patchSessionMeta(sessionName, {
+                      summary: title,
+                      autoTitleGenerated: true,
+                    });
+                    emitCurrentSessionReconciled(tab);
+                    emitSessions(tab);
+                  } catch {
+                    // Title generation is best-effort display metadata.
+                  }
+                },
+                () => undefined,
+              );
+            }
+          }
           emitCurrentSessionReconciled(tab);
           emit({ type: "$turn_complete" }, tab.id);
           if (tab.planTotalSteps > 0 && tab.completedStepIds.size >= tab.planTotalSteps) {

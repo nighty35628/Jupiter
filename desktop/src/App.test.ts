@@ -93,6 +93,7 @@ function initialState(): Parameters<typeof reduce>[0] {
     sessionFiles: [],
     memory: [],
     memoryDetail: null,
+    storageScan: null,
     sourceSearchResults: null,
     sourceIngestResult: null,
     jobs: [],

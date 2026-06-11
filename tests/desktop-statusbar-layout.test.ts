@@ -34,11 +34,25 @@ describe("desktop settings status card layout", () => {
   it("keeps the popover compact and anchored to the lower left settings area", () => {
     expect(cssRule(".settings-card-layer")).toContain("position: fixed");
     expect(cssRule(".settings-card")).toContain("bottom: 52px");
-    expect(cssRule(".settings-card")).toContain("width: min(320px");
+    expect(cssRule(".settings-card")).toContain("width: min(306px");
     expect(cssRule(".settings-card-grid")).toContain("repeat(2, minmax(0, 1fr))");
     expect(cssRule(".settings-card-actions")).toContain("minmax(0, 1fr) 34px 42px");
     expect(cssRule(".settings-icon-action")).toContain("height: 34px");
     expect(css).toContain(".settings-theme-option {\n  min-width: 0;");
     expect(css).toContain("grid-template-columns: 48px minmax(0, 1fr) 14px");
+  });
+
+  it("aligns the right sidebar resize guide with the context panel boundary", () => {
+    expect(cssRule(".app")).toContain("grid-template-rows: 38px 34px");
+    expect(cssRule(".ctx")).toContain("grid-area: ctx");
+    expect(cssRule(".ctx")).toContain("border-left: 1px solid var(--border)");
+
+    const rightHandleRule = cssRule('.resize-handle[data-side="right"]');
+    expect(rightHandleRule).toContain("top: 72px");
+    expect(rightHandleRule).toContain("bottom: 0");
+
+    const rightGuideRule = cssRule('.resize-handle[data-side="right"]::after');
+    expect(rightGuideRule).toContain("top: 0");
+    expect(rightGuideRule).toContain("bottom: 0");
   });
 });
