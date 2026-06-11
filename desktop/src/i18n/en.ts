@@ -803,6 +803,10 @@ export const en = {
     workflowSource: "source",
     workflowSources: "sources",
     workflowCancel: "Cancel workflow",
+    workflowSaveToLibrary: "Save to library",
+    workflowInsertResult: "Insert result",
+    workflowExportMarkdown: "Export Markdown",
+    workflowCopyResult: "Copy result",
   },
   statusbar: {
     offline: "Offline",

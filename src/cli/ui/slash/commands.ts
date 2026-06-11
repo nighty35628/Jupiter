@@ -180,9 +180,9 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   {
     cmd: "workflow",
     group: "extend",
-    argsHint: "<start|status|open|cancel> [id]",
+    argsHint: "<start|status|open|cancel|export|save-library> [id]",
     summary: "start, inspect, or cancel built-in workflow runs",
-    argCompleter: ["start", "status", "open", "cancel"],
+    argCompleter: ["start", "status", "open", "cancel", "export", "save-library"],
   },
   {
     cmd: "qq",

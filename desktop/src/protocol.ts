@@ -1,3 +1,7 @@
+import type { WorkflowEvent, WorkflowRun } from "../../src/workflows/types";
+
+export type { WorkflowRun };
+
 export type ReadyEvent = { type: "$ready" };
 export type ProtocolErrorEvent = { type: "$error"; message: string };
 export type TurnCompleteEvent = { type: "$turn_complete" };
@@ -768,6 +772,8 @@ export type KernelErrorEvent = {
   recoverable: boolean;
 };
 
+export type WorkflowRunEvent = WorkflowEvent;
+
 export type IncomingEvent = { tabId?: string } & (
   | ReadyEvent
   | ProtocolErrorEvent
@@ -818,6 +824,7 @@ export type IncomingEvent = { tabId?: string } & (
   | CompactResultEvent
   | StatusEvent
   | WarningEvent
+  | WorkflowRunEvent
   | KernelErrorEvent
   | RetryResultEvent
   | BtwResultEvent
@@ -890,6 +897,8 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "library_refresh"; id: string }
   | { cmd: "storage_scan" }
   | { cmd: "storage_cleanup"; itemIds: string[] }
+  | { cmd: "workflow_cancel"; runId: string }
+  | { cmd: "workflow_save_library"; runId: string }
   | { cmd: "tab_open"; workspaceDir?: string }
   | { cmd: "tab_close" }
   | { cmd: "tab_activate"; tabId: string }

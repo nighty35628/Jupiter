@@ -68,6 +68,7 @@ import type {
   StorageScanEvent,
   SubagentEvent,
   SubagentRunInfo,
+  WorkflowRun,
 } from "./protocol";
 import type { QQDesktopSettingsState } from "./qq-settings";
 import {
@@ -99,7 +100,7 @@ import {
 } from "./theme";
 import { AboutModal } from "./ui/about";
 import { AppContextMenu } from "./ui/app-context-menu";
-import { parseEditResult } from "./ui/cards";
+import { WorkflowRunCard, parseEditResult } from "./ui/cards";
 import {
   Composer,
   type ComposerSendPayload,
@@ -159,6 +160,7 @@ import {
 import { WorkdirPop } from "./ui/workdir-pop";
 import { type JupiterUpdate, checkJupiterUpdate, installJupiterUpdate } from "./update-policy";
 import { displayWorkspaceBasename, displayWorkspacePath } from "./workspace-display";
+import { BUILT_IN_WORKFLOWS } from "../../src/workflows/catalog";
 
 const RIGHT_SIDEBAR_COLLAPSE_WIDTH = 1120;
 const LEFT_SIDEBAR_COLLAPSE_WIDTH = 760;
@@ -218,6 +220,7 @@ export type ChatMessage =
       segments: AssistantSegment[];
       pending: boolean;
     }
+  | { kind: "workflow"; run: WorkflowRun }
   | { kind: "status"; text: string }
   | { kind: "warning"; id: string; text: string; severity: "low" | "high" }
   | { kind: "error"; message: string; id: string; recoverable?: boolean };
@@ -709,6 +712,8 @@ export function chatMessageKey(message: ChatMessage | undefined, index: number):
       return `user-${message.clientId || message.turn}`;
     case "assistant":
       return `assistant-${message.turn}`;
+    case "workflow":
+      return `workflow-${message.run.id}`;
     case "warning":
       return `warning-${message.id}`;
     case "error":
@@ -750,6 +755,14 @@ let _errSeq = 0;
 function nextErrorId(): string {
   _errSeq += 1;
   return `err-${Date.now().toString(36)}-${_errSeq}`;
+}
+
+function upsertWorkflowRunMessage(messages: ChatMessage[], run: WorkflowRun): ChatMessage[] {
+  const index = messages.findIndex((message) => message.kind === "workflow" && message.run.id === run.id);
+  if (index < 0) return [...messages, { kind: "workflow", run }];
+  const next = [...messages];
+  next[index] = { kind: "workflow", run };
+  return next;
 }
 
 export function reduce(state: State, action: Action): State {
@@ -1464,6 +1477,18 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return { ...state, ready: true, needsSetup: false };
     case "$needs_setup":
       return { ...state, needsSetup: true, ready: false };
+    case "workflow_started":
+    case "workflow_phase_changed":
+    case "workflow_log":
+    case "workflow_agent_started":
+    case "workflow_agent_updated":
+    case "workflow_agent_completed":
+    case "workflow_token_usage":
+    case "workflow_waiting_approval":
+    case "workflow_completed":
+    case "workflow_failed":
+    case "workflow_canceled":
+      return { ...state, messages: upsertWorkflowRunMessage(state.messages, ev.run) };
     case "$turn_complete":
       // Clear pause-gate-tied modals too. By the time the loop emits
       // $turn_complete, anything still in these arrays is orphaned — the
@@ -2070,6 +2095,48 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
   }
 }
 
+export function formatWorkflowRunMarkdown(run: WorkflowRun): string {
+  const lines = [
+    `# ${run.title}`,
+    "",
+    `- Workflow: ${run.workflowId}@${run.workflowVersion}`,
+    `- Status: ${run.status}`,
+    `- Phase: ${run.phase ?? "-"}`,
+    `- Started: ${run.startedAt}`,
+    run.completedAt ? `- Completed: ${run.completedAt}` : null,
+    `- Tokens: ${run.tokenUsage.total.toLocaleString()}`,
+    "",
+    "## Agents",
+    "",
+    ...run.agents.flatMap((agent) => [
+      `### ${agent.label}`,
+      "",
+      `- Status: ${agent.status}`,
+      `- Phase: ${agent.phase}`,
+      `- Tokens: ${agent.tokenUsage.total.toLocaleString()}`,
+      agent.summary ? `\n${agent.summary}` : "",
+      agent.error ? `\nError: ${agent.error}` : "",
+      "",
+    ]),
+  ].filter((line): line is string => line !== null);
+
+  if (run.sources.length > 0) {
+    lines.push("## Sources", "");
+    for (const source of run.sources) {
+      const target = source.url ?? source.path ?? "";
+      lines.push(`- ${source.title}${target ? `: ${target}` : ""}`);
+    }
+    lines.push("");
+  }
+  if (run.result !== undefined) {
+    lines.push("## Result", "", "```json", JSON.stringify(run.result, null, 2), "```", "");
+  }
+  if (run.error) {
+    lines.push("## Error", "", run.error, "");
+  }
+  return `${lines.join("\n").trim()}\n`;
+}
+
 function formatConversationMarkdown(messages: ChatMessage[], userLabel: string): string {
   return messages
     .map((m) => {
@@ -2090,6 +2157,9 @@ function formatConversationMarkdown(messages: ChatMessage[], userLabel: string):
           .filter(Boolean)
           .join("\n\n");
         return `### Jupiter\n\n${body}`;
+      }
+      if (m.kind === "workflow") {
+        return formatWorkflowRunMarkdown(m.run);
       }
       if (m.kind === "error") return `### Error\n\n${m.message}`;
       return "";
@@ -3587,6 +3657,15 @@ function TabRuntimeInner({
     busy: state.busy,
     canCloseTab,
     hasMessages: state.messages.length > 0,
+    workflowCommands: BUILT_IN_WORKFLOWS.map((workflow) => ({
+      id: `workflow-${workflow.id}`,
+      label: `Workflow: ${workflow.title}`,
+      hint: workflow.description,
+      run: () => {
+        setDraft(`/workflow start ${workflow.id} `);
+        composerRef.current?.focus();
+      },
+    })),
   });
 
   const slashSettingCommands: SlashCmd[] = buildSlashSettingsDescriptors().map(
@@ -3867,6 +3946,26 @@ function TabRuntimeInner({
     }
   }, [state.messages, session, flashToast]);
 
+  const exportWorkflowRun = useCallback(
+    async (run: WorkflowRun) => {
+      try {
+        const filename = defaultExportFilename(run.title || run.id);
+        const path = await saveDialog({
+          defaultPath: filename,
+          filters: [{ name: "Markdown", extensions: ["md"] }],
+          title: t("app.toast.exportDialogTitle"),
+        });
+        if (!path) return;
+        await invoke("write_text_file", { path, content: formatWorkflowRunMarkdown(run) });
+        flashToast(t("app.toast.exportedMd"));
+      } catch (err) {
+        console.error("workflow export failed", err);
+        flashToast(t("app.toast.exportFailed", { error: String(err) }));
+      }
+    },
+    [flashToast],
+  );
+
   const conversationCopy = useCallback(() => {
     const userLabel = t("app.exportUserLabel");
     const md = formatConversationMarkdown(state.messages, userLabel);
@@ -4056,6 +4155,36 @@ function TabRuntimeInner({
                               }
                             />
                             {stats ? <DiffStats stats={stats} /> : null}
+                          </div>
+                        );
+                      }
+                      if (m.kind === "workflow") {
+                        return (
+                          <div className="thread-inner">
+                            <WorkflowRunCard
+                              run={m.run}
+                              defaultOpen={state.settings?.processCardsDefaultOpen ?? false}
+                              onCancel={(runId) => sendRpc({ cmd: "workflow_cancel", runId })}
+                              onSaveToLibrary={(runId) =>
+                                sendRpc({ cmd: "workflow_save_library", runId })
+                              }
+                              onInsertResult={() => {
+                                setDraft((current) => {
+                                  const markdown = formatWorkflowRunMarkdown(m.run).trim();
+                                  return current.trim()
+                                    ? `${current.trimEnd()}\n\n${markdown}`
+                                    : markdown;
+                                });
+                                composerRef.current?.focus();
+                              }}
+                              onExportMarkdown={() => {
+                                void exportWorkflowRun(m.run);
+                              }}
+                              onCopyResult={() => {
+                                void navigator.clipboard.writeText(formatWorkflowRunMarkdown(m.run));
+                                flashToast(t("app.toast.copiedMd"));
+                              }}
+                            />
                           </div>
                         );
                       }

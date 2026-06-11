@@ -213,6 +213,8 @@ import type { SubagentEvent, SubagentSink } from "../../tools/subagent.js";
 import { webFetch, webSearch } from "../../tools/web.js";
 import type { ChatMessage } from "../../types.js";
 import { VERSION } from "../../version.js";
+import { classifyWorkflowIntent, getWorkflowTemplate } from "../../workflows/index.js";
+import type { WorkflowEvent } from "../../workflows/types.js";
 import {
   type EditHistoryEntry,
   entryStatus,
@@ -299,6 +301,8 @@ type InMessage = { tabId?: string } & (
   | { cmd: "library_refresh"; id: string }
   | { cmd: "storage_scan" }
   | { cmd: "storage_cleanup"; itemIds: string[] }
+  | { cmd: "workflow_cancel"; runId: string }
+  | { cmd: "workflow_save_library"; runId: string }
   | { cmd: "new_chat"; workspaceDir?: string; openInNewTab?: boolean }
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_sign_out" }
@@ -873,6 +877,7 @@ type EmittableEvent =
   | CtxBreakdownEvent
   | MemoryEvent
   | MemoryDetailEvent
+  | WorkflowEvent
   | JobsEvent;
 
 const STDOUT_BACKPRESSURE_WAIT = new Int32Array(new SharedArrayBuffer(4));
@@ -2311,6 +2316,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       jobs: tab.toolset?.jobs,
       pendingEditCount: 0,
       postInfo: (message) => emitStatus(tab, message),
+      workflowEmitEvent: (event) => emit(event, tab.id),
       reloadHooks: () => {
         tab.hooks = loadHooks({ projectRoot: tab.rootDir });
         return tab.hooks.length;
@@ -2379,6 +2385,51 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     } else {
       finishDesktopCommand(tab);
     }
+  }
+
+  function handleDesktopWorkflowCommand(tab: Tab, args: readonly string[]): void {
+    if (!tab.runtime) {
+      emit(
+        {
+          type: "$error",
+          message: "Not configured yet — paste your DeepSeek API key first.",
+        },
+        tab.id,
+      );
+      return;
+    }
+    const result = handleSlash("workflow", [...args], tab.runtime.loop, {
+      codeRoot: tab.rootDir,
+      workflowRoot: tab.rootDir,
+      memoryRoot: tab.rootDir,
+      postInfo: (message) => emitStatus(tab, message),
+      workflowEmitEvent: (event) => emit(event, tab.id),
+    });
+    if (result.info) emitStatus(tab, result.info);
+  }
+
+  async function maybeSuggestWorkflow(tab: Tab, text: string): Promise<void> {
+    if (!tab.runtime) return;
+    const intent = await classifyWorkflowIntent({
+      text,
+      mode: "suggest",
+      classifyWithModel: async (prompt) => {
+        const response = await tab.runtime!.loop.client.chat({
+          model: tab.runtime!.loop.model,
+          messages: [{ role: "user", content: prompt }],
+          responseFormat: { type: "json_object" },
+          thinking: "disabled",
+          temperature: 0,
+          maxTokens: 200,
+          signal: tab.aborter?.signal,
+        });
+        return response.content;
+      },
+    });
+    if (!intent.shouldSuggest || !intent.workflowId) return;
+    const workflow = getWorkflowTemplate(intent.workflowId);
+    if (!workflow) return;
+    emitStatus(tab, `Workflow suggested: ${workflow.title} — run /workflow start ${workflow.id}`);
   }
 
   function handleQQRemoteDesktopCommand(tab: Tab, text: string): boolean {
@@ -4843,6 +4894,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       }
       return;
     }
+    if (msg.cmd === "workflow_cancel") {
+      handleDesktopWorkflowCommand(tab, ["cancel", msg.runId]);
+      return;
+    }
+    if (msg.cmd === "workflow_save_library") {
+      handleDesktopWorkflowCommand(tab, ["save-library", msg.runId]);
+      return;
+    }
     if (msg.cmd === "library_add") {
       try {
         const needsWebFetch =
@@ -5497,6 +5556,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             .finally(() => finishDesktopCommand(tab));
           return;
         }
+        void maybeSuggestWorkflow(tab, msg.text).catch((err: Error) => {
+          emit({ type: "$error", message: `workflow suggestion failed: ${err.message}` }, tab.id);
+        });
       }
       void runTurn(tab, msg.text, false, msg.clientId, {
         displayText: msg.displayText,

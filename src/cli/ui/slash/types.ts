@@ -127,6 +127,8 @@ export interface SlashContext {
   workflowExecuteAgent?: (
     input: import("../../../workflows/runner.js").WorkflowAgentInput,
   ) => Promise<import("../../../workflows/runner.js").WorkflowAgentResult>;
+  /** Optional structured workflow event sink for desktop cards. */
+  workflowEmitEvent?: (event: import("../../../workflows/types.js").WorkflowEvent) => void;
   /** Diff config.mcp[] vs live bridges → add/close clients accordingly. Wired from chat.tsx mcpRuntime. */
   reloadMcp?: () => Promise<{
     added: string[];

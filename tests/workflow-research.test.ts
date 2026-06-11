@@ -10,6 +10,7 @@ describe("research workflow definitions", () => {
   it("defines Batch 1 research workflows with focused checks", () => {
     for (const id of [
       "deep-fact-check",
+      "paper-direction-validation",
       "open-source-project-selection",
       "technical-route-feasibility-review",
     ]) {

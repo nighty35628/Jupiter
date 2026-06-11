@@ -3783,6 +3783,24 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   gap: 8px;
   padding: 8px 12px 12px;
 }
+.workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.workflow-action {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  padding: 6px 8px;
+}
+.workflow-action:hover {
+  background: var(--surface-hover);
+}
 .workflow-log,
 .workflow-error {
   font-size: 12px;
@@ -3790,6 +3808,42 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 }
 .workflow-error {
   color: var(--danger);
+}
+.workflow-result {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+.workflow-source-list {
+  display: grid;
+  gap: 5px;
+}
+.workflow-source {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+.workflow-source-title {
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 650;
+}
+.workflow-source-target {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .workflow-agent-list {
   display: grid;

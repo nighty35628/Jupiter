@@ -797,6 +797,10 @@ export const ja = {
     workflowSource: "source",
     workflowSources: "sources",
     workflowCancel: "Cancel workflow",
+    workflowSaveToLibrary: "ライブラリへ保存",
+    workflowInsertResult: "結果を挿入",
+    workflowExportMarkdown: "Markdown を書き出す",
+    workflowCopyResult: "結果をコピー",
   },
   statusbar: {
     offline: "オフライン",

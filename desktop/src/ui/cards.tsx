@@ -21,6 +21,7 @@ export type WorkflowCardRun = {
   }>;
   logs: Array<{ ts: string; message: string }>;
   sources: Array<{ title: string; url?: string; path?: string }>;
+  result?: unknown;
   error?: string;
 };
 
@@ -181,10 +182,18 @@ export function WorkflowRunCard({
   run,
   defaultOpen = false,
   onCancel,
+  onSaveToLibrary,
+  onInsertResult,
+  onExportMarkdown,
+  onCopyResult,
 }: {
   run: WorkflowCardRun;
   defaultOpen?: boolean;
   onCancel?: (runId: string) => void;
+  onSaveToLibrary?: (runId: string) => void;
+  onInsertResult?: (runId: string) => void;
+  onExportMarkdown?: (runId: string) => void;
+  onCopyResult?: (runId: string) => void;
 }) {
   useLang();
   const running = run.agents.filter((agent) => agent.status === "running").length;
@@ -260,8 +269,64 @@ export function WorkflowRunCard({
       }
     >
       <div className="workflow-card">
+        {run.status === "completed" &&
+        (onSaveToLibrary || onInsertResult || onExportMarkdown || onCopyResult) ? (
+          <div className="workflow-actions">
+            {onSaveToLibrary ? (
+              <button
+                type="button"
+                className="workflow-action"
+                onClick={() => onSaveToLibrary(run.id)}
+              >
+                {t("cards.workflowSaveToLibrary")}
+              </button>
+            ) : null}
+            {onInsertResult ? (
+              <button
+                type="button"
+                className="workflow-action"
+                onClick={() => onInsertResult(run.id)}
+              >
+                {t("cards.workflowInsertResult")}
+              </button>
+            ) : null}
+            {onExportMarkdown ? (
+              <button
+                type="button"
+                className="workflow-action"
+                onClick={() => onExportMarkdown(run.id)}
+              >
+                {t("cards.workflowExportMarkdown")}
+              </button>
+            ) : null}
+            {onCopyResult ? (
+              <button
+                type="button"
+                className="workflow-action"
+                onClick={() => onCopyResult(run.id)}
+              >
+                {t("cards.workflowCopyResult")}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {lastLog ? <div className="workflow-log">{lastLog}</div> : null}
         {run.error ? <div className="workflow-error">{run.error}</div> : null}
+        {run.result !== undefined ? (
+          <pre className="workflow-result">{formatWorkflowResult(run.result)}</pre>
+        ) : null}
+        {run.sources.length > 0 ? (
+          <div className="workflow-source-list">
+            {run.sources.map((source) => (
+              <div className="workflow-source" key={`${source.title}:${source.url ?? source.path ?? ""}`}>
+                <span className="workflow-source-title">{source.title}</span>
+                {source.url || source.path ? (
+                  <span className="workflow-source-target">{source.url ?? source.path}</span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="workflow-agent-list">
           {run.agents.map((agent) => (
             <div className="workflow-agent" key={agent.id} data-status={agent.status}>
@@ -289,6 +354,10 @@ export function WorkflowRunCard({
       </div>
     </Card>
   );
+}
+
+function formatWorkflowResult(result: unknown): string {
+  return typeof result === "string" ? result : JSON.stringify(result, null, 2);
 }
 
 // ---- Reasoning ----

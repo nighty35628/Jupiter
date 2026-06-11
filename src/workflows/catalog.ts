@@ -5,6 +5,7 @@ import type {
   WorkflowPermissions,
   WorkflowTemplate,
 } from "./types.js";
+import { getWorkspaceWorkflowPlan } from "./workspace.js";
 
 const TEXT_INPUT_SCHEMA: JsonSchema = {
   type: "object",
@@ -77,6 +78,14 @@ function phasesFor(id: string): WorkflowTemplate["phases"] {
   const researchPlan = getResearchWorkflowPlan(id);
   if (researchPlan) {
     return researchPlan.checks.map((check) => ({
+      id: check.id,
+      title: check.title,
+      detail: check.prompt,
+    }));
+  }
+  const workspacePlan = getWorkspaceWorkflowPlan(id);
+  if (workspacePlan) {
+    return workspacePlan.checks.map((check) => ({
       id: check.id,
       title: check.title,
       detail: check.prompt,

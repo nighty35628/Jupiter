@@ -1,13 +1,21 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { BUILT_IN_WORKFLOWS, getWorkflowTemplate } from "../../../../workflows/catalog.js";
+import {
+  formatWorkflowRunMarkdown,
+  saveWorkflowRunToLibrary,
+} from "../../../../workflows/markdown.js";
 import { createResearchWorkflowAgentExecutor } from "../../../../workflows/research-executor.js";
 import { getResearchWorkflowPlan } from "../../../../workflows/research.js";
 import { runWorkflow } from "../../../../workflows/runner.js";
 import { createWorkflowStore } from "../../../../workflows/store.js";
 import type { WorkflowRun } from "../../../../workflows/types.js";
+import { createWorkspaceWorkflowAgentExecutor } from "../../../../workflows/workspace-executor.js";
+import { getWorkspaceWorkflowPlan } from "../../../../workflows/workspace.js";
 import type { SlashHandler } from "../dispatch.js";
 import type { SlashContext } from "../types.js";
+
+const ACTIVE_WORKFLOW_ABORTS = new Map<string, AbortController>();
 
 const workflows: SlashHandler = () => {
   const lines = ["Built-in workflows"];
@@ -28,8 +36,12 @@ const workflow: SlashHandler = (args, _loop, ctx) => {
       return openWorkflow(args[1], ctx.workflowRoot ?? ctx.codeRoot ?? process.cwd());
     case "cancel":
       return cancelWorkflow(args[1], ctx.workflowRoot ?? ctx.codeRoot ?? process.cwd());
+    case "export":
+      return exportWorkflow(args[1], ctx.workflowRoot ?? ctx.codeRoot ?? process.cwd());
+    case "save-library":
+      return saveWorkflowToLibrary(args[1], ctx, ctx.workflowRoot ?? ctx.codeRoot ?? process.cwd());
     default:
-      return { info: "usage: /workflow <start|status|open|cancel> [id]" };
+      return { info: "usage: /workflow <start|status|open|cancel|export|save-library> [id]" };
   }
 };
 
@@ -40,6 +52,9 @@ function startWorkflow(args: readonly string[], ctx: SlashContext, root: string)
   const runId = `wf-${Date.now().toString(36)}`;
   const userPrompt = args.slice(1).join(" ").trim();
   const plan = getResearchWorkflowPlan(template.id);
+  const workspacePlan = getWorkspaceWorkflowPlan(template.id);
+  const abortController = new AbortController();
+  ACTIVE_WORKFLOW_ABORTS.set(runId, abortController);
   const executeAgent =
     ctx.workflowExecuteAgent ??
     (plan
@@ -49,11 +64,17 @@ function startWorkflow(args: readonly string[], ctx: SlashContext, root: string)
           workspaceDir: ctx.codeRoot ?? root,
           configPath: ctx.configPath,
         })
-      : async (input) => ({
-          summary: `${input.phase} checked`,
-          tokenUsage: { prompt: 0, completion: 0, total: 0 },
-          sources: [],
-        }));
+      : workspacePlan
+        ? createWorkspaceWorkflowAgentExecutor({
+            plan: workspacePlan,
+            userPrompt,
+            workspaceDir: ctx.codeRoot ?? root,
+          })
+        : async (input) => ({
+            summary: `${input.phase} checked`,
+            tokenUsage: { prompt: 0, completion: 0, total: 0 },
+            sources: [],
+          }));
 
   void runWorkflow({
     runId,
@@ -61,12 +82,17 @@ function startWorkflow(args: readonly string[], ctx: SlashContext, root: string)
     input: { prompt: userPrompt },
     store: createWorkflowStore(root),
     executeAgent,
+    emit: ctx.workflowEmitEvent,
+    signal: abortController.signal,
   })
     .then((run) => {
       ctx.postInfo?.(`workflow ${run.status}: ${run.id} ${run.title}`);
     })
     .catch((error: Error) => {
       ctx.postInfo?.(`workflow failed: ${runId} ${error.message}`);
+    })
+    .finally(() => {
+      ACTIVE_WORKFLOW_ABORTS.delete(runId);
     });
 
   return { info: `started ${runId}: ${template.title}` };
@@ -104,6 +130,7 @@ function openWorkflow(id: string | undefined, root: string) {
 
 function cancelWorkflow(id: string | undefined, root: string) {
   if (!id) return { info: "usage: /workflow cancel <run-id>" };
+  ACTIVE_WORKFLOW_ABORTS.get(id)?.abort();
   const runs = readWorkflowRuns(root);
   const index = runs.findIndex((run) => run.id === id);
   if (index < 0) return { info: `workflow run not found: ${id}` };
@@ -119,6 +146,28 @@ function cancelWorkflow(id: string | undefined, root: string) {
   };
   writeWorkflowRuns(root, runs);
   return { info: `canceled ${id}` };
+}
+
+function exportWorkflow(id: string | undefined, root: string) {
+  if (!id) return { info: "usage: /workflow export <run-id>" };
+  const run = readWorkflowRuns(root).find((entry) => entry.id === id);
+  if (!run) return { info: `workflow run not found: ${id}` };
+  return { info: formatWorkflowRunMarkdown(run) };
+}
+
+function saveWorkflowToLibrary(id: string | undefined, ctx: SlashContext, root: string) {
+  if (!id) return { info: "usage: /workflow save-library <run-id>" };
+  const run = readWorkflowRuns(root).find((entry) => entry.id === id);
+  if (!run) return { info: `workflow run not found: ${id}` };
+  const workspaceDir = ctx.codeRoot ?? root;
+  void saveWorkflowRunToLibrary(workspaceDir, run, { jupiterHome: ctx.homeDir })
+    .then((saved) => {
+      ctx.postInfo?.(`saved workflow ${id} to library: ${saved.source.title}`);
+    })
+    .catch((error: Error) => {
+      ctx.postInfo?.(`failed to save workflow ${id}: ${error.message}`);
+    });
+  return { info: `saving workflow ${id} to library...` };
 }
 
 function agentSummary(run: WorkflowRun): string {

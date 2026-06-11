@@ -2,6 +2,7 @@ import type { JsonSchema } from "./types.js";
 
 export type ResearchWorkflowId =
   | "deep-fact-check"
+  | "paper-direction-validation"
   | "open-source-project-selection"
   | "technical-route-feasibility-review";
 
@@ -76,6 +77,47 @@ export const RESEARCH_WORKFLOW_PLANS: readonly ResearchWorkflowPlan[] = [
         title: "Contradictions and caveats",
         prompt: "Look for stale, conflicting, missing, or restricted information and list caveats.",
         suggestedQueries: ["known issue", "license limitation", "download unavailable"],
+      },
+    ],
+  },
+  {
+    id: "paper-direction-validation",
+    title: "Paper Direction Validation",
+    description:
+      "Validate dataset availability, baselines, novelty gaps, evaluation protocols, and publication risk.",
+    recommendedTools: RECOMMENDED_TOOLS,
+    outputSchema: FACTS_SCHEMA,
+    checks: [
+      {
+        id: "datasets-baselines",
+        title: "Datasets and baselines",
+        prompt:
+          "Verify whether required datasets, official code, pretrained models, and baseline protocols are public and usable.",
+        suggestedQueries: ["dataset download baseline code", "official repository benchmark"],
+      },
+      {
+        id: "literature-gap",
+        title: "Literature gap",
+        prompt:
+          "Search recent papers for the closest work and assess whether the proposed novelty remains open.",
+        suggestedQueries: ["2024 2025 2026 paper novelty gap", "survey latest method"],
+      },
+      {
+        id: "evaluation-protocol",
+        title: "Evaluation protocol",
+        prompt:
+          "Verify metrics, train/test split, evaluation scripts, and whether the protocol is accepted by the target community.",
+        suggestedQueries: [
+          "evaluation protocol metrics train test split",
+          "challenge report benchmark",
+        ],
+      },
+      {
+        id: "publication-risk",
+        title: "Publication risk",
+        prompt:
+          "Summarize feasibility, novelty, reproducibility, and reviewer-risk caveats for the direction.",
+        suggestedQueries: ["limitations reproducibility open problems", "negative results"],
       },
     ],
   },

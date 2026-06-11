@@ -33,6 +33,7 @@ const run = {
   ],
   logs: [{ ts: "2026-06-11T00:00:01.000Z", message: "checking release files" }],
   sources: [{ title: "release.yml", path: ".github/workflows/release.yml" }],
+  result: { summary: "Ready with caveats" },
 } as const;
 
 afterEach(() => cleanup());
@@ -55,9 +56,38 @@ describe("WorkflowRunCard", () => {
 
     expect(screen.getByText("checking release files")).toBeTruthy();
     expect(screen.getByText("Inputs checked")).toBeTruthy();
+    expect(screen.getByText("release.yml")).toBeTruthy();
+    expect(screen.getByText(/Ready with caveats/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel workflow" }));
 
     expect(onCancel).toHaveBeenCalledWith("wf-1");
+  });
+
+  it("shows completed result actions", () => {
+    const onSaveToLibrary = vi.fn();
+    const onInsertResult = vi.fn();
+    const onExportMarkdown = vi.fn();
+    const onCopyResult = vi.fn();
+    render(
+      <WorkflowRunCard
+        run={{ ...run, status: "completed", phase: "completed" }}
+        defaultOpen
+        onSaveToLibrary={onSaveToLibrary}
+        onInsertResult={onInsertResult}
+        onExportMarkdown={onExportMarkdown}
+        onCopyResult={onCopyResult}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save to library" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert result" }));
+    fireEvent.click(screen.getByRole("button", { name: "Export Markdown" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy result" }));
+
+    expect(onSaveToLibrary).toHaveBeenCalledWith("wf-1");
+    expect(onInsertResult).toHaveBeenCalledWith("wf-1");
+    expect(onExportMarkdown).toHaveBeenCalledWith("wf-1");
+    expect(onCopyResult).toHaveBeenCalledWith("wf-1");
   });
 });

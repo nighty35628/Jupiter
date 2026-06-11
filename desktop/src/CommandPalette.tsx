@@ -5,6 +5,7 @@ import {
   FocusIcon,
   FolderOpen,
   Info,
+  ListChecks,
   Plus,
   Search,
   Settings,
@@ -65,6 +66,12 @@ export type CommandHandlers = {
   busy: boolean;
   canCloseTab: boolean;
   hasMessages: boolean;
+  workflowCommands?: Array<{
+    id: string;
+    label: string;
+    hint?: string;
+    run: () => void;
+  }>;
 };
 
 export function buildCommands(handlers: CommandHandlers): Command[] {
@@ -150,6 +157,16 @@ export function buildCommands(handlers: CommandHandlers): Command[] {
       hint: t("palette.clearChatHint"),
       icon: <Trash2 size={13} />,
       run: handlers.clearChat,
+    });
+  }
+  for (const workflow of handlers.workflowCommands ?? []) {
+    list.push({
+      id: workflow.id,
+      group: "action",
+      label: workflow.label,
+      hint: workflow.hint,
+      icon: <ListChecks size={13} />,
+      run: workflow.run,
     });
   }
   list.push({

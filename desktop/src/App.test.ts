@@ -173,6 +173,96 @@ describe("Desktop App reducer — usage", () => {
         1,
       ),
     ).toBe("assistant-7");
+    expect(
+      chatMessageKey(
+        {
+          kind: "workflow",
+          run: {
+            id: "wf-1",
+            workflowId: "release-readiness-check",
+            workflowVersion: 1,
+            title: "Release Readiness Check",
+            status: "running",
+            phase: "release-workflow",
+            input: { prompt: "check release" },
+            startedAt: "2026-06-11T00:00:00.000Z",
+            tokenUsage: { prompt: 0, completion: 0, total: 0 },
+            agents: [],
+            logs: [],
+            sources: [],
+          },
+        },
+        2,
+      ),
+    ).toBe("workflow-wf-1");
+  });
+
+  it("updates workflow run cards from live workflow events", () => {
+    const started = reduce(initialState(), {
+      t: "incoming",
+      event: {
+        type: "workflow_started",
+        run: {
+          id: "wf-1",
+          workflowId: "release-readiness-check",
+          workflowVersion: 1,
+          title: "Release Readiness Check",
+          status: "running",
+          phase: "release-workflow",
+          input: { prompt: "check release" },
+          startedAt: "2026-06-11T00:00:00.000Z",
+          tokenUsage: { prompt: 0, completion: 0, total: 0 },
+          agents: [],
+          logs: [],
+          sources: [],
+        },
+      },
+    });
+
+    const completed = reduce(started, {
+      t: "incoming",
+      event: {
+        type: "workflow_completed",
+        run: {
+          id: "wf-1",
+          workflowId: "release-readiness-check",
+          workflowVersion: 1,
+          title: "Release Readiness Check",
+          status: "completed",
+          phase: "completed",
+          input: { prompt: "check release" },
+          startedAt: "2026-06-11T00:00:00.000Z",
+          completedAt: "2026-06-11T00:00:05.000Z",
+          tokenUsage: { prompt: 100, completion: 50, total: 150 },
+          agents: [
+            {
+              id: "agent-1",
+              label: "Release workflow",
+              status: "completed",
+              phase: "release-workflow",
+              summary: "Release workflow checked",
+              tokenUsage: { prompt: 100, completion: 50, total: 150 },
+            },
+          ],
+          logs: [{ ts: "2026-06-11T00:00:04.000Z", message: "final report ready" }],
+          sources: [{ title: "release.yml", path: ".github/workflows/release.yml" }],
+          result: { summary: "Ready with caveats" },
+        },
+      },
+    });
+
+    expect(completed.busy).toBe(false);
+    expect(completed.messages).toHaveLength(1);
+    expect(completed.messages[0]).toMatchObject({
+      kind: "workflow",
+      run: {
+        id: "wf-1",
+        status: "completed",
+        phase: "completed",
+        tokenUsage: { total: 150 },
+        logs: [{ message: "final report ready" }],
+      },
+    });
   });
 
   it("deduplicates local user message echoes by client id", () => {

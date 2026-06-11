@@ -810,6 +810,10 @@ export const zhCN: typeof en = {
     workflowSource: "source",
     workflowSources: "sources",
     workflowCancel: "Cancel workflow",
+    workflowSaveToLibrary: "保存到资料库",
+    workflowInsertResult: "插入结果",
+    workflowExportMarkdown: "导出 Markdown",
+    workflowCopyResult: "复制结果",
   },
   contextPanel: {
     reservedKey: "预留",
