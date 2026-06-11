@@ -11,7 +11,7 @@ export type WorkflowCardRun = {
   status: "queued" | "running" | "waiting_approval" | "completed" | "failed" | "canceled";
   phase: string | null;
   tokenUsage: { prompt: number; completion: number; total: number };
-  agents: Array<{
+  agents: ReadonlyArray<{
     id: string;
     label: string;
     status: "queued" | "running" | "completed" | "failed" | "canceled";
@@ -19,8 +19,8 @@ export type WorkflowCardRun = {
     summary?: string;
     tokenUsage: { prompt: number; completion: number; total: number };
   }>;
-  logs: Array<{ ts: string; message: string }>;
-  sources: Array<{ title: string; url?: string; path?: string }>;
+  logs: ReadonlyArray<{ ts: string; message: string }>;
+  sources: ReadonlyArray<{ title: string; url?: string; path?: string }>;
   result?: unknown;
   error?: string;
 };

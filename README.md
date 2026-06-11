@@ -21,6 +21,10 @@ Jupiter 是我自己长期用的 coding agent 工作台。最早只是想把 Dee
 
 ### 0.99.9 重点
 
+- 新增内置 workflow 批次：`/workflows` 可以查看模板，`/workflow start ...` 可以跑深度事实核查、论文方向验证、
+  开源项目选型、发布就绪检查、工作区健康检查等固定流程。
+- workflow 运行结果会落到本地，并能在 CLI/TUI 和桌面端显示状态卡；支持 `status`、`open`、`cancel`、
+  `export` 和 `save-library`。
 - 修复 macOS Finder 文件粘贴：支持从系统剪贴板读取 `public.file-url` 和 `.file/id=...` 这类真实文件引用。
 - 粘贴图片、粘贴文件、点加号添加文件/图片，都统一成输入框上方的附件卡片，不再把路径硬塞进正文。
 - 文件附件卡片做了收窄和压缩，侧边设置卡片、右侧 resize guide 也顺手调得更贴边。
@@ -148,6 +152,11 @@ It is not trying to sound like a platform. The goals are plain:
 
 ### 0.99.9 Highlights
 
+- Added built-in workflow batches: `/workflows` lists templates, and `/workflow start ...` can run fixed flows such
+  as deep fact checks, paper direction validation, open-source project selection, release readiness checks, and
+  workspace health checks.
+- Workflow runs are stored locally and render as status cards in CLI/TUI and desktop; `status`, `open`, `cancel`,
+  `export`, and `save-library` are supported.
 - macOS Finder file paste now reads `public.file-url` and `.file/id=...` references from the system clipboard.
 - Pasted images, pasted files, and plus-button file/image picks now share compact attachment cards above the composer.
 - File cards are narrower, and a few desktop layout details were tightened around settings and the right resize guide.

@@ -4,6 +4,8 @@
 
 ### 主要更新
 
+- 新增内置 workflow 批次：`/workflows` 查看模板，`/workflow start ...` 启动深度事实核查、论文方向验证、开源项目选型、发布就绪检查、工作区健康检查等流程。
+- workflow 运行结果会落到本地，并能在 CLI/TUI 和桌面端显示状态卡；支持 `status`、`open`、`cancel`、`export` 和 `save-library`。
 - 修复 macOS Finder 文件粘贴：支持从系统剪贴板读取 `public.file-url` 和 `.file/id=...` 文件引用。
 - 粘贴图片、粘贴文件、点加号添加文件/图片，都统一显示为输入框上方的附件卡片，不再把路径硬塞进正文。
 - 文件附件卡片更紧凑；设置卡片和右侧 resize guide 也做了小幅布局调整。
@@ -27,6 +29,8 @@ open /Applications/Jupiter.app
 
 ### Highlights
 
+- Added built-in workflow batches: `/workflows` lists templates, and `/workflow start ...` launches flows such as deep fact checks, paper direction validation, open-source project selection, release readiness checks, and workspace health checks.
+- Workflow runs are stored locally and render as status cards in CLI/TUI and desktop; `status`, `open`, `cancel`, `export`, and `save-library` are supported.
 - Fixed macOS Finder file paste by reading `public.file-url` and `.file/id=...` references from the system clipboard.
 - Pasted images, pasted files, and plus-button file/image picks now share attachment cards above the composer instead of inserting raw paths into the message body.
 - File attachment cards are more compact, with small layout cleanup around the settings card and right resize guide.

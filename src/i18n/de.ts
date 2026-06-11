@@ -229,6 +229,14 @@ export const de: TranslationSchema = {
       description:
         "Benutzer-Skills auflisten / ausführen (Projekt + benutzerdefiniert + global + builtin)",
     },
+    workflows: {
+      ...EN.slash.workflows,
+      description: "Eingebaute Workflow-Vorlagen auflisten",
+    },
+    workflow: {
+      ...EN.slash.workflow,
+      description: "Workflow-Läufe starten, prüfen, abbrechen, exportieren oder speichern",
+    },
     hooks: {
       ...EN.slash.hooks,
       argsHint: "[Neu laden]",

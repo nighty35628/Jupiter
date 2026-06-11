@@ -7,6 +7,10 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 中文
 
+**内置 workflow 批次。** 新增内置 workflow 系统，覆盖深度事实核查、论文方向验证、开源项目选型、
+发布就绪检查、工作区健康检查等研究和工程流程。CLI/TUI 支持 `/workflows` 预览模板，
+`/workflow start/status/open/cancel/export/save-library` 管理运行结果；桌面端会同步显示 workflow 状态卡和命令面板入口。
+
 **桌面附件粘贴修复。** macOS Finder 文件粘贴现在会从系统剪贴板读取 `public.file-url`
 和 `.file/id=...` 文件引用，并解析成真实路径。粘贴图片、粘贴文件、点加号添加文件/图片都统一显示为输入框上方的附件卡片，
 不再把路径直接插进正文；文件卡片也改得更紧凑。
@@ -19,6 +23,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Tauri 配置、Cargo、CHANGELOG 和 GitHub Release notes 版本统一升级为 `0.99.9`。
 
 ### English
+
+**Built-in workflow batches.** Jupiter now includes a built-in workflow system for research and engineering flows
+such as deep fact checks, paper direction validation, open-source project selection, release readiness checks, and
+workspace health checks. CLI/TUI can list templates with `/workflows` and manage runs with
+`/workflow start/status/open/cancel/export/save-library`; desktop renders workflow status cards and command-palette
+entries for the same runs.
 
 **Desktop attachment paste fixes.** macOS Finder file paste now reads `public.file-url` and `.file/id=...`
 references from the system clipboard and resolves them into real paths. Pasted images, pasted files, and

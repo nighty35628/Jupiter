@@ -306,6 +306,13 @@ export const EN: TranslationSchema = {
       description: "list / run user skills (project + custom + global + builtin)",
       argsHint: "[list|paths|show <name>|<name> [args]]",
     },
+    workflows: {
+      description: "list built-in workflow templates",
+    },
+    workflow: {
+      description: "start, inspect, cancel, export, or save workflow runs",
+      argsHint: "<start|status|open|cancel|export|save-library> [id]",
+    },
     hooks: {
       description: "list active hooks (settings.json under .jupiter/) · reload re-reads from disk",
       argsHint: "[reload]",

@@ -84,7 +84,7 @@ describe("SlashSuggestions", () => {
     );
   });
 
-  it("renders the bare slash release command surface as 46 total commands", () => {
+  it("renders the bare slash release command surface as 48 total commands", () => {
     const matches = suggestSlashCommands("", true);
     const names = matches.map((spec) => spec.cmd);
     const { lastFrame, unmount } = render(
@@ -93,12 +93,12 @@ describe("SlashSuggestions", () => {
     const frame = lastFrame() ?? "";
     unmount();
 
-    expect(matches).toHaveLength(46);
+    expect(matches).toHaveLength(48);
     expect(names).toContain("language");
     expect(names).toContain("btw");
     expect(names).toContain("about");
     expect(countAdvancedCommands(true)).toBe(10);
-    expect(frame).toContain("46 commands");
+    expect(frame).toContain("48 commands");
     expect(frame).toContain("+ 10 advanced");
   });
 

@@ -295,6 +295,13 @@ export const zhCN: TranslationSchema = {
       description: "列出 / 运行用户技能（项目 + 自定义 + 全局 + 内置）",
       argsHint: "[list|paths|show <name>|<name> [args]]",
     },
+    workflows: {
+      description: "列出内置 workflow 模板",
+    },
+    workflow: {
+      description: "启动、查看、取消、导出或保存 workflow 运行结果",
+      argsHint: "<start|status|open|cancel|export|save-library> [id]",
+    },
     hooks: {
       description: "列出活跃的 hooks（.jupiter/ 下的 settings.json）· reload 从磁盘重新读取",
       argsHint: "[reload]",

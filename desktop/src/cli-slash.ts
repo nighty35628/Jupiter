@@ -84,6 +84,12 @@ export const DESKTOP_CLI_SLASH_COMMANDS: readonly DesktopCliSlashCommand[] = [
       "[list|paths|paths add <path>|paths remove <path|N>|show <name>|new <name>|<name> [args]]",
     summary: "list / run / scaffold skills",
   },
+  { cmd: "workflows", summary: "list built-in workflow templates" },
+  {
+    cmd: "workflow",
+    argsHint: "<start|status|open|cancel|export|save-library> [id]",
+    summary: "start, inspect, cancel, export, or save workflow runs",
+  },
   {
     cmd: "qq",
     argsHint: "<connect|status|disconnect>",
