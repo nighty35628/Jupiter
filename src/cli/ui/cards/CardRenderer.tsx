@@ -20,6 +20,7 @@ import { ToolCard } from "./ToolCard.js";
 import { UsageCard } from "./UsageCard.js";
 import { UserCard } from "./UserCard.js";
 import { WarnCard } from "./WarnCard.js";
+import { WorkflowCard } from "./WorkflowCard.js";
 
 // Memoized so the cards array re-rendering (every store update) only
 // reconciles cards whose object identity actually changed — the reducer
@@ -68,6 +69,8 @@ function renderCard(card: Card): React.ReactElement {
       return <DoctorCard card={card} />;
     case "compaction":
       return <CompactionCard card={card} />;
+    case "workflow":
+      return <WorkflowCard card={card} />;
     default:
       return <FallbackCard card={card} />;
   }

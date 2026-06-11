@@ -3613,6 +3613,22 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   color: var(--muted);
   font-size: 12px;
 }
+.card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  cursor: default;
+}
+.card-action:hover {
+  color: var(--danger);
+  background: var(--panel-2);
+}
 .tool-edit-preview {
   display: inline-flex;
   align-items: center;
@@ -3758,6 +3774,54 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 .card[data-tone="violet"] .card-head .ico {
   background: var(--violet-soft);
   color: var(--violet);
+}
+
+/* ---- Workflow card ---- */
+
+.workflow-card {
+  display: grid;
+  gap: 8px;
+  padding: 8px 12px 12px;
+}
+.workflow-log,
+.workflow-error {
+  font-size: 12px;
+  color: var(--muted);
+}
+.workflow-error {
+  color: var(--danger);
+}
+.workflow-agent-list {
+  display: grid;
+  gap: 6px;
+}
+.workflow-agent {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 28px;
+}
+.workflow-agent-status {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--muted);
+}
+.workflow-agent[data-status="completed"] .workflow-agent-status {
+  color: var(--success);
+}
+.workflow-agent[data-status="failed"] .workflow-agent-status {
+  color: var(--danger);
+}
+.workflow-agent-title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--fg);
+}
+.workflow-agent-summary,
+.workflow-agent-tokens {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 /* ---- Plan card ---- */

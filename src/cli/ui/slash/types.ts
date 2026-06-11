@@ -121,6 +121,8 @@ export interface SlashContext {
   reloadHooks?: () => number;
   /** Switch the workspace root mid-session — re-targets filesystem/shell/memory tools, hooks, at-mention walker. Code mode only. `clear` mirrors `/new` (drops in-memory history + UI cards) so the previous workspace's chat doesn't contaminate the new one. */
   switchCwd?: (newPath: string) => { ok: boolean; info: string; clear?: boolean };
+  /** Root for workflow run storage. Tests inject this; production falls back to codeRoot or process.cwd(). */
+  workflowRoot?: string;
   /** Diff config.mcp[] vs live bridges → add/close clients accordingly. Wired from chat.tsx mcpRuntime. */
   reloadMcp?: () => Promise<{
     added: string[];

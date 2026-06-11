@@ -5,6 +5,25 @@ import { t, useLang } from "../i18n";
 
 type Tone = "default" | "success" | "warning" | "danger" | "accent" | "violet";
 
+export type WorkflowCardRun = {
+  id: string;
+  title: string;
+  status: "queued" | "running" | "waiting_approval" | "completed" | "failed" | "canceled";
+  phase: string | null;
+  tokenUsage: { prompt: number; completion: number; total: number };
+  agents: Array<{
+    id: string;
+    label: string;
+    status: "queued" | "running" | "completed" | "failed" | "canceled";
+    phase: string;
+    summary?: string;
+    tokenUsage: { prompt: number; completion: number; total: number };
+  }>;
+  logs: Array<{ ts: string; message: string }>;
+  sources: Array<{ title: string; url?: string; path?: string }>;
+  error?: string;
+};
+
 export function Card({
   tone = "default",
   icon,
@@ -154,6 +173,120 @@ export function PlanCardView({
           </li>
         ))}
       </ul>
+    </Card>
+  );
+}
+
+export function WorkflowRunCard({
+  run,
+  defaultOpen = false,
+  onCancel,
+}: {
+  run: WorkflowCardRun;
+  defaultOpen?: boolean;
+  onCancel?: (runId: string) => void;
+}) {
+  useLang();
+  const running = run.agents.filter((agent) => agent.status === "running").length;
+  const done = run.agents.filter((agent) => agent.status === "completed").length;
+  const failed = run.agents.filter((agent) => agent.status === "failed").length;
+  const tone: Tone =
+    run.status === "failed"
+      ? "danger"
+      : run.status === "canceled"
+        ? "warning"
+        : run.status === "completed"
+          ? "success"
+          : "accent";
+  const status =
+    run.status === "running"
+      ? { state: "running" as const, label: t("cards.workflowRunning") }
+      : run.status === "completed"
+        ? { state: "done" as const, label: t("cards.workflowCompleted") }
+        : run.status === "failed"
+          ? { state: "failed" as const, label: t("cards.workflowFailed") }
+          : { state: "waiting" as const, label: run.status };
+  const lastLog = run.logs.at(-1)?.message;
+  return (
+    <Card
+      tone={tone}
+      icon={<I.bot size={12} />}
+      kind={t("cards.workflowName")}
+      name={run.title}
+      meta={
+        <>
+          <span>{run.phase ?? "-"}</span>
+          <span>{run.tokenUsage.total.toLocaleString()} t</span>
+          <span>
+            {running} {t("cards.workflowRunningShort")}
+          </span>
+          <span>
+            {done} {t("cards.workflowDoneShort")}
+          </span>
+          {failed > 0 ? (
+            <span>
+              {failed} {t("cards.workflowFailedShort")}
+            </span>
+          ) : null}
+          <span>
+            {run.sources.length}{" "}
+            {run.sources.length === 1 ? t("cards.workflowSource") : t("cards.workflowSources")}
+          </span>
+          <StatusIcon state={status.state} label={status.label} />
+        </>
+      }
+      defaultOpen={defaultOpen}
+      headRight={
+        run.status === "running" && onCancel ? (
+          <span
+            role="button"
+            tabIndex={0}
+            className="card-action"
+            aria-label={t("cards.workflowCancel")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onCancel(run.id);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onCancel(run.id);
+            }}
+          >
+            <I.x size={12} />
+          </span>
+        ) : null
+      }
+    >
+      <div className="workflow-card">
+        {lastLog ? <div className="workflow-log">{lastLog}</div> : null}
+        {run.error ? <div className="workflow-error">{run.error}</div> : null}
+        <div className="workflow-agent-list">
+          {run.agents.map((agent) => (
+            <div className="workflow-agent" key={agent.id} data-status={agent.status}>
+              <span className="workflow-agent-status">
+                {agent.status === "completed" ? (
+                  <I.check size={12} />
+                ) : agent.status === "failed" ? (
+                  <I.x size={12} />
+                ) : agent.status === "running" ? (
+                  <span className="spin" />
+                ) : (
+                  <span className="status-dot warn" />
+                )}
+              </span>
+              <div className="workflow-agent-main">
+                <div className="workflow-agent-title">{agent.label}</div>
+                {agent.summary ? <div className="workflow-agent-summary">{agent.summary}</div> : null}
+              </div>
+              <span className="workflow-agent-tokens">
+                {agent.tokenUsage.total.toLocaleString()} t
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
     </Card>
   );
 }

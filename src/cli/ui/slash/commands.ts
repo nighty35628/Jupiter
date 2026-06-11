@@ -176,6 +176,14 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     summary: "list / run / scaffold skills (project + custom + global + builtin)",
     argCompleter: "skills",
   },
+  { cmd: "workflows", group: "extend", summary: "list built-in workflow templates" },
+  {
+    cmd: "workflow",
+    group: "extend",
+    argsHint: "<start|status|open|cancel> [id]",
+    summary: "start, inspect, or cancel built-in workflow runs",
+    argCompleter: ["start", "status", "open", "cancel"],
+  },
   {
     cmd: "qq",
     group: "extend",

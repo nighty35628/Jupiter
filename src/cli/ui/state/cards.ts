@@ -1,3 +1,5 @@
+import type { WorkflowRun } from "../../../workflows/types.js";
+
 export type CardId = string;
 
 export interface CardBase {
@@ -217,6 +219,11 @@ export interface CompactionCard extends CardBase {
   readonly summary: string;
 }
 
+export interface WorkflowCard extends CardBase {
+  readonly kind: "workflow";
+  readonly run: WorkflowRun;
+}
+
 export type Card =
   | UserCard
   | ReasoningCard
@@ -235,7 +242,8 @@ export type Card =
   | CtxCard
   | DoctorCard
   | TipCard
-  | CompactionCard;
+  | CompactionCard
+  | WorkflowCard;
 
 export interface DoctorCheckEntry {
   readonly label: string;
