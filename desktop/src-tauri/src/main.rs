@@ -125,14 +125,27 @@ fn linux_webkit_compat() {
     // libwayland bundling does. Cheap to disable, slow path is still fine.
     set_default("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
 
+    // Debian/ARM devices without a usable Vulkan/EGL stack can let Mesa pick
+    // zink and then abort WebKit before the first frame:
+    // "ZINK: vkCreateInstance failed" → "Could not create surfaceless EGL".
+    // Disable WebKit's accelerated compositing on all Linux builds so the
+    // installed .deb can still render on conservative GPU stacks.
+    set_default("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // ARM64 desktop machines and SBCs are the most common place where zink
+        // is selected without a compatible Vulkan driver. Prefer llvmpipe unless
+        // the user explicitly provides a different Mesa setup.
+        set_default("LIBGL_ALWAYS_SOFTWARE", "1");
+        set_default("MESA_LOADER_DRIVER_OVERRIDE", "llvmpipe");
+    }
+
     let in_appimage = std::env::var_os("APPDIR").is_some();
     let on_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
     if !(in_appimage && on_wayland) {
         return;
     }
-
-    // Disable accelerated compositing as well — same EGL init path.
-    set_default("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
 
     // Skip /usr/lib/libwayland-client.so.0 — on 64-bit Fedora that path can
     // resolve to a 32-bit library and the loader prints a wrong-ELF-class
@@ -493,16 +506,34 @@ fn git_untracked_diff_output(root_path: &Path, path: &str) -> Result<String, Str
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+fn git_auto_commit_message(root_path: &Path) -> Result<String, String> {
+    let status = git_status_entries(root_path)?;
+    if status.is_empty() {
+        return Ok("Update workspace".to_string());
+    }
+    let first = status
+        .first()
+        .map(|entry| entry.path.as_str())
+        .unwrap_or("workspace");
+    if status.len() == 1 {
+        return Ok(format!("Update {first}"));
+    }
+    Ok(format!("Update {first} and {} more", status.len() - 1))
+}
+
 #[tauri::command]
 fn git_commit_all(root: String, message: String) -> Result<TerminalCommandResult, String> {
     let root_path = Path::new(&root);
     if !root_path.is_dir() {
         return Err(format!("not a directory: {root}"));
     }
-    let message = message.trim();
-    if message.is_empty() {
-        return Err("commit message is empty".into());
-    }
+    let auto_message;
+    let message = if message.trim().is_empty() {
+        auto_message = git_auto_commit_message(root_path)?;
+        auto_message.as_str()
+    } else {
+        message.trim()
+    };
     let add = run_command_output(root_path, "git", &["add", "-A"])?;
     if add.code != 0 {
         return Ok(add);

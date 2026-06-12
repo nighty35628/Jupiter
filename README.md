@@ -7,15 +7,15 @@
 
 ## 中文
 
-Jupiter 1.0.0 正式发布。
+Jupiter 是一款 DeepSeek 桌面 agent，也是日常开发、检索与发布的工作台。
 
-Jupiter 是一款 DeepSeek 桌面 agent，也是日常开发、检索与发布的工作台。它围绕 DeepSeek prefix cache 设计，
-把长上下文成本压下来，并把桌面多会话、本地资料库、MCP、Skills、远程消息通道和常用工程工具放进一个统一环境。
+目标很直接：做最好用的 DeepSeek desktop agent。Jupiter 围绕 DeepSeek prefix cache 设计，把长上下文成本压下来；
+桌面端负责多会话、本地资料库、MCP、Skills、远程消息通道和常用工程工具，让一个项目可以连续做几天、几周，
+中途不用反复重新整理上下文。
 
-我希望把 Jupiter 做成最好用的 DeepSeek 桌面 agent。如果它对你有帮助，欢迎给项目点 Star，也欢迎分享给身边正在用
-DeepSeek 做开发、研究或自动化工作的朋友。
+如果 Jupiter 对你有帮助，欢迎点 Star，也欢迎分享给身边正在用 DeepSeek 做开发、研究或自动化工作的朋友。
 
-### 适合谁
+### 适合谁用
 
 - 想用 DeepSeek 长时间处理真实项目，而不是每次都重新喂上下文的人。
 - 同时维护多个任务、多个仓库、多个会话，需要桌面端持续挂着的人。
@@ -136,14 +136,15 @@ npm --prefix desktop run dev -- --host 127.0.0.1
 
 ## English
 
-Jupiter 1.0.0 is officially released.
+Jupiter is a DeepSeek desktop agent and a workbench for daily development, research, and release work.
 
-Jupiter is a DeepSeek desktop agent and a workbench for daily development, research, and release work. It is designed
-around DeepSeek prefix cache, keeps long-context cost under control, and brings tabbed desktop sessions, local sources,
-MCP, Skills, remote messaging, and practical engineering tools into one environment.
+The goal is simple: build the best DeepSeek desktop agent. Jupiter is designed around DeepSeek prefix cache to keep
+long-context cost down. The desktop app brings multi-session work, local sources, MCP, Skills, remote messaging, and
+practical engineering tools into one place, so a real project can stay alive for days or weeks without rebuilding
+context every time.
 
-I am building Jupiter to be the best DeepSeek desktop agent I can make. If it helps your work, please star the project
-and share it with people who use DeepSeek for development, research, or automation.
+If Jupiter helps your work, please star the project and share it with people using DeepSeek for development, research,
+or automation.
 
 ### Who It Is For
 

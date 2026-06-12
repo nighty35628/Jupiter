@@ -259,6 +259,10 @@ export function desktopUserAbortLoopOptions(): LoopAbortOptions | undefined {
   return undefined;
 }
 
+function isAbortSyntheticFinal(content: string | undefined, forcedSummary?: boolean): boolean {
+  return forcedSummary === true && /^\[aborted by user \(Esc\) — /.test((content ?? "").trim());
+}
+
 type InMessage = { tabId?: string } & (
   | {
       cmd: "user_input";
@@ -3969,7 +3973,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             emittedTurnContext = true;
             emitCtxBreakdown(tab);
           }
-          if (ev.role === "assistant_final" && ev.content) {
+          if (
+            ev.role === "assistant_final" &&
+            ev.content &&
+            !isAbortSyntheticFinal(ev.content, ev.forcedSummary)
+          ) {
             lastAssistantText = ev.content;
           }
           for (const kev of rt.eventizer.consume(ev, rt.ctx)) {

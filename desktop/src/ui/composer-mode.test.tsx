@@ -9,7 +9,7 @@ import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Toast } from "../CommandPalette";
 import { setLang } from "../i18n";
-import { Composer, clipboardFileMentionPaths } from "./composer";
+import { Composer, clipboardFileMentionPaths, sanitizeComposerInput } from "./composer";
 
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `asset://${path}`,
@@ -167,6 +167,11 @@ describe("desktop permission mode copy", () => {
 
     expect(document.body.textContent).toContain("完全控制");
     expect(document.body.textContent).not.toMatch(/YOLO/i);
+  });
+
+  it("strips terminal arrow-key escape sequences from composer input", () => {
+    expect(sanitizeComposerInput("hello\u001b[C\u001b[D world\u0007")).toBe("hello world");
+    expect(sanitizeComposerInput("\u001b[Aask Jupiter")).toBe("ask Jupiter");
   });
 
   it("shows pasted images as thumbnails without inserting @ paths into the textarea", async () => {

@@ -138,6 +138,14 @@ function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path;
 }
 
+export function sanitizeComposerInput(value: string): string {
+  return value
+    .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[@-Z\\-_]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+}
+
 type Popup =
   | { kind: "slash"; query: string }
   | { kind: "at"; query: string; nonce: number }
@@ -833,7 +841,11 @@ export function Composer({
   };
 
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
-    const v = e.target.value;
+    const raw = e.target.value;
+    const v = sanitizeComposerInput(raw);
+    if (v !== raw) {
+      e.target.value = v;
+    }
     setDraft(v);
     const cursorPos = e.target.selectionStart ?? v.length;
     syncPopupFromCursor(v, cursorPos);

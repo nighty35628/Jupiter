@@ -4387,6 +4387,37 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   font-size: 14px;
   color: var(--muted);
 }
+.subagent-run-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.subagent-run-task {
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.subagent-run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+}
+.subagent-run-meta .k {
+  color: var(--muted);
+}
+.subagent-run-summary {
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.subagent-run-error {
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
 
 /* ---- Cache / token card (inline strip) ---- */
 
@@ -5439,7 +5470,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 .context-info-scroll {
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 2px;
 }
 .context-info-scroll::-webkit-scrollbar {
@@ -5460,10 +5492,11 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 .ctx-git-grid {
   display: grid;
-  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(64px, max-content) minmax(0, 1fr);
   gap: 7px 10px;
   align-items: baseline;
   font-size: var(--font-size-caption);
+  min-width: 0;
 }
 .ctx-git-grid span {
   color: var(--muted);
@@ -5479,12 +5512,13 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 .ctx-git-branch,
 .ctx-git-commit {
   display: grid;
-  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(64px, max-content) minmax(0, 1fr);
   gap: 8px 10px;
   align-items: center;
   margin-top: 10px;
   color: var(--muted);
   font-size: var(--font-size-caption);
+  min-width: 0;
 }
 .ctx-git-branch select,
 .ctx-git-commit input {
@@ -5506,8 +5540,10 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   flex-wrap: wrap;
   gap: 7px;
   margin-top: 10px;
+  min-width: 0;
 }
 .ctx-git-actions button {
+  min-width: 0;
   height: 28px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5529,7 +5565,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 .ctx-git-action-status {
   margin-top: 9px;
   max-height: 72px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   border: 1px solid color-mix(in oklch, var(--border) 68%, transparent);
   border-radius: 8px;
   background: color-mix(in oklch, var(--card) 82%, var(--panel));
@@ -5538,6 +5575,47 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   line-height: 1.45;
   padding: 7px 8px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ctx-subagent-detail {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+}
+.ctx-subagent-title-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.ctx-subagent-title {
+  color: var(--fg);
+  font-size: var(--font-size-ui);
+  font-weight: var(--font-weight-title);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.ctx-subagent-role,
+.ctx-subagent-metrics,
+.ctx-subagent-note {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.ctx-subagent-metrics {
+  margin-bottom: 12px;
+}
+.ctx-subagent-text {
+  color: var(--fg);
+  font-size: var(--font-size-caption);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ctx-subagent-error {
+  margin-bottom: 12px;
 }
 .ctx-home-shell,
 .ctx-mode-shell {

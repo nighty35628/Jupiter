@@ -32,6 +32,7 @@ export type ContextPanelMode =
   | "browser"
   | "review"
   | "terminal"
+  | "subagent"
   | "preview";
 export type BrowserOpenRequest = { id: number; url: string };
 export type ContextPanelTab = {
@@ -43,6 +44,7 @@ export type ContextPanelTab = {
   filePreviewLoading?: boolean;
   filePreviewError?: string | null;
   filePreviewPath?: string | null;
+  subagentRun?: SubagentRunInfo | null;
 };
 export type LibrarySource = {
   id: string;
@@ -225,6 +227,8 @@ function contextPanelModeTitle(mode: ContextPanelMode): string {
       return t("contextPanel.home.reviewTitle");
     case "terminal":
       return t("contextPanel.home.terminalTitle");
+    case "subagent":
+      return t("contextPanel.subagentsTitle");
     case "preview":
       return t("fileActions.previewTitle");
     case "home":
@@ -251,6 +255,8 @@ function contextPanelModeIcon(mode: ContextPanelMode, size = 14): ReactNode {
       return <I.diff size={size} />;
     case "terminal":
       return <I.terminal size={size} />;
+    case "subagent":
+      return <I.bot size={size} />;
     case "preview":
       return <I.file size={size} />;
     case "home":
@@ -362,6 +368,7 @@ export function ContextPanel({
     ? (activeTab?.filePreview?.path ?? activeTab?.filePreviewPath ?? null)
     : filePreviewPath;
   const activeBrowserRequest = usingTabs ? (activeTab?.browserRequest ?? null) : browserRequest;
+  const activeSubagentRun = usingTabs ? (activeTab?.subagentRun ?? null) : null;
   const previewPath = activeSelectedFilePreview?.path ?? activeFilePreviewPath;
   const previewAvailable = Boolean(
     previewPath || activeFilePreviewLoading || activeFilePreviewError,
@@ -497,6 +504,11 @@ export function ContextPanel({
             <div className="ctx-mode-shell">
               {tabBar}
               <CtxTerminal settings={settings} />
+            </div>
+          ) : activeMode === "subagent" ? (
+            <div className="ctx-mode-shell">
+              {tabBar}
+              <CtxSubagentDetail run={activeSubagentRun} />
             </div>
           ) : (
             <CtxPlaceholder mode={activeMode} onClose={closeTab} onSelectMode={openPanelMode} />
@@ -1017,7 +1029,7 @@ function CtxGitInfo({ settings }: { settings: Settings | null }) {
 
   const info = state.info;
   const changedCount = state.entries.length;
-  const canCommit = Boolean(commitMessage.trim()) && Boolean(workspaceDir);
+  const canCommit = Boolean(workspaceDir);
   return (
     <div className="ctx-block ctx-git-info">
       <div className="h">
@@ -2691,6 +2703,51 @@ function CtxSubagents({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function CtxSubagentDetail({ run }: { run?: SubagentRunInfo | null }) {
+  if (!run) {
+    return <div className="ctx-empty">{t("contextPanel.subagentsEmpty")}</div>;
+  }
+  const role = run.skillName?.trim() || t("contextPanel.subagentRoleFallback");
+  const elapsed = formatElapsed(run.elapsedMs);
+  const metrics = [
+    subagentMeta(run),
+    run.model ? `${t("settings.model")} ${run.model}` : null,
+    typeof run.costUsd === "number" ? `$${run.costUsd.toFixed(4)}` : null,
+    typeof run.outputChars === "number" ? `${run.outputChars.toLocaleString()} out` : null,
+    typeof run.reasoningChars === "number"
+      ? `${run.reasoningChars.toLocaleString()} reasoning`
+      : null,
+    typeof run.toolReadChars === "number" ? `${run.toolReadChars.toLocaleString()} read` : null,
+    elapsed,
+  ].filter(Boolean);
+  return (
+    <div className="ctx-subagent-detail">
+      <div className="ctx-subagent-title-row">
+        <span className="subagent-ico" aria-hidden="true">
+          <I.bot size={15} />
+        </span>
+        <div>
+          <div className="ctx-subagent-title">{run.task}</div>
+          <div className="ctx-subagent-role">{role}</div>
+        </div>
+      </div>
+      {metrics.length > 0 ? <div className="ctx-subagent-metrics">{metrics.join(" · ")}</div> : null}
+      {run.summary ? (
+        <div className="ctx-block">
+          <div className="h">
+            <span>{t("contextPanel.subagentSummary")}</span>
+          </div>
+          <div className="ctx-subagent-text">{run.summary}</div>
+        </div>
+      ) : null}
+      {run.error ? (
+        <div className="ctx-browser-error ctx-subagent-error">{run.error}</div>
+      ) : null}
+      <div className="ctx-subagent-note">{t("contextPanel.subagentSidebarHint")}</div>
     </div>
   );
 }

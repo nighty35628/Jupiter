@@ -761,6 +761,7 @@ export type ModelFinalEvent = {
   reasoningContent?: string;
   usage?: Usage;
   costUsd?: number;
+  forcedSummary?: boolean;
 };
 
 export type ToolPreparingEvent = {

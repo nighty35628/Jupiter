@@ -943,6 +943,117 @@ export type SubAgentChild = {
   status: "done" | "running" | "queued";
 };
 
+export type SubagentCardRun = {
+  runId: string;
+  task: string;
+  skillName?: string;
+  model?: string;
+  status: "running" | "done" | "failed";
+  phase?: "exploring" | "summarising";
+  iter?: number;
+  elapsedMs?: number;
+  summary?: string;
+  error?: string;
+  turns?: number;
+  costUsd?: number;
+  outputChars?: number;
+  reasoningChars?: number;
+  toolReadChars?: number;
+};
+
+function formatSubagentElapsed(ms?: number): string | null {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return null;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.floor((ms % 60_000) / 1000);
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function formatSubagentStatus(run: SubagentCardRun): string {
+  if (run.status === "failed") return t("cards.subagentFailed");
+  if (run.status === "done") return t("cards.subagentDone");
+  if (run.phase === "summarising") return t("cards.subagentSummarising");
+  return t("cards.subagentRunning");
+}
+
+export function SubagentRunCard({
+  run,
+  defaultOpen = false,
+}: {
+  run: SubagentCardRun;
+  defaultOpen?: boolean;
+}) {
+  useLang();
+  const elapsed = formatSubagentElapsed(run.elapsedMs);
+  const statusLabel = formatSubagentStatus(run);
+  const tokens = typeof run.costUsd === "number" ? `$${run.costUsd.toFixed(4)}` : null;
+  const activity = [
+    typeof run.iter === "number" && run.iter > 0
+      ? t("contextPanel.subagentToolCalls", { count: run.iter })
+      : null,
+    typeof run.turns === "number" && run.turns > 0
+      ? t("contextPanel.subagentTurns", { count: run.turns })
+      : null,
+    elapsed,
+    tokens,
+  ].filter(Boolean);
+  return (
+    <Card
+      tone={run.status === "failed" ? "danger" : run.status === "done" ? "success" : "violet"}
+      icon={<I.bot size={12} />}
+      kind="subagent"
+      name={run.task}
+      defaultOpen={defaultOpen}
+      meta={
+        <>
+          {run.skillName?.trim() ? <span>{run.skillName.trim()}</span> : null}
+          <span>{statusLabel}</span>
+          {run.status === "done" ? (
+            <StatusIcon state="done" label={statusLabel} />
+          ) : run.status === "failed" ? (
+            <StatusIcon state="failed" label={statusLabel} />
+          ) : (
+            <StatusIcon state="running" label={statusLabel} />
+          )}
+        </>
+      }
+    >
+      <div className="sub-card subagent-run-card">
+        <div className="subagent-run-task">{run.task}</div>
+        <div className="subagent-run-meta">
+          {run.model ? (
+            <span>
+              <span className="k">{t("settings.model")}</span> {run.model}
+            </span>
+          ) : null}
+          {activity.length > 0 ? <span>{activity.join(" · ")}</span> : null}
+          {typeof run.outputChars === "number" ||
+          typeof run.reasoningChars === "number" ||
+          typeof run.toolReadChars === "number" ? (
+            <span>
+              {[
+                typeof run.outputChars === "number"
+                  ? `${run.outputChars.toLocaleString()} out`
+                  : null,
+                typeof run.reasoningChars === "number"
+                  ? `${run.reasoningChars.toLocaleString()} reasoning`
+                  : null,
+                typeof run.toolReadChars === "number"
+                  ? `${run.toolReadChars.toLocaleString()} read`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          ) : null}
+        </div>
+        {run.summary ? <div className="subagent-run-summary">{run.summary}</div> : null}
+        {run.error ? <div className="subagent-run-error">{run.error}</div> : null}
+      </div>
+    </Card>
+  );
+}
+
 export function SubagentCard({
   name,
   children,

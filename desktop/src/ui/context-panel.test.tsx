@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { invoke } from "@tauri-apps/api/core";
 import * as eventApi from "@tauri-apps/api/event";
 import * as webviewApi from "@tauri-apps/api/webview";
@@ -996,6 +998,65 @@ describe("ContextPanel files", () => {
         branch: "feature/git-panel",
       }),
     );
+  });
+
+  it("allows an empty git commit message so the backend can auto-generate one", async () => {
+    vi.mocked(invoke).mockImplementation((command: string) => {
+      if (command === "git_info") {
+        return Promise.resolve({
+          isRepo: true,
+          branch: "main",
+          upstream: "origin/main",
+          remote: "origin",
+          ahead: 0,
+          behind: 0,
+          lastCommit: "abc1234 Update docs",
+          branches: ["main"],
+        }) as never;
+      }
+      if (command === "git_status") {
+        return Promise.resolve([{ path: "README.md", kind: "modified" }]) as never;
+      }
+      return Promise.resolve({ stdout: "ok", stderr: "", code: 0 }) as never;
+    });
+
+    render(
+      <ContextInfoPopover
+        open
+        settings={settings}
+        usage={usage}
+        mcpSpecs={[]}
+        mcpBridged={false}
+        subagents={[]}
+        sessionFiles={[]}
+        memory={[]}
+        memoryDetail={null}
+        onOpenSubagent={() => {}}
+        onReadMemory={() => {}}
+      />,
+    );
+
+    await waitFor(() => screen.getByText("Git"));
+    fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("git_commit_all", {
+        root: "/repo",
+        message: "",
+      }),
+    );
+  });
+
+  it("keeps the context info card vertical-only when content is wide", () => {
+    const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+    const scrollRule = css.match(/\.context-info-scroll \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const gitStatusRule = css.match(/\.ctx-git-action-status \{[\s\S]*?\n\}/)?.[0] ?? "";
+
+    expect(scrollRule).toContain("overflow-y: auto");
+    expect(scrollRule).toContain("overflow-x: hidden");
+    expect(gitStatusRule).toContain("overflow-y: auto");
+    expect(gitStatusRule).toContain("overflow-x: hidden");
+    expect(gitStatusRule).toContain("overflow-wrap: anywhere");
   });
 
   it("lets the surrounding shell control whether a selected file shows preview or files", () => {

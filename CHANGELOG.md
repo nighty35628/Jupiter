@@ -3,6 +3,39 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] — 2026-06-13
+
+### 中文
+
+**桌面稳定性修复。** Linux 桌面端禁用 WebKit 加速合成，并在 ARM64 设备上默认使用 llvmpipe，
+避免 Debian/ARM 等环境因为 Mesa zink、Vulkan 或 EGL 初始化失败导致首屏打不开。
+
+**子智能体展示。** 子智能体运行会直接出现在主对话流中，右侧上下文面板可打开对应的子智能体详情标签页，
+查看任务、状态、模型、耗时、摘要、错误与成本信息，同时保留主对话不被切到子会话。
+
+**Git 与输入修正。** 桌面 Git 提交信息可留空，由后端根据变更文件自动生成提交信息；输入框会清理从终端粘贴进来的方向键等控制序列。
+
+**中断与布局修正。** Esc 中断产生的强制摘要不再当作正常助手回复保存；右侧上下文面板、Git 状态输出和子智能体详情修复宽内容横向溢出。
+
+**版本同步。** 桌面端、根包、Tauri、Cargo、CHANGELOG、README 和 release notes 版本统一为 `1.0.1`。
+
+### English
+
+**Desktop stability fixes.** Linux desktop builds now disable WebKit accelerated compositing, and ARM64 builds default
+to llvmpipe so Debian/ARM devices with broken Mesa zink, Vulkan, or EGL setup can still open the first window.
+
+**Subagent visibility.** Subagent runs now appear directly in the main conversation. The context panel can open a
+subagent detail tab with task, status, model, elapsed time, summary, error, and cost information without switching the
+main chat into the child session.
+
+**Git and input fixes.** Desktop Git commits can leave the message empty and let the backend generate one from the
+changed files. Composer input now strips terminal arrow-key/control escape sequences pasted into the text box.
+
+**Abort and layout fixes.** Forced summaries produced by Esc aborts are no longer stored as normal assistant replies.
+The context panel, Git command output, and subagent detail views now avoid horizontal overflow on wide content.
+
+**Version alignment.** Desktop, root package, Tauri, Cargo, CHANGELOG, README, and release notes are aligned on `1.0.1`.
+
 ## [1.0.0] — 2026-06-11
 
 ### 中文

@@ -103,7 +103,7 @@ import {
 } from "./theme";
 import { AboutModal } from "./ui/about";
 import { AppContextMenu } from "./ui/app-context-menu";
-import { WorkflowRunCard, parseEditResult } from "./ui/cards";
+import { SubagentRunCard, WorkflowRunCard, parseEditResult } from "./ui/cards";
 import {
   Composer,
   type ComposerSendPayload,
@@ -223,6 +223,7 @@ export type ChatMessage =
       pending: boolean;
     }
   | { kind: "workflow"; run: WorkflowRun }
+  | { kind: "subagent"; run: SubagentRunInfo }
   | { kind: "status"; text: string }
   | { kind: "warning"; id: string; text: string; severity: "low" | "high" }
   | { kind: "error"; message: string; id: string; recoverable?: boolean };
@@ -732,6 +733,8 @@ export function chatMessageKey(message: ChatMessage | undefined, index: number):
       return `assistant-${message.turn}`;
     case "workflow":
       return `workflow-${message.run.id}`;
+    case "subagent":
+      return `subagent-${message.run.runId}`;
     case "warning":
       return `warning-${message.id}`;
     case "error":
@@ -780,6 +783,16 @@ function upsertWorkflowRunMessage(messages: ChatMessage[], run: WorkflowRun): Ch
   if (index < 0) return [...messages, { kind: "workflow", run }];
   const next = [...messages];
   next[index] = { kind: "workflow", run };
+  return next;
+}
+
+function upsertSubagentRunMessage(messages: ChatMessage[], run: SubagentRunInfo): ChatMessage[] {
+  const index = messages.findIndex(
+    (message) => message.kind === "subagent" && message.run.runId === run.runId,
+  );
+  if (index < 0) return [...messages, { kind: "subagent", run }];
+  const next = [...messages];
+  next[index] = { kind: "subagent", run };
   return next;
 }
 
@@ -1210,6 +1223,13 @@ function mergeFinalSegments(
   return mergeFinalTextSegment(withReasoning, ev.content);
 }
 
+function isAbortSyntheticFinal(ev: { content?: string; forcedSummary?: boolean }): boolean {
+  return (
+    ev.forcedSummary === true &&
+    /^\[aborted by user \(Esc\) — /.test((ev.content ?? "").trim())
+  );
+}
+
 function sessionFilesForMessages(messages: ChatMessage[]): SessionFile[] {
   let sessionFiles: SessionFile[] = [];
   for (const m of messages) {
@@ -1397,7 +1417,6 @@ export function reduceSubagentRuns(
   ev: SubagentEvent,
   currentSession?: string,
 ): SubagentRunInfo[] {
-  if (!currentSession && ev.parentSession) return prev;
   if (currentSession && ev.parentSession && ev.parentSession !== currentSession) {
     return prev;
   }
@@ -1663,10 +1682,15 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         mcpBridged: Boolean(ev.bridged),
       };
     case "$subagent_event":
-      return {
-        ...state,
-        subagents: reduceSubagentRuns(state.subagents, ev, state.currentSession),
-      };
+      {
+        const subagents = reduceSubagentRuns(state.subagents, ev, state.currentSession);
+        const run = subagents.find((entry) => entry.runId === ev.runId);
+        return {
+          ...state,
+          subagents,
+          messages: run ? upsertSubagentRunMessage(state.messages, run) : state.messages,
+        };
+      }
     case "$skills":
       return { ...state, skills: ev.items, skillRoots: ev.roots ?? [] };
     case "$ctx_breakdown": {
@@ -1946,6 +1970,19 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
     }
     case "model.final": {
+      if (isAbortSyntheticFinal(ev)) {
+        const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn);
+        if (assistantIndex < 0) return { ...state, transientStatus: null };
+        const m = state.messages[assistantIndex]!;
+        if (m.kind !== "assistant") return { ...state, transientStatus: null };
+        const messages = [...state.messages];
+        if (m.segments.length === 0) {
+          messages.splice(assistantIndex, 1);
+        } else {
+          messages[assistantIndex] = { ...m, pending: false };
+        }
+        return { ...state, messages, transientStatus: null };
+      }
       const u = ev.usage;
       const promptTokens =
         u?.prompt_tokens ?? (u?.prompt_cache_hit_tokens ?? 0) + (u?.prompt_cache_miss_tokens ?? 0);
@@ -2192,6 +2229,21 @@ function formatConversationMarkdown(messages: ChatMessage[], userLabel: string):
       }
       if (m.kind === "workflow") {
         return formatWorkflowRunMarkdown(m.run);
+      }
+      if (m.kind === "subagent") {
+        const lines = [
+          "### Subagent",
+          "",
+          `- Task: ${m.run.task}`,
+          `- Status: ${m.run.status}`,
+          m.run.skillName ? `- Skill: ${m.run.skillName}` : null,
+          m.run.model ? `- Model: ${m.run.model}` : null,
+          typeof m.run.turns === "number" ? `- Turns: ${m.run.turns}` : null,
+          typeof m.run.costUsd === "number" ? `- Cost: $${m.run.costUsd.toFixed(4)}` : null,
+          m.run.summary ? `\n${m.run.summary}` : null,
+          m.run.error ? `\nError: ${m.run.error}` : null,
+        ].filter((line): line is string => line !== null);
+        return lines.join("\n");
       }
       if (m.kind === "error") return `### Error\n\n${m.message}`;
       return "";
@@ -2720,6 +2772,56 @@ function TabRuntimeInner({
     },
     [ensureContextPanelVisible, openContextTab],
   );
+  const openSubagentSidebarTab = useCallback(
+    (sessionName: string) => {
+      const run = state.subagents.find((entry) => entry.sessionName === sessionName);
+      if (!run) return;
+      ensureContextPanelVisible();
+      setContextInfoOpen(false);
+      const existing = contextTabState.tabs.find(
+        (tab) =>
+          tab.mode === "subagent" &&
+          (tab.subagentRun?.sessionName === sessionName || tab.subagentRun?.runId === run.runId),
+      );
+      if (existing) {
+        activateContextTab(existing.id);
+        return;
+      }
+      openContextTab({
+        mode: "subagent",
+        title: run.task,
+        subagentRun: run,
+      });
+    },
+    [
+      activateContextTab,
+      contextTabState.tabs,
+      ensureContextPanelVisible,
+      openContextTab,
+      state.subagents,
+    ],
+  );
+  useEffect(() => {
+    setContextTabState((current) => {
+      let changed = false;
+      const tabs = current.tabs.map((tab) => {
+        if (tab.mode !== "subagent" || !tab.subagentRun) return tab;
+        const latest = state.subagents.find(
+          (run) =>
+            run.runId === tab.subagentRun?.runId ||
+            (tab.subagentRun?.sessionName && run.sessionName === tab.subagentRun.sessionName),
+        );
+        if (!latest || latest === tab.subagentRun) return tab;
+        changed = true;
+        return {
+          ...tab,
+          title: latest.task || tab.title,
+          subagentRun: latest,
+        };
+      });
+      return changed ? { ...current, tabs } : current;
+    });
+  }, [state.subagents]);
   const revealLibraryFileSource = useCallback(
     (path: string) => {
       void revealFileInFolder(path, state.settings?.workspaceDir).catch((err) =>
@@ -4234,6 +4336,16 @@ function TabRuntimeInner({
                           </div>
                         );
                       }
+                      if (m.kind === "subagent") {
+                        return (
+                          <div className="thread-inner">
+                            <SubagentRunCard
+                              run={m.run}
+                              defaultOpen={state.settings?.processCardsDefaultOpen ?? false}
+                            />
+                          </div>
+                        );
+                      }
                       if (m.kind === "status") {
                         return (
                           <div className="thread-inner">
@@ -4444,7 +4556,7 @@ function TabRuntimeInner({
               placement={bottomCollapsed ? "side" : "bottom"}
               onOpenSubagent={(name) => {
                 clearAbortDraft();
-                sendRpc({ cmd: "session_load", name, openInNewTab: isTabBusy() });
+                openSubagentSidebarTab(name);
               }}
               onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
               onSourceSearch={searchLibrarySources}
@@ -4475,7 +4587,7 @@ function TabRuntimeInner({
               }
               onOpenSubagent={(name) => {
                 clearAbortDraft();
-                sendRpc({ cmd: "session_load", name, openInNewTab: isTabBusy() });
+                openSubagentSidebarTab(name);
               }}
               onReadMemory={(path) => sendRpc({ cmd: "memory_read", path })}
               onPreviewFile={previewFile}

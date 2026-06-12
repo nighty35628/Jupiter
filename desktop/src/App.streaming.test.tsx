@@ -711,6 +711,78 @@ describe("App streaming events", () => {
     expect(within(activeApp()).getByTitle("stop")).toBeTruthy();
   });
 
+  it("renders live subagent activity as an in-thread card", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-subagent", "/tmp/ws-subagent");
+    await emitRpc({
+      type: "user.message",
+      tabId: "tab-subagent",
+      id: 1,
+      ts: new Date().toISOString(),
+      turn: 1,
+      text: "research this",
+      clientId: "c-subagent",
+    });
+    await emitRpc({
+      type: "model.turn.started",
+      tabId: "tab-subagent",
+      id: 2,
+      ts: new Date().toISOString(),
+      turn: 1,
+      model: "deepseek-v4-flash",
+      reasoningEffort: "high",
+      prefixHash: "test-prefix",
+    });
+    await emitRpc({
+      type: "$subagent_event",
+      tabId: "tab-subagent",
+      kind: "start",
+      runId: "subagent-1",
+      parentSession: "desktop-subagent",
+      sessionName: "subagent-session-1",
+      task: "Survey release blockers",
+      skillName: "research",
+      model: "deepseek-v4-flash",
+    });
+
+    expect(visibleMain().textContent).toContain("subagent");
+    expect(visibleMain().textContent).toContain("Survey release blockers");
+  });
+
+  it("opens subagent details in a sidebar tab instead of loading the child session in main chat", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-subagent", "/tmp/ws-subagent");
+    await emitRpc({
+      type: "$subagent_event",
+      tabId: "tab-subagent",
+      kind: "start",
+      runId: "subagent-1",
+      parentSession: "desktop-subagent",
+      sessionName: "subagent-session-1",
+      task: "Survey release blockers",
+      skillName: "research",
+      model: "deepseek-v4-flash",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Show information" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open subagent: Survey release blockers" }));
+
+    await waitFor(() => {
+      expect(contextTabTitles()).toContain("Survey release blockers");
+    });
+    expect(document.querySelector(".ctx")?.getAttribute("data-mode")).toBe("subagent");
+    expect(within(document.querySelector(".ctx") as HTMLElement).getByText("research")).toBeTruthy();
+    expect(
+      sentRpcCommands().some(
+        (cmd) => cmd.cmd === "session_load" && cmd.name === "subagent-session-1",
+      ),
+    ).toBe(false);
+  });
+
   it("keeps sidebar sessions synchronized across tab switches", async () => {
     render(<App />);
 
@@ -1067,6 +1139,22 @@ describe("App streaming events", () => {
         line: JSON.stringify({ tabId: "tab-1", cmd: "abort" }),
       });
     });
+
+    await emitRpc({
+      type: "model.final",
+      tabId: "tab-1",
+      id: 2,
+      ts: new Date().toISOString(),
+      turn: 1,
+      content:
+        "[aborted by user (Esc) — no summary produced. Ask again or /retry when ready; prior tool output is still in the log.]",
+      forcedSummary: true,
+      usage: {},
+      costUsd: 0,
+    });
+
+    expect(document.body.textContent).not.toContain("no summary produced");
+    expect(document.body.textContent).not.toContain("Ask again or /retry");
 
     await emitRpc({ type: "$turn_complete", tabId: "tab-1" });
 
