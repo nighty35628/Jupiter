@@ -72,4 +72,28 @@ describe("atomicWriteSync", () => {
     expect(() => atomicWriteSync(target, '{"a":1}', tmp, 0o600, fs)).toThrow(/EACCES/);
     expect(existsSync(tmp)).toBe(false);
   });
+
+  it("retries transient rename locks before giving up", () => {
+    const target = join(dir, "config.json");
+    const tmp = `${target}.tmp`;
+    let attempts = 0;
+    const fs: AtomicWriteFs = {
+      ...realFs,
+      renameSync: (from, to) => {
+        attempts++;
+        if (attempts < 3) {
+          const err = new Error("EPERM: file is temporarily locked") as NodeJS.ErrnoException;
+          err.code = "EPERM";
+          throw err;
+        }
+        renameSync(from, to);
+      },
+    };
+
+    atomicWriteSync(target, '{"a":1}', tmp, 0o600, fs);
+
+    expect(attempts).toBe(3);
+    expect(readFileSync(target, "utf8")).toBe('{"a":1}');
+    expect(existsSync(tmp)).toBe(false);
+  });
 });

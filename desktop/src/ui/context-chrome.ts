@@ -26,6 +26,22 @@ export function nextContextSidebarToggle({
   };
 }
 
+export function nextContextTabOpenVisibility({
+  bottomCollapsed,
+  sidebarCollapsed,
+  infoOpen,
+}: {
+  bottomCollapsed: boolean;
+  sidebarCollapsed: boolean;
+  infoOpen: boolean;
+}) {
+  return {
+    collapseBottom: !bottomCollapsed,
+    expandSidebar: sidebarCollapsed,
+    infoOpen: infoOpen ? false : infoOpen,
+  };
+}
+
 export function nextSideChatSend({
   text,
   ready,

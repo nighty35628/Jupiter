@@ -2903,6 +2903,8 @@ function PageBilling({
   const sessionCost = currency === "CNY" ? usage.totalCostUsd * 7.2 : usage.totalCostUsd;
   const totalTokens = usage.cacheHitTokens + usage.cacheMissTokens;
   const hitPct = totalTokens > 0 ? Math.round((usage.cacheHitTokens / totalTokens) * 100) : 0;
+  const diagnostics = usage.contextDiagnostics;
+  const fmt = (n: number) => n.toLocaleString();
   return (
     <>
       <div className="bill-grid">
@@ -2935,6 +2937,54 @@ function PageBilling({
           </div>
         </div>
       </div>
+      <section className="section">
+        <div className="stitle">{t("settings.contextDiagnosticsTitle")}</div>
+        {diagnostics ? (
+          <div className="setting-row" style={{ alignItems: "flex-start" }}>
+            <div className="l">
+              <div className="n">
+                {t("settings.contextDiagnosticsLastCall", {
+                  prompt: fmt(diagnostics.lastPromptTokens),
+                  hit: fmt(diagnostics.lastCacheHitTokens),
+                  miss: fmt(diagnostics.lastCacheMissTokens),
+                })}
+              </div>
+              <div className="h">
+                {t("settings.contextDiagnosticsTokenMix", {
+                  system: fmt(diagnostics.systemTokens),
+                  tools: fmt(diagnostics.toolsTokens),
+                  log: fmt(diagnostics.logTokens),
+                  memory: fmt(diagnostics.memoryTokens),
+                  summary: fmt(diagnostics.summaryTokens),
+                })}
+              </div>
+              <div className="h">
+                {t("settings.contextDiagnosticsTools", {
+                  count: fmt(diagnostics.toolsCount),
+                  messages: fmt(diagnostics.logMessages),
+                  cache: Math.round(diagnostics.sessionCacheHitRatio * 100),
+                })}
+              </div>
+              <div className="h">
+                {diagnostics.topTools.length > 0
+                  ? t("settings.contextDiagnosticsTopTools", {
+                      tools: diagnostics.topTools
+                        .map((tool) => `${tool.name} ${fmt(tool.tokens)}t@${tool.turn}`)
+                        .join(" · "),
+                    })
+                  : t("settings.contextDiagnosticsNoTopTools")}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.contextDiagnosticsEmpty")}</div>
+              <div className="h">{t("settings.contextDiagnosticsHint")}</div>
+            </div>
+          </div>
+        )}
+      </section>
     </>
   );
 }

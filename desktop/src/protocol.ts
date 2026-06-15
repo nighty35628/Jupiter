@@ -370,12 +370,31 @@ export type SkillsEvent = {
   roots?: SkillRootInfo[];
 };
 
+export type ContextDiagnosticsInfo = {
+  systemTokens: number;
+  toolsTokens: number;
+  logTokens: number;
+  inputTokens: number;
+  memoryTokens: number;
+  summaryTokens: number;
+  ctxMax: number;
+  toolsCount: number;
+  logMessages: number;
+  topTools: Array<{ name: string; tokens: number; turn: number }>;
+  lastPromptTokens: number;
+  lastCacheHitTokens: number;
+  lastCacheMissTokens: number;
+  sessionCacheHitRatio: number;
+  totalCostUsd: number;
+  turns: number;
+};
+
 export type CtxBreakdownEvent = {
   type: "$ctx_breakdown";
   reservedTokens: number;
   /** Current log token count (real-time) — sent after /compact to refresh the meter. */
   logTokens?: number;
-};
+} & Partial<ContextDiagnosticsInfo>;
 
 export type MemoryEntryInfo = {
   kind: "project_file" | "global_file" | "structured";
@@ -907,6 +926,7 @@ export type IncomingEvent = { tabId?: string } & (
 
 export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "user_input"; text: string; clientId?: string; displayText?: string; planOneShot?: boolean }
+  | { cmd: "ask_light"; text: string; clientId?: string }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
@@ -952,6 +972,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_sign_out" }
   | { cmd: "settings_get" }
+  | { cmd: "context_diagnostics_get" }
   | ({ cmd: "settings_save" } & SettingsPatch)
   | { cmd: "qq_status_get" }
   | { cmd: "qq_connect" }

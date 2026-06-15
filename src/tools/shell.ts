@@ -12,6 +12,7 @@ import {
   runCommand,
 } from "./shell/exec.js";
 import { isCommandAllowed } from "./shell/parse.js";
+import { saveTruncatedResult } from "./truncated-result-saver.js";
 
 export {
   BUILTIN_ALLOWLIST,
@@ -142,7 +143,7 @@ export function registerShellTools(registry: ToolRegistry, opts: ShellToolsOptio
         maxOutputChars,
         signal: ctx?.signal,
       });
-      return formatCommandResult(cmd, result);
+      return formatCommandResult(cmd, result, { rootDir });
     },
   });
 
@@ -382,9 +383,35 @@ function tailLines(s: string, n: number): string {
   return [`[… ${dropped} earlier lines …]`, ...lines.slice(-n)].join("\n");
 }
 
-export function formatCommandResult(cmd: string, r: RunCommandResult): string {
+const RUN_COMMAND_INLINE_OUTPUT_CHARS = 12_000;
+const RUN_COMMAND_INLINE_HEAD_CHARS = 5_500;
+const RUN_COMMAND_INLINE_TAIL_CHARS = 5_500;
+
+function summarizeLongCommandOutput(output: string, rootDir: string | undefined): string {
+  if (output.length <= RUN_COMMAND_INLINE_OUTPUT_CHARS) return output;
+  let savedLine = "";
+  if (rootDir) {
+    try {
+      const relPath = saveTruncatedResult(output, "run_command", rootDir);
+      savedLine = `\nFull output saved at: ${relPath}`;
+    } catch {
+      savedLine = "\nFull output could not be saved.";
+    }
+  }
+  const head = output.slice(0, RUN_COMMAND_INLINE_HEAD_CHARS).trimEnd();
+  const tail = output.slice(-RUN_COMMAND_INLINE_TAIL_CHARS).trimStart();
+  const omitted = Math.max(0, output.length - head.length - tail.length);
+  return `${head}\n\n[… omitted ${omitted.toLocaleString()} chars from middle …]${savedLine}\n\n${tail}`;
+}
+
+export function formatCommandResult(
+  cmd: string,
+  r: RunCommandResult,
+  opts: { rootDir?: string } = {},
+): string {
   const header = r.timedOut
     ? `$ ${cmd}\n[killed after timeout]`
     : `$ ${cmd}\n[exit ${r.exitCode ?? "?"}]`;
-  return r.output ? `${header}\n${r.output}` : header;
+  const output = summarizeLongCommandOutput(r.output, opts.rootDir);
+  return output ? `${header}\n${output}` : header;
 }

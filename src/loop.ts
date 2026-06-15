@@ -14,6 +14,7 @@ import {
   ContextManager,
   MANUAL_COMPACT_KEEP_RECENT_TOKENS,
   TURN_START_FOLD_THRESHOLD,
+  pruneOldToolResultsForModelContext,
 } from "./context-manager.js";
 import { InflightSet } from "./core/inflight.js";
 import { t } from "./i18n/index.js";
@@ -373,6 +374,35 @@ export class CacheFirstLoop {
     }
   }
 
+  recordLightAskExchange(args: {
+    userInput: string;
+    assistantContent: string;
+    model: string;
+    usage: Usage;
+    reasoningContent?: string | null;
+  }): TurnStats {
+    this._turn++;
+    this.appendAndPersist({ role: "user", content: args.userInput });
+    this.appendAndPersist(
+      buildAssistantMessage(args.assistantContent, [], args.model, args.reasoningContent ?? null),
+    );
+    const turnStats = this.stats.record(this._turn, args.model, args.usage);
+    if (this.sessionName) {
+      try {
+        patchSessionMeta(this.sessionName, {
+          totalCostUsd: this.stats.totalCost,
+          cacheHitTokens: this.stats.cumulativeCacheHitTokens,
+          cacheMissTokens: this.stats.cumulativeCacheMissTokens,
+          totalCompletionTokens: this.stats.cumulativeCompletionTokens,
+          lastPromptTokens: args.usage.promptTokens,
+        });
+      } catch {
+        /* Best-effort; don't crash lightweight Ask on a metadata write failure. */
+      }
+    }
+    return turnStats;
+  }
+
   /** Swap the just-appended assistant entry — used by self-correction to restore the original tool_calls without dropping reasoning_content. */
   private replaceTailAssistantMessage(message: ChatMessage): void {
     const retained = shrinkMessageForRetention(message);
@@ -570,7 +600,7 @@ export class CacheFirstLoop {
 
   private buildMessages(): ChatMessage[] {
     const healedMessages = this.healActiveLogBeforeSend();
-    return [...this.prefix.toMessages(), ...healedMessages];
+    return [...this.prefix.toMessages(), ...pruneOldToolResultsForModelContext(healedMessages)];
   }
 
   private healActiveLogBeforeSend(): ChatMessage[] {
@@ -1117,56 +1147,16 @@ export class CacheFirstLoop {
           this._steerQueue.length = 0;
           return;
         }
+        if (yield* this.handlePostUsageContextDecision(usage)) {
+          this._steerQueue.length = 0;
+          return;
+        }
         yield { turn: this._turn, role: "done", content: assistantContent };
         this._steerQueue.length = 0;
         return;
       }
 
-      // Context-management decision after each turn's response.
-      // ContextManager owns the policy; loop renders the events.
-      const decision = this.context.decideAfterUsage(usage, this.model, this._foldedThisTurn);
-      if (decision.kind === "fold") {
-        this._foldedThisTurn = true;
-        const before = decision.promptTokens;
-        const ctxMax = decision.ctxMax;
-        const aggressiveTag = decision.aggressive ? t("loop.aggressiveTag") : "";
-        yield {
-          turn: this._turn,
-          role: "status",
-          content: t("loop.compactingHistoryStatus", { aggressiveTag }),
-        };
-        const result = await this.compactHistory({ keepRecentTokens: decision.tailBudget });
-        if (result.folded) {
-          yield {
-            turn: this._turn,
-            role: "warning",
-            content: t(
-              decision.aggressive ? "loop.aggressivelyFoldedHistory" : "loop.foldedHistory",
-              {
-                before: before.toLocaleString(),
-                ctxMax: ctxMax.toLocaleString(),
-                pct: Math.round((before / ctxMax) * 100),
-                beforeMessages: result.beforeMessages,
-                afterMessages: result.afterMessages,
-                summaryChars: result.summaryChars,
-              },
-            ),
-          };
-        }
-      } else if (decision.kind === "exit-with-summary") {
-        const before = decision.promptTokens;
-        const ctxMax = decision.ctxMax;
-        yield {
-          turn: this._turn,
-          role: "warning",
-          content: t("loop.forcingSummary", {
-            before: before.toLocaleString(),
-            ctxMax: ctxMax.toLocaleString(),
-            pct: Math.round((before / ctxMax) * 100),
-          }),
-        };
-        this.context.trimTrailingToolCalls();
-        yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "context-guard" });
+      if (yield* this.handlePostUsageContextDecision(usage)) {
         this._steerQueue.length = 0;
         return;
       }
@@ -1186,6 +1176,59 @@ export class CacheFirstLoop {
     // loop via return statements when it produces no more tool calls,
     // when the context guard fires, when an abort fires, or when a fatal
     // error escapes the inner try blocks.
+  }
+
+  private async *handlePostUsageContextDecision(
+    usage: TurnStats["usage"] | null,
+  ): AsyncGenerator<LoopEvent, boolean, unknown> {
+    // Context-management decision after each turn's response.
+    // ContextManager owns the policy; loop renders the events.
+    const decision = this.context.decideAfterUsage(usage, this.model, this._foldedThisTurn);
+    if (decision.kind === "fold") {
+      this._foldedThisTurn = true;
+      const before = decision.promptTokens;
+      const ctxMax = decision.ctxMax;
+      const aggressiveTag = decision.aggressive ? t("loop.aggressiveTag") : "";
+      yield {
+        turn: this._turn,
+        role: "status",
+        content: t("loop.compactingHistoryStatus", { aggressiveTag }),
+      };
+      const result = await this.compactHistory({ keepRecentTokens: decision.tailBudget });
+      if (result.folded) {
+        yield {
+          turn: this._turn,
+          role: "warning",
+          content: t(
+            decision.aggressive ? "loop.aggressivelyFoldedHistory" : "loop.foldedHistory",
+            {
+              before: before.toLocaleString(),
+              ctxMax: ctxMax.toLocaleString(),
+              pct: Math.round((before / ctxMax) * 100),
+              beforeMessages: result.beforeMessages,
+              afterMessages: result.afterMessages,
+              summaryChars: result.summaryChars,
+            },
+          ),
+        };
+      }
+    } else if (decision.kind === "exit-with-summary") {
+      const before = decision.promptTokens;
+      const ctxMax = decision.ctxMax;
+      yield {
+        turn: this._turn,
+        role: "warning",
+        content: t("loop.forcingSummary", {
+          before: before.toLocaleString(),
+          ctxMax: ctxMax.toLocaleString(),
+          pct: Math.round((before / ctxMax) * 100),
+        }),
+      };
+      this.context.trimTrailingToolCalls();
+      yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "context-guard" });
+      return true;
+    }
+    return false;
   }
 
   private summaryContext(): ForceSummaryContext {

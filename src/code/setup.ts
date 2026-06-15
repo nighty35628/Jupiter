@@ -76,7 +76,7 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
       outlineThresholdBytes,
       autoGitRollback: {},
     });
-    const cfg = readConfig();
+    const cfg = readConfig(opts.configPath);
     registerShellTools(tools, {
       rootDir: root,
       extraAllowed: () => loadProjectShellAllowed(root),
@@ -90,10 +90,12 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
       confirmWrites: () => loadMemoryConfirmWrites(opts.configPath),
       globalEnabled: () => loadMemoryGlobalEnabled(opts.configPath),
     });
-    registerLibraryTools(tools, {
-      workspaceDir: root,
-      retrievalMode: () => loadLibraryRetrievalMode(opts.configPath),
-    });
+    if (loadLibraryRetrievalMode(opts.configPath) !== "off") {
+      registerLibraryTools(tools, {
+        workspaceDir: root,
+        retrievalMode: () => loadLibraryRetrievalMode(opts.configPath),
+      });
+    }
     registerCodeQueryTools(tools, { rootDir: root });
   };
 
@@ -109,10 +111,10 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
   registerTodoTool(tools);
   registerOpenUrlTool(tools);
   registerScaffoldTools(tools, { projectRoot: opts.rootDir });
-  if (searchEnabled()) {
+  if (searchEnabled(opts.configPath)) {
     registerWebTools(tools);
   }
-  if (loadJavaSourceEnabled()) {
+  if (loadJavaSourceEnabled(opts.configPath)) {
     registerJavaSourceTool(tools, { projectRoot: opts.rootDir });
   }
   // Lazy: constructing DeepSeekClient throws when DEEPSEEK_API_KEY is unset,

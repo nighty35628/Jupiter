@@ -31,7 +31,10 @@ const xtermMockState = vi.hoisted(() => {
   return { terminals, fitAddons };
 });
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  convertFileSrc: (path: string) => `asset://${path}`,
+}));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     options?: Record<string, unknown>;
@@ -88,6 +91,7 @@ const usage: UsageStats = {
   lastCallCacheMiss: null,
   reservedTokens: 0,
   liveLogTokens: 0,
+  contextDiagnostics: null,
 };
 
 const settings: Settings = {
@@ -517,6 +521,71 @@ describe("ContextPanel files", () => {
     rectSpy.mockRestore();
   });
 
+  it("resyncs native browser bounds when the panel placement changes", async () => {
+    let rect = {
+      x: 40,
+      y: 480,
+      left: 40,
+      top: 480,
+      right: 740,
+      bottom: 680,
+      width: 700,
+      height: 200,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => rect);
+    const view = renderPanel({
+      mode: "browser",
+      browserRequest: { id: 1, url: "file:///repo/reports/index.html" },
+      placement: "bottom",
+      visible: true,
+    });
+
+    await waitFor(() => expect(webviewMockState.webviewInstances[0]?.show).toHaveBeenCalled());
+
+    rect = {
+      x: 840,
+      y: 96,
+      left: 840,
+      top: 96,
+      right: 1200,
+      bottom: 720,
+      width: 360,
+      height: 624,
+      toJSON: () => ({}),
+    } as DOMRect;
+    view.rerender(
+      <Panel
+        settings={settings}
+        usage={usage}
+        mcpSpecs={[]}
+        mcpBridged={false}
+        subagents={[]}
+        sessionFiles={[{ path: "src/new-file.ts", status: "m" }]}
+        memory={[]}
+        memoryDetail={null}
+        onOpenSubagent={() => {}}
+        onReadMemory={() => {}}
+        mode="browser"
+        browserRequest={{ id: 1, url: "file:///repo/reports/index.html" }}
+        placement="side"
+        visible={true}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(webviewMockState.webviewInstances[0]?.setPosition).toHaveBeenCalledWith(
+        expect.objectContaining({ x: 840, y: 96 }),
+      ),
+    );
+    expect(webviewMockState.webviewInstances[0]?.setSize).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 360, height: 624 }),
+    );
+    rectSpy.mockRestore();
+  });
+
   it("renders review changes and previews a changed file", async () => {
     const onPreviewFile = vi.fn();
     vi.mocked(invoke).mockImplementation((command: string) => {
@@ -775,7 +844,7 @@ describe("ContextPanel files", () => {
     expect(document.body.textContent).toContain("export const x = 1;");
   });
 
-  it("renders extracted document text in the preview pane", () => {
+  it("uses rich rendering for docx files instead of extracted text", () => {
     renderPanel({
       mode: "preview",
       selectedFilePreview: {
@@ -792,7 +861,31 @@ describe("ContextPanel files", () => {
     });
 
     expect(screen.getByText("spec.docx")).toBeTruthy();
-    expect(document.body.textContent).toContain("Project brief");
+    expect(document.querySelector(".file-preview-docx")).toBeTruthy();
+    expect(document.querySelector(".file-preview-text")).toBeNull();
+    expect(document.body.textContent).not.toContain("Project brief");
+  });
+
+  it("renders markdown previews as markdown instead of plain text", () => {
+    renderPanel({
+      mode: "preview",
+      selectedFilePreview: {
+        path: "docs/demo.md",
+        absPath: "/repo/docs/demo.md",
+        name: "demo.md",
+        ext: "md",
+        kind: "text",
+        bytes: 128,
+        modifiedMs: null,
+        text: "# Welcome\n\n**Ready**",
+        truncated: false,
+      },
+    });
+
+    expect(document.querySelector(".file-preview-markdown")).toBeTruthy();
+    expect(document.querySelector(".file-preview-text")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Welcome" })).toBeTruthy();
+    expect(screen.getByText("Ready").tagName.toLowerCase()).toBe("strong");
   });
 
   it("reveals a tracked file from its actions menu", async () => {

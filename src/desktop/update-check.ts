@@ -77,6 +77,7 @@ export interface CheckDesktopUpdateOptions {
   configPath?: string;
   fetchImpl?: typeof fetch;
   manual?: boolean;
+  fetchTimeoutMs?: number;
 }
 
 export function normalizeReleaseVersion(raw: string): string {
@@ -86,30 +87,54 @@ export function normalizeReleaseVersion(raw: string): string {
     .replace(/^v/i, "");
 }
 
-async function fetchLatestRelease(fetchImpl: typeof fetch): Promise<LatestRelease | null> {
-  const releases: LatestRelease[] = [];
-  for (const endpoint of RELEASE_APIS) {
-    try {
-      const res = await fetchImpl(endpoint.url, {
-        headers: {
-          accept: "application/json",
-          "user-agent": "Jupiter Update Check",
-        },
-      });
-      if (!res.ok) continue;
-      const body = (await res.json()) as ReleasePayload;
-      const tag = typeof body.tag_name === "string" ? body.tag_name.trim() : "";
-      if (!tag) continue;
-      const version = normalizeReleaseVersion(tag);
-      if (!version) continue;
-      releases.push({
-        source: endpoint.source,
-        tag,
-        version,
-        name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : undefined,
-      });
-    } catch {}
+const DEFAULT_RELEASE_FETCH_TIMEOUT_MS = 5_000;
+
+async function fetchReleaseFromEndpoint(
+  fetchImpl: typeof fetch,
+  endpoint: (typeof RELEASE_APIS)[number],
+  timeoutMs: number,
+): Promise<LatestRelease | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(
+    () => ctrl.abort(new Error(`release source timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  try {
+    const res = await fetchImpl(endpoint.url, {
+      headers: {
+        accept: "application/json",
+        "user-agent": "Jupiter Update Check",
+      },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as ReleasePayload;
+    const tag = typeof body.tag_name === "string" ? body.tag_name.trim() : "";
+    if (!tag) return null;
+    const version = normalizeReleaseVersion(tag);
+    if (!version) return null;
+    return {
+      source: endpoint.source,
+      tag,
+      version,
+      name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : undefined,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+async function fetchLatestRelease(
+  fetchImpl: typeof fetch,
+  timeoutMs = DEFAULT_RELEASE_FETCH_TIMEOUT_MS,
+): Promise<LatestRelease | null> {
+  const releases = (
+    await Promise.all(
+      RELEASE_APIS.map((endpoint) => fetchReleaseFromEndpoint(fetchImpl, endpoint, timeoutMs)),
+    )
+  ).filter((release): release is LatestRelease => release !== null);
   return releases.reduce<LatestRelease | null>((best, release) => {
     if (!best) return release;
     return compareVersions(release.version, best.version) > 0 ? release : best;
@@ -143,7 +168,7 @@ export async function checkDesktopUpdate(
     };
   }
 
-  const latest = await fetchLatestRelease(fetchImpl);
+  const latest = await fetchLatestRelease(fetchImpl, opts.fetchTimeoutMs);
   if (!latest) {
     return {
       status: "error",

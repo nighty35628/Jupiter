@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { nextContextInfoToggle, nextContextSidebarToggle, nextSideChatSend } from "./context-chrome";
+import {
+  nextContextInfoToggle,
+  nextContextSidebarToggle,
+  nextContextTabOpenVisibility,
+  nextSideChatSend,
+} from "./context-chrome";
 
 describe("nextContextInfoToggle", () => {
   it("opens the info popover and collapses the right sidebar when the sidebar is open", () => {
@@ -29,6 +34,36 @@ describe("nextContextSidebarToggle", () => {
     expect(nextContextSidebarToggle({ infoOpen: true, sidebarCollapsed: false })).toEqual({
       panelMode: null,
       infoOpen: true,
+    });
+  });
+});
+
+describe("nextContextTabOpenVisibility", () => {
+  it("moves context-tab content back to the right sidebar when the bottom panel is open", () => {
+    expect(
+      nextContextTabOpenVisibility({
+        bottomCollapsed: false,
+        sidebarCollapsed: true,
+        infoOpen: true,
+      }),
+    ).toEqual({
+      collapseBottom: true,
+      expandSidebar: true,
+      infoOpen: false,
+    });
+  });
+
+  it("keeps an already visible right sidebar in place", () => {
+    expect(
+      nextContextTabOpenVisibility({
+        bottomCollapsed: true,
+        sidebarCollapsed: false,
+        infoOpen: false,
+      }),
+    ).toEqual({
+      collapseBottom: false,
+      expandSidebar: false,
+      infoOpen: false,
     });
   });
 });

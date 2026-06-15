@@ -99,7 +99,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     argCompleter: ["auto", "dark", "light", "midnight", "deep-blue", "high-contrast"],
   },
 
-  { cmd: "status", group: "info", summary: "current model, flags, context, session" },
+  {
+    cmd: "status",
+    group: "info",
+    argsHint: "[detail]",
+    summary: "current model, flags, context, session; detail adds cache diagnostics",
+    argCompleter: ["detail"],
+  },
   {
     cmd: "cost",
     group: "info",

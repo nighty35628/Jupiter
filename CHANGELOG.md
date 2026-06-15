@@ -3,6 +3,44 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-06-16
+
+### 中文
+
+**Linux 发布包。** Release 工作流新增 Arch Linux x64 pacman 包，README 与安装脚本同步说明
+`.deb`、`.pkg.tar.zst` 和 `jupiter-bin` AUR 模板；Arch 系发行版会优先安装原生 pacman 包，
+旧 release 没有对应产物时回退到 `.deb` 解包安装。
+
+**轻量问答。** 桌面端新增 `/ask` 与输入框 Ask 模式，用禁用工具调用的轻量请求处理快速问题，
+并把问答记录、用量和自动命名写回当前会话。
+
+**上下文成本控制。** 新增上下文诊断数据，桌面设置页和 CLI 侧可看到系统、工具、日志、记忆、
+摘要、缓存命中和高成本工具结果；长会话会更早触发成本导向折叠，并保留原始用户回合摘要。
+
+**桌面体验与稳定性。** 右侧上下文标签打开时会自动处理底部栏和侧边栏可见性；文件预览增加图片、
+Markdown、PDF、DOCX 等更丰富渲染；暂停确认卡会在重连或切回标签时恢复；更新检查增加单源超时；
+原子写入与流式读取补了更稳的重试和空闲超时。
+
+**版本同步。** 桌面端、根包、Tauri、Cargo、CHANGELOG、README 和 release notes 版本统一为 `1.0.2`。
+
+### English
+
+**Linux release assets.** The release workflow now builds an Arch Linux x64 pacman package. README and the Linux
+installer document `.deb`, `.pkg.tar.zst`, and the `jupiter-bin` AUR template; Arch-family systems prefer the native
+pacman package and fall back to `.deb` payload extraction for older releases without that asset.
+
+**Lightweight Ask.** Desktop now supports `/ask` and a composer Ask mode for quick no-tool questions. The result is
+recorded into the active session together with usage accounting and normal auto-title behavior.
+
+**Context cost control.** Added context diagnostics for system, tool, log, memory, summary, cache, and high-cost tool
+result tokens. Long sessions can trigger cost-aware folding earlier, while fold summaries preserve original user turns.
+
+**Desktop polish and stability.** Context tabs now manage bottom/sidebar visibility when opened; file preview has richer
+image, Markdown, PDF, and DOCX rendering; pending approval cards are replayed after reconnect or tab activation; update
+checks have per-source timeouts; atomic writes and streaming reads have stronger retry/idle-timeout handling.
+
+**Version alignment.** Desktop, root package, Tauri, Cargo, CHANGELOG, README, and release notes are aligned on `1.0.2`.
+
 ## [1.0.1] — 2026-06-13
 
 ### 中文

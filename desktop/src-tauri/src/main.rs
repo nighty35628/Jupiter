@@ -918,6 +918,20 @@ fn read_file_preview(path: String, workspace_dir: Option<String>) -> Result<File
 }
 
 #[tauri::command]
+fn read_file_bytes(path: String, workspace_dir: Option<String>) -> Result<Vec<u8>, String> {
+    const MAX_BYTES: u64 = 64 * 1024 * 1024;
+    let abs = resolve_preview_path(&path, workspace_dir.as_deref())?;
+    let metadata = std::fs::metadata(&abs).map_err(|e| format!("metadata failed: {e}"))?;
+    if !metadata.is_file() {
+        return Err("not a file".into());
+    }
+    if metadata.len() > MAX_BYTES {
+        return Err("file is too large to preview".into());
+    }
+    std::fs::read(&abs).map_err(|e| format!("read failed: {e}"))
+}
+
+#[tauri::command]
 fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, &content).map_err(|e| format!("write failed: {e}"))
 }
@@ -1142,6 +1156,7 @@ fn main() {
             git_checkout_branch,
             run_terminal_command,
             read_file_preview,
+            read_file_bytes,
             write_text_file,
             read_clipboard_file_paths,
             save_clipboard_image

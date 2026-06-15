@@ -46,6 +46,7 @@ const splashMockState = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
+  convertFileSrc: (path: string) => `asset://localhost/${encodeURIComponent(path)}`,
   invoke: tauri.invoke,
 }));
 

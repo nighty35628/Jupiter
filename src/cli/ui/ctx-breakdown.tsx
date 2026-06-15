@@ -3,8 +3,7 @@ import { Box, Text } from "ink";
 import React from "react";
 import { t } from "../../i18n/index.js";
 import type { CacheFirstLoop } from "../../loop.js";
-import { resolveContextTokens } from "../../telemetry/stats.js";
-import { countTokensBounded } from "../../tokenizer.js";
+import { computeContextDiagnosticsFromLoop } from "../../telemetry/context-diagnostics.js";
 import { formatTokens } from "./primitives.js";
 import { COLOR } from "./theme.js";
 
@@ -19,49 +18,18 @@ export interface CtxBreakdownData {
   topTools: Array<{ name: string; tokens: number; turn: number }>;
 }
 
-/**
- * Walk the loop's prefix + log and tally tokens per category.
- * Uses bounded counting because `/context` can inspect oversized tool
- * results before the next loop-healing pass trims them.
- */
+/** Walk the loop's prefix + log and tally model-bound tokens per category. */
 export function computeCtxBreakdown(loop: CacheFirstLoop): CtxBreakdownData {
-  const systemTokens = countTokensBounded(loop.prefix.system);
-  const toolsTokens = countTokensBounded(JSON.stringify(loop.prefix.toolSpecs));
-  const entries = loop.log.toFullHistory();
-  let userTokens = 0;
-  let assistantTokens = 0;
-  let toolResultTokens = 0;
-  let toolCallTokens = 0;
-  const toolBreakdown: Array<{ name: string; tokens: number; turn: number }> = [];
-  let logTurn = 0;
-  for (const e of entries) {
-    const content = typeof e.content === "string" ? e.content : "";
-    if (e.role === "user") {
-      userTokens += countTokensBounded(content);
-      logTurn += 1;
-    } else if (e.role === "assistant") {
-      assistantTokens += countTokensBounded(content);
-      if (Array.isArray(e.tool_calls) && e.tool_calls.length > 0) {
-        toolCallTokens += countTokensBounded(JSON.stringify(e.tool_calls));
-      }
-    } else if (e.role === "tool") {
-      const n = countTokensBounded(content);
-      toolResultTokens += n;
-      toolBreakdown.push({ name: e.name ?? "?", tokens: n, turn: logTurn });
-    }
-  }
-  const logTokens = userTokens + assistantTokens + toolResultTokens + toolCallTokens;
-  const ctxMax = resolveContextTokens(loop.model);
-  const topTools = [...toolBreakdown].sort((a, b) => b.tokens - a.tokens).slice(0, 5);
+  const diagnostics = computeContextDiagnosticsFromLoop(loop);
   return {
-    systemTokens,
-    toolsTokens,
-    logTokens,
+    systemTokens: diagnostics.systemTokens,
+    toolsTokens: diagnostics.toolsTokens,
+    logTokens: diagnostics.logTokens,
     inputTokens: 0,
-    ctxMax,
-    toolsCount: loop.prefix.toolSpecs.length,
-    logMessages: entries.length,
-    topTools,
+    ctxMax: diagnostics.ctxMax,
+    toolsCount: diagnostics.toolsCount,
+    logMessages: diagnostics.logMessages,
+    topTools: diagnostics.topTools,
   };
 }
 

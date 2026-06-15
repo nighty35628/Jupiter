@@ -96,6 +96,38 @@ describe("desktop release update checks", () => {
     });
   });
 
+  it("does not let a hung mirror block the other release source", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("gitee.com/api/")) {
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      }
+      return jsonResponse({
+        tag_name: "desktop-v0.99.10",
+        name: "Jupiter Desktop 0.99.10",
+        html_url: "https://github.com/nighty35628/Jupiter/releases/tag/desktop-v0.99.10",
+      });
+    }) as typeof fetch;
+
+    const result = await checkDesktopUpdate({
+      currentVersion: "0.99.9",
+      configPath,
+      fetchImpl,
+      manual: true,
+      fetchTimeoutMs: 25,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "available",
+      latestVersion: "0.99.10",
+      source: "github",
+    });
+  });
+
   it("suppresses automatic prompts for skipped versions but lets manual checks bypass that", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ tag_name: "desktop-v0.99.10", html_url: DESKTOP_UPDATE_RELEASE_URLS.gitee }),

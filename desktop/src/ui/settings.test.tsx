@@ -50,6 +50,7 @@ const usage: UsageStats = {
   lastCallCacheMiss: null,
   reservedTokens: 0,
   liveLogTokens: 0,
+  contextDiagnostics: null,
 };
 
 function renderSettings({
@@ -71,6 +72,7 @@ function renderSettings({
   storageScan = null,
   onScanStorage = vi.fn(),
   onCleanStorage = vi.fn(),
+  usage: usageOverride,
 }: {
   settings?: Partial<SettingsType>;
   onOpenAbout?: () => void;
@@ -86,16 +88,17 @@ function renderSettings({
   onRestoreArchivedSession?: (name: string) => void;
   onDeleteArchivedSession?: (name: string) => void;
   onClearArchivedSessions?: () => void;
-  initialPage?: "memory" | "archives" | "shortcuts" | "storage";
+  initialPage?: "memory" | "archives" | "shortcuts" | "storage" | "billing";
   storageScan?: any;
   onScanStorage?: () => void;
   onCleanStorage?: (itemIds: string[]) => void;
+  usage?: UsageStats;
 } = {}) {
   render(
     <SettingsModal
       settings={{ ...settings, ...settingsOverride }}
       balance={null}
-      usage={usage}
+      usage={usageOverride ?? usage}
       currency="USD"
       theme="dark"
       themeStyle="graphite"
@@ -517,5 +520,41 @@ describe("SettingsModal", () => {
       priority: "high",
       expires: "project_end",
     });
+  });
+
+  it("shows context diagnostics in the billing settings page", () => {
+    renderSettings({
+      initialPage: "billing",
+      usage: {
+        ...usage,
+        totalPromptTokens: 15097,
+        cacheHitTokens: 14000,
+        cacheMissTokens: 1097,
+        contextDiagnostics: {
+          systemTokens: 5516,
+          toolsTokens: 9479,
+          logTokens: 102,
+          inputTokens: 0,
+          memoryTokens: 300,
+          summaryTokens: 0,
+          ctxMax: 1_000_000,
+          toolsCount: 46,
+          logMessages: 2,
+          topTools: [{ name: "run_command", tokens: 430, turn: 1 }],
+          lastPromptTokens: 15097,
+          lastCacheHitTokens: 14000,
+          lastCacheMissTokens: 1097,
+          sessionCacheHitRatio: 0.927,
+          totalCostUsd: 0.002,
+          turns: 1,
+        },
+      },
+    });
+
+    expect(screen.getByText("Context diagnostics")).toBeTruthy();
+    expect(screen.getByText(/system 5,516/)).toBeTruthy();
+    expect(screen.getByText(/tools 9,479/)).toBeTruthy();
+    expect(screen.getByText(/run_command/)).toBeTruthy();
+    expect(screen.getByText(/last prompt 15,097t · hit 14,000 \/ miss 1,097/)).toBeTruthy();
   });
 });

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { Terminal } from "@xterm/xterm";
@@ -7,7 +7,13 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SessionFile, Settings, SideChatEntry, UsageStats } from "../App";
 import { Markdown } from "../Markdown";
-import { type FilePreview, type FilePreviewTarget, isHtmlFilePath } from "../file-preview";
+import {
+  type FilePreview,
+  type FilePreviewTarget,
+  isHtmlFilePath,
+  pathToFileUrl,
+  readFileBytes,
+} from "../file-preview";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
 import type {
@@ -20,6 +26,7 @@ import type {
 } from "../protocol";
 import { PanelErrorBoundary } from "./error-boundary";
 import { FileActionMenu } from "./file-action-menu";
+import { FilePreviewRenderer, previewRendererKind } from "./file-preview-renderers";
 import { rankItems } from "./fuzzy";
 import { NativeBrowserWebview } from "./native-browser-webview";
 import { type TerminalFitAddon, createTerminalAddons } from "./xterm-addons";
@@ -493,7 +500,7 @@ export function ContextPanel({
           ) : activeMode === "browser" ? (
             <div className="ctx-mode-shell">
               {tabBar}
-              <CtxBrowser request={activeBrowserRequest} visible={visible} />
+              <CtxBrowser request={activeBrowserRequest} visible={visible} placement={placement} />
             </div>
           ) : activeMode === "review" ? (
             <div className="ctx-mode-shell">
@@ -522,9 +529,11 @@ export function ContextPanel({
 function CtxBrowser({
   request,
   visible = true,
+  placement,
 }: {
   request?: BrowserOpenRequest | null;
   visible?: boolean;
+  placement: "side" | "bottom";
 }) {
   const [draft, setDraft] = useState("");
   const [history, setHistory] = useState<string[]>([]);
@@ -620,7 +629,11 @@ function CtxBrowser({
   useEffect(() => {
     if (!currentUrl || !visible) return;
     const sync = () => syncNativeBrowser(false);
-    const frame = window.requestAnimationFrame(sync);
+    let followupFrame = 0;
+    const frame = window.requestAnimationFrame(() => {
+      sync();
+      followupFrame = window.requestAnimationFrame(sync);
+    });
     const resizeObserver =
       typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => sync());
     if (hostRef.current && resizeObserver) resizeObserver.observe(hostRef.current);
@@ -628,11 +641,12 @@ function CtxBrowser({
     window.addEventListener("scroll", sync, true);
     return () => {
       window.cancelAnimationFrame(frame);
+      if (followupFrame) window.cancelAnimationFrame(followupFrame);
       resizeObserver?.disconnect();
       window.removeEventListener("resize", sync);
       window.removeEventListener("scroll", sync, true);
     };
-  }, [currentUrl, syncNativeBrowser, visible]);
+  }, [currentUrl, placement, syncNativeBrowser, visible]);
   const canGoBack = historyIndex > 0;
   const canGoForward = historyIndex >= 0 && historyIndex < history.length - 1;
   const openCurrentExternal = () => {
@@ -2536,6 +2550,19 @@ function FilePreviewPane({
   } | null>(null);
   const path = preview?.path ?? fallbackPath;
   if (!path && !loading && !error) return null;
+  const previewUrl = preview ? convertFileSrc(preview.absPath) : null;
+  const richKind = preview
+    ? previewRendererKind(preview.path, null)
+    : path
+      ? previewRendererKind(path, null)
+      : "text";
+  const shouldUseRichRenderer =
+    preview &&
+    (richKind === "pdf" ||
+      richKind === "docx" ||
+      richKind === "markdown" ||
+      richKind === "image" ||
+      richKind === "unsupported");
   const meta = preview
     ? [
         formatBytes(preview.bytes),
@@ -2576,6 +2603,13 @@ function FilePreviewPane({
           <div className="ctx-empty">{t("fileActions.previewLoading")}</div>
         ) : error ? (
           <div className="ctx-empty">{t("fileActions.previewError", { message: error })}</div>
+        ) : shouldUseRichRenderer ? (
+          <FilePreviewRenderer
+            path={preview.path}
+            url={previewUrl ?? pathToFileUrl(preview.absPath)}
+            text={preview.text}
+            loadBytes={() => readFileBytes(preview.absPath, undefined)}
+          />
         ) : preview?.text !== undefined && preview.text !== null ? (
           <pre className="file-preview-text">{preview.text}</pre>
         ) : (

@@ -102,6 +102,7 @@ export interface DeepSeekClientOptions {
   apiKey?: string;
   baseUrl?: string;
   timeoutMs?: number;
+  streamIdleTimeoutMs?: number;
   fetch?: typeof fetch;
   rateLimit?: { rpm?: number };
   /** Retry configuration. Pass `{ maxAttempts: 1 }` to disable retries. */
@@ -155,6 +156,7 @@ export class DeepSeekClient {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly timeoutMs: number;
+  readonly streamIdleTimeoutMs: number;
   readonly retry: RetryOptions;
   private readonly _fetch: typeof fetch;
   private readonly minChatIntervalMs: number;
@@ -183,6 +185,9 @@ export class DeepSeekClient {
     // connection first (clean EOF → natural retry), and our timer
     // is a safety net for genuinely hung sockets.
     this.timeoutMs = opts.timeoutMs ?? 660_000;
+    // Separate body-idle watchdog: keeps the long queue timeout above, but
+    // fails streams that have started and then stop delivering any bytes.
+    this.streamIdleTimeoutMs = opts.streamIdleTimeoutMs ?? 120_000;
     this._fetch = opts.fetch ?? globalThis.fetch.bind(globalThis);
     this.retry = opts.retry ?? {};
     const rpm = opts.rateLimit?.rpm ?? loadRateLimit()?.rpm;
@@ -405,6 +410,25 @@ export class DeepSeekClient {
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
+    const readWithIdleTimeout = async () => {
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => {
+            idleTimer = setTimeout(() => {
+              const err = new Error(
+                `DeepSeek stream idle timeout after ${this.streamIdleTimeoutMs}ms`,
+              );
+              ctrl.abort(err);
+              reject(err);
+            }, this.streamIdleTimeoutMs);
+          }),
+        ]);
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
+      }
+    };
     try {
       while (true) {
         if (queue.length > 0) {
@@ -415,8 +439,9 @@ export class DeepSeekClient {
         let value: Uint8Array | undefined;
         let streamDone: boolean;
         try {
-          ({ value, done: streamDone } = await reader.read());
+          ({ value, done: streamDone } = await readWithIdleTimeout());
         } catch (readErr) {
+          if (readErr instanceof Error && /idle timeout/i.test(readErr.message)) throw readErr;
           const cause = readErr instanceof Error ? readErr : new Error(String(readErr));
           const code = "code" in cause && typeof cause.code === "string" ? cause.code : undefined;
           throw Object.assign(new Error(`SSE body read failed: ${cause.message}`), {
@@ -430,6 +455,7 @@ export class DeepSeekClient {
       while (queue.length > 0) yield queue.shift()!;
     } finally {
       clearTimeout(timer);
+      await reader.cancel().catch(() => {});
       reader.releaseLock();
     }
   }

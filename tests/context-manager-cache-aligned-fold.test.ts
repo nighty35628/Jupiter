@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DeepSeekClient } from "../src/client.js";
+import { FOLD_USER_TURNS_HEADER } from "../src/context-manager.js";
 import { CacheFirstLoop } from "../src/loop.js";
 import { ImmutablePrefix } from "../src/memory/runtime.js";
 import type { ChatMessage, ToolSpec } from "../src/types.js";
@@ -261,5 +262,41 @@ describe("ContextManager fold sends cache-aligned summary request", () => {
     // no separator / wrapper that would push the cache-miss boundary inward.
     expect(secondLast).toBeDefined();
     expect(secondLast.role === "assistant" || secondLast.role === "tool").toBe(true);
+  });
+
+  it("folded summary preserves original user turns with bounded verbatim text", async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new DeepSeekClient({
+      apiKey: "sk-test",
+      fetch: fakeFetch(captured, "Facts digest: durable summary."),
+    });
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: SYSTEM_PROMPT, toolSpecs: TOOLS }),
+      model: "deepseek-v4-flash",
+      stream: false,
+    });
+    loop.log.append({
+      role: "user",
+      content: "Keep this exact negative constraint: do not remove the updater.",
+    });
+    loop.log.append({ role: "assistant", content: "ack" });
+    loop.log.append({
+      role: "user",
+      content: `Long pasted requirement: ${"0123456789".repeat(120)}`,
+    });
+    loop.log.append({ role: "assistant", content: "ack" });
+    seedTurns(loop, 6);
+
+    const result = await loop.compactHistory({ keepRecentTokens: 40 });
+
+    expect(result.folded).toBe(true);
+    const summary = loop.log.toMessages()[0]!;
+    const content = typeof summary.content === "string" ? summary.content : "";
+    expect(content).toContain(FOLD_USER_TURNS_HEADER);
+    expect(content).toContain("do not remove the updater");
+    expect(content).toContain("Long pasted requirement:");
+    expect(content).toContain("[truncated]");
+    expect(content).not.toContain("0123456789".repeat(100));
   });
 });

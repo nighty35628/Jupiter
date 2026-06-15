@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { COMPACTION_SUMMARY_MARKER } from "@jupiter/core-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SLASH_COMMANDS,
@@ -155,6 +156,20 @@ describe("handleSlash", () => {
     const r = handleSlash("status", [], loop);
     expect(r.info).toMatch(/model\s+deepseek-/);
     expect(r.info).toMatch(/effort=high/);
+  });
+
+  it("/status detail calls out top tool-result contributors", () => {
+    const loop = makeLoop();
+    loop.log.append({ role: "user", content: "inspect" });
+    loop.log.append({
+      role: "tool",
+      name: "run_command",
+      tool_call_id: "t1",
+      content: "build output with repeated details\n".repeat(200),
+    });
+    const r = handleSlash("status", ["detail"], loop);
+    expect(r.info).toContain("tool hot spots:");
+    expect(r.info).toContain("run_command");
   });
 
   it("/model switches the model", () => {
@@ -1001,6 +1016,26 @@ describe("handleSlash", () => {
     expect(r.info).toMatch(/edits\s+3 pending/);
     // /status now also surfaces cost/turns
     expect(r.info).toMatch(/cost\s+\$/);
+  });
+
+  it("/status detail shows cache hit/miss and approximate token composition", () => {
+    const loop = makeLoop();
+    loop.stats.record(1, loop.model, new Usage(42_000, 50, 42_050, 40_000, 2_000));
+    loop.log.append({ role: "user", content: "hi" });
+    loop.log.append({
+      role: "assistant",
+      content: `${COMPACTION_SUMMARY_MARKER}A compact summary of earlier work.`,
+    });
+    const r = handleSlash("status", ["detail"], loop);
+
+    expect(r.info).toMatch(/cache detail:/);
+    expect(r.info).toMatch(/last call hit\/miss\s+\d+(\.\d+)?K\/\d+(\.\d+)?K/);
+    expect(r.info).toMatch(/token mix:/);
+    expect(r.info).toMatch(/system\s+\d+(\.\d+)?%/);
+    expect(r.info).toMatch(/tools\s+\d+(\.\d+)?%/);
+    expect(r.info).toMatch(/log\s+\d+(\.\d+)?%/);
+    expect(r.info).toMatch(/summary\s+\d+(\.\d+)?%/);
+    expect(r.info).toMatch(/tip:/);
   });
 
   it("/context breaks down tokens across system / tools / log, and flags the heaviest tool results", () => {

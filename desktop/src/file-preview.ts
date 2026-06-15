@@ -71,6 +71,17 @@ export async function readFilePreview(
   return invoke<FilePreview>("read_file_preview", { path, workspaceDir: workspaceDir ?? null });
 }
 
+export async function readFileBytes(
+  path: string,
+  workspaceDir: string | undefined,
+): Promise<Uint8Array> {
+  const bytes = await invoke<number[]>("read_file_bytes", {
+    path,
+    workspaceDir: workspaceDir ?? null,
+  });
+  return Uint8Array.from(bytes);
+}
+
 export async function openDefaultFile(path: string, workspaceDir: string | undefined): Promise<void> {
   await openPath(resolveWorkspacePath(path, workspaceDir));
 }

@@ -32,6 +32,10 @@ export const HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION = 0.1;
 export const HISTORY_FOLD_MIN_SAVINGS_FRACTION = 0.3;
 /** Above this fraction we exit the turn with a summary instead of folding (defense in depth). */
 export const FORCE_SUMMARY_THRESHOLD = 0.8;
+/** Cost guard: large-window models can be expensive well before context pressure starts. */
+export const COST_AWARE_FOLD_PROMPT_TOKENS = 160_000;
+/** Cost-triggered folds keep a tight tail because the goal is spend reduction, not just headroom. */
+export const COST_AWARE_FOLD_TAIL_TOKENS = 16_000;
 /** Turn-start local estimate above this fraction triggers a pre-iter fold. Covers cases the
  * post-response fold can't (terminal prior turn, fresh session restore, huge user paste). */
 export const TURN_START_FOLD_THRESHOLD = 0.9;
@@ -46,6 +50,13 @@ export const MANUAL_COMPACT_KEEP_RECENT_TOKENS = 16_000;
 export const HISTORY_FOLD_MARKER = COMPACTION_SUMMARY_MARKER;
 /** Header that precedes preserved skill bodies in a fold's synthesized assistant message. */
 export const SKILL_PIN_MEMO_HEADER = "[Active skill memos — preserved verbatim across the fold:]";
+export const FOLD_USER_TURNS_HEADER =
+  "[Original user turns preserved across the fold — exact text until per-turn truncation:]";
+export const FOLD_USER_TURN_MAX_CHARS = 600;
+export const FOLD_USER_TURNS_MAX_CHARS = 12_000;
+export const OLD_TOOL_RESULT_ELIDED_MARKER =
+  "[old tool result elided from model context; full output remains in the session log]";
+export const OLD_TOOL_RESULT_PRUNE_MIN_CHARS = 12_000;
 /** Matches the wrapper emitted by `run_skill` so the fold can lift bodies out before summarizing. */
 const SKILL_PIN_REGEX = /<skill-pin name="([^"]+)">\n[\s\S]*?\n<\/skill-pin>/g;
 
@@ -96,7 +107,9 @@ export interface FoldResult {
 
 function buildFoldSummaryInstruction(pinnedSkillNames: string[]): string {
   const base =
-    "Summarize the conversation above as one self-contained prose recap. Preserve the user's " +
+    "Summarize the conversation above as one self-contained recap. Start with a compact " +
+    "Facts digest paragraph containing durable facts, decisions, constraints, and current state. " +
+    "Then add only the open work that still matters. Preserve the user's " +
     "ORIGINAL OBJECTIVE (never paraphrase away negative constraints like 'do NOT do X'), all " +
     "'do not' / 'never' / 'avoid' instructions, decisions reached, files inspected or modified, " +
     "tool results still relevant, and any open todos. Skip turn-by-turn play-by-play. " +
@@ -104,6 +117,66 @@ function buildFoldSummaryInstruction(pinnedSkillNames: string[]): string {
   if (pinnedSkillNames.length === 0) return base;
   const list = pinnedSkillNames.map((n) => `"${n}"`).join(", ");
   return `${base} The following skill memos are pinned verbatim and appended after your summary — do NOT quote or paraphrase their bodies: ${list}.`;
+}
+
+function stringifyUserContent(content: ChatMessage["content"]): string {
+  if (typeof content === "string") return content;
+  if (content == null) return "";
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+function truncateForFold(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 18))}\n[truncated]`;
+}
+
+function buildPreservedUserTurns(head: ChatMessage[]): string {
+  const chunks: string[] = [];
+  let total = 0;
+  let userIndex = 0;
+  for (const msg of head) {
+    if (msg.role !== "user") continue;
+    userIndex++;
+    const content = truncateForFold(stringifyUserContent(msg.content), FOLD_USER_TURN_MAX_CHARS);
+    const chunk = `User turn ${userIndex}:\n${content}`;
+    const sep = chunks.length === 0 ? "" : "\n\n";
+    if (total + sep.length + chunk.length > FOLD_USER_TURNS_MAX_CHARS) {
+      chunks.push("[older preserved user turns omitted to stay within fold budget]");
+      break;
+    }
+    chunks.push(chunk);
+    total += sep.length + chunk.length;
+  }
+  return chunks.length > 0 ? `\n\n${FOLD_USER_TURNS_HEADER}\n\n${chunks.join("\n\n")}` : "";
+}
+
+export function pruneOldToolResultsForModelContext(
+  messages: readonly ChatMessage[],
+  opts: { maxToolResultChars?: number } = {},
+): ChatMessage[] {
+  const maxToolResultChars = opts.maxToolResultChars ?? OLD_TOOL_RESULT_PRUNE_MIN_CHARS;
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") {
+      lastUserIndex = i;
+      break;
+    }
+  }
+  if (lastUserIndex <= 0) return [...messages];
+  return messages.map((message, index) => {
+    if (index >= lastUserIndex) return message;
+    if (message.role !== "tool") return message;
+    const content = typeof message.content === "string" ? message.content : "";
+    if (content.length <= maxToolResultChars) return message;
+    return {
+      ...message,
+      content: OLD_TOOL_RESULT_ELIDED_MARKER,
+    };
+  });
 }
 
 // Dedupe by name, last invocation wins. Read-only — leaves head bytes unchanged so the
@@ -168,6 +241,14 @@ export class ContextManager {
         kind: "fold",
         ...base,
         tailBudget: Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION),
+        aggressive: false,
+      };
+    }
+    if (usage.promptTokens >= COST_AWARE_FOLD_PROMPT_TOKENS) {
+      return {
+        kind: "fold",
+        ...base,
+        tailBudget: Math.min(COST_AWARE_FOLD_TAIL_TOKENS, Math.floor(ctxMax * 0.2)),
         aggressive: false,
       };
     }
@@ -273,6 +354,7 @@ export class ContextManager {
 
     const memoTail =
       pinnedBodies.length > 0 ? `\n\n${SKILL_PIN_MEMO_HEADER}\n\n${pinnedBodies.join("\n\n")}` : "";
+    const userTurnsTail = buildPreservedUserTurns(head);
     const constraints = extractPinnedConstraints(this.deps.getSystemPrompt());
     const constraintTail = constraints
       ? `\n\n[PINNED CONSTRAINTS — preserved verbatim]\n\n${constraints}`
@@ -283,7 +365,7 @@ export class ContextManager {
     // the SESSION model so an empty placeholder is added even when the
     // summarizer call somehow returned no reasoning.
     const summaryMsg = buildAssistantMessage(
-      HISTORY_FOLD_MARKER + summary.content + memoTail + constraintTail,
+      HISTORY_FOLD_MARKER + summary.content + userTurnsTail + memoTail + constraintTail,
       [],
       model,
       summary.reasoningContent,

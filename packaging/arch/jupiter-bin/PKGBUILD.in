@@ -1,0 +1,43 @@
+# Maintainer: Jupiter maintainers <maintainers@jupiter.local>
+pkgname=jupiter-bin
+pkgver=@PKGVER@
+pkgrel=@PKGREL@
+pkgdesc='Cache-first AI workbench with coding-agent workflows, workspace libraries, and tabbed desktop sessions'
+arch=(@ARCH_ARRAY@)
+url='https://github.com/nighty35628/Jupiter'
+license=('GPL-3.0-or-later')
+depends=(
+  'gtk3'
+  'webkit2gtk-4.1'
+  'libayatana-appindicator'
+  'librsvg'
+  'openssl'
+  'hicolor-icon-theme'
+)
+optdepends=(
+  'desktop-file-utils: refresh desktop entry cache after manual installs'
+)
+provides=('jupiter')
+conflicts=('jupiter')
+options=('!strip')
+noextract=(@NOEXTRACT_ARRAY@)
+
+@SOURCE_LINES@
+
+package() {
+  local deb_file data_archive
+
+  case "$CARCH" in
+    x86_64) deb_file="Jupiter-${pkgver}-linux-x64.deb" ;;
+    aarch64) deb_file="Jupiter-${pkgver}-linux-arm64.deb" ;;
+    *) echo "Unsupported architecture: $CARCH" >&2; return 1 ;;
+  esac
+
+  data_archive="$(bsdtar -tf "${srcdir}/${deb_file}" | sed -n '/^\(\.\/\)\{0,1\}data\.tar\./{p;q;}')"
+  if [[ -z "$data_archive" ]]; then
+    echo "Could not find data.tar.* in ${deb_file}" >&2
+    return 1
+  fi
+
+  bsdtar -xOf "${srcdir}/${deb_file}" "$data_archive" | bsdtar -C "$pkgdir" -xf -
+}

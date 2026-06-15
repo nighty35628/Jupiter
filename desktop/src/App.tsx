@@ -48,6 +48,7 @@ import type {
   CheckpointVerdict,
   ChoiceVerdict,
   ConfirmationChoice,
+  ContextDiagnosticsInfo,
   ExternalSessionApp,
   ExternalSessionCandidate,
   ExternalSessionSelection,
@@ -113,6 +114,7 @@ import {
 import {
   nextContextInfoToggle,
   nextContextSidebarToggle,
+  nextContextTabOpenVisibility,
   nextSideChatSend,
 } from "./ui/context-chrome";
 import {
@@ -310,6 +312,7 @@ export type UsageStats = {
   reservedTokens: number;
   /** Current conversation log tokens, refreshed by the desktop sidecar. */
   liveLogTokens: number;
+  contextDiagnostics: ContextDiagnosticsInfo | null;
 };
 
 type WindowControls = Pick<
@@ -1150,6 +1153,7 @@ function zeroUsage(): UsageStats {
     lastCallCacheMiss: null,
     reservedTokens: 0,
     liveLogTokens: 0,
+    contextDiagnostics: null,
   };
 }
 
@@ -1550,7 +1554,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         pendingConfirms: [
-          ...state.pendingConfirms,
+          ...state.pendingConfirms.filter((item) => item.id !== ev.id),
           { id: ev.id, kind: ev.kind, command: ev.command, prompt: ev.prompt! },
         ],
       };
@@ -1558,7 +1562,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         pendingPathAccess: [
-          ...state.pendingPathAccess,
+          ...state.pendingPathAccess.filter((item) => item.id !== ev.id),
           {
             id: ev.id,
             path: ev.path,
@@ -1574,7 +1578,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         pendingChoices: [
-          ...state.pendingChoices,
+          ...state.pendingChoices.filter((item) => item.id !== ev.id),
           {
             id: ev.id,
             question: ev.question,
@@ -1588,7 +1592,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         pendingPlans: [
-          ...state.pendingPlans,
+          ...state.pendingPlans.filter((item) => item.id !== ev.id),
           {
             id: ev.id,
             plan: ev.plan,
@@ -1602,7 +1606,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         pendingCheckpoints: [
-          ...state.pendingCheckpoints,
+          ...state.pendingCheckpoints.filter((item) => item.id !== ev.id),
           {
             id: ev.id,
             stepId: ev.stepId,
@@ -1618,7 +1622,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return {
         ...state,
         pendingRevisions: [
-          ...state.pendingRevisions,
+          ...state.pendingRevisions.filter((item) => item.id !== ev.id),
           {
             id: ev.id,
             reason: ev.reason,
@@ -1700,6 +1704,35 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
       if (typeof ev.logTokens === "number") {
         next.liveLogTokens = ev.logTokens;
+      }
+      if (
+        typeof ev.systemTokens === "number" &&
+        typeof ev.toolsTokens === "number" &&
+        typeof ev.logTokens === "number" &&
+        typeof ev.memoryTokens === "number" &&
+        typeof ev.summaryTokens === "number" &&
+        typeof ev.ctxMax === "number" &&
+        typeof ev.toolsCount === "number" &&
+        typeof ev.logMessages === "number"
+      ) {
+        next.contextDiagnostics = {
+          systemTokens: ev.systemTokens,
+          toolsTokens: ev.toolsTokens,
+          logTokens: ev.logTokens,
+          inputTokens: ev.inputTokens ?? 0,
+          memoryTokens: ev.memoryTokens,
+          summaryTokens: ev.summaryTokens,
+          ctxMax: ev.ctxMax,
+          toolsCount: ev.toolsCount,
+          logMessages: ev.logMessages,
+          topTools: ev.topTools ?? [],
+          lastPromptTokens: ev.lastPromptTokens ?? 0,
+          lastCacheHitTokens: ev.lastCacheHitTokens ?? 0,
+          lastCacheMissTokens: ev.lastCacheMissTokens ?? 0,
+          sessionCacheHitRatio: ev.sessionCacheHitRatio ?? 0,
+          totalCostUsd: ev.totalCostUsd ?? 0,
+          turns: ev.turns ?? 0,
+        };
       }
       return { ...state, usage: next };
     }
@@ -1999,6 +2032,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         lastCallCacheMiss: hasCall ? callMiss : state.usage.lastCallCacheMiss,
         reservedTokens: state.usage.reservedTokens,
         liveLogTokens: state.usage.liveLogTokens,
+        contextDiagnostics: state.usage.contextDiagnostics,
       };
       let matchedAssistant = false;
       const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn);
@@ -2417,6 +2451,7 @@ function TabRuntimeInner({
   useDisableTextAssist();
   const [draft, setDraft] = useState("");
   const [oneShotPlanArmed, setOneShotPlanArmed] = useState(false);
+  const [askArmed, setAskArmed] = useState(false);
   const [filePreview, setFilePreview] = useState<{
     target: FilePreviewTarget | null;
     preview: FilePreview | null;
@@ -2531,9 +2566,16 @@ function TabRuntimeInner({
     () => contextTabState.tabs.find((tab) => tab.id === contextTabState.activeId) ?? null,
     [contextTabState.activeId, contextTabState.tabs],
   );
-  const ensureContextPanelVisible = useCallback(() => {
-    if (bottomCollapsed && ctxCollapsed) onToggleCtx();
-  }, [bottomCollapsed, ctxCollapsed, onToggleCtx]);
+  const ensureContextTabVisible = useCallback(() => {
+    const next = nextContextTabOpenVisibility({
+      bottomCollapsed,
+      sidebarCollapsed: ctxCollapsed,
+      infoOpen: contextInfoOpen,
+    });
+    if (next.infoOpen !== contextInfoOpen) setContextInfoOpen(next.infoOpen);
+    if (next.collapseBottom) onToggleBottom();
+    if (next.expandSidebar) onToggleCtx();
+  }, [bottomCollapsed, contextInfoOpen, ctxCollapsed, onToggleBottom, onToggleCtx]);
   const activateContextTab = useCallback((id: string) => {
     setContextTabState((current) => {
       if (!current.tabs.some((tab) => tab.id === id)) return current;
@@ -2561,7 +2603,7 @@ function TabRuntimeInner({
         setContextTabState({ tabs: [], activeId: null, history: [] });
         return;
       }
-      ensureContextPanelVisible();
+      ensureContextTabVisible();
       if (
         mode === "files" ||
         mode === "library" ||
@@ -2577,7 +2619,7 @@ function TabRuntimeInner({
       }
       openContextTab({ mode });
     },
-    [activateContextTab, contextTabState.tabs, ensureContextPanelVisible, openContextTab],
+    [activateContextTab, contextTabState.tabs, ensureContextTabVisible, openContextTab],
   );
   const selectContextTab = useCallback(
     (id: string) => {
@@ -2701,8 +2743,7 @@ function TabRuntimeInner({
   const previewFile = useCallback(
     (target: FilePreviewTarget) => {
       const workspaceDir = state.settings?.workspaceDir;
-      ensureContextPanelVisible();
-      setContextInfoOpen(false);
+      ensureContextTabVisible();
       const tabId = openContextTab({
         mode: "preview",
         title: target.path.split(/[\\/]/).filter(Boolean).pop() || target.path,
@@ -2756,12 +2797,11 @@ function TabRuntimeInner({
         },
       );
     },
-    [ensureContextPanelVisible, openContextTab, state.settings?.workspaceDir],
+    [ensureContextTabVisible, openContextTab, state.settings?.workspaceDir],
   );
   const openBrowserUrl = useCallback(
     (url: string) => {
-      ensureContextPanelVisible();
-      setContextInfoOpen(false);
+      ensureContextTabVisible();
       browserRequestIdRef.current += 1;
       const request: BrowserOpenRequest = { id: browserRequestIdRef.current, url };
       openContextTab({
@@ -2770,14 +2810,13 @@ function TabRuntimeInner({
         browserRequest: request,
       });
     },
-    [ensureContextPanelVisible, openContextTab],
+    [ensureContextTabVisible, openContextTab],
   );
   const openSubagentSidebarTab = useCallback(
     (sessionName: string) => {
       const run = state.subagents.find((entry) => entry.sessionName === sessionName);
       if (!run) return;
-      ensureContextPanelVisible();
-      setContextInfoOpen(false);
+      ensureContextTabVisible();
       const existing = contextTabState.tabs.find(
         (tab) =>
           tab.mode === "subagent" &&
@@ -2796,7 +2835,7 @@ function TabRuntimeInner({
     [
       activateContextTab,
       contextTabState.tabs,
-      ensureContextPanelVisible,
+      ensureContextTabVisible,
       openContextTab,
       state.subagents,
     ],
@@ -2897,6 +2936,9 @@ function TabRuntimeInner({
     },
     [saveSettings],
   );
+  useEffect(() => {
+    if (settingsOpen) sendRpc({ cmd: "context_diagnostics_get" });
+  }, [settingsOpen, sendRpc]);
   const loadQQSettings = useCallback(() => sendRpc({ cmd: "qq_status_get" }), [sendRpc]);
   const connectQQ = useCallback(() => sendRpc({ cmd: "qq_connect" }), [sendRpc]);
   const disconnectQQ = useCallback(() => sendRpc({ cmd: "qq_disconnect" }), [sendRpc]);
@@ -2974,6 +3016,7 @@ function TabRuntimeInner({
   const newChat = useCallback(() => {
     clearAbortDraft();
     setOneShotPlanArmed(false);
+    setAskArmed(false);
     sendRpc({ cmd: "new_chat", openInNewTab: isTabBusy() });
     if (!isTabBusy()) dispatch({ t: "clear" });
   }, [clearAbortDraft, isTabBusy, sendRpc]);
@@ -3169,6 +3212,30 @@ function TabRuntimeInner({
         return;
       }
 
+      const askMatch = /^\/ask(?:\s+([\s\S]+))?$/.exec(text);
+      if (askMatch) {
+        const question = askMatch[1]?.trim() ?? "";
+        if (!question) {
+          dispatch({
+            t: "push_status",
+            text:
+              getLang() === "zh-CN"
+                ? "▸ 用法：/ask 你的问题"
+                : "▸ Usage: /ask your question",
+          });
+          if (!override) setDraft("/ask ");
+          return;
+        }
+        const clientId = `ask-${Date.now()}`;
+        setAskArmed(false);
+        recordAbortDraft("ask_light", question);
+        markOptimisticBusy();
+        dispatch({ t: "send_user", text: question, clientId });
+        sendRpc({ cmd: "ask_light", text: question, clientId });
+        if (!override) setDraft("");
+        return;
+      }
+
       if (/^\/compact(?:\s|$)/.test(text)) {
         dispatch({ t: "push_status", text: t("app.compact.starting") });
         sendRpc({ cmd: "compact_history" });
@@ -3225,6 +3292,16 @@ function TabRuntimeInner({
       }
 
       const clientId = `c-${Date.now()}`;
+      const askFirst = payload?.ask === true || askArmed;
+      if (askFirst) {
+        setAskArmed(false);
+        recordAbortDraft("ask_light", text);
+        markOptimisticBusy();
+        dispatch({ t: "send_user", text, clientId });
+        sendRpc({ cmd: "ask_light", text, clientId });
+        if (!override) setDraft("");
+        return;
+      }
       const planFirst = oneShotPlanArmed;
       if (oneShotPlanArmed) setOneShotPlanArmed(false);
       const hiddenMentionText = hiddenMentions.map((mention) => `@${mention}`).join(" ");
@@ -3259,11 +3336,13 @@ function TabRuntimeInner({
       applySlashSettingsCommand,
       openSettingsAt,
       oneShotPlanArmed,
+      askArmed,
     ],
   );
 
   const abort = useCallback(() => {
     setOneShotPlanArmed(false);
+    setAskArmed(false);
     const restored = restoreAbortedDraft(draft, abortDraftRef.current);
     clearAbortDraft();
     if (restored !== null) {
@@ -4042,6 +4121,8 @@ function TabRuntimeInner({
       onEditModeChange={applyEditMode}
       planArmed={oneShotPlanArmed}
       onPlanArmedChange={setOneShotPlanArmed}
+      askArmed={askArmed}
+      onAskArmedChange={setAskArmed}
       workspaceDir={state.settings?.workspaceDir}
       slashCommands={allSlashCommands}
       onMentionQuery={queryMentions}

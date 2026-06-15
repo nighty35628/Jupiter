@@ -23,7 +23,7 @@ export type ReasoningEffort = "low" | "medium" | "high" | "max";
 export type EditMode = "review" | "auto" | "yolo";
 
 type ModeEntry = { k: EditMode; label: TKey; icon: React.ReactNode; hint: TKey };
-export type ComposerSendPayload = { hiddenMentions?: string[] };
+export type ComposerSendPayload = { hiddenMentions?: string[]; ask?: boolean };
 
 const EFFORTS: readonly ReasoningEffort[] = ["low", "medium", "high", "max"];
 
@@ -367,6 +367,8 @@ export function Composer({
   onEditModeChange,
   planArmed = false,
   onPlanArmedChange,
+  askArmed = false,
+  onAskArmedChange,
   textareaRef,
   slashCommands,
   onMentionQuery,
@@ -402,6 +404,8 @@ export function Composer({
   onEditModeChange: (mode: EditMode) => void;
   planArmed?: boolean;
   onPlanArmedChange?: (armed: boolean) => void;
+  askArmed?: boolean;
+  onAskArmedChange?: (armed: boolean) => void;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   slashCommands: SlashCmd[];
   onMentionQuery?: (q: string, nonce: number) => void;
@@ -923,8 +927,13 @@ export function Composer({
     const hiddenMentions = imageAttachments.map((attachment) => attachment.path);
     const hasPayload = Boolean(draft.trim()) || hiddenMentions.length > 0;
     if (disabled || !hasPayload || busy) return;
+    const ask = askArmed;
     recordSendAndReset();
-    onSend(hiddenMentions.length > 0 ? { hiddenMentions } : undefined);
+    const payload: ComposerSendPayload = {};
+    if (hiddenMentions.length > 0) payload.hiddenMentions = hiddenMentions;
+    if (ask) payload.ask = true;
+    onSend(hiddenMentions.length > 0 || ask ? payload : undefined);
+    if (ask) onAskArmedChange?.(false);
     setPickedChips(new Map());
     revokeImagePreviews(imageAttachments);
     setImageAttachments([]);
@@ -1312,6 +1321,18 @@ export function Composer({
                   <I.x size={10} />
                 </button>
               ) : null}
+
+              <button
+                type="button"
+                className="composer-ask-toggle"
+                data-active={askArmed}
+                title={t("composer.askModeHint")}
+                aria-label={t("composer.askMode")}
+                onClick={() => onAskArmedChange?.(!askArmed)}
+              >
+                <I.info size={12} />
+                <span>{t("composer.askMode")}</span>
+              </button>
 
               <PermissionModeMenu
                 mode={editMode}

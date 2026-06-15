@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DeepSeekClient } from "../src/client.js";
+import { DeepSeekClient, Usage } from "../src/client.js";
 import { ContextManager } from "../src/context-manager.js";
 import { AppendOnlyLog } from "../src/memory/runtime.js";
-import { SessionStats } from "../src/telemetry/stats.js";
+import { DEEPSEEK_CONTEXT_TOKENS, SessionStats } from "../src/telemetry/stats.js";
 
 function makeManager(log: AppendOnlyLog): ContextManager {
   const client = new DeepSeekClient({ apiKey: "sk-test" });
@@ -90,5 +90,26 @@ describe("ContextManager.getLogTokens", () => {
     log.compactInPlace(all.slice(all.length - 4));
     const after = mgr.getLogTokens();
     expect(after).toBeLessThan(before);
+  });
+});
+
+describe("ContextManager cost-aware folding policy", () => {
+  it("folds costly prompts in large context windows before they reach context pressure", () => {
+    const model = "test-cost-aware-large-window";
+    DEEPSEEK_CONTEXT_TOKENS[model] = 1_000_000;
+    try {
+      const mgr = makeManager(new AppendOnlyLog());
+      const decision = mgr.decideAfterUsage(
+        new Usage(200_000, 100, 200_100, 160_000, 40_000),
+        model,
+        false,
+      );
+
+      expect(decision.kind).toBe("fold");
+      expect(decision.ratio).toBeLessThan(0.75);
+      expect(decision.tailBudget).toBeLessThanOrEqual(16_000);
+    } finally {
+      delete DEEPSEEK_CONTEXT_TOKENS[model];
+    }
   });
 });

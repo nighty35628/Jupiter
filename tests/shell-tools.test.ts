@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -587,6 +587,32 @@ describe("registerShellTools — dispatch integration", () => {
     );
     expect(out).toMatch(/\$ node --version/);
     expect(out).toMatch(/\[exit 0\]/);
+  });
+
+  it("summarizes long run_command output and saves the full output outside the transcript", async () => {
+    const registry = new ToolRegistry();
+    registerShellTools(registry, {
+      rootDir: tmp,
+      extraAllowed: ["node -e"],
+      maxOutputChars: 100_000,
+    });
+    const out = await registry.dispatch(
+      "run_command",
+      JSON.stringify({
+        command:
+          "node -e \"for(let i=0;i<2000;i++) console.log('line '+i+' detail detail detail detail detail')\"",
+      }),
+    );
+
+    expect(out.length).toBeLessThan(16_000);
+    expect(out).toContain("Full output saved at:");
+    expect(out).toContain("line 0 detail");
+    expect(out).toContain("line 1999 detail");
+    const match = /Full output saved at: ([^\n]+)/.exec(out);
+    expect(match).not.toBeNull();
+    const savedPath = join(tmp, match![1]!);
+    expect(existsSync(savedPath)).toBe(true);
+    expect(readFileSync(savedPath, "utf8")).toContain("line 1999 detail");
   });
 
   it("blocks non-allowlisted commands via confirmation gate, runs on approve", async () => {

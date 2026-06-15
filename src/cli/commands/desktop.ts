@@ -116,6 +116,7 @@ import {
   pauseGate,
 } from "../../core/pause-gate.js";
 import { autoResolveVerdict } from "../../core/pause-policy.js";
+import { runDesktopLightAsk } from "../../desktop/ask-light.js";
 import { detectBrowserAutomation } from "../../desktop/browser-automation.js";
 import {
   dingtalkRemoteCommandBypassesBusy,
@@ -179,6 +180,7 @@ import {
   type DesktopUpdateCheckResult,
   checkDesktopUpdate,
 } from "../../desktop/update-check.js";
+import { appendDesktopAssistantFinalUsage } from "../../desktop/usage-log.js";
 import { DingTalkChannel } from "../../dingtalk/channel.js";
 import { loadDotenv } from "../../env.js";
 import { FeishuChannel } from "../../feishu/channel.js";
@@ -226,6 +228,10 @@ import {
   shouldAutoNameSession,
 } from "../../session-title.js";
 import { SkillStore, skillDisplayDescription } from "../../skills.js";
+import {
+  type ContextDiagnostics,
+  computeContextDiagnosticsFromLoop,
+} from "../../telemetry/context-diagnostics.js";
 import { countTokensBounded } from "../../tokenizer.js";
 import type { ChoiceOption } from "../../tools/choice.js";
 import type { SubagentEvent, SubagentSink } from "../../tools/subagent.js";
@@ -271,6 +277,7 @@ type InMessage = { tabId?: string } & (
       displayText?: string;
       planOneShot?: boolean;
     }
+  | { cmd: "ask_light"; text: string; clientId?: string }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
@@ -330,6 +337,7 @@ type InMessage = { tabId?: string } & (
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_sign_out" }
   | { cmd: "settings_get" }
+  | { cmd: "context_diagnostics_get" }
   | {
       cmd: "settings_save";
       reasoningEffort?: import("../../config.js").ReasoningEffort;
@@ -768,7 +776,7 @@ interface McpSpecsEvent {
   bridged: boolean;
 }
 
-interface CtxBreakdownEvent {
+interface CtxBreakdownEvent extends Partial<ContextDiagnostics> {
   type: "$ctx_breakdown";
   reservedTokens: number;
   /** Current log token count (real-time) — sent after /compact to refresh the meter. */
@@ -938,6 +946,14 @@ type EmittableEvent =
   | MemoryDetailEvent
   | WorkflowEvent
   | JobsEvent;
+
+type PendingGateEvent =
+  | ConfirmRequiredEvent
+  | PathAccessRequiredEvent
+  | ChoiceRequiredEvent
+  | PlanRequiredEvent
+  | CheckpointRequiredEvent
+  | RevisionRequiredEvent;
 
 const STDOUT_BACKPRESSURE_WAIT = new Int32Array(new SharedArrayBuffer(4));
 
@@ -1308,6 +1324,7 @@ function loadSessionIntoTab(
     },
     tab.id,
   );
+  emitPendingGateEvents(tab);
   emitCtxBreakdown(tab);
   if (backfilledWorkspace) emitSessions(tab);
 }
@@ -1331,12 +1348,26 @@ function currentSessionSnapshot(
   };
 }
 
+function rememberPendingGate(tab: Tab | undefined, event: PendingGateEvent): void {
+  if (!tab) return;
+  tab.pendingGateIds.add(event.id);
+  tab.pendingGateEvents.set(event.id, event);
+}
+
+function emitPendingGateEvents(tab: Tab): void {
+  for (const event of tab.pendingGateEvents.values()) {
+    emit(event, tab.id);
+  }
+}
+
 function emitCurrentSessionLoaded(tab: Tab): void {
   emit(currentSessionSnapshot(tab, "$session_loaded"), tab.id);
+  emitPendingGateEvents(tab);
 }
 
 function emitCurrentSessionReconciled(tab: Tab): void {
   emit(currentSessionSnapshot(tab, "$session_reconciled"), tab.id);
+  emitPendingGateEvents(tab);
 }
 
 function emptySessionLoadedEvent(name: string): SessionLoadedEvent {
@@ -1478,6 +1509,21 @@ function countTokensForMeter(text: string): number {
 // show a fake zero while the streaming call is still waiting on usage metadata.
 function emitCtxBreakdown(tab: Tab): void {
   if (!tab.runtime) return;
+  try {
+    const diagnostics = computeContextDiagnosticsFromLoop(tab.runtime.loop);
+    emit(
+      {
+        type: "$ctx_breakdown",
+        reservedTokens: diagnostics.systemTokens + diagnostics.toolsTokens,
+        ...diagnostics,
+      },
+      tab.id,
+    );
+    return;
+  } catch {
+    /* fall through to legacy coarse meter */
+  }
+
   const sys = countTokensForMeter(tab.runtime.loop.prefix.system);
   const tools = countTokensForMeter(JSON.stringify(tab.runtime.loop.prefix.toolSpecs));
   let logTokens = 0;
@@ -1797,6 +1843,8 @@ interface Tab {
   recentMentions: string[];
   /** Pause-gate ids waiting on this tab — abort uses these to free stranded plan_checkpoint / plan_revision / shell-confirm callers. */
   pendingGateIds: Set<number>;
+  /** Full pending pause payloads, replayed when a renderer reconnects or a busy tab is reactivated. */
+  pendingGateEvents: Map<number, PendingGateEvent>;
   /** Step ids already marked complete in the in-flight plan — also tells UI when a plan is "active". */
   completedStepIds: Set<string>;
   /** Total steps in the in-flight plan (0 = no active plan / steps not provided). */
@@ -2437,6 +2485,91 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         hooks?.onError?.(message);
       }
     })();
+  }
+
+  function runLightAskOnTab(tab: Tab, text: string, clientId?: string): void {
+    if (!tab.runtime) return;
+    const rt = tab.runtime;
+    tab.aborter = new AbortController();
+    const turn = rt.loop.currentTurn + 1;
+    void tabContext.run(tab.id, async () => {
+      try {
+        const result = await runDesktopLightAsk({
+          client: rt.loop.client,
+          model: tab.currentModel,
+          reasoningEffort: rt.loop.reasoningEffort,
+          prefixHash: rt.ctx.prefixHash,
+          text,
+          turn,
+          clientId,
+          signal: tab.aborter?.signal,
+          recordExchange: (exchange) => {
+            const stats = rt.loop.recordLightAskExchange(exchange);
+            appendDesktopAssistantFinalUsage(
+              { role: "assistant_final", stats },
+              tab.currentSession,
+            );
+          },
+          emit: (event) => {
+            if (event.type === "$turn_complete") {
+              return;
+            }
+            emit(event, tab.id);
+          },
+        });
+        tab.aborter = null;
+        const sessionName = tab.currentSession;
+        if (sessionName) {
+          const metaBeforeStats = loadSessionMeta(sessionName);
+          const nextTurnCount = (metaBeforeStats.turnCount ?? 0) + 1;
+          patchSessionMeta(sessionName, {
+            lastAssistantCompletedAt: Date.now(),
+            turnCount: nextTurnCount,
+          });
+          if (
+            result.content.trim() &&
+            shouldAutoNameSession(sessionName, metaBeforeStats, nextTurnCount)
+          ) {
+            void generateSessionTitle(rt.loop.client, rt.loop.model, {
+              workspace: tab.rootDir,
+              userText: text,
+              assistantText: result.content,
+            }).then(
+              (title) => {
+                if (!title) return;
+                try {
+                  applyGeneratedDesktopSessionTitle({
+                    sessionName,
+                    title,
+                    workspace: tab.rootDir,
+                    onRenamed: (nextName) => {
+                      if (tab.currentSession !== sessionName) return;
+                      tab.currentSession = nextName;
+                      rt.loop.sessionName = nextName;
+                      rt.loop.log.setSessionPath(sessionPath(nextName));
+                    },
+                  });
+                  emitCurrentSessionReconciled(tab);
+                  emitSessions(tab);
+                } catch {
+                  /* title generation is best-effort */
+                }
+              },
+              () => undefined,
+            );
+          }
+        }
+        emitCtxBreakdown(tab);
+        emitCurrentSessionReconciled(tab);
+        emitSessions(tab);
+        void emitBalance(tab);
+      } catch (err) {
+        emit({ type: "$error", message: `/ask failed: ${(err as Error).message}` }, tab.id);
+      } finally {
+        tab.aborter = null;
+        emit({ type: "$turn_complete" }, tab.id);
+      }
+    });
   }
 
   function handleDesktopSlash(tab: Tab, text: string, clientId?: string): void {
@@ -3732,6 +3865,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       symbolBuilding: null,
       recentMentions: [],
       pendingGateIds: new Set<number>(),
+      pendingGateEvents: new Map<number, PendingGateEvent>(),
       completedStepIds: new Set<string>(),
       planTotalSteps: 0,
       oneShotPlanActive: false,
@@ -3980,6 +4114,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           ) {
             lastAssistantText = ev.content;
           }
+          if (ev.role === "assistant_final") {
+            appendDesktopAssistantFinalUsage(ev, tab.currentSession);
+          }
           for (const kev of rt.eventizer.consume(ev, rt.ctx)) {
             emit(
               kev.type === "user.message" && clientId
@@ -4185,7 +4322,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
 
   function forgetGate(id: number): Tab | undefined {
     for (const t of tabs.values()) {
-      if (t.pendingGateIds.delete(id)) return t;
+      if (t.pendingGateIds.delete(id)) {
+        t.pendingGateEvents.delete(id);
+        return t;
+      }
     }
     return undefined;
   }
@@ -4288,6 +4428,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     const hadActivePlan = tab.planTotalSteps > 0 || tab.completedStepIds.size > 0;
     const ids = [...tab.pendingGateIds];
     tab.pendingGateIds.clear();
+    tab.pendingGateEvents.clear();
     restoreOneShotPlanGuard(tab);
     for (const id of ids) pauseGate.cancel(id);
     if (hadActivePlan) {
@@ -4323,7 +4464,6 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   pauseGate.on((req) => {
     const tab = activeRunningTab();
     const tabId = tab?.id;
-    if (tab) tab.pendingGateIds.add(req.id);
     // Shared auto-resolve policy (e.g. plan_checkpoint in auto/yolo) — must
     // still run BEFORE we emit any UI event, otherwise the surface flickers
     // a card that we'd immediately tear down.
@@ -4350,7 +4490,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           tabId,
         );
       }
-      if (tab) tab.pendingGateIds.delete(req.id);
+      if (tab) {
+        tab.pendingGateIds.delete(req.id);
+        tab.pendingGateEvents.delete(req.id);
+      }
       pauseGate.resolve(req.id, auto);
       return;
     }
@@ -4366,20 +4509,19 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
-      emit(
-        {
-          type: "$confirm_required",
+      const event: ConfirmRequiredEvent = {
+        type: "$confirm_required",
+        id: req.id,
+        kind: req.kind,
+        command: payload.command ?? "",
+        prompt: toApprovalPrompt({
           id: req.id,
           kind: req.kind,
-          command: payload.command ?? "",
-          prompt: toApprovalPrompt({
-            id: req.id,
-            kind: req.kind,
-            payload,
-          }),
-        },
-        tabId,
-      );
+          payload,
+        }),
+      };
+      rememberPendingGate(tab, event);
+      emit(event, tabId);
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
@@ -4400,23 +4542,22 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
-      emit(
-        {
-          type: "$path_access_required",
+      const event: PathAccessRequiredEvent = {
+        type: "$path_access_required",
+        id: req.id,
+        path: payload.path,
+        intent: payload.intent,
+        toolName: payload.toolName,
+        sandboxRoot: payload.sandboxRoot,
+        allowPrefix: payload.allowPrefix,
+        prompt: toApprovalPrompt({
           id: req.id,
-          path: payload.path,
-          intent: payload.intent,
-          toolName: payload.toolName,
-          sandboxRoot: payload.sandboxRoot,
-          allowPrefix: payload.allowPrefix,
-          prompt: toApprovalPrompt({
-            id: req.id,
-            kind: req.kind,
-            payload,
-          }),
-        },
-        tabId,
-      );
+          kind: req.kind,
+          payload,
+        }),
+      };
+      rememberPendingGate(tab, event);
+      emit(event, tabId);
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
@@ -4435,16 +4576,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
-      emit(
-        {
-          type: "$choice_required",
-          id: req.id,
-          question: payload.question,
-          options: payload.options,
-          allowCustom: payload.allowCustom,
-        },
-        tabId,
-      );
+      const event: ChoiceRequiredEvent = {
+        type: "$choice_required",
+        id: req.id,
+        question: payload.question,
+        options: payload.options,
+        allowCustom: payload.allowCustom,
+      };
+      rememberPendingGate(tab, event);
+      emit(event, tabId);
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
@@ -4466,16 +4606,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
-      emit(
-        {
-          type: "$plan_required",
-          id: req.id,
-          plan: payload.plan,
-          steps: payload.steps,
-          summary: payload.summary,
-        },
-        tabId,
-      );
+      const event: PlanRequiredEvent = {
+        type: "$plan_required",
+        id: req.id,
+        plan: payload.plan,
+        steps: payload.steps,
+        summary: payload.summary,
+      };
+      rememberPendingGate(tab, event);
+      emit(event, tabId);
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
@@ -4506,19 +4645,18 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         },
         tabId,
       );
-      emit(
-        {
-          type: "$checkpoint_required",
-          id: req.id,
-          stepId: payload.stepId,
-          title: payload.title,
-          result: payload.result,
-          notes: payload.notes,
-          completed: tab?.completedStepIds.size ?? 0,
-          total: tab?.planTotalSteps ?? 0,
-        },
-        tabId,
-      );
+      const event: CheckpointRequiredEvent = {
+        type: "$checkpoint_required",
+        id: req.id,
+        stepId: payload.stepId,
+        title: payload.title,
+        result: payload.result,
+        notes: payload.notes,
+        completed: tab?.completedStepIds.size ?? 0,
+        total: tab?.planTotalSteps ?? 0,
+      };
+      rememberPendingGate(tab, event);
+      emit(event, tabId);
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
@@ -4537,16 +4675,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         setQQPendingInteraction(feishuRuntime.routing, tab.id, req.id, req.kind, payload);
         setQQPendingInteraction(dingtalkRuntime.routing, tab.id, req.id, req.kind, payload);
       }
-      emit(
-        {
-          type: "$revision_required",
-          id: req.id,
-          reason: payload.reason,
-          remainingSteps: payload.remainingSteps,
-          summary: payload.summary,
-        },
-        tabId,
-      );
+      const event: RevisionRequiredEvent = {
+        type: "$revision_required",
+        id: req.id,
+        reason: payload.reason,
+        remainingSteps: payload.remainingSteps,
+        summary: payload.summary,
+      };
+      rememberPendingGate(tab, event);
+      emit(event, tabId);
       if (tab) {
         handleQQPauseRequest(tab, req.kind, payload as Record<string, unknown>);
         handleFeishuPauseRequest(tab, req.kind, payload as Record<string, unknown>);
@@ -4561,7 +4698,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     process.stderr.write(
       `[desktop] no handler for pause kind "${String(exhaustive)}" — auto-cancelling gate id=${req.id}\n`,
     );
-    if (tab) tab.pendingGateIds.delete(req.id);
+    if (tab) {
+      tab.pendingGateIds.delete(req.id);
+      tab.pendingGateEvents.delete(req.id);
+    }
     pauseGate.cancel(req.id);
   });
 
@@ -4625,6 +4765,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         },
         tab.id,
       );
+      emitPendingGateEvents(tab);
     }
     if (!loadApiKey()) emit({ type: "$needs_setup", reason: "no_api_key" }, tab.id);
     void emitBalance(tab);
@@ -4765,6 +4906,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     if (msg.cmd === "tab_activate") {
       if (tabs.has(msg.tabId)) {
         lastActiveTabId = msg.tabId;
+        emitPendingGateEvents(tabs.get(msg.tabId)!);
         persistOpenTabs();
       }
       return;
@@ -4907,6 +5049,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               },
               t.id,
             );
+            emitPendingGateEvents(t);
           } catch {
             // unreadable jsonl — skip re-emit
           }
@@ -5691,6 +5834,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       emitSettings(tab);
       return;
     }
+    if (msg.cmd === "context_diagnostics_get") {
+      emitCtxBreakdown(tab);
+      return;
+    }
     if (msg.cmd === "qq_status_get") {
       emitQQSettings(tab);
       return;
@@ -6273,6 +6420,26 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         return;
       }
       runBtwOnTab(tab, question, msg.clientId);
+      return;
+    }
+    if (msg.cmd === "ask_light") {
+      if (!tab.runtime) {
+        emit(
+          {
+            type: "$error",
+            message: "Not configured yet — paste your DeepSeek API key first.",
+          },
+          tab.id,
+        );
+        finishDesktopCommand(tab);
+        return;
+      }
+      const question = msg.text.trim();
+      if (!question) {
+        finishDesktopCommand(tab);
+        return;
+      }
+      runLightAskOnTab(tab, question, msg.clientId);
       return;
     }
     if (msg.cmd === "user_input") {

@@ -122,6 +122,27 @@ describe("desktop permission mode copy", () => {
     expect(onEditModeChange).not.toHaveBeenCalled();
   });
 
+  it("sends one-shot Ask mode and resets it after submit without changing permission mode", () => {
+    const setAskArmed = vi.fn();
+    const onEditModeChange = vi.fn();
+    const onSend = vi.fn();
+    renderComposer({
+      draft: "你好",
+      askArmed: true,
+      onAskArmedChange: setAskArmed,
+      onEditModeChange,
+      onSend,
+    });
+
+    expect(screen.getByRole("button", { name: "询问模式" }).textContent).toContain("询问");
+
+    fireEvent.click(document.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({ ask: true });
+    expect(setAskArmed).toHaveBeenCalledWith(false);
+    expect(onEditModeChange).not.toHaveBeenCalled();
+  });
+
   it("keeps the plus menu compact and removes the duplicate image attach entry", () => {
     renderComposer({ editMode: "review" });
 

@@ -1,7 +1,8 @@
 import { release } from "node:os";
 import { loadRateLimit, loadTheme, resolveThemePreference } from "@/config.js";
 import { getLanguage, t } from "@/i18n/index.js";
-import { pricingFor, resolveContextTokens } from "@/telemetry/stats.js";
+import { computeContextDiagnosticsFromLoop } from "@/telemetry/context-diagnostics.js";
+import { type SessionSummary, pricingFor, resolveContextTokens } from "@/telemetry/stats.js";
 import { countTokensBounded } from "@/tokenizer.js";
 import { VERSION } from "@/version.js";
 import { writeClipboard } from "../../clipboard.js";
@@ -28,7 +29,7 @@ const context: SlashHandler = (_args, loop) => {
   return { info: fallbackInfo, ctxBreakdown: breakdown };
 };
 
-const status: SlashHandler = (_args, loop, ctx) => {
+const status: SlashHandler = (args, loop, ctx) => {
   const ctxMax = resolveContextTokens(loop.model);
   const summary = loop.stats.summary();
   const lastPromptTokens = summary.lastPromptTokens;
@@ -45,6 +46,7 @@ const status: SlashHandler = (_args, loop, ctx) => {
       : t("handlers.observability.statusCtxNone");
 
   const cost = summary.totalCostUsd;
+  const cacheDiagnostic = formatCacheDiagnostic(summary);
   const cacheLine =
     summary.turns > 3
       ? (() => {
@@ -111,11 +113,15 @@ const status: SlashHandler = (_args, loop, ctx) => {
       effort: loop.reasoningEffort,
     }),
     cacheLine,
+    cacheDiagnostic,
     ctxLine,
     `rate limit: ${rpm ? `${rpm} rpm` : "off"}`,
     mcpLine,
     sessionLine,
   ];
+  if ((args[0] ?? "").toLowerCase() === "detail") {
+    lines.push(...formatCacheDetail(loop, summary));
+  }
   if (workspaceLine) lines.push(workspaceLine);
   if (budgetLine) lines.push(budgetLine);
   if (pendingLine) lines.push(pendingLine);
@@ -125,6 +131,58 @@ const status: SlashHandler = (_args, loop, ctx) => {
   if (dashLine) lines.push(dashLine);
   return { info: lines.join("\n") };
 };
+
+function formatCacheDiagnostic(summary: SessionSummary): string {
+  const hit = summary.cacheHitRatio;
+  if (summary.turns === 0) return "cache diagnostic: cold start; no model usage recorded yet";
+  if (summary.turns < 4)
+    return "cache diagnostic: warming up; use several turns before judging hit rate";
+  if (hit >= 0.7) return "cache diagnostic: healthy; stable prefix is being reused";
+  if (hit >= 0.4) {
+    return "cache diagnostic: moderate; recent tool/schema/session changes may be reducing reuse";
+  }
+  return "cache diagnostic: low; check for frequent model/tool changes, huge pasted context, or session resets";
+}
+
+function formatCacheDetail(
+  loop: import("@/loop.js").CacheFirstLoop,
+  summary: SessionSummary,
+): string[] {
+  const breakdown = computeContextDiagnosticsFromLoop(loop);
+  const total =
+    breakdown.systemTokens + breakdown.toolsTokens + breakdown.logTokens + breakdown.inputTokens;
+  const pct = (n: number) => (total > 0 ? ((n / total) * 100).toFixed(1) : "0.0");
+  const miss = breakdown.lastCacheMissTokens;
+  const hit = breakdown.lastCacheHitTokens;
+  const hints: string[] = [];
+  if (summary.turns === 0) {
+    hints.push("run a few turns before judging cache quality");
+  } else if (summary.cacheHitRatio < 0.4) {
+    hints.push(
+      "avoid changing model/tools mid-session; use /compact after large pasted/tool output",
+    );
+  } else if (breakdown.logTokens > breakdown.systemTokens + breakdown.toolsTokens) {
+    hints.push("log dominates; /compact can usually recover cache-friendly context");
+  } else {
+    hints.push("cache looks usable; keep the same model and stable tool set for best reuse");
+  }
+  if (breakdown.summaryTokens > 0) {
+    hints.push("summary is present; future turns should be cheaper than carrying raw history");
+  }
+  const topToolLine =
+    breakdown.topTools.length > 0
+      ? `tool hot spots: ${breakdown.topTools
+          .map((tool) => `${tool.name} ${compactNum(tool.tokens)}t@turn${tool.turn}`)
+          .join(" · ")}`
+      : null;
+  return [
+    `cache detail: session hit ${(summary.cacheHitRatio * 100).toFixed(1)}% · last call hit/miss ${compactNum(hit)}/${compactNum(miss)}`,
+    `token mix: system ${pct(breakdown.systemTokens)}% · tools ${pct(breakdown.toolsTokens)}% · log ${pct(breakdown.logTokens)}% · memory ${pct(breakdown.memoryTokens)}% · summary ${pct(breakdown.summaryTokens)}%`,
+    `token counts: system ${compactNum(breakdown.systemTokens)} · tools ${compactNum(breakdown.toolsTokens)} · log ${compactNum(breakdown.logTokens)} · memory ${compactNum(breakdown.memoryTokens)} · summary ${compactNum(breakdown.summaryTokens)}`,
+    ...(topToolLine ? [topToolLine] : []),
+    `tip: ${hints.join("; ")}`,
+  ];
+}
 
 function renderTinyBar(pct: number, width: number): string {
   const w = Math.max(4, width);

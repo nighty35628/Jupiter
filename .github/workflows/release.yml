@@ -68,7 +68,7 @@ jobs:
       fail-fast: false
       matrix:
         # Release assets intentionally stay installer-focused:
-        # Linux gets per-arch .deb packages, macOS gets per-arch DMGs, Windows gets per-arch NSIS installers.
+        # Linux gets per-arch .deb packages plus an x86_64 Arch pacman package, macOS gets per-arch DMGs, Windows gets per-arch NSIS installers.
         target: ${{ fromJSON(needs.resolve-matrix.outputs.targets) }}
     runs-on: ${{ matrix.target.os }}
     # secrets.* isn't accessible from step-level if:, so expose presence as a
@@ -272,6 +272,70 @@ jobs:
           test -n "$node_bin"
           codesign -vvv --strict "$node_bin"
           codesign -d --entitlements :- "$node_bin" 2>&1 | grep -q "com.apple.security.inherit"
+
+  arch-package:
+    name: package Arch Linux (linux-x64)
+    needs: bundle
+    if: github.event_name != 'workflow_dispatch' || inputs.target_label == '' || inputs.target_label == 'linux-x64'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Linux x64 deb from release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          mkdir -p dist/release-assets
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "Jupiter_${TAG}_linux-x64.deb" \
+            --dir dist/release-assets \
+            --clobber
+          test -f "dist/release-assets/Jupiter_${TAG}_linux-x64.deb"
+
+      - name: Build Arch pacman package
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          docker run --rm \
+            -e TAG="$TAG" \
+            -v "$PWD:/work" \
+            -w /work \
+            archlinux:latest \
+            bash -lc '
+              set -euo pipefail
+              pacman -Syu --noconfirm base-devel nodejs
+              host_uid="$(stat -c "%u" /work)"
+              host_gid="$(stat -c "%g" /work)"
+              if ! getent group "$host_gid" >/dev/null; then
+                groupadd -g "$host_gid" jupiterbuild
+              fi
+              useradd -m -u "$host_uid" -g "$host_gid" jupiterbuild
+              su jupiterbuild -c "scripts/build-arch-package.sh --tag \"$TAG\" --deb \"dist/release-assets/Jupiter_${TAG}_linux-x64.deb\" --out dist/arch"
+            '
+
+      - name: Upload Arch pacman package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          gh release upload "$TAG" dist/arch/*.pkg.tar.zst --repo "$GITHUB_REPOSITORY" --clobber
 
   release-notes:
     name: publish release notes

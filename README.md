@@ -78,7 +78,18 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 - macOS Intel: `Jupiter_<version>_macos-x64.dmg`
 - macOS Apple Silicon: `Jupiter_<version>_macos-arm64.dmg`
 - Linux x64: `Jupiter_<version>_linux-x64.deb`
+- Arch Linux x64: `Jupiter_<version>_linux-x64.pkg.tar.zst`
 - Linux ARM64: `Jupiter_<version>_linux-arm64.deb`
+
+Linux 目前发布原生 `.deb` 包，并为 Arch Linux x64 发布 pacman 包。Debian/Ubuntu 系可以直接安装 `.deb`；
+Arch 系发行版可以用 `pacman -U` 安装 `.pkg.tar.zst`。项目也提供了一个安装脚本，会自动选择当前发行版最合适
+的 release 产物；Arch 旧版本 release 没有 pacman 包时，会回退到解包 `.deb`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nighty35628/Jupiter/main/install-linux.sh | bash
+```
+
+AUR 发布使用 `jupiter-bin` 包名；维护模板在 [packaging/arch/jupiter-bin](./packaging/arch/jupiter-bin/)。
 
 Windows 安装包目前未签名。首次安装或启动时，Microsoft Defender SmartScreen 可能提示“无法识别的应用”；
 如果你确认是从上面的 GitHub Releases 下载，可以点 **More info** -> **Run anyway**。
@@ -130,7 +141,8 @@ npm --prefix desktop run dev -- --host 127.0.0.1
 
 - Jupiter 是独立项目，配置、资料库、会话、Skills 与记忆尽量本地优先，可检查、可备份、可迁移。
 - 桌面端暂未签名，Windows 与 macOS 首次启动会出现系统提示。
-- Linux 桌面包优先提供 `.deb`，x64 与 ARM64 均覆盖；更早版本的 glibc 发行版需单独测试。
+- Linux 桌面包提供 `.deb`，x64 与 ARM64 均覆盖；Arch Linux x64 同步提供 `.pkg.tar.zst`，并准备了
+  `jupiter-bin` AUR 模板。更早版本的 glibc 发行版需单独测试。
 - 发布记录见 [CHANGELOG.md](./CHANGELOG.md)，GitHub Release 使用的双语说明在
   [.github/release-notes](./.github/release-notes/)，旧 README 快照在 [history/readme](./history/readme/)。
 
@@ -212,7 +224,20 @@ Asset names include platform labels:
 - macOS Intel: `Jupiter_<version>_macos-x64.dmg`
 - macOS Apple Silicon: `Jupiter_<version>_macos-arm64.dmg`
 - Linux x64: `Jupiter_<version>_linux-x64.deb`
+- Arch Linux x64: `Jupiter_<version>_linux-x64.pkg.tar.zst`
 - Linux ARM64: `Jupiter_<version>_linux-arm64.deb`
+
+Linux currently ships native `.deb` packages and an Arch Linux x64 pacman package. Debian/Ubuntu-family systems can
+install the `.deb` directly; Arch-family systems can install the `.pkg.tar.zst` with `pacman -U`. The installer script
+automatically selects the best release asset for the current distribution, and falls back to `.deb` payload extraction
+for older releases that do not have a pacman package:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nighty35628/Jupiter/main/install-linux.sh | bash
+```
+
+The AUR package name is `jupiter-bin`; its package template lives in
+[packaging/arch/jupiter-bin](./packaging/arch/jupiter-bin/).
 
 The current Windows installers are unsigned. Microsoft Defender SmartScreen may show an "unrecognized app" warning on
 first launch; choose **More info** -> **Run anyway** if you downloaded Jupiter from the official GitHub Releases page.
@@ -266,7 +291,8 @@ npm --prefix desktop run dev -- --host 127.0.0.1
 - Jupiter is an independent, local-first project. Sessions, library data, configuration, skills, and memory stay local
   where possible.
 - Desktop installers are unsigned for now, so Windows and macOS may show first-run warnings.
-- Linux desktop releases are `.deb` packages for x64 and ARM64. Very old glibc targets need separate legacy testing.
+- Linux desktop releases include `.deb` packages for x64 and ARM64, plus an Arch Linux x64 `.pkg.tar.zst`. The
+  `jupiter-bin` AUR template is included for AUR publication; very old glibc targets need separate legacy testing.
 - See [CHANGELOG.md](./CHANGELOG.md) for release history. GitHub Release notes are kept under
   [.github/release-notes](./.github/release-notes/). Older README snapshots are kept under
   [history/readme](./history/readme/).

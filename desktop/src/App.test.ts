@@ -74,6 +74,7 @@ function initialState(): Parameters<typeof reduce>[0] {
       lastCallCacheMiss: null,
       reservedTokens: 0,
       liveLogTokens: 0,
+      contextDiagnostics: null,
     },
     sessions: [],
     archivedSessions: [],

@@ -17,7 +17,9 @@ Environment:
 
 Notes:
   Debian/Ubuntu family installs the .deb with apt/dpkg.
-  Arch/Manjaro/EndeavourOS extracts the same .deb into / using sudo.
+  Arch/Manjaro/EndeavourOS installs the native .pkg.tar.zst with pacman
+  when that release asset is available. Older releases fall back to extracting
+  the .deb payload into / and refreshing desktop/icon caches when possible.
 EOF
 }
 
@@ -50,6 +52,13 @@ need() {
   fi
 }
 
+need_privilege_escalation() {
+  if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+    echo "This installer needs root privileges. Re-run as root or install sudo." >&2
+    exit 1
+  fi
+}
+
 sudo_cmd() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
@@ -77,7 +86,7 @@ release_api_url() {
   fi
 }
 
-deb_arch_regex() {
+linux_arch_regex() {
   case "$(uname -m)" in
     x86_64|amd64) printf '%s\n' '(amd64|x86_64|x64)' ;;
     aarch64|arm64) printf '%s\n' '(arm64|aarch64)' ;;
@@ -88,13 +97,15 @@ deb_arch_regex() {
   esac
 }
 
-download_deb() {
+download_release_asset() {
   need awk
   need curl
-  local tmp json_url asset_url deb arch_re
+  local asset_re="$1"
+  local output_name="$2"
+  local required="${3:-required}"
+  local tmp json_url asset_url output
   tmp="$(mktemp -d)"
   json_url="$(release_api_url)"
-  arch_re="$(deb_arch_regex)"
 
   echo "Fetching release metadata: $json_url" >&2
   asset_url="$(
@@ -102,12 +113,12 @@ download_deb() {
       -H 'Accept: application/vnd.github+json' \
       -H 'X-GitHub-Api-Version: 2022-11-28' \
       "$json_url" |
-      awk -v arch_re="$arch_re" '
-        /"browser_download_url": ".*\.deb"/ {
+      awk -v asset_re="$asset_re" '
+        /"browser_download_url": "/ {
           url = $0
           sub(/^.*"browser_download_url": "/, "", url)
           sub(/".*$/, "", url)
-          if (url ~ arch_re) {
+          if (url ~ asset_re) {
             print url
             exit
           }
@@ -117,19 +128,35 @@ download_deb() {
   )"
 
   if [ -z "$asset_url" ]; then
-    echo "No $(uname -m) .deb asset found in release metadata for $REPO ($VERSION)." >&2
+    if [ "$required" = "optional" ]; then
+      return 1
+    fi
+    echo "No matching release asset found for $(uname -m) in $REPO ($VERSION)." >&2
     echo "Open: https://github.com/$REPO/releases" >&2
     exit 1
   fi
 
-  deb="$tmp/jupiter.deb"
+  output="$tmp/$output_name"
   echo "Downloading: $asset_url" >&2
-  curl -fL --progress-bar "$asset_url" -o "$deb"
-  printf '%s\n' "$deb"
+  curl -fL --progress-bar "$asset_url" -o "$output"
+  printf '%s\n' "$output"
+}
+
+download_deb() {
+  local arch_re
+  arch_re="$(linux_arch_regex)"
+  download_release_asset "(${arch_re}).*\\.deb$" "jupiter.deb" "required"
+}
+
+download_pacman_pkg() {
+  local arch_re
+  arch_re="$(linux_arch_regex)"
+  download_release_asset "(${arch_re}).*\\.pkg\\.tar\\.zst$" "jupiter.pkg.tar.zst" "optional"
 }
 
 install_debian_deb() {
   local deb="$1"
+  need_privilege_escalation
   if command -v apt-get >/dev/null 2>&1; then
     sudo_cmd apt-get install -y "$deb"
     return
@@ -138,15 +165,45 @@ install_debian_deb() {
   sudo_cmd dpkg -i "$deb" || sudo_cmd apt-get -f install -y
 }
 
+install_arch_pacman_pkg() {
+  local pkg="$1"
+  need_privilege_escalation
+  need pacman
+  sudo_cmd pacman -U --needed --noconfirm "$pkg"
+}
+
+install_arch_deps() {
+  local missing=()
+  for cmd in ar tar gzip xz zstd; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing+=("$cmd")
+    fi
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    return
+  fi
+  if ! command -v pacman >/dev/null 2>&1; then
+    echo "Missing required command(s): ${missing[*]}" >&2
+    exit 1
+  fi
+  echo "Installing Arch extraction dependencies: binutils tar gzip xz zstd" >&2
+  sudo_cmd pacman -S --needed --noconfirm binutils tar gzip xz zstd
+}
+
+refresh_desktop_caches() {
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    sudo_cmd update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+  fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    sudo_cmd gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+  fi
+}
+
 install_arch_from_deb() {
   local deb="$1"
   local work data
-  if { ! command -v ar >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; } &&
-    command -v pacman >/dev/null 2>&1; then
-    sudo_cmd pacman -Sy --needed --noconfirm binutils tar
-  fi
-  need ar
-  need tar
+  need_privilege_escalation
+  install_arch_deps
   work="$(mktemp -d)"
   (
     cd "$work"
@@ -156,10 +213,12 @@ install_arch_from_deb() {
       echo "Could not find data.tar.* inside $deb" >&2
       exit 1
     fi
-    echo "Extracting Debian payload into / for Arch-family system."
+    echo "Extracting Debian payload into / for Arch-family system." >&2
     sudo_cmd tar -C / -xf "$data"
   )
   rm -rf "$work"
+  refresh_desktop_caches
+  echo "Installed from Debian payload. Note: pacman will not track files installed through this convenience path." >&2
 }
 
 detect_linux_family() {
@@ -176,22 +235,35 @@ detect_linux_family() {
 }
 
 main() {
-  local family deb
+  local family deb pkg
   family="$(detect_linux_family)"
-  deb="$(download_deb)"
 
   case "$family" in
     *debian*|*ubuntu*|*linuxmint*|*pop*)
+      deb="$(download_deb)"
       install_debian_deb "$deb"
       ;;
     *arch*|*endeavouros*|*manjaro*)
-      install_arch_from_deb "$deb"
+      if pkg="$(download_pacman_pkg)"; then
+        install_arch_pacman_pkg "$pkg"
+      else
+        echo "No native pacman package found for this release; falling back to .deb payload extraction." >&2
+        deb="$(download_deb)"
+        install_arch_from_deb "$deb"
+      fi
       ;;
     *)
       if command -v dpkg >/dev/null 2>&1; then
+        deb="$(download_deb)"
         install_debian_deb "$deb"
       elif command -v pacman >/dev/null 2>&1; then
-        install_arch_from_deb "$deb"
+        if pkg="$(download_pacman_pkg)"; then
+          install_arch_pacman_pkg "$pkg"
+        else
+          echo "No native pacman package found for this release; falling back to .deb payload extraction." >&2
+          deb="$(download_deb)"
+          install_arch_from_deb "$deb"
+        fi
       else
         echo "Unsupported Linux distribution. Download manually from:" >&2
         echo "https://github.com/$REPO/releases" >&2

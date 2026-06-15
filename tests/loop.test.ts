@@ -808,6 +808,53 @@ describe("CacheFirstLoop (non-streaming)", () => {
     expect(loop.log.length).toBeLessThan(beforeMessages);
   }, 30_000);
 
+  it("cost-aware folds after a final answer even when no tool call follows", async () => {
+    DEEPSEEK_CONTEXT_TOKENS[FOLD_TEST_MODEL] = 1_000_000;
+    const responses: FakeResponseShape[] = [
+      {
+        content: "final answer before compaction",
+        usage: {
+          prompt_tokens: 200_000,
+          completion_tokens: 20,
+          total_tokens: 200_020,
+          prompt_cache_hit_tokens: 170_000,
+          prompt_cache_miss_tokens: 30_000,
+        },
+      },
+      { content: "Earlier turns were summarized for cheaper continuation." },
+    ];
+    const client = makeClient(responses);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+      model: FOLD_TEST_MODEL,
+    });
+    const fillLines = (label: string, n: number) =>
+      Array.from(
+        { length: n },
+        (_, i) =>
+          `${label} line ${i}: repository investigation output with enough realistic words to weigh the retained session log.`,
+      ).join("\n");
+    for (let i = 0; i < 20; i++) {
+      loop.log.append({ role: "user", content: `Q${i}\n${fillLines(`q${i}`, 120)}` });
+      loop.log.append({ role: "assistant", content: `A${i}\n${fillLines(`a${i}`, 120)}` });
+    }
+    const beforeMessages = loop.log.length;
+
+    const events: { role: string; content?: string }[] = [];
+    for await (const ev of loop.step("wrap up")) {
+      events.push({ role: ev.role, content: ev.content });
+    }
+
+    const foldWarn = events.find(
+      (e) => e.role === "warning" && /folded \d+ messages/.test(e.content ?? ""),
+    );
+    expect(foldWarn).toBeDefined();
+    expect(loop.log.length).toBeLessThan(beforeMessages + 2);
+    expect(events[events.length - 1]?.role).toBe("done");
+  }, 30_000);
+
   it("uses the aggressive fold tier when promptTokens crosses the aggressive threshold", async () => {
     DEEPSEEK_CONTEXT_TOKENS[FOLD_TEST_MODEL] = 200_000;
     const tripPrompt = Math.ceil(

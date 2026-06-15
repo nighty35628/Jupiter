@@ -38,6 +38,42 @@ function hangingStreamFetch(): { fetch: typeof fetch; calls: () => number } {
   return { fetch: spy as unknown as typeof fetch, calls: () => count };
 }
 
+function idleAfterFirstDeltaFetch(): typeof fetch {
+  const spy = vi.fn(async (_url: unknown, init: unknown) => {
+    const reqSignal = (init as RequestInit).signal as AbortSignal | null;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'data: {"choices":[{"delta":{"content":"hello"},"finish_reason":null}]}\n\n',
+          ),
+        );
+        if (!reqSignal) return;
+        if (reqSignal.aborted) {
+          controller.error(reqSignal.reason);
+          return;
+        }
+        reqSignal.addEventListener(
+          "abort",
+          () => {
+            try {
+              controller.error(reqSignal.reason);
+            } catch {
+              /* controller already closed */
+            }
+          },
+          { once: true },
+        );
+      },
+    });
+    return new Response(body, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  return spy as unknown as typeof fetch;
+}
+
 /** Mock fetch whose JSON body promise never resolves until the request
  *  signal aborts. Used to cover the non-streaming chat() path. */
 function hangingJsonFetch(): typeof fetch {
@@ -119,6 +155,29 @@ describe("DeepSeekClient.stream() timeout with caller signal (issue #1535)", () 
     const promise = consume();
     setTimeout(() => callerCtrl.abort(new Error("user pressed esc")), 30);
     await expect(promise).rejects.toThrow(/user pressed esc/);
+  });
+
+  it("aborts an SSE body that goes idle after partial output", async () => {
+    const client = new DeepSeekClient({
+      apiKey: "sk-test",
+      fetch: idleAfterFirstDeltaFetch(),
+      timeoutMs: 60_000,
+      streamIdleTimeoutMs: 30,
+      retry: { maxAttempts: 1 },
+    });
+
+    const chunks: string[] = [];
+    const consume = async () => {
+      for await (const chunk of client.stream({
+        model: "deepseek-chat",
+        messages: [{ role: "user", content: "hi" }],
+      })) {
+        if (chunk.contentDelta) chunks.push(chunk.contentDelta);
+      }
+    };
+
+    await expect(consume()).rejects.toThrow(/idle timeout/i);
+    expect(chunks).toEqual(["hello"]);
   });
 });
 

@@ -98,8 +98,11 @@ describe("Linux installer", () => {
   it("targets the Jupiter GitHub releases and handles Debian plus Arch-family systems", () => {
     expect(linuxInstaller).toContain('REPO="${JUPITER_REPO:-nighty35628/Jupiter}"');
     expect(linuxInstaller).toContain("install_debian_deb");
+    expect(linuxInstaller).toContain("install_arch_pacman_pkg");
     expect(linuxInstaller).toContain("install_arch_from_deb");
-    expect(linuxInstaller).toContain("deb_arch_regex");
+    expect(linuxInstaller).toContain("linux_arch_regex");
+    expect(linuxInstaller).toContain("download_pacman_pkg");
+    expect(linuxInstaller).toContain(".pkg.tar.zst");
     expect(linuxInstaller).toContain("aarch64|arm64");
     expect(linuxInstaller).toMatch(/\*debian\*\|\*ubuntu\*\|\*linuxmint\*\|\*pop\*/);
     expect(linuxInstaller).toMatch(/\*arch\*\|\*endeavouros\*\|\*manjaro\*/);
