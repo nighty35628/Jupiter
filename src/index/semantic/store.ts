@@ -12,7 +12,23 @@ export interface IndexEntry extends CodeChunk {
 
 export interface SearchHit {
   entry: IndexEntry;
+  /** Raw cosine similarity. `minScore` filters on this value. */
   score: number;
+  /** Small lexical boost used only for result ordering. */
+  lexicalScore?: number;
+  /** Final ordering score: `score + lexicalScore`. */
+  rankScore?: number;
+  freshness?: SearchFreshness;
+}
+
+export interface SearchFreshness {
+  status: "stale" | "missing";
+  indexedMtimeMs: number;
+  currentMtimeMs?: number;
+}
+
+export interface SearchOptions {
+  lexicalQuery?: string;
 }
 
 export type IndexMismatch = "provider" | "model";
@@ -127,22 +143,28 @@ export class SemanticStore {
     return removed;
   }
 
-  search(query: Float32Array, topK = 8, minScore = 0): SearchHit[] {
+  search(query: Float32Array, topK = 8, minScore = 0, opts: SearchOptions = {}): SearchHit[] {
     if (this.entries.length === 0) return [];
     if (query.length !== this.dim && this.dim !== 0) {
       throw new Error(`query dim ${query.length} ≠ index dim ${this.dim}`);
     }
+    const tokens = tokenizeLexicalQuery(opts.lexicalQuery);
     const heap: SearchHit[] = [];
     for (const entry of this.entries) {
       const score = dot(query, entry.embedding);
       if (score < minScore) continue;
+      const lexicalScore = lexicalBoost(entry, tokens);
+      const hit: SearchHit =
+        lexicalScore > 0
+          ? { entry, score, lexicalScore, rankScore: score + lexicalScore }
+          : { entry, score, rankScore: score };
       if (heap.length < topK) {
-        heap.push({ entry, score });
-        if (heap.length === topK) heap.sort((a, b) => a.score - b.score);
-      } else if (score > heap[0]!.score) {
-        heap[0] = { entry, score };
+        heap.push(hit);
+        if (heap.length === topK) heap.sort(compareRankAscending);
+      } else if (compareRankAscending(hit, heap[0]!) > 0) {
+        heap[0] = hit;
         for (let i = 0; i < heap.length - 1; i++) {
-          if (heap[i]!.score > heap[i + 1]!.score) {
+          if (compareRankAscending(heap[i]!, heap[i + 1]!) > 0) {
             const tmp = heap[i]!;
             heap[i] = heap[i + 1]!;
             heap[i + 1] = tmp;
@@ -150,7 +172,7 @@ export class SemanticStore {
         }
       }
     }
-    return heap.sort((a, b) => b.score - a.score);
+    return heap.sort(compareRankDescending);
   }
 
   private async flush(): Promise<void> {
@@ -241,6 +263,44 @@ function dot(a: Float32Array, b: Float32Array): number {
   let s = 0;
   for (let i = 0; i < a.length; i++) s += a[i]! * b[i]!;
   return s;
+}
+
+function compareRankAscending(a: SearchHit, b: SearchHit): number {
+  const rank = (a.rankScore ?? a.score) - (b.rankScore ?? b.score);
+  if (rank !== 0) return rank;
+  return a.score - b.score;
+}
+
+function compareRankDescending(a: SearchHit, b: SearchHit): number {
+  return compareRankAscending(b, a);
+}
+
+function tokenizeLexicalQuery(query: string | undefined): string[] {
+  if (!query) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of query.toLowerCase().split(/[^\p{L}\p{N}_]+/u)) {
+    const token = raw.trim();
+    if (token.length < 2 || seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+  return out;
+}
+
+function lexicalBoost(entry: IndexEntry, tokens: readonly string[]): number {
+  if (tokens.length === 0) return 0;
+  const pathLower = entry.path.toLowerCase();
+  const slash = pathLower.lastIndexOf("/");
+  const baseLower = slash >= 0 ? pathLower.slice(slash + 1) : pathLower;
+  const textLower = entry.text.toLowerCase();
+  let boost = 0;
+  for (const token of tokens) {
+    if (baseLower.includes(token)) boost += 0.035;
+    else if (pathLower.includes(token)) boost += 0.025;
+    if (textLower.includes(token)) boost += 0.02;
+  }
+  return Math.min(boost, 0.18);
 }
 
 function serializeEntry(e: IndexEntry): string {

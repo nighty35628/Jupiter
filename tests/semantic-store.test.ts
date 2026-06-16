@@ -74,6 +74,44 @@ describe("SemanticStore", () => {
       expect(hits[0]?.entry.path).toBe("a.ts");
     });
 
+    it("uses lexical query matches as a small rerank boost while preserving cosine score", async () => {
+      const store = await openStore(dir, { provider: "ollama", model: "test-model" });
+      await store.add([
+        {
+          ...entry("src/transport.ts", 1, 30, [0.91, 0.414608, 0]),
+          text: "generic HTTP transport helpers",
+        },
+        {
+          ...entry("src/auth/session-cookie.ts", 1, 30, [0.86, 0.510294, 0]),
+          text: "validate session cookie and reject expired auth tokens",
+        },
+      ]);
+      const q = unitVector([1, 0, 0]);
+
+      const hits = store.search(q, 2, 0, { lexicalQuery: "session cookie validation" });
+
+      expect(hits).toHaveLength(2);
+      expect(hits[0]?.entry.path).toBe("src/auth/session-cookie.ts");
+      expect(hits[0]?.score).toBeCloseTo(0.86, 2);
+      expect(hits[0]?.lexicalScore).toBeGreaterThan(0);
+      expect(hits[0]?.rankScore).toBeGreaterThan(hits[0]!.score);
+    });
+
+    it("still applies minScore to cosine similarity before lexical reranking", async () => {
+      const store = await openStore(dir, { provider: "ollama", model: "test-model" });
+      await store.add([
+        {
+          ...entry("src/auth/session-cookie.ts", 1, 30, [0.1, 1, 0]),
+          text: "validate session cookie and reject expired auth tokens",
+        },
+      ]);
+      const q = unitVector([1, 0, 0]);
+
+      const hits = store.search(q, 5, 0.5, { lexicalQuery: "session cookie" });
+
+      expect(hits).toEqual([]);
+    });
+
     it("rejects mismatched dimensionality", async () => {
       const store = await openStore(dir, { provider: "ollama", model: "test-model" });
       await store.add([entry("a.ts", 1, 30, [1, 0, 0])]);
