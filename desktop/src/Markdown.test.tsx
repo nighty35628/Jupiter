@@ -79,6 +79,19 @@ describe("Markdown", () => {
     expect(openUrl).not.toHaveBeenCalled();
   });
 
+  it("routes fenced mermaid blocks to the diagram renderer", () => {
+    const { container } = render(
+      <Markdown
+        source={`\`\`\`mermaid
+graph TD
+  A --> B
+\`\`\``}
+      />,
+    );
+
+    expect(container.querySelector(".mermaid-block")).toBeTruthy();
+  });
+
   it("opens html file pills through the workspace browser callback", () => {
     const onOpenHtmlFile = vi.fn();
     const onPreviewFile = vi.fn();

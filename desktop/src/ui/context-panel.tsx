@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { Terminal } from "@xterm/xterm";
@@ -7,7 +7,12 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SessionFile, Settings, SideChatEntry, UsageStats } from "../App";
 import { Markdown } from "../Markdown";
-import { type FilePreview, type FilePreviewTarget, isHtmlFilePath } from "../file-preview";
+import {
+  type FilePreview,
+  type FilePreviewTarget,
+  isHtmlFilePath,
+  pathToFileUrl,
+} from "../file-preview";
 import { t, useLang } from "../i18n";
 import { I } from "../icons";
 import type {
@@ -20,6 +25,7 @@ import type {
 } from "../protocol";
 import { PanelErrorBoundary } from "./error-boundary";
 import { FileActionMenu } from "./file-action-menu";
+import { FilePreviewRenderer, previewRendererKind } from "./file-preview-renderers";
 import { rankItems } from "./fuzzy";
 import { NativeBrowserWebview } from "./native-browser-webview";
 import { type TerminalFitAddon, createTerminalAddons } from "./xterm-addons";
@@ -2536,6 +2542,19 @@ function FilePreviewPane({
   } | null>(null);
   const path = preview?.path ?? fallbackPath;
   if (!path && !loading && !error) return null;
+  const previewUrl = preview ? convertFileSrc(preview.absPath) : null;
+  const richKind = preview
+    ? previewRendererKind(preview.path, null)
+    : path
+      ? previewRendererKind(path, null)
+      : "text";
+  const shouldUseRichRenderer =
+    preview &&
+    (richKind === "pdf" ||
+      richKind === "docx" ||
+      richKind === "markdown" ||
+      richKind === "image" ||
+      richKind === "unsupported");
   const meta = preview
     ? [
         formatBytes(preview.bytes),
@@ -2576,6 +2595,12 @@ function FilePreviewPane({
           <div className="ctx-empty">{t("fileActions.previewLoading")}</div>
         ) : error ? (
           <div className="ctx-empty">{t("fileActions.previewError", { message: error })}</div>
+        ) : shouldUseRichRenderer ? (
+          <FilePreviewRenderer
+            path={preview.path}
+            url={previewUrl ?? pathToFileUrl(preview.absPath)}
+            text={preview.text}
+          />
         ) : preview?.text !== undefined && preview.text !== null ? (
           <pre className="file-preview-text">{preview.text}</pre>
         ) : (

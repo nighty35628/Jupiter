@@ -3214,6 +3214,25 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   box-sizing: border-box;
   position: relative;
 }
+.markdown .mermaid-block {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow-x: auto;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.markdown .mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}
+.markdown .mermaid-block--loading,
+.markdown .mermaid-error {
+  color: var(--muted);
+  font-size: 12px;
+}
 .markdown .codeblock-head {
   position: absolute;
   top: 0;
@@ -7306,6 +7325,36 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   padding: 14px 10px;
   display: grid;
   gap: 5px;
+}
+.file-preview-rich {
+  min-height: 180px;
+  padding: 10px;
+  box-sizing: border-box;
+}
+.file-preview-markdown {
+  padding: 10px;
+}
+.file-preview-markdown .markdown {
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.file-preview-rich--loading {
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  color: var(--muted);
+  text-align: center;
+}
+.file-preview-pdf,
+.file-preview-docx {
+  overflow: auto;
+}
+.file-preview-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
 }
 
 .ctx-empty {

@@ -31,7 +31,10 @@ const xtermMockState = vi.hoisted(() => {
   return { terminals, fitAddons };
 });
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  convertFileSrc: (path: string) => `asset://${path}`,
+}));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     options?: Record<string, unknown>;
@@ -792,7 +795,47 @@ describe("ContextPanel files", () => {
     });
 
     expect(screen.getByText("spec.docx")).toBeTruthy();
-    expect(document.body.textContent).toContain("Project brief");
+    expect(screen.getByText(/DOCX preview/i)).toBeTruthy();
+    expect(document.body.textContent).not.toContain("Project brief");
+  });
+
+  it("renders markdown previews in the preview pane", () => {
+    renderPanel({
+      mode: "preview",
+      selectedFilePreview: {
+        path: "README.md",
+        absPath: "/repo/README.md",
+        name: "README.md",
+        ext: "md",
+        kind: "text",
+        bytes: 64,
+        modifiedMs: null,
+        text: "# Jupiter\n\n**Ready**",
+        truncated: false,
+      },
+    });
+
+    expect(screen.getByRole("heading", { name: "Jupiter" })).toBeTruthy();
+    expect(screen.getByText("Ready").tagName.toLowerCase()).toBe("strong");
+  });
+
+  it("uses the rich PDF renderer for PDF previews", () => {
+    renderPanel({
+      mode: "preview",
+      selectedFilePreview: {
+        path: "docs/spec.pdf",
+        absPath: "/repo/docs/spec.pdf",
+        name: "spec.pdf",
+        ext: "pdf",
+        kind: "binary",
+        bytes: 4096,
+        modifiedMs: null,
+        text: null,
+        truncated: false,
+      },
+    });
+
+    expect(screen.getByText(/PDF preview/i)).toBeTruthy();
   });
 
   it("reveals a tracked file from its actions menu", async () => {
