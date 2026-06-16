@@ -524,10 +524,16 @@ describe("searchBaidu", () => {
   it("requires an API key before contacting Baidu AI Search", async () => {
     // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
     delete process.env.BAIDU_API_KEY;
+    // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
+    delete process.env.QIANFAN_API_KEY;
     const originalFetch = globalThis.fetch;
+    const isolatedConfigPath = "/tmp/jupiter-web-tools-baidu-missing-key-test.json";
+    writeConfig({}, isolatedConfigPath);
     globalThis.fetch = vi.fn() as unknown as typeof fetch;
     try {
-      await expect(webSearch("q", { engine: "baidu" })).rejects.toThrow(/Baidu.*API key/i);
+      await expect(
+        webSearch("q", { engine: "baidu", configPath: isolatedConfigPath }),
+      ).rejects.toThrow(/Baidu.*API key/i);
       expect(globalThis.fetch).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
