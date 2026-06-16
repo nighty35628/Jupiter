@@ -2,23 +2,23 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MermaidBlock, setMermaidLoaderForTest } from "./mermaid-renderer";
 
 const renderMock = vi.fn();
 const initializeMock = vi.fn();
-
-vi.mock("mermaid", () => ({
-  default: {
-    initialize: initializeMock,
-    render: renderMock,
-  },
-}));
-
-import { MermaidBlock } from "./mermaid-renderer";
 
 describe("MermaidBlock", () => {
   beforeEach(() => {
     renderMock.mockReset();
     initializeMock.mockReset();
+    setMermaidLoaderForTest(() =>
+      Promise.resolve({
+        default: {
+          initialize: initializeMock,
+          render: renderMock,
+        },
+      }),
+    );
   });
 
   it("renders sanitized mermaid svg output", async () => {

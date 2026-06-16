@@ -6,6 +6,21 @@ type MermaidState =
   | { status: "ready"; svg: string }
   | { status: "error"; message: string };
 
+type MermaidModule = {
+  default: {
+    initialize: (config: { securityLevel: "strict"; startOnLoad: false }) => void;
+    render: (id: string, source: string) => Promise<{ svg: string }>;
+  };
+};
+
+const MERMAID_PACKAGE = "mermaid";
+
+let mermaidLoader: () => Promise<MermaidModule> = () => import(/* @vite-ignore */ MERMAID_PACKAGE);
+
+export function setMermaidLoaderForTest(loader: () => Promise<MermaidModule>): void {
+  mermaidLoader = loader;
+}
+
 function stableMermaidId(seed: string): string {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) {
@@ -27,7 +42,7 @@ export function MermaidBlock({
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    void import("mermaid")
+    void mermaidLoader()
       .then(async (mod) => {
         const mermaid = mod.default;
         mermaid.initialize({ securityLevel: "strict", startOnLoad: false });
