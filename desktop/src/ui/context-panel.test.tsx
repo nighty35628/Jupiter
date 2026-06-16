@@ -888,6 +888,25 @@ describe("ContextPanel files", () => {
     expect(screen.getByText("Ready").tagName.toLowerCase()).toBe("strong");
   });
 
+  it("uses the rich PDF renderer for PDF previews", () => {
+    renderPanel({
+      mode: "preview",
+      selectedFilePreview: {
+        path: "docs/spec.pdf",
+        absPath: "/repo/docs/spec.pdf",
+        name: "spec.pdf",
+        ext: "pdf",
+        kind: "binary",
+        bytes: 4096,
+        modifiedMs: null,
+        text: null,
+        truncated: false,
+      },
+    });
+
+    expect(screen.getByText(/PDF preview/i)).toBeTruthy();
+  });
+
   it("reveals a tracked file from its actions menu", async () => {
     renderPanel();
 

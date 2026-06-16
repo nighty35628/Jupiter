@@ -25,6 +25,7 @@ import {
 } from "./file-preview";
 import { t, useLang } from "./i18n";
 import { FileActionMenu } from "./ui/file-action-menu";
+import { MermaidBlock } from "./ui/mermaid-renderer";
 import { sanitizeUserUrl } from "./ui/safe-content";
 
 async function openWithEditor(
@@ -279,7 +280,11 @@ export const Markdown = memo(function Markdown({ source }: { source: string }) {
           pre: ({ children }) => {
             // react-markdown v9 nests children unpredictably — flatten all text.
             const rawText = flattenChildText(children).trimEnd();
-            return <CodeBlock lang={extractFencedLang(children)} text={rawText} />;
+            const lang = extractFencedLang(children);
+            if (lang.toLowerCase() === "mermaid") {
+              return <MermaidBlock source={rawText} idSeed={rawText} />;
+            }
+            return <CodeBlock lang={lang} text={rawText} />;
           },
           code: ({ className, children }) => {
             const text = String(children ?? "");
