@@ -11,6 +11,14 @@ const nshFiles = [
 
 const PRODUCT_NAME = "Jupiter";
 const RUNTIME_STRINGS = ["appRunning", "appRunningOkKill", "failedToKillApp"] as const;
+const UPDATE_FLOW_STRINGS = [
+  "dontUninstall",
+  "dontUninstallDowngrade",
+  "newerVersionInstalled",
+  "olderOrUnknownVersionInstalled",
+  "unableToUninstall",
+  "uninstallBeforeInstalling",
+] as const;
 
 describe("desktop installer NSIS language files — issue #928", () => {
   for (const rel of nshFiles) {
@@ -33,6 +41,18 @@ describe("desktop installer NSIS language files — issue #928", () => {
           expect(text).toMatch(re);
         });
       }
+
+      it("uses update wording rather than uninstall/delete wording in the upgrade flow", () => {
+        const updateFlowText = UPDATE_FLOW_STRINGS.map((stringName) => {
+          const match = code.match(
+            new RegExp(`LangString\\s+${stringName}\\s+\\$\\{LANG_[A-Z_]+\\}\\s+"([^"]*)"`),
+          );
+          return match?.[1] ?? "";
+        }).join("\n");
+
+        expect(updateFlowText).toMatch(/update|更新/i);
+        expect(updateFlowText).not.toMatch(/uninstall|delete|卸载|删除/i);
+      });
     });
   }
 });
