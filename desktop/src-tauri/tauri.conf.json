@@ -46,6 +46,8 @@
     "createUpdaterArtifacts": false,
     "windows": {
       "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
         "languages": [
           "English",
           "SimpChinese"
