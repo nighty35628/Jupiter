@@ -37,18 +37,31 @@ export function buildSessionTitleMessages(input: SessionTitleInput): ChatMessage
 
 export async function generateSessionTitle(
   client: SessionTitleClient,
-  _model: string,
+  model: string,
   input: SessionTitleInput,
 ): Promise<string | null> {
-  const resp = await client.chat({
-    model: SESSION_TITLE_MODEL,
-    messages: buildSessionTitleMessages(input),
-    temperature: 0.2,
-    maxTokens: TITLE_MODEL_MAX_TOKENS,
-    thinking: "disabled",
-    reasoningEffort: SESSION_TITLE_REASONING_EFFORT,
-  });
-  return normalizeGeneratedSessionTitle(resp.content);
+  const messages = buildSessionTitleMessages(input);
+  const models = [SESSION_TITLE_MODEL, model]
+    .map((name) => name.trim())
+    .filter((name, index, all) => name && all.indexOf(name) === index);
+  for (const titleModel of models) {
+    try {
+      const resp = await client.chat({
+        model: titleModel,
+        messages,
+        temperature: 0.2,
+        maxTokens: TITLE_MODEL_MAX_TOKENS,
+        thinking: "disabled",
+        reasoningEffort: SESSION_TITLE_REASONING_EFFORT,
+      });
+      const title = normalizeGeneratedSessionTitle(resp.content);
+      if (title) return title;
+    } catch {
+      // Title generation is display-only. Try the active chat model next,
+      // then fall back to a local title so sessions do not stay timestamped.
+    }
+  }
+  return fallbackSessionTitle(input.userText);
 }
 
 export function normalizeGeneratedSessionTitle(raw: string | null | undefined): string | null {
@@ -102,6 +115,7 @@ export function shouldAutoNameSession(
   return (
     /^default(?:-\d{12,14})?$/.test(name) ||
     /^desktop-\d{12,17}-\d+(?:-\d+)?$/.test(name) ||
+    /^\d{12,17}$/.test(name) ||
     /^\d{12,17}-\d+(?:-\d+)?$/.test(name)
   );
 }
@@ -109,4 +123,25 @@ export function shouldAutoNameSession(
 function truncateForPrompt(text: string, max: number): string {
   const trimmed = text.replace(/\s+/g, " ").trim();
   return trimmed.length > max ? `${trimmed.slice(0, max)}...` : trimmed;
+}
+
+function fallbackSessionTitle(userText: string): string | null {
+  const cleaned = userText
+    .replace(/@[^\s]+/g, " ")
+    .replace(/\b\d{8,}\b/g, " ")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[\\/][^\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return null;
+  const firstClause = cleaned.split(/[。.!?！？；;，,\n\r]/)[0]?.trim() || cleaned;
+  const cjk = firstClause.match(/[\u4e00-\u9fa5]/g);
+  if (cjk && cjk.length >= 4) return cjk.slice(0, 7).join("");
+  const words = firstClause
+    .replace(/[^\p{L}\p{N}\s_-]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 6)
+    .join(" ");
+  return normalizeGeneratedSessionTitle(words);
 }

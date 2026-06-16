@@ -31,10 +31,12 @@ describe("session title generation", () => {
     expect(shouldAutoNameSession("default-20260517123456", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("desktop-20260517123456-1", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("desktop-20260611123456789-1-2", {}, 1)).toBe(true);
+    expect(shouldAutoNameSession("20260611123456789", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("20260611065427382-1-1", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("default-20260517123456", {}, 2)).toBe(false);
     expect(shouldAutoNameSession("desktop-20260517123456-1", {}, 2)).toBe(false);
     expect(shouldAutoNameSession("desktop-20260611123456789-1-2", {}, 2)).toBe(false);
+    expect(shouldAutoNameSession("20260611123456789", {}, 2)).toBe(false);
     expect(shouldAutoNameSession("20260611065427382-1-1", {}, 2)).toBe(false);
     expect(shouldAutoNameSession("custom-session", {}, 1)).toBe(false);
     expect(shouldAutoNameSession("default-20260517123456", { autoTitleGenerated: true }, 1)).toBe(
@@ -78,5 +80,48 @@ describe("session title generation", () => {
       reasoningEffort: "low",
       thinking: "disabled",
     });
+  });
+
+  it("falls back to the active model when the flash title model is unavailable", async () => {
+    const calls: unknown[] = [];
+    const title = await generateSessionTitle(
+      {
+        async chat(opts) {
+          calls.push(opts);
+          if (calls.length === 1) throw new Error("model not found");
+          return { content: "修复会话标题" };
+        },
+      },
+      "deepseek-v4-pro",
+      {
+        workspace: "/work/jupiter",
+        userText: "对话名还是一长串数字",
+        assistantText: "修复标题生成回退逻辑。",
+      },
+    );
+
+    expect(title).toBe("修复会话标题");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ model: "deepseek-v4-flash" });
+    expect(calls[1]).toMatchObject({ model: "deepseek-v4-pro" });
+  });
+
+  it("uses a readable local title instead of leaving timestamp sessions when title models fail", async () => {
+    const title = await generateSessionTitle(
+      {
+        async chat() {
+          throw new Error("network unavailable");
+        },
+      },
+      "deepseek-v4-pro",
+      {
+        workspace: "/work/jupiter",
+        userText: "现在对话名还是 20260615 这样的一长串数字，想办法修复",
+        assistantText: "已定位自动命名失败。",
+      },
+    );
+
+    expect(title).toBe("现在对话名还是");
+    expect(title).not.toMatch(/^\d{8,}/);
   });
 });

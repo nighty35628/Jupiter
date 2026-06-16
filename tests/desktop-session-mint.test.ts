@@ -38,19 +38,20 @@ describe("desktop session minting", () => {
   it("renames timestamp desktop sessions after model title generation", () => {
     const workspace = "/tmp/jupiter-workspace";
     const session = mintSessionFor(workspace);
+    const title = `修复粘贴文件-${tmp.split(/[\\/]/).pop()}`;
     writeFileSync(sessionPath(session), `${JSON.stringify({ role: "user", content: "hi" })}\n`);
 
     const next = applyGeneratedDesktopSessionTitle({
       sessionName: session,
-      title: "修复粘贴文件",
+      title,
       workspace,
     });
 
-    expect(next).toBe("修复粘贴文件");
+    expect(next).toBe(title);
     expect(existsSync(sessionPath(session))).toBe(false);
     expect(existsSync(sessionPath(next))).toBe(true);
     expect(loadSessionMeta(next)).toMatchObject({
-      summary: "修复粘贴文件",
+      summary: title,
       autoTitleGenerated: true,
       workspace,
     });
