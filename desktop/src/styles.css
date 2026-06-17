@@ -3315,61 +3315,34 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 /* ---- File pills (inline clickable file paths in markdown) ---- */
 
 .file-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 0 3px;
-  border-radius: 4px;
+  display: inline;
+  padding: 0;
+  border-radius: 0;
   background: transparent;
-  border: 1px solid transparent;
-  color: var(--fg-2);
-  font-family: "Geist Mono", monospace;
-  font-size: 0.96em;
-  line-height: 1.2;
-  cursor: pointer;
+  border: 0;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
   vertical-align: baseline;
   text-decoration: none;
-  transition: background 0.12s, color 0.12s;
+  transition: color 0.12s;
   white-space: nowrap;
+  cursor: pointer;
 }
-.file-pill:hover {
-  background: color-mix(in oklch, var(--panel) 64%, transparent);
-  border-color: color-mix(in oklch, var(--border) 58%, transparent);
-  color: var(--fg);
+.file-pill:hover,
+.file-pill:focus-visible {
+  color: var(--accent-strong);
 }
 .file-pill.done {
   color: var(--success);
-  background: color-mix(in oklch, var(--success-soft) 42%, transparent);
-  border-color: transparent;
 }
 .file-pill-icon {
-  opacity: 0.64;
+  display: none;
   flex-shrink: 0;
 }
 .file-pill-line {
-  color: var(--muted);
-}
-.file-pill-menu-btn {
-  width: 18px;
-  height: 18px;
-  margin-left: 1px;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  color: currentColor;
-  background: transparent;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-}
-.file-pill:hover .file-pill-menu-btn,
-.file-pill:focus-within .file-pill-menu-btn {
-  opacity: 0.75;
-}
-.file-pill-menu-btn:hover {
-  opacity: 1;
-  background: var(--panel-2);
+  color: color-mix(in srgb, var(--accent) 78%, var(--muted));
 }
 
 .floating-layer {
@@ -4698,48 +4671,53 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 }
 .composer-file-attachment {
   position: relative;
-  width: min(260px, calc(100vw - 96px));
-  height: 56px;
+  max-width: min(260px, calc(100vw - 96px));
+  min-width: 0;
+  height: 28px;
   flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
+  display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 30px 7px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--card);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 70%, transparent);
+  gap: 4px;
+  padding: 0 22px 0 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--accent);
 }
 .composer-file-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 9px;
-  display: inline-flex;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  display: none;
   align-items: center;
   justify-content: center;
   color: var(--accent);
-  background: var(--panel);
+  background: transparent;
 }
 .composer-file-copy {
   min-width: 0;
-  display: grid;
-  gap: 2px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
 }
 .composer-file-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg);
+  color: var(--accent);
   font-size: 13px;
-  font-weight: 620;
+  font-weight: 500;
   line-height: 1.18;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 .composer-file-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--accent) 72%, var(--muted));
   font-size: 11px;
   line-height: 1.2;
 }

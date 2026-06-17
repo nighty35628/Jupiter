@@ -83,7 +83,9 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 Linux 目前发布原生 `.deb` 包，并为 Arch Linux x64 发布 pacman 包。Debian/Ubuntu 系可以直接安装 `.deb`；
 Arch 系发行版可以用 `pacman -U` 安装 `.pkg.tar.zst`。项目也提供了一个安装脚本，会自动选择当前发行版最合适
-的 release 产物；Arch 旧版本 release 没有 pacman 包时，会回退到解包 `.deb`：
+的 release 产物；Arch 旧版本 release 没有 pacman 包时，会回退到解包 `.deb`。脚本会为 Arch 安装 WebKitGTK
+与 AppIndicator 运行库；如果旧脚本曾解包 `.deb` 导致 `/usr/bin/Jupiter` 不归 pacman 管理，重新运行脚本会在
+安装 pacman 包前迁移这些旧文件：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nighty35628/Jupiter/main/install-linux.sh | bash
@@ -230,7 +232,9 @@ Asset names include platform labels:
 Linux currently ships native `.deb` packages and an Arch Linux x64 pacman package. Debian/Ubuntu-family systems can
 install the `.deb` directly; Arch-family systems can install the `.pkg.tar.zst` with `pacman -U`. The installer script
 automatically selects the best release asset for the current distribution, and falls back to `.deb` payload extraction
-for older releases that do not have a pacman package:
+for older releases that do not have a pacman package. On Arch-family systems it installs the WebKitGTK and AppIndicator
+runtime libraries; if an older script extracted the `.deb` and left `/usr/bin/Jupiter` outside pacman's ownership,
+rerunning the script migrates those old files before installing the pacman package:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nighty35628/Jupiter/main/install-linux.sh | bash

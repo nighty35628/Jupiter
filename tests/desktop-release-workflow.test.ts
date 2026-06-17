@@ -107,6 +107,16 @@ describe("Linux installer", () => {
     expect(linuxInstaller).toMatch(/\*debian\*\|\*ubuntu\*\|\*linuxmint\*\|\*pop\*/);
     expect(linuxInstaller).toMatch(/\*arch\*\|\*endeavouros\*\|\*manjaro\*/);
   });
+
+  it("installs Arch runtime libraries and migrates old unmanaged fallback installs", () => {
+    expect(linuxInstaller).toContain("install_arch_runtime_deps");
+    expect(linuxInstaller).toContain("webkit2gtk-4.1");
+    expect(linuxInstaller).toContain("libayatana-appindicator");
+    expect(linuxInstaller).toContain("remove_unmanaged_arch_install");
+    expect(linuxInstaller).toContain("pacman -Qo");
+    expect(linuxInstaller).toContain("/usr/bin/Jupiter");
+    expect(linuxInstaller).toContain("/usr/share/applications/Jupiter.desktop");
+  });
 });
 
 describe("README installer guidance", () => {

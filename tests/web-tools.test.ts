@@ -328,6 +328,65 @@ describe("webSearch", () => {
   });
 });
 
+describe("web_research tool", () => {
+  it("searches once, fetches a bounded set of pages, and returns one synthesized result", async () => {
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url: string | URL) => {
+      const href = String(url);
+      calls.push(href);
+      if (href.includes("cn.bing.com/search")) {
+        return new Response(
+          `
+            <li class="b_algo"><h2><a href="https://example.com/a">Alpha</a></h2>
+              <div class="b_caption"><p>alpha snippet</p></div></li>
+            <li class="b_algo"><h2><a href="https://example.com/b">Beta</a></h2>
+              <div class="b_caption"><p>beta snippet</p></div></li>
+            <li class="b_algo"><h2><a href="https://example.com/c">Gamma</a></h2>
+              <div class="b_caption"><p>gamma snippet</p></div></li>
+          `,
+          { status: 200, headers: { "Content-Type": "text/html" } },
+        );
+      }
+      if (href === "https://example.com/a") {
+        return new Response("<html><title>Alpha page</title><p>Alpha full body.</p></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        });
+      }
+      if (href === "https://example.com/b") {
+        return new Response("<html><title>Beta page</title><p>Beta full body.</p></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        });
+      }
+      throw new Error(`unexpected fetch ${href}`);
+    }) as unknown as typeof fetch;
+
+    try {
+      const registry = new ToolRegistry();
+      registerWebTools(registry);
+      const out = await registry.dispatch(
+        "web_research",
+        JSON.stringify({ query: "alpha beta", topK: 3, maxFetches: 2, maxCharsPerPage: 120 }),
+      );
+
+      expect(calls).toHaveLength(3);
+      expect(out).toContain("web_research: alpha beta");
+      expect(out).toContain("search results: 3");
+      expect(out).toContain("fetched pages: 2");
+      expect(out).toContain("[1] Alpha page");
+      expect(out).toContain("Alpha full body.");
+      expect(out).toContain("[2] Beta page");
+      expect(out).toContain("Beta full body.");
+      expect(out).toContain("[3] Gamma");
+      expect(out).toContain("(not fetched)");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe("searchMetaso", () => {
   const originalMetasoKey = process.env.METASO_API_KEY;
   const sampleResponse = {
@@ -1321,10 +1380,13 @@ describe("formatSearchResults", () => {
 describe("registerWebTools", () => {
   const isolatedConfigPath = "/tmp/jupiter-web-tools-test-config-does-not-exist.json";
 
-  it("registers web_search and web_fetch", () => {
+  it("registers low-level web tools and the aggregated research tool", () => {
     const registry = new ToolRegistry();
     registerWebTools(registry, { configPath: isolatedConfigPath });
-    expect(registry.size).toBe(2);
+    expect(registry.size).toBe(3);
+    expect(registry.has("web_search")).toBe(true);
+    expect(registry.has("web_fetch")).toBe(true);
+    expect(registry.has("web_research")).toBe(true);
   });
 
   it("web_fetch refuses non-http(s) urls", async () => {

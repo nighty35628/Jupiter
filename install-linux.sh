@@ -169,10 +169,53 @@ install_arch_pacman_pkg() {
   local pkg="$1"
   need_privilege_escalation
   need pacman
+  install_arch_runtime_deps
+  remove_unmanaged_arch_install
   sudo_cmd pacman -U --needed --noconfirm "$pkg"
 }
 
-install_arch_deps() {
+install_arch_runtime_deps() {
+  need_privilege_escalation
+  need pacman
+  echo "Installing Arch runtime dependencies: gtk3 webkit2gtk-4.1 libayatana-appindicator librsvg openssl hicolor-icon-theme" >&2
+  sudo_cmd pacman -S --needed --noconfirm \
+    gtk3 \
+    webkit2gtk-4.1 \
+    libayatana-appindicator \
+    librsvg \
+    openssl \
+    hicolor-icon-theme
+}
+
+remove_unmanaged_path() {
+  local path="$1"
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    return
+  fi
+  if pacman -Qo "$path" >/dev/null 2>&1; then
+    return
+  fi
+  echo "Removing unmanaged old Jupiter install path before pacman install: $path" >&2
+  sudo_cmd rm -rf "$path"
+}
+
+remove_unmanaged_arch_install() {
+  local icon
+  remove_unmanaged_path /usr/bin/Jupiter
+  remove_unmanaged_path /usr/lib/Jupiter
+  remove_unmanaged_path /usr/share/applications/Jupiter.desktop
+  if [ -d /usr/share/icons/hicolor ]; then
+    while IFS= read -r icon; do
+      remove_unmanaged_path "$icon"
+    done < <(
+      find /usr/share/icons/hicolor \
+        \( -path '*/apps/Jupiter.png' -o -path '*/apps/jupiter.png' \) \
+        -print 2>/dev/null
+    )
+  fi
+}
+
+install_arch_extraction_deps() {
   local missing=()
   for cmd in ar tar gzip xz zstd; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -203,7 +246,8 @@ install_arch_from_deb() {
   local deb="$1"
   local work data
   need_privilege_escalation
-  install_arch_deps
+  install_arch_runtime_deps
+  install_arch_extraction_deps
   work="$(mktemp -d)"
   (
     cd "$work"

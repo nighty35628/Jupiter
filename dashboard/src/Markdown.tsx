@@ -44,13 +44,14 @@ function resolveAgainstWorkspace(rel: string, ws: string | undefined): string {
 }
 
 const KNOWN_EXTS =
-  "ts|tsx|mts|cts|js|jsx|mjs|cjs|py|pyi|rs|go|json|jsonc|md|mdx|css|scss|less|html|htm|xml|svg|yaml|yml|toml|sh|bash|zsh|fish|sql|rb|java|kt|swift|c|cpp|cc|cxx|h|hpp|hxx|cs|php|lua|dart|ex|exs|erl|hs|clj|cljs|zig|vue|svelte|graphql|gql|proto";
+  "ts|tsx|mts|cts|js|jsx|mjs|cjs|py|pyi|rs|go|json|jsonc|md|mdx|txt|csv|pdf|doc|docx|xls|xlsx|ppt|pptx|css|scss|less|html|htm|xml|svg|yaml|yml|toml|sh|bash|zsh|fish|sql|rb|java|kt|swift|c|cpp|cc|cxx|h|hpp|hxx|cs|php|lua|dart|ex|exs|erl|hs|clj|cljs|zig|vue|svelte|graphql|gql|proto";
+const PATH_SEG = "[^\\s\\\\/:\uFF1A`'\"()\\[\\]{}<>|?*]+";
 // No lookbehind here — Tauri's WKWebView on macOS Monterey (Safari < 16.4)
 // can't parse `(?<=...)` and the whole bundle fails to load with an
 // "invalid group specifier name" error. Capture the leading char as
 // group 1 instead and let splitFilePaths skip past it. Issue #1209.
 const FILE_PATH_RE = new RegExp(
-  `(^|[\\s\`'"(\\[])((?:[\\w.-]+\\/)+[\\w.-]+\\.(?:${KNOWN_EXTS}))(?::(\\d+(?:-\\d+)?))?(?=[\\s.,;!?\\]\\)'"\`]|$)`,
+  `(^|[\\s:\uFF1A\`'"(\\[])((?:${PATH_SEG}[\\\\/])*${PATH_SEG}\\.(?:${KNOWN_EXTS}))(?::(\\d+(?:-\\d+)?))?(?=[\\s.,;!?\\]\\)'"\`]|$)`,
   "g",
 );
 

@@ -1,6 +1,6 @@
 {
   "name": "jupiter",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Jupiter: a cache-first AI workbench with full coding-agent workflows, workspace libraries, and tabbed desktop sessions.",
   "type": "module",
   "bin": {
@@ -94,6 +94,7 @@
     "lodash-es": "^4.17.21",
     "node-html-parser": "^7.1.0",
     "picomatch": "^4.0.4",
+    "playwright-core": "^1.61.0",
     "react": "^19.2.6",
     "react-reconciler": "^0.32.0",
     "semver": "^7.6.3",

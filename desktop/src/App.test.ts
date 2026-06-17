@@ -76,6 +76,7 @@ function initialState(): Parameters<typeof reduce>[0] {
       liveLogTokens: 0,
       contextDiagnostics: null,
     },
+    usageHistory: null,
     sessions: [],
     archivedSessions: [],
     librarySources: [],
@@ -175,7 +176,13 @@ describe("Desktop App reducer — usage", () => {
         { kind: "assistant", turn: 7, segments: [], pending: false },
         1,
       ),
-    ).toBe("assistant-7");
+    ).toBe("assistant-7-1");
+    expect(
+      chatMessageKey(
+        { kind: "assistant", turn: 7, segments: [], pending: true },
+        2,
+      ),
+    ).toBe("assistant-7-2");
     expect(
       chatMessageKey(
         {
@@ -508,6 +515,32 @@ describe("Desktop App reducer — usage", () => {
     expect(next.usage.cacheHitTokens).toBe(80);
     expect(next.usage.cacheMissTokens).toBe(20);
     expect(next.usage.liveLogTokens).toBe(42);
+  });
+
+  it("preserves live context breakdown when a session snapshot refreshes usage carryover", () => {
+    const withBreakdown = reduce(initialState(), {
+      t: "incoming",
+      event: { type: "$ctx_breakdown", reservedTokens: 10, logTokens: 42 },
+    });
+    const next = reduce(withBreakdown, {
+      t: "incoming",
+      event: {
+        type: "$session_loaded",
+        name: "desktop-20260617000100-1",
+        busy: false,
+        messages: [],
+        carryover: {
+          totalCostUsd: 0.12,
+          cacheHitTokens: 80,
+          cacheMissTokens: 20,
+          totalCompletionTokens: 5,
+        },
+      },
+    });
+
+    expect(next.usage.reservedTokens).toBe(10);
+    expect(next.usage.liveLogTokens).toBe(42);
+    expect(next.usage.totalPromptTokens).toBe(100);
   });
 });
 

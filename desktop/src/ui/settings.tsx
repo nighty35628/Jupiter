@@ -21,12 +21,16 @@ import type {
   MemoryDetail,
   MemoryEntryInfo,
   MemoryWriteInput,
+  OptionalComponentStatus,
   SettingsPatch,
   SkillPackSourceInfo,
   SkillInfo,
   SkillRootInfo,
   StorageItem,
   StorageScanEvent,
+  UsageHistoryDay,
+  UsageHistoryEvent,
+  UsageHistoryMonth,
 } from "../protocol";
 import {
   type QQDesktopSettingsState,
@@ -56,6 +60,7 @@ export type PageId =
   | "models"
   | "rules"
   | "mcp"
+  | "components"
   | "skills"
   | "memory"
   | "archives"
@@ -69,6 +74,7 @@ const PAGE_META: ReadonlyArray<{ id: PageId; icon: keyof typeof I }> = [
   { id: "models", icon: "brain" },
   { id: "rules", icon: "shield" },
   { id: "mcp", icon: "wrench" },
+  { id: "components", icon: "download" },
   { id: "skills", icon: "zap" },
   { id: "memory", icon: "bookmark" },
   { id: "archives", icon: "archive" },
@@ -81,7 +87,7 @@ const PAGE_META: ReadonlyArray<{ id: PageId; icon: keyof typeof I }> = [
 export function SettingsModal({
   settings,
   balance,
-  usage,
+  usageHistory,
   currency,
   theme,
   themeStyle,
@@ -130,6 +136,7 @@ export function SettingsModal({
   onEnableMcpSpec,
   onDisableMcpSpec,
   onReconnectMcpSpecs,
+  onRefreshOptionalComponents,
   onAddSkillPath,
   onRemoveSkillPath,
   onCreateSkill,
@@ -149,6 +156,7 @@ export function SettingsModal({
   settings: SettingsType;
   balance: Balance | null;
   usage: UsageStats;
+  usageHistory: UsageHistoryEvent | null;
   currency: "CNY" | "USD";
   theme: Theme;
   themeStyle: ThemeStyle;
@@ -209,6 +217,7 @@ export function SettingsModal({
   onEnableMcpSpec: (name: string) => void;
   onDisableMcpSpec: (name: string) => void;
   onReconnectMcpSpecs: () => void;
+  onRefreshOptionalComponents: () => void;
   onAddSkillPath: (path: string) => void;
   onRemoveSkillPath: (path: string) => void;
   onCreateSkill: (name: string, scope: "project" | "global") => void;
@@ -250,6 +259,9 @@ export function SettingsModal({
   useEffect(() => {
     if (page === "storage") onScanStorage();
   }, [onScanStorage, page]);
+  useEffect(() => {
+    if (page === "components") onRefreshOptionalComponents();
+  }, [onRefreshOptionalComponents, page]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -328,7 +340,6 @@ export function SettingsModal({
                   onSignOutApiKey={onSignOutApiKey}
                 />
                 <WebSearchSection settings={settings} onSave={onSave} />
-                <BrowserAutomationSection settings={settings} />
                 <QQChannelSection
                   qq={qq}
                   configureOpen={qqConfigureOpen}
@@ -391,6 +402,12 @@ export function SettingsModal({
                 />
               </>
             )}
+            {page === "components" && (
+              <PageComponents
+                settings={settings}
+                onRefresh={onRefreshOptionalComponents}
+              />
+            )}
             {page === "skills" && (
               <PageSkills
                 settings={settings}
@@ -448,7 +465,7 @@ export function SettingsModal({
               />
             )}
             {page === "billing" && (
-              <PageBilling balance={balance} usage={usage} currency={currency} />
+              <PageBilling balance={balance} usageHistory={usageHistory} currency={currency} />
             )}
             {page === "shortcuts" && <PageShortcuts />}
           </div>
@@ -1288,6 +1305,111 @@ function BrowserAutomationSection({ settings }: { settings: SettingsType }) {
         )}
       </div>
     </section>
+  );
+}
+
+function optionalCapabilityLabel(capability: OptionalComponentStatus["capability"]): string {
+  switch (capability) {
+    case "browser-automation":
+      return t("settings.optionalCapabilityBrowserAutomation");
+    case "office-preview":
+      return t("settings.optionalCapabilityOfficePreview");
+    case "media-processing":
+      return t("settings.optionalCapabilityMediaProcessing");
+    case "ocr":
+      return t("settings.optionalCapabilityOcr");
+    case "document-conversion":
+      return t("settings.optionalCapabilityDocumentConversion");
+  }
+}
+
+function optionalComponentStateLabel(state: OptionalComponentStatus["state"]): string {
+  if (state === "available") return t("settings.optionalComponentAvailable");
+  if (state === "unsupported") return t("settings.optionalComponentUnsupported");
+  return t("settings.optionalComponentMissing");
+}
+
+function optionalComponentStatus(status: OptionalComponentStatus["state"]): string {
+  if (status === "available") return "connected";
+  if (status === "unsupported") return "disabled";
+  return "failed";
+}
+
+export function OptionalComponentsList({
+  components,
+}: {
+  components: OptionalComponentStatus[];
+}) {
+  if (components.length === 0) {
+    return <div className="muted-card">{t("settings.optionalComponentsEmpty")}</div>;
+  }
+
+  return (
+    <div className="optional-components-list">
+      {components.map((component) => (
+        <div className="setting-row optional-component-row" key={component.id}>
+          <div className="l">
+            <div className="n">
+              {component.name}
+              {component.recommended ? (
+                <span className="status-pill optional-component-rec" data-status="configured">
+                  {t("settings.optionalComponentRecommended")}
+                </span>
+              ) : null}
+            </div>
+            <div className="h">{optionalCapabilityLabel(component.capability)}</div>
+            {component.executablePath ? <code>{component.executablePath}</code> : null}
+            {component.installHint && component.state !== "available" ? (
+              <div className="h">{component.installHint}</div>
+            ) : null}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {component.version ? <span className="muted">{component.version}</span> : null}
+            <span className="status-pill" data-status={optionalComponentStatus(component.state)}>
+              {optionalComponentStateLabel(component.state)}
+            </span>
+            {component.homepageUrl && component.state !== "available" ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  void openUrl(component.homepageUrl!);
+                }}
+              >
+                <span>{t("settings.optionalComponentOpenInstall")}</span>
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PageComponents({
+  settings,
+  onRefresh,
+}: {
+  settings: SettingsType;
+  onRefresh: () => void;
+}) {
+  return (
+    <>
+      <BrowserAutomationSection settings={settings} />
+      <section className="section">
+        <div className="setting-row">
+          <div className="l">
+            <div className="n">{t("settings.optionalComponentsTitle")}</div>
+            <div className="h">{t("settings.optionalComponentsHint")}</div>
+          </div>
+          <button type="button" className="btn" onClick={onRefresh}>
+            <I.refresh size={13} />
+            <span>{t("settings.optionalComponentsRefresh")}</span>
+          </button>
+        </div>
+        <OptionalComponentsList components={settings.optionalComponents ?? []} />
+      </section>
+    </>
   );
 }
 
@@ -2892,19 +3014,33 @@ function PageRules({
 
 function PageBilling({
   balance,
-  usage,
+  usageHistory,
   currency,
 }: {
   balance: Balance | null;
-  usage: UsageStats;
+  usageHistory: UsageHistoryEvent | null;
   currency: "CNY" | "USD";
 }) {
   const symbol = currency === "CNY" ? "¥" : "$";
-  const sessionCost = currency === "CNY" ? usage.totalCostUsd * 7.2 : usage.totalCostUsd;
-  const totalTokens = usage.cacheHitTokens + usage.cacheMissTokens;
-  const hitPct = totalTokens > 0 ? Math.round((usage.cacheHitTokens / totalTokens) * 100) : 0;
-  const diagnostics = usage.contextDiagnostics;
-  const fmt = (n: number) => n.toLocaleString();
+  const months = usageHistory?.months ?? [];
+  const [monthIndex, setMonthIndex] = useState(0);
+  const [mode, setMode] = useState<"day" | "week" | "month">("day");
+
+  useEffect(() => {
+    if (monthIndex >= months.length) setMonthIndex(0);
+  }, [monthIndex, months.length]);
+
+  const selected = months[Math.min(monthIndex, Math.max(0, months.length - 1))] ?? null;
+  const selectedTotal = selected?.total ?? emptyUsageHistoryDay("");
+  const selectedTokens = usageHistoryTokens(selectedTotal);
+  const selectedCost = usageHistoryDisplayCost(selectedTotal.costUsd, currency);
+  const rows = selected ? usageHistoryRows(selected, mode) : [];
+  const tableTitle =
+    mode === "week"
+      ? t("settings.usageHistoryWeeklyUsage")
+      : mode === "month"
+        ? t("settings.usageHistoryMonthlyUsage")
+        : t("settings.usageHistoryDailyUsage");
   return (
     <>
       <div className="bill-grid">
@@ -2922,71 +3058,180 @@ function PageBilling({
           </div>
         </div>
         <div className="bill-card">
-          <div className="l">{t("settings.sessionCost")}</div>
+          <div className="l">{t("settings.usageHistoryTotalTokens")}</div>
           <div className="v">
-            {symbol} {sessionCost.toFixed(4)}
+            {selectedTokens.toLocaleString()}
           </div>
-          <div className="sub">prompt {usage.totalPromptTokens.toLocaleString()} t</div>
+          <div className="sub">{selected?.label ?? t("settings.usageHistoryNoMonth")}</div>
         </div>
         <div className="bill-card">
-          <div className="l">{t("settings.cacheHitRate")}</div>
-          <div className="v acc">{hitPct}%</div>
-          <div className="sub">
-            hit {usage.cacheHitTokens.toLocaleString()} / miss{" "}
-            {usage.cacheMissTokens.toLocaleString()}
+          <div className="l">{t("settings.usageHistoryTotalCost")}</div>
+          <div className="v acc">
+            {symbol} {selectedCost.toFixed(4)}
           </div>
+          <div className="sub">{t("settings.usageHistoryCostHint")}</div>
         </div>
       </div>
       <section className="section">
-        <div className="stitle">{t("settings.contextDiagnosticsTitle")}</div>
-        {diagnostics ? (
-          <div className="setting-row" style={{ alignItems: "flex-start" }}>
-            <div className="l">
-              <div className="n">
-                {t("settings.contextDiagnosticsLastCall", {
-                  prompt: fmt(diagnostics.lastPromptTokens),
-                  hit: fmt(diagnostics.lastCacheHitTokens),
-                  miss: fmt(diagnostics.lastCacheMissTokens),
-                })}
-              </div>
-              <div className="h">
-                {t("settings.contextDiagnosticsTokenMix", {
-                  system: fmt(diagnostics.systemTokens),
-                  tools: fmt(diagnostics.toolsTokens),
-                  log: fmt(diagnostics.logTokens),
-                  memory: fmt(diagnostics.memoryTokens),
-                  summary: fmt(diagnostics.summaryTokens),
-                })}
-              </div>
-              <div className="h">
-                {t("settings.contextDiagnosticsTools", {
-                  count: fmt(diagnostics.toolsCount),
-                  messages: fmt(diagnostics.logMessages),
-                  cache: Math.round(diagnostics.sessionCacheHitRatio * 100),
-                })}
-              </div>
-              <div className="h">
-                {diagnostics.topTools.length > 0
-                  ? t("settings.contextDiagnosticsTopTools", {
-                      tools: diagnostics.topTools
-                        .map((tool) => `${tool.name} ${fmt(tool.tokens)}t@${tool.turn}`)
-                        .join(" · "),
-                    })
-                  : t("settings.contextDiagnosticsNoTopTools")}
-              </div>
+        <div className="stitle">{t("settings.usageHistoryTitle")}</div>
+        <div className="setting-row" style={{ alignItems: "flex-start" }}>
+          <div className="l">
+            <div className="n">{t("settings.usageHistoryHint")}</div>
+            <div className="h">
+              {usageHistory
+                ? t("settings.usageHistoryRecords", {
+                    count: usageHistory.recordCount.toLocaleString(),
+                  })
+                : t("settings.usageHistoryEmpty")}
             </div>
           </div>
+        </div>
+        {months.length > 0 ? (
+          <>
+            <div className="setting-row switch-row">
+              <div className="l">
+                <div className="n">{t("settings.usageHistoryMonth")}</div>
+                <div className="h">{t("settings.usageHistoryMonthHint")}</div>
+              </div>
+              <div className="seg-ctrl" role="group" aria-label={t("settings.usageHistoryMonth")}>
+                {months.map((month, index) => (
+                  <button
+                    key={month.month}
+                    type="button"
+                    data-on={index === monthIndex}
+                    onClick={() => setMonthIndex(index)}
+                  >
+                    {month.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="setting-row switch-row">
+              <div className="l">
+                <div className="n">{tableTitle}</div>
+                <div className="h">{t("settings.usageHistoryModeHint")}</div>
+              </div>
+              <div className="seg-ctrl" role="group" aria-label={t("settings.usageHistoryMode")}>
+                <button type="button" data-on={mode === "day"} onClick={() => setMode("day")}>
+                  {t("settings.usageHistoryDay")}
+                </button>
+                <button type="button" data-on={mode === "week"} onClick={() => setMode("week")}>
+                  {t("settings.usageHistoryWeek")}
+                </button>
+                <button type="button" data-on={mode === "month"} onClick={() => setMode("month")}>
+                  {t("settings.usageHistoryMonth")}
+                </button>
+              </div>
+            </div>
+            <table className="usage-table">
+              <thead>
+                <tr>
+                  <th>{t("settings.usageHistoryPeriod")}</th>
+                  <th className="num">{t("settings.usageHistoryTurns")}</th>
+                  <th className="num">{t("settings.usageHistoryTokens")}</th>
+                  <th className="num">{t("settings.usageHistoryCost")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length > 0 ? (
+                  rows.map((row) => (
+                    <tr key={row.label}>
+                      <td>{row.label}</td>
+                      <td className="num">{row.total.turns.toLocaleString()}</td>
+                      <td className="num">{usageHistoryTokens(row.total).toLocaleString()}</td>
+                      <td className="num">
+                        {symbol} {usageHistoryDisplayCost(row.total.costUsd, currency).toFixed(4)}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4}>{t("settings.usageHistoryNoRows")}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </>
         ) : (
           <div className="setting-row">
             <div className="l">
-              <div className="n">{t("settings.contextDiagnosticsEmpty")}</div>
-              <div className="h">{t("settings.contextDiagnosticsHint")}</div>
+              <div className="n">{t("settings.usageHistoryNoRows")}</div>
+              <div className="h">{t("settings.usageHistoryEmptyHint")}</div>
             </div>
           </div>
         )}
       </section>
     </>
   );
+}
+
+function emptyUsageHistoryDay(day: string): UsageHistoryDay {
+  return {
+    day,
+    turns: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    cacheHitTokens: 0,
+    cacheMissTokens: 0,
+    costUsd: 0,
+    claudeEquivUsd: 0,
+    cacheSavingsUsd: 0,
+  };
+}
+
+function usageHistoryTokens(day: UsageHistoryDay): number {
+  return day.promptTokens + day.completionTokens;
+}
+
+function usageHistoryDisplayCost(costUsd: number, currency: "CNY" | "USD"): number {
+  return currency === "CNY" ? costUsd * 7.2 : costUsd;
+}
+
+function sumUsageHistoryDays(days: UsageHistoryDay[], label: string): UsageHistoryDay {
+  const total = emptyUsageHistoryDay(label);
+  for (const day of days) {
+    total.turns += day.turns;
+    total.promptTokens += day.promptTokens;
+    total.completionTokens += day.completionTokens;
+    total.cacheHitTokens += day.cacheHitTokens;
+    total.cacheMissTokens += day.cacheMissTokens;
+    total.costUsd += day.costUsd;
+    total.claudeEquivUsd += day.claudeEquivUsd;
+    total.cacheSavingsUsd += day.cacheSavingsUsd;
+  }
+  return total;
+}
+
+function usageHistoryWeekLabel(day: string): string {
+  const date = new Date(`${day}T00:00:00.000Z`);
+  const offset = (date.getUTCDay() + 6) % 7;
+  const start = new Date(date);
+  start.setUTCDate(date.getUTCDate() - offset);
+  const end = new Date(start);
+  end.setUTCDate(start.getUTCDate() + 6);
+  return `${start.toISOString().slice(0, 10)} - ${end.toISOString().slice(0, 10)}`;
+}
+
+function usageHistoryRows(
+  month: UsageHistoryMonth,
+  mode: "day" | "week" | "month",
+): Array<{ label: string; total: UsageHistoryDay }> {
+  if (mode === "month") return [{ label: month.label, total: month.total }];
+  if (mode === "day") {
+    return [...month.days]
+      .sort((a, b) => b.day.localeCompare(a.day))
+      .map((day) => ({ label: day.day, total: day }));
+  }
+  const weeks = new Map<string, UsageHistoryDay[]>();
+  for (const day of month.days) {
+    const label = usageHistoryWeekLabel(day.day);
+    const bucket = weeks.get(label) ?? [];
+    bucket.push(day);
+    weeks.set(label, bucket);
+  }
+  return Array.from(weeks.entries())
+    .map(([label, days]) => ({ label, total: sumUsageHistoryDays(days, label) }))
+    .sort((a, b) => b.label.localeCompare(a.label));
 }
 
 function PageShortcuts() {

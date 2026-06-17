@@ -59,6 +59,7 @@ import type {
   MemoryDetail,
   MemoryEntryInfo,
   OutgoingCommand,
+  OptionalComponentStatus,
   PlanVerdict,
   RevisionVerdict,
   SettingsPatch,
@@ -72,6 +73,7 @@ import type {
   SubagentRunInfo,
   UpdateCheckEvent,
   UpdateReleaseUrls,
+  UsageHistoryEvent,
   WorkflowRun,
 } from "./protocol";
 import type { QQDesktopSettingsState } from "./qq-settings";
@@ -370,6 +372,7 @@ export type Settings = {
     | "ollama";
   webSearchEndpoint?: string;
   browserAutomation?: BrowserAutomationStatus;
+  optionalComponents?: OptionalComponentStatus[];
   skillPackSources?: SkillPackSourceInfo[];
   webSearchApiKeys?: {
     metaso?: string;
@@ -434,6 +437,7 @@ type State = {
   pendingRevisions: PendingRevision[];
   activePlan: ActivePlan | null;
   usage: UsageStats;
+  usageHistory: UsageHistoryEvent | null;
   sessions: SessionInfo[];
   archivedSessions: SessionInfo[];
   externalImportSources: ExternalSessionApp[];
@@ -733,7 +737,7 @@ export function chatMessageKey(message: ChatMessage | undefined, index: number):
     case "user":
       return `user-${message.clientId || message.turn}`;
     case "assistant":
-      return `assistant-${message.turn}`;
+      return `assistant-${message.turn}-${index}`;
     case "workflow":
       return `workflow-${message.run.id}`;
     case "subagent":
@@ -1296,6 +1300,11 @@ function applySessionSnapshot(
     totalCompletionTokens: ev.carryover.totalCompletionTokens ?? 0,
     cacheHitTokens: ev.carryover.cacheHitTokens,
     cacheMissTokens: ev.carryover.cacheMissTokens,
+    lastCallCacheHit: state.usage.lastCallCacheHit,
+    lastCallCacheMiss: state.usage.lastCallCacheMiss,
+    reservedTokens: state.usage.reservedTokens,
+    liveLogTokens: state.usage.liveLogTokens,
+    contextDiagnostics: state.usage.contextDiagnostics,
   };
   if (!opts.resetUi) {
     const nextMessages = shouldKeepCurrentMessagesForReconcile(state.messages, loaded)
@@ -1736,6 +1745,18 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       }
       return { ...state, usage: next };
     }
+    case "$usage_history":
+      return { ...state, usageHistory: ev };
+    case "$optional_components":
+      return state.settings
+        ? {
+            ...state,
+            settings: {
+              ...state.settings,
+              optionalComponents: ev.items,
+            },
+          }
+        : state;
     case "$compact_result": {
       const compactStats =
         typeof ev.totalTokens === "number" && typeof ev.tailBudget === "number"
@@ -1883,6 +1904,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           webSearchEngine: ev.webSearchEngine,
           webSearchEndpoint: ev.webSearchEndpoint,
           browserAutomation: ev.browserAutomation,
+          optionalComponents: ev.optionalComponents,
           skillPackSources: ev.skillPackSources,
           webSearchApiKeys: ev.webSearchApiKeys,
           subagentModels: ev.subagentModels,
@@ -2418,6 +2440,7 @@ function TabRuntimeInner({
     pendingRevisions: [],
     activePlan: null,
     usage: zeroUsage(),
+    usageHistory: null,
     sessions: [],
     archivedSessions: [],
     externalImportSources: [],
@@ -4734,6 +4757,7 @@ function TabRuntimeInner({
                 settings={state.settings}
                 balance={state.balance}
                 usage={state.usage}
+                usageHistory={state.usageHistory}
                 currency={currency}
                 theme={theme}
                 themeStyle={themeStyle}
@@ -4788,6 +4812,7 @@ function TabRuntimeInner({
                 onEnableMcpSpec={enableMcpSpec}
                 onDisableMcpSpec={disableMcpSpec}
                 onReconnectMcpSpecs={reconnectMcpSpecs}
+                onRefreshOptionalComponents={() => sendRpc({ cmd: "optional_components_get" })}
                 onAddSkillPath={addSkillPath}
                 onRemoveSkillPath={removeSkillPath}
                 onCreateSkill={createSkill}

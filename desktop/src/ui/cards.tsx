@@ -625,6 +625,129 @@ export function ToolCard({
   );
 }
 
+const SUBAGENT_SKILL_WRAPPER_TOOLS = new Set([
+  "explore",
+  "research",
+  "review",
+  "security_review",
+]);
+
+export type RunSkillUsage = {
+  skillName: string;
+  argumentsSummary: string | null;
+  isSubagentWrapper: boolean;
+};
+
+function compactSkillArgument(value: string): string {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  return collapsed.length > 160 ? `${collapsed.slice(0, 160)}…` : collapsed;
+}
+
+export function deriveRunSkillUsage(name: string, args?: string): RunSkillUsage | null {
+  if (SUBAGENT_SKILL_WRAPPER_TOOLS.has(name)) {
+    return {
+      skillName: name,
+      argumentsSummary: args ? compactSkillArgument(args) : null,
+      isSubagentWrapper: true,
+    };
+  }
+  if (name !== "run_skill") return null;
+  if (!args) {
+    return {
+      skillName: "unknown",
+      argumentsSummary: null,
+      isSubagentWrapper: false,
+    };
+  }
+  try {
+    const parsed = JSON.parse(args) as Record<string, unknown>;
+    const rawName = typeof parsed.name === "string" ? parsed.name.trim() : "";
+    const rawArguments =
+      typeof parsed.arguments === "string" ? compactSkillArgument(parsed.arguments) : "";
+    return {
+      skillName: rawName || "unknown",
+      argumentsSummary: rawArguments || null,
+      isSubagentWrapper: false,
+    };
+  } catch {
+    return {
+      skillName: "unknown",
+      argumentsSummary: null,
+      isSubagentWrapper: false,
+    };
+  }
+}
+
+export function SkillCard({
+  skillName,
+  argumentsSummary,
+  status,
+  durationMs,
+  defaultOpen,
+  isSubagentWrapper = false,
+  result,
+  ok,
+}: {
+  skillName: string;
+  argumentsSummary?: string | null;
+  status: "running" | "done" | "failed";
+  durationMs?: number;
+  defaultOpen?: boolean;
+  isSubagentWrapper?: boolean;
+  result?: string;
+  ok?: boolean;
+}) {
+  useLang();
+  const statusLabel =
+    status === "running"
+      ? t("cards.skillRunning")
+      : status === "failed"
+        ? t("cards.skillFailed")
+        : t("cards.skillDone");
+  const tone: Tone = status === "failed" || ok === false ? "danger" : status === "done" ? "success" : "violet";
+  return (
+    <Card
+      tone={tone}
+      icon={<I.zap size={12} />}
+      kind={isSubagentWrapper ? t("cards.subagentSkillName") : t("cards.skillName")}
+      name={skillName}
+      defaultOpen={defaultOpen ?? status === "running"}
+      compact
+      meta={
+        <>
+          {status === "running" ? (
+            <StatusIcon state="running" label={statusLabel} />
+          ) : status === "failed" || ok === false ? (
+            <StatusIcon state="failed" label={statusLabel} />
+          ) : (
+            <StatusIcon state="done" label={statusLabel} />
+          )}
+          {durationMs !== undefined ? <span className="meta-dur">{durationMs} ms</span> : null}
+        </>
+      }
+    >
+      <div className="skill-call">
+        {argumentsSummary ? (
+          <div className="row">
+            <span className="k">{t("cards.skillTask")}</span>
+            <span className="v">
+              <span className="str">{argumentsSummary}</span>
+            </span>
+          </div>
+        ) : null}
+        {result !== undefined && ok === false ? (
+          <div className="row">
+            <span className="k">{t("cards.error")}</span>
+            <span className="v">
+              <span className="num">{result.length > 1200 ? `${result.slice(0, 1200)}…` : result}</span>
+            </span>
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
 export type ToolEditPreview = {
   label: string;
   added: number;

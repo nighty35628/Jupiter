@@ -15,6 +15,7 @@ export interface LifecyclePolicyDecision {
 }
 
 const SAFE_TOOL_NAMES = new Set([
+  "read_files",
   "read_file",
   "list_directory",
   "directory_tree",
@@ -23,6 +24,7 @@ const SAFE_TOOL_NAMES = new Set([
   "glob",
   "get_file_info",
   "semantic_search",
+  "web_research",
   "web_search",
   "web_fetch",
   "recall_memory",

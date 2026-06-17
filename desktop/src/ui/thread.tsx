@@ -27,7 +27,9 @@ import {
   type PlanItem,
   ReasoningCard,
   ShellCard,
+  SkillCard,
   ToolCard,
+  deriveRunSkillUsage,
   parseEditResult,
 } from "./cards";
 import { ApprovalCard, TaskCard, type TaskStepView } from "./extra-cards";
@@ -301,6 +303,24 @@ export const AssistantMsg = memo(function AssistantMsg({
     idx: number,
     expanded?: boolean,
   ): ReactNode {
+    const skillUsage = deriveRunSkillUsage(s.name, s.args);
+    if (skillUsage) {
+      const status: "running" | "done" | "failed" =
+        s.result === undefined ? "running" : s.ok === false ? "failed" : "done";
+      return (
+        <SkillCard
+          key={idx}
+          skillName={skillUsage.skillName}
+          argumentsSummary={skillUsage.argumentsSummary}
+          isSubagentWrapper={skillUsage.isSubagentWrapper}
+          status={status}
+          result={s.result}
+          ok={s.ok}
+          durationMs={s.durationMs}
+          defaultOpen={expanded ?? (status !== "done" || processCardsDefaultOpen)}
+        />
+      );
+    }
     const pendingConfirm =
       (s.name === "run_command" || s.name === "run_background") &&
       s.result === undefined

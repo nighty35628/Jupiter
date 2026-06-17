@@ -108,6 +108,15 @@ function isLikelyBinaryByName(name: string): boolean {
   return BINARY_EXTENSIONS.has(name.slice(dot).toLowerCase());
 }
 
+function isToolErrorResult(result: string): boolean {
+  try {
+    const parsed = JSON.parse(result) as unknown;
+    return Boolean(parsed && typeof parsed === "object" && "error" in parsed);
+  } catch {
+    return false;
+  }
+}
+
 /** Sniff first 8 KiB for a NUL byte — catches binary files whose extension lied. UTF-16 (rare in source) is an accepted false positive. */
 function looksBinary(buf: Buffer): boolean {
   const end = Math.min(buf.length, 8192);
@@ -247,7 +256,7 @@ export function registerFilesystemTools(
     name: "read_file",
     parallelSafe: true,
     skipTruncationSave: true,
-    description: `Read a file under the sandbox root. Default returns FULL CONTENT for files ≤ ${Math.round(DEFAULT_OUTLINE_THRESHOLD_BYTES / 1024)} KiB. Optional scoping: head/tail (N lines), range "A-B" (1-indexed inclusive). Larger files auto-switch to outline mode (metadata + head + symbol outline for TS/JS/Python/Go/Rust/Markdown/Protobuf/text) — drill in with range or search_content. Files over ${Math.round(HARD_MAX_FILE_BYTES / (1024 * 1024))} MiB and binaries are refused — use get_file_info for stat.`,
+    description: `Read one file under the sandbox root. Prefer read_files when inspecting multiple known files in the same turn. Default returns FULL CONTENT for files ≤ ${Math.round(DEFAULT_OUTLINE_THRESHOLD_BYTES / 1024)} KiB. Optional scoping: head/tail (N lines), range "A-B" (1-indexed inclusive). Larger files auto-switch to outline mode (metadata + head + symbol outline for TS/JS/Python/Go/Rust/Markdown/Protobuf/text) — drill in with range or search_content. Files over ${Math.round(HARD_MAX_FILE_BYTES / (1024 * 1024))} MiB and binaries are refused — use get_file_info for stat.`,
     readOnly: true,
     stormExempt: true,
     parameters: {
@@ -367,6 +376,70 @@ export function registerFilesystemTools(
         `  - search_content path:"${rel}" pattern:"..."   — grep within this file]`,
       );
       return withSubdirMemory(abs, parts.join("\n"));
+    },
+  });
+
+  registry.register({
+    name: "read_files",
+    parallelSafe: true,
+    skipTruncationSave: true,
+    description:
+      "Read several files in one model-visible tool call. Prefer this over repeated read_file calls when inspecting multiple known files. Each item supports path plus optional head/tail/range, using the same sandbox, outline, and binary safeguards as read_file. Max 8 files per call.",
+    readOnly: true,
+    stormExempt: true,
+    parameters: {
+      type: "object",
+      properties: {
+        files: {
+          type: "array",
+          description:
+            'File requests, e.g. [{"path":"src/a.ts"},{"path":"src/b.ts","range":"10-40"}].',
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string", description: "Path to read." },
+              head: { type: "integer", description: "If set, return only the first N lines." },
+              tail: { type: "integer", description: "If set, return only the last N lines." },
+              range: { type: "string", description: 'Inclusive line range like "50-100".' },
+            },
+            required: ["path"],
+          },
+        },
+      },
+      required: ["files"],
+    },
+    fn: async (
+      args: { files: Array<{ path: string; head?: number; tail?: number; range?: string }> },
+      ctx?: ToolCallContext,
+    ) => {
+      const requests = Array.isArray(args.files) ? args.files.slice(0, 8) : [];
+      if (requests.length === 0) return "files read: 0\nfiles failed: 0\n(no files requested)";
+
+      let readCount = 0;
+      let failedCount = 0;
+      const sections: string[] = [];
+      for (const request of requests) {
+        const label = typeof request?.path === "string" ? request.path : "(invalid path)";
+        try {
+          const out = await registry.dispatch("read_file", request as Record<string, unknown>, {
+            signal: ctx?.signal,
+            confirmationGate: ctx?.confirmationGate,
+            readTracker: ctx?.readTracker,
+            rootDir,
+          });
+          const failed = isToolErrorResult(out);
+          if (failed) failedCount++;
+          else readCount++;
+          sections.push(`## ${label}\n${out}`);
+        } catch (err) {
+          failedCount++;
+          sections.push(`## ${label}\n${(err as Error).name}: ${(err as Error).message}`);
+        }
+      }
+
+      return [`files read: ${readCount}`, `files failed: ${failedCount}`, "", ...sections].join(
+        "\n",
+      );
     },
   });
 
@@ -521,7 +594,7 @@ export function registerFilesystemTools(
     parallelSafe: true,
     skipTruncationSave: true,
     description:
-      "Recursively grep file CONTENTS for a substring or regex — 'where is X called', 'what files contain Y'. Returns one match per line as `path:line: text`. Per-file hit cap 30; when the byte budget is mostly spent, remaining files switch to a `rel: N matches` histogram. Pass `summary_only:true` for just the histogram. Skips dependency / VCS / build dirs and binary files. For file NAMES use search_files.",
+      "Recursively grep file CONTENTS for a substring or regex — 'where is X called', 'what files contain Y'. Returns one match per line as `path:line: text`. Per-file hit cap 30; when the byte budget is mostly spent, remaining files switch to a `rel: N matches` histogram. Pass `summary_only:true` before drilling into broad matches, then use read_files for several known files. Skips dependency / VCS / build dirs and binary files. For file NAMES use search_files.",
     readOnly: true,
     parameters: {
       type: "object",

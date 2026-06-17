@@ -9,6 +9,7 @@ import { Usage } from "../src/client.js";
 import {
   type UsageRecord,
   aggregateUsage,
+  aggregateUsageHistory,
   appendUsage,
   bucketCacheHitRatio,
   bucketSavingsFraction,
@@ -216,6 +217,54 @@ describe("aggregateUsage", () => {
     expect(agg.byModel[0]?.turns).toBe(3);
     expect(agg.bySession[0]?.session).toBe("a");
     expect(agg.bySession.find((s) => s.session === "(ephemeral)")?.turns).toBe(1);
+  });
+});
+
+describe("aggregateUsageHistory", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  function rec(partial: Partial<UsageRecord> & { ts: number }): UsageRecord {
+    return {
+      session: null,
+      model: "deepseek-v4-flash",
+      promptTokens: 100,
+      completionTokens: 20,
+      cacheHitTokens: 80,
+      cacheMissTokens: 20,
+      costUsd: 0.001,
+      claudeEquivUsd: 0.01,
+      ...partial,
+    };
+  }
+
+  it("builds calendar-month daily buckets for current and previous month", () => {
+    const now = Date.UTC(2026, 5, 17, 12);
+    const history = aggregateUsageHistory(
+      [
+        rec({ ts: Date.UTC(2026, 5, 1, 8), promptTokens: 10, costUsd: 0.1 }),
+        rec({ ts: Date.UTC(2026, 5, 1, 9), promptTokens: 20, costUsd: 0.2 }),
+        rec({ ts: Date.UTC(2026, 4, 20, 9), promptTokens: 30, costUsd: 0.3 }),
+        rec({ ts: Date.UTC(2026, 3, 30, 9), promptTokens: 40, costUsd: 0.4 }),
+      ],
+      { now, monthCount: 2 },
+    );
+
+    expect(history.months.map((m) => m.month)).toEqual(["2026-06", "2026-05"]);
+    expect(history.months[0]?.total.promptTokens).toBe(30);
+    expect(history.months[0]?.total.costUsd).toBeCloseTo(0.3);
+    expect(history.months[0]?.days.find((d) => d.day === "2026-06-01")?.turns).toBe(2);
+    expect(history.months[1]?.total.promptTokens).toBe(30);
+    expect(history.months[1]?.days.find((d) => d.day === "2026-05-20")?.costUsd).toBeCloseTo(0.3);
+    expect(history.recordCount).toBe(4);
+  });
+
+  it("keeps empty months selectable with zero totals", () => {
+    const now = Date.UTC(2026, 5, 17, 12);
+    const history = aggregateUsageHistory([rec({ ts: now - DAY })], { now, monthCount: 3 });
+
+    expect(history.months.map((m) => m.month)).toEqual(["2026-06", "2026-05", "2026-04"]);
+    expect(history.months[1]?.total.turns).toBe(0);
+    expect(history.months[1]?.days).toEqual([]);
   });
 });
 

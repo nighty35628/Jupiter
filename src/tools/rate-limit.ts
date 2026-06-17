@@ -41,6 +41,10 @@ export const DEFAULT_TOOL_RATE_LIMIT: NormalizedToolRateLimitConfig = {
   tools: {
     run_command: { maxCalls: 60, windowSeconds: 60 },
     run_background: { maxCalls: 10, windowSeconds: 60 },
+    web_search: { maxCalls: 6, windowSeconds: 60 },
+    web_fetch: { maxCalls: 12, windowSeconds: 60 },
+    read_file: { maxCalls: 24, windowSeconds: 60 },
+    search_content: { maxCalls: 16, windowSeconds: 60 },
   },
 };
 

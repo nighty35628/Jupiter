@@ -49,6 +49,22 @@ describe("Markdown", () => {
     expect(onPreviewFile).toHaveBeenCalledWith({ path: "docs/spec.docx", line: undefined });
   });
 
+  it("turns unicode filenames in inline code into previewable file links", () => {
+    const onPreviewFile = vi.fn();
+    render(
+      <WorkspaceProvider value={{ dir: "/repo", onPreviewFile } as never}>
+        <Markdown source="已生成第二版 `AI画PCB可行性调研报告.pptx`！" />
+      </WorkspaceProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "AI画PCB可行性调研报告.pptx" }));
+
+    expect(onPreviewFile).toHaveBeenCalledWith({
+      path: "AI画PCB可行性调研报告.pptx",
+      line: undefined,
+    });
+  });
+
   it("opens external links through the workspace browser callback", () => {
     const onOpenBrowserUrl = vi.fn();
     render(
@@ -119,5 +135,16 @@ graph TD
     expect(screen.getByRole("menu")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reveal in folder" })).toBeTruthy();
+  });
+
+  it("does not render a separate file dropdown button", () => {
+    const { container } = render(
+      <WorkspaceProvider value={{ dir: "/repo" }}>
+        <Markdown source="查看 docs/spec.docx" />
+      </WorkspaceProvider>,
+    );
+
+    expect(container.querySelector(".file-pill-menu-btn")).toBeNull();
+    expect(screen.getByRole("button", { name: "docs/spec.docx" })).toBeTruthy();
   });
 });

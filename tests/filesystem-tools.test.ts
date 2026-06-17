@@ -240,6 +240,40 @@ describe("filesystem tools (built-in, sandbox-enforced)", () => {
     });
   });
 
+  describe("read_files", () => {
+    it("reads several scoped files in one tool call", async () => {
+      const out = await tools.dispatch(
+        "read_files",
+        JSON.stringify({
+          files: [{ path: "hello.txt", head: 1 }, { path: "src/index.ts" }],
+        }),
+      );
+
+      expect(out).toContain("files read: 2");
+      expect(out).toContain("## hello.txt");
+      expect(out).toContain("line 1");
+      expect(out).not.toContain("line 2");
+      expect(out).toContain("## src/index.ts");
+      expect(out).toContain("export const x = 1;");
+    });
+
+    it("keeps per-file failures local to the batch", async () => {
+      const out = await tools.dispatch(
+        "read_files",
+        JSON.stringify({
+          files: [{ path: "missing.txt" }, { path: "src/util.ts" }],
+        }),
+      );
+
+      expect(out).toContain("files read: 1");
+      expect(out).toContain("files failed: 1");
+      expect(out).toContain("## missing.txt");
+      expect(out).toMatch(/ENOENT|no such file/i);
+      expect(out).toContain("## src/util.ts");
+      expect(out).toContain("export const y = 2;");
+    });
+  });
+
   describe("list_directory / directory_tree", () => {
     it("list_directory shows entries with trailing slash for dirs", async () => {
       const out = await tools.dispatch("list_directory", JSON.stringify({ path: "." }));

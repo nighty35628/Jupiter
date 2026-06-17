@@ -1214,6 +1214,8 @@ export interface WebToolsOptions {
   defaultTopK?: number;
   /** Byte cap for `web_fetch` extracted text. */
   maxFetchChars?: number;
+  /** Default number of pages `web_research` fetches after search. */
+  defaultResearchFetches?: number;
   /** Config path to read at tool-call time. Defaults to ~/.jupiter/config.json. */
   configPath?: string;
 }
@@ -1221,11 +1223,12 @@ export interface WebToolsOptions {
 export function registerWebTools(registry: ToolRegistry, opts: WebToolsOptions = {}): ToolRegistry {
   const defaultTopK = opts.defaultTopK ?? DEFAULT_TOPK;
   const maxFetchChars = opts.maxFetchChars ?? DEFAULT_FETCH_MAX_CHARS;
+  const defaultResearchFetches = opts.defaultResearchFetches ?? 3;
 
   registry.register({
     name: "web_search",
     description:
-      "Search the public web. Returns ranked results with title, url, and snippet. Call this when the answer's correctness depends on current state — anything that changes over time (events, prices, releases, status of a thing in the real world). Composing such answers from training memory invents stale numbers; search first, then ground the answer in the results. For evergreen / definitional questions you don't need this.",
+      "Low-level web search. Returns ranked results with title, url, and snippet only. Prefer web_research for ordinary research because it searches, fetches, dedupes, and summarizes in one model-visible tool result. Use web_search directly only when snippets are enough or you need to choose one URL before a targeted web_fetch.",
     readOnly: true,
     parallelSafe: true,
     parameters: {
@@ -1257,7 +1260,7 @@ export function registerWebTools(registry: ToolRegistry, opts: WebToolsOptions =
   registry.register({
     name: "web_fetch",
     description:
-      "Download a URL and return its visible text content (HTML pages get scripts/styles/nav stripped). Truncated at the tool-result cap. Use after web_search when a snippet isn't enough.",
+      "Low-level fetch for one specific URL. Downloads visible text content (HTML pages get scripts/styles/nav stripped). Prefer web_research for query-style research to avoid repeated search/fetch loops; use web_fetch only when the exact URL is already known and needs direct inspection.",
     readOnly: true,
     parallelSafe: true,
     parameters: {
@@ -1287,7 +1290,129 @@ export function registerWebTools(registry: ToolRegistry, opts: WebToolsOptions =
     },
   });
 
+  registry.register({
+    name: "web_research",
+    description:
+      "Search the web and fetch a bounded set of the most relevant pages in one model-visible tool result. Prefer this over repeated web_search + web_fetch loops for research, comparisons, current facts, releases, prices, docs, and news. Returns source list plus short page excerpts; use web_fetch only when you need one specific URL in full.",
+    readOnly: true,
+    parallelSafe: true,
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Natural-language research query." },
+        topK: {
+          type: "integer",
+          description: `Search results to consider. Default ${defaultTopK}; capped by the active search engine.`,
+        },
+        maxFetches: {
+          type: "integer",
+          description: `Number of result pages to fetch. Default ${defaultResearchFetches}; capped at 8. Use 0 for search-only.`,
+        },
+        maxCharsPerPage: {
+          type: "integer",
+          description:
+            "Excerpt cap per fetched page. Default 2400 chars; lower this for broad scans, raise slightly for source-heavy work.",
+        },
+      },
+      required: ["query"],
+    },
+    fn: async (
+      args: { query: string; topK?: number; maxFetches?: number; maxCharsPerPage?: number },
+      ctx,
+    ) => {
+      const engine = loadWebSearchEngine(opts.configPath);
+      const endpoint = loadWebSearchEndpoint(opts.configPath);
+      const topK = clampInt(args.topK, 1, 10, defaultTopK);
+      const maxFetches = clampInt(args.maxFetches, 0, 8, defaultResearchFetches);
+      const maxCharsPerPage = clampInt(args.maxCharsPerPage, 400, maxFetchChars, 2400);
+      const results = dedupeSearchResults(
+        await webSearch(args.query, {
+          topK,
+          signal: ctx?.signal,
+          engine,
+          endpoint,
+          configPath: opts.configPath,
+        }),
+      );
+      const fetchable = results.filter((r) => /^https?:\/\//i.test(r.url)).slice(0, maxFetches);
+      const fetched = await Promise.all(
+        fetchable.map(async (result) => {
+          try {
+            const page =
+              engine === "ollama"
+                ? await webFetchOllama(result.url, {
+                    maxChars: maxCharsPerPage,
+                    signal: ctx?.signal,
+                    configPath: opts.configPath,
+                  })
+                : await webFetch(result.url, { maxChars: maxCharsPerPage, signal: ctx?.signal });
+            return { result, page };
+          } catch (err) {
+            return { result, error: (err as Error).message };
+          }
+        }),
+      );
+      return formatResearchResult(args.query, results, fetched);
+    },
+  });
+
   return registry;
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function dedupeSearchResults(results: SearchResult[]): SearchResult[] {
+  const seen = new Set<string>();
+  const out: SearchResult[] = [];
+  for (const result of results) {
+    const key = result.url || `${result.title}\n${result.snippet}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(result);
+  }
+  return out;
+}
+
+function formatResearchResult(
+  query: string,
+  results: SearchResult[],
+  fetched: Array<{ result: SearchResult; page?: PageContent; error?: string }>,
+): string {
+  const fetchedByUrl = new Map(fetched.map((entry) => [entry.result.url, entry]));
+  const fetchedCount = fetched.filter((entry) => entry.page).length;
+  const failedCount = fetched.filter((entry) => entry.error).length;
+  const lines: string[] = [
+    `web_research: ${query}`,
+    `search results: ${results.length}`,
+    `fetched pages: ${fetchedCount}`,
+  ];
+  if (failedCount > 0) lines.push(`fetch failures: ${failedCount}`);
+  lines.push("", "sources:");
+
+  results.forEach((result, index) => {
+    const entry = fetchedByUrl.get(result.url);
+    const page = entry?.page;
+    const title = page?.title || result.title || result.url || "(untitled)";
+    lines.push(`[${index + 1}] ${title}`);
+    if (result.url) lines.push(result.url);
+    if (result.snippet) lines.push(`snippet: ${result.snippet}`);
+    if (page) {
+      lines.push("excerpt:");
+      lines.push(page.text);
+    } else if (entry?.error) {
+      lines.push(`fetch error: ${entry.error}`);
+    } else if (result.answer) {
+      lines.push("answer:");
+      lines.push(result.answer);
+    } else {
+      lines.push("(not fetched)");
+    }
+    lines.push("");
+  });
+  return lines.join("\n").trimEnd();
 }
 
 export function formatSearchResults(query: string, results: SearchResult[]): string {

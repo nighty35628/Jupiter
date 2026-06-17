@@ -3,6 +3,53 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] — 2026-06-17
+
+### 中文
+
+**可选组件与浏览器自动化。** 桌面设置新增可选组件页，可检测 Chrome、Edge、Chromium、LibreOffice、
+FFmpeg、Tesseract OCR 与 Pandoc，并显示安装路径、版本、安装提示和推荐状态。浏览器自动化优先复用系统
+Chrome/Edge/Chromium，新增 `playwright-core` 依赖用于后续浏览器能力。
+
+**轻量 Ask 路由。** 桌面端新增轻量 Ask 输入判断，短问答、寒暄和解释类问题会走更轻的路径；涉及代码、文件、
+终端、构建、测试、提交、浏览器和工作区操作的输入仍保留完整 agent 流程，避免误跳过工具能力。
+
+**工具与上下文预算。** 新增 `read_files` 批量读取工具，鼓励多文件阅读合并为一次模型可见结果；新增
+`web_research`，把搜索、页面抓取、去重和摘录合并为一次研究工具调用。系统提示同步压缩，降低固定提示成本。
+
+**桌面体验。** Skills 与 subagent wrapper 调用在对话流中以专门卡片展示；设置页计费视图改为按月、周、日查看
+历史用量，包含 tokens、turns 与费用汇总；Markdown 渲染和若干卡片样式继续修正。
+
+**Linux/Arch 安装。** Arch 安装路径会自动补齐 WebKitGTK、AppIndicator 等运行库；如果旧脚本曾把 `.deb`
+解包到 pacman 管理之外，安装 pacman 包前会迁移这些旧文件。README 与安装脚本同步说明。
+
+**版本同步。** 桌面端、根包、Tauri、Cargo、CHANGELOG、README 和 release notes 版本统一为 `1.0.3`。
+
+### English
+
+**Optional components and browser automation.** Desktop settings now include an optional components page that detects
+Chrome, Edge, Chromium, LibreOffice, FFmpeg, Tesseract OCR, and Pandoc, showing paths, versions, install hints, and
+recommended status. Browser automation prefers system Chrome/Edge/Chromium, with `playwright-core` added for upcoming
+browser capabilities.
+
+**Lightweight Ask routing.** Desktop now classifies short casual questions, greetings, and explanation prompts into a
+lighter Ask path. Inputs involving code, files, terminal work, builds, tests, commits, browser actions, or workspaces
+stay on the full agent path so tool use is not skipped accidentally.
+
+**Tool and context budget.** Added `read_files` for reading several known files in one model-visible result, and
+`web_research` for search, fetch, dedupe, and excerpts in one research tool call. The coding system prompt was also
+compressed to reduce fixed prompt cost.
+
+**Desktop polish.** Skills and subagent wrapper calls now render as dedicated cards in the conversation. The billing
+settings page now shows monthly, weekly, and daily usage history with token, turn, and cost totals. Markdown rendering
+and card styling received additional fixes.
+
+**Linux/Arch installation.** Arch installs now ensure WebKitGTK, AppIndicator, and related runtime libraries are
+present. If an older script extracted a `.deb` outside pacman ownership, the installer migrates those files before
+installing the pacman package. README and installer guidance were updated.
+
+**Version alignment.** Desktop, root package, Tauri, Cargo, CHANGELOG, README, and release notes are aligned on `1.0.3`.
+
 ## [1.0.2] — 2026-06-16
 
 ### 中文

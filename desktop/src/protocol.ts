@@ -396,6 +396,34 @@ export type CtxBreakdownEvent = {
   logTokens?: number;
 } & Partial<ContextDiagnosticsInfo>;
 
+export type UsageHistoryDay = {
+  day: string;
+  turns: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  costUsd: number;
+  claudeEquivUsd: number;
+  cacheSavingsUsd: number;
+};
+
+export type UsageHistoryMonth = {
+  month: string;
+  label: string;
+  start: number;
+  end: number;
+  total: UsageHistoryDay;
+  days: UsageHistoryDay[];
+};
+
+export type UsageHistoryEvent = {
+  type: "$usage_history";
+  generatedAt: number;
+  recordCount: number;
+  months: UsageHistoryMonth[];
+};
+
 export type MemoryEntryInfo = {
   kind: "project_file" | "global_file" | "structured";
   name: string;
@@ -532,8 +560,38 @@ export type BrowserAutomationStatus =
       browser: "chrome" | "edge" | "chromium";
       name: string;
       executablePath: string;
+      launchMode?: "system";
     }
-  | { state: "unavailable" };
+  | { state: "unavailable"; reason?: "no-browser" };
+
+export type OptionalComponentStatus = {
+  id:
+    | "browser-chrome"
+    | "browser-edge"
+    | "browser-chromium"
+    | "libreoffice"
+    | "ffmpeg"
+    | "tesseract"
+    | "pandoc";
+  name: string;
+  capability:
+    | "browser-automation"
+    | "office-preview"
+    | "media-processing"
+    | "ocr"
+    | "document-conversion";
+  state: "available" | "missing" | "unsupported";
+  version?: string;
+  executablePath?: string;
+  homepageUrl?: string;
+  installHint?: string;
+  recommended?: boolean;
+};
+
+export type OptionalComponentsEvent = {
+  type: "$optional_components";
+  items: OptionalComponentStatus[];
+};
 
 export type SkillPackSourceInfo = {
   id: string;
@@ -557,6 +615,7 @@ export type SettingsEvent = {
   webSearchEngine?: WebSearchEngineName;
   webSearchEndpoint?: string;
   browserAutomation?: BrowserAutomationStatus;
+  optionalComponents?: OptionalComponentStatus[];
   skillPackSources?: SkillPackSourceInfo[];
   webSearchApiKeys?: {
     metaso?: string;
@@ -899,12 +958,14 @@ export type IncomingEvent = { tabId?: string } & (
   | LibrarySourcesEvent
   | StorageScanEvent
   | StorageCleanupEvent
+  | OptionalComponentsEvent
   | TabOpenedEvent
   | TabClosedEvent
   | McpSpecsEvent
   | SubagentEvent
   | SkillsEvent
   | CtxBreakdownEvent
+  | UsageHistoryEvent
   | MemoryEvent
   | MemoryDetailEvent
   | JobsEvent
@@ -1000,6 +1061,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "library_refresh"; id: string }
   | { cmd: "storage_scan" }
   | { cmd: "storage_cleanup"; itemIds: string[] }
+  | { cmd: "optional_components_get" }
   | { cmd: "workflow_cancel"; runId: string }
   | { cmd: "workflow_save_library"; runId: string }
   | { cmd: "tab_open"; workspaceDir?: string }

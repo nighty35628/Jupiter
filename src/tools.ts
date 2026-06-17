@@ -244,7 +244,7 @@ export class ToolRegistry {
     // `run_command` is read-only iff the command matches its allowlist).
     if (this._planMode && !isReadOnlyCall(tool, args)) {
       return JSON.stringify({
-        error: `${name}: unavailable in plan mode — this is a read-only exploration phase. Use read_file / list_directory / search_files / directory_tree / web_search / allowlisted shell commands to investigate. Call submit_plan with your proposed plan when you're ready for the user's review.`,
+        error: `${name}: unavailable in plan mode — this is a read-only exploration phase. Use read_files / read_file / list_directory / search_files / search_content / directory_tree / web_research / web_search / allowlisted shell commands to investigate. Call submit_plan with your proposed plan when you're ready for the user's review.`,
         rejectedReason: "plan-mode",
       });
     }

@@ -12,7 +12,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings as SettingsType, UsageStats } from "../App";
 import { setLang } from "../i18n";
-import type { MemoryEntryInfo } from "../protocol";
+import type { MemoryEntryInfo, UsageHistoryEvent } from "../protocol";
 import { SettingsModal } from "./settings";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -72,7 +72,9 @@ function renderSettings({
   storageScan = null,
   onScanStorage = vi.fn(),
   onCleanStorage = vi.fn(),
+  onRefreshOptionalComponents = vi.fn(),
   usage: usageOverride,
+  usageHistory = null,
 }: {
   settings?: Partial<SettingsType>;
   onOpenAbout?: () => void;
@@ -88,17 +90,20 @@ function renderSettings({
   onRestoreArchivedSession?: (name: string) => void;
   onDeleteArchivedSession?: (name: string) => void;
   onClearArchivedSessions?: () => void;
-  initialPage?: "memory" | "archives" | "shortcuts" | "storage" | "billing";
+  initialPage?: "memory" | "archives" | "shortcuts" | "storage" | "billing" | "components";
   storageScan?: any;
   onScanStorage?: () => void;
   onCleanStorage?: (itemIds: string[]) => void;
+  onRefreshOptionalComponents?: () => void;
   usage?: UsageStats;
+  usageHistory?: UsageHistoryEvent | null;
 } = {}) {
   render(
     <SettingsModal
       settings={{ ...settings, ...settingsOverride }}
       balance={null}
       usage={usageOverride ?? usage}
+      usageHistory={usageHistory}
       currency="USD"
       theme="dark"
       themeStyle="graphite"
@@ -147,6 +152,7 @@ function renderSettings({
       onEnableMcpSpec={vi.fn()}
       onDisableMcpSpec={vi.fn()}
       onReconnectMcpSpecs={vi.fn()}
+      onRefreshOptionalComponents={onRefreshOptionalComponents}
       onAddSkillPath={vi.fn()}
       onRemoveSkillPath={vi.fn()}
       onCreateSkill={vi.fn()}
@@ -338,7 +344,7 @@ describe("SettingsModal", () => {
     expect(onSignOutApiKey).toHaveBeenCalledTimes(1);
   });
 
-  it("shows detected browser automation status in integrations", () => {
+  it("shows detected browser automation status in components", () => {
     renderSettings({
       settings: {
         browserAutomation: {
@@ -350,7 +356,7 @@ describe("SettingsModal", () => {
       },
     });
 
-    fireEvent.click(screen.getByText("Integrations"));
+    fireEvent.click(screen.getByText("Components"));
 
     expect(screen.getByText("Browser automation")).toBeTruthy();
     expect(screen.getByText("Enabled through Google Chrome.")).toBeTruthy();
@@ -362,13 +368,56 @@ describe("SettingsModal", () => {
       settings: { browserAutomation: { state: "unavailable" } },
     });
 
-    fireEvent.click(screen.getByText("Integrations"));
+    fireEvent.click(screen.getByText("Components"));
     fireEvent.click(screen.getByRole("button", { name: "Install Chrome" }));
     fireEvent.click(screen.getByRole("button", { name: "Install Edge" }));
 
     expect(screen.getByText("WebView fallback active.")).toBeTruthy();
     expect(openUrl).toHaveBeenCalledWith("https://www.google.com/chrome/");
     expect(openUrl).toHaveBeenCalledWith("https://www.microsoft.com/edge/download");
+  });
+
+  it("lists optional components and refreshes detection", () => {
+    const onRefreshOptionalComponents = vi.fn();
+    renderSettings({
+      initialPage: "components",
+      onRefreshOptionalComponents,
+      settings: {
+        optionalComponents: [
+          {
+            id: "browser-chrome",
+            name: "Google Chrome",
+            capability: "browser-automation",
+            state: "available",
+            executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            version: "126.0.0",
+            recommended: true,
+          },
+          {
+            id: "libreoffice",
+            name: "LibreOffice",
+            capability: "office-preview",
+            state: "missing",
+            homepageUrl: "https://www.libreoffice.org/download/download-libreoffice/",
+            installHint: "brew install --cask libreoffice",
+          },
+        ],
+      },
+    });
+
+    expect(onRefreshOptionalComponents).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Local components")).toBeTruthy();
+    expect(screen.getByText("Google Chrome")).toBeTruthy();
+    expect(screen.getAllByText("Browser automation").length).toBeGreaterThan(0);
+    expect(screen.getByText("126.0.0")).toBeTruthy();
+    expect(screen.getByText("LibreOffice")).toBeTruthy();
+    expect(screen.getByText("brew install --cask libreoffice")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open install page" }));
+    fireEvent.click(screen.getByRole("button", { name: "Detect again" }));
+
+    expect(openUrl).toHaveBeenCalledWith("https://www.libreoffice.org/download/download-libreoffice/");
+    expect(onRefreshOptionalComponents).toHaveBeenCalledTimes(2);
   });
 
   it("saves the model memory confirmation setting", () => {
@@ -522,9 +571,64 @@ describe("SettingsModal", () => {
     });
   });
 
-  it("shows context diagnostics in the billing settings page", () => {
+  it("shows historical token and cost usage in the billing settings page", () => {
     renderSettings({
       initialPage: "billing",
+      usageHistory: {
+        type: "$usage_history",
+        generatedAt: Date.UTC(2026, 5, 17),
+        recordCount: 2,
+        months: [
+          {
+            month: "2026-06",
+            label: "June 2026",
+            start: Date.UTC(2026, 5, 1),
+            end: Date.UTC(2026, 6, 1),
+            total: {
+              day: "2026-06",
+              turns: 2,
+              promptTokens: 3000,
+              completionTokens: 500,
+              cacheHitTokens: 2000,
+              cacheMissTokens: 1000,
+              costUsd: 0.42,
+              claudeEquivUsd: 3,
+              cacheSavingsUsd: 0.2,
+            },
+            days: [
+              {
+                day: "2026-06-17",
+                turns: 2,
+                promptTokens: 3000,
+                completionTokens: 500,
+                cacheHitTokens: 2000,
+                cacheMissTokens: 1000,
+                costUsd: 0.42,
+                claudeEquivUsd: 3,
+                cacheSavingsUsd: 0.2,
+              },
+            ],
+          },
+          {
+            month: "2026-05",
+            label: "May 2026",
+            start: Date.UTC(2026, 4, 1),
+            end: Date.UTC(2026, 5, 1),
+            total: {
+              day: "2026-05",
+              turns: 1,
+              promptTokens: 1000,
+              completionTokens: 100,
+              cacheHitTokens: 700,
+              cacheMissTokens: 300,
+              costUsd: 0.12,
+              claudeEquivUsd: 1,
+              cacheSavingsUsd: 0.1,
+            },
+            days: [],
+          },
+        ],
+      },
       usage: {
         ...usage,
         totalPromptTokens: 15097,
@@ -551,10 +655,15 @@ describe("SettingsModal", () => {
       },
     });
 
-    expect(screen.getByText("Context diagnostics")).toBeTruthy();
-    expect(screen.getByText(/system 5,516/)).toBeTruthy();
-    expect(screen.getByText(/tools 9,479/)).toBeTruthy();
-    expect(screen.getByText(/run_command/)).toBeTruthy();
-    expect(screen.getByText(/last prompt 15,097t · hit 14,000 \/ miss 1,097/)).toBeTruthy();
+    expect(screen.getByText("Usage history")).toBeTruthy();
+    expect(screen.getAllByText("June 2026").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("3,500").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("$ 0.4200").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "May 2026" }));
+    expect(screen.getByText("1,100")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Week" }));
+    expect(screen.getByText(/Weekly usage/)).toBeTruthy();
   });
 });

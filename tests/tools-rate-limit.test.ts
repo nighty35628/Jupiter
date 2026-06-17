@@ -114,4 +114,17 @@ describe("ToolRateLimiter", () => {
       },
     });
   });
+
+  it("defaults include budgets for high-fanout web and filesystem primitives", () => {
+    const normalized = normalizeToolRateLimitConfig({});
+
+    expect(normalized).toMatchObject({
+      tools: {
+        web_search: { maxCalls: 6, windowSeconds: 60 },
+        web_fetch: { maxCalls: 12, windowSeconds: 60 },
+        read_file: { maxCalls: 24, windowSeconds: 60 },
+        search_content: { maxCalls: 16, windowSeconds: 60 },
+      },
+    });
+  });
 });

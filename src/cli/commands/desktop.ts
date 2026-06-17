@@ -117,7 +117,6 @@ import {
 } from "../../core/pause-gate.js";
 import { autoResolveVerdict } from "../../core/pause-policy.js";
 import { runDesktopLightAsk } from "../../desktop/ask-light.js";
-import { detectBrowserAutomation } from "../../desktop/browser-automation.js";
 import {
   dingtalkRemoteCommandBypassesBusy,
   dingtalkRemoteDesktopHelpText,
@@ -136,6 +135,7 @@ import {
   removeLibrarySourceForWorkspace,
   updateLibrarySourceContentForWorkspace,
 } from "../../desktop/library-store.js";
+import { shouldUseLightAskForDesktopInput } from "../../desktop/light-ask-router.js";
 import { augmentProcessPath } from "../../desktop/login-shell-path.js";
 import {
   type MemoryEntryDetail,
@@ -148,6 +148,8 @@ import {
 } from "../../desktop/memory-browser.js";
 import { classifyDesktopNaturalCommandIntent } from "../../desktop/natural-command-intent.js";
 import { buildOneShotPlanPrompt } from "../../desktop/one-shot-plan.js";
+import { detectOptionalComponents } from "../../desktop/optional-components.js";
+import { resolvePlaywrightBrowser } from "../../desktop/playwright-browser.js";
 import { classifyDesktopQQIngress } from "../../desktop/qq-ingress.js";
 import {
   parseQQRemoteDesktopCommand,
@@ -232,6 +234,11 @@ import {
   type ContextDiagnostics,
   computeContextDiagnosticsFromLoop,
 } from "../../telemetry/context-diagnostics.js";
+import {
+  type UsageHistoryMonth,
+  aggregateUsageHistory,
+  readUsageLog,
+} from "../../telemetry/usage.js";
 import { countTokensBounded } from "../../tokenizer.js";
 import type { ChoiceOption } from "../../tools/choice.js";
 import type { SubagentEvent, SubagentSink } from "../../tools/subagent.js";
@@ -411,6 +418,7 @@ type InMessage = { tabId?: string } & (
   | { cmd: "mention_query"; query: string; nonce: number }
   | { cmd: "mention_preview"; path: string; nonce: number }
   | { cmd: "mention_picked"; path: string }
+  | { cmd: "optional_components_get" }
   | { cmd: "tab_open"; workspaceDir?: string }
   | { cmd: "tab_close" }
   | { cmd: "tab_activate"; tabId: string }
@@ -466,7 +474,16 @@ interface SettingsEvent {
     | "brave"
     | "ollama";
   webSearchEndpoint?: string;
-  browserAutomation?: ReturnType<typeof detectBrowserAutomation>;
+  browserAutomation?:
+    | {
+        state: "available";
+        browser: "chrome" | "edge" | "chromium";
+        name: string;
+        executablePath: string;
+        launchMode: "system";
+      }
+    | { state: "unavailable"; reason: "no-browser" };
+  optionalComponents?: ReturnType<typeof detectOptionalComponents>;
   skillPackSources?: ReturnType<typeof loadSkillPackSources>;
   webSearchApiKeys?: {
     metaso?: string;
@@ -783,6 +800,13 @@ interface CtxBreakdownEvent extends Partial<ContextDiagnostics> {
   logTokens?: number;
 }
 
+interface UsageHistoryEvent {
+  type: "$usage_history";
+  generatedAt: number;
+  recordCount: number;
+  months: UsageHistoryMonth[];
+}
+
 interface MemoryEvent {
   type: "$memory";
   entries: MemoryEntryInfo[];
@@ -831,6 +855,11 @@ interface JobInfoPayload {
 interface JobsEvent {
   type: "$jobs";
   items: JobInfoPayload[];
+}
+
+interface OptionalComponentsEvent {
+  type: "$optional_components";
+  items: ReturnType<typeof detectOptionalComponents>;
 }
 
 const desktopQqRuntimeSnapshot: {
@@ -942,9 +971,11 @@ type EmittableEvent =
   | CompactResultEvent
   | SkillsEvent
   | CtxBreakdownEvent
+  | UsageHistoryEvent
   | MemoryEvent
   | MemoryDetailEvent
   | WorkflowEvent
+  | OptionalComponentsEvent
   | JobsEvent;
 
 type PendingGateEvent =
@@ -1149,6 +1180,13 @@ function emitSettings(tab: Tab): void {
   const editMode = loadDesktopEditMode();
   if (tab.toolset) applyPlanMode(tab.toolset.tools, editMode);
   const recent = loadRecentWorkspaces().filter((p) => p !== tab.rootDir);
+  const optionalComponents = detectOptionalComponents();
+  const browserResolution = resolvePlaywrightBrowser(optionalComponents);
+  const browserComponent = browserResolution
+    ? optionalComponents.find(
+        (component) => component.executablePath === browserResolution.executablePath,
+      )
+    : undefined;
   emit(
     {
       type: "$settings",
@@ -1164,7 +1202,16 @@ function emitSettings(tab: Tab): void {
       desktopCloseBehavior: loadDesktopCloseBehavior(),
       webSearchEngine: readWebSearchEngine(),
       webSearchEndpoint: readConfig().webSearchEndpoint,
-      browserAutomation: detectBrowserAutomation(),
+      browserAutomation: browserResolution
+        ? {
+            state: "available",
+            browser: browserResolution.browser,
+            name: browserComponent?.name ?? browserResolution.browser,
+            executablePath: browserResolution.executablePath,
+            launchMode: browserResolution.launchMode,
+          }
+        : { state: "unavailable", reason: "no-browser" },
+      optionalComponents,
       skillPackSources: loadSkillPackSources(),
       webSearchApiKeys: collectWebSearchApiKeyPrefixes(),
       subagentModels: loadSubagentModels(),
@@ -1326,6 +1373,7 @@ function loadSessionIntoTab(
   );
   emitPendingGateEvents(tab);
   emitCtxBreakdown(tab);
+  emitUsageHistory(tab);
   if (backfilledWorkspace) emitSessions(tab);
 }
 
@@ -1538,6 +1586,15 @@ function emitCtxBreakdown(tab: Tab): void {
     }
   }
   emit({ type: "$ctx_breakdown", reservedTokens: sys + tools, logTokens }, tab.id);
+}
+
+function emitUsageHistory(tab: Tab): void {
+  const history = aggregateUsageHistory(readUsageLog(), { monthCount: 13 });
+  emit({ type: "$usage_history", ...history }, tab.id);
+}
+
+function emitOptionalComponents(tab: Tab): void {
+  emit({ type: "$optional_components", items: detectOptionalComponents() }, tab.id);
 }
 
 function emitCompactResult(tab: Tab, result: Omit<CompactResultEvent, "type">): void {
@@ -2509,6 +2566,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               { role: "assistant_final", stats },
               tab.currentSession,
             );
+            emitUsageHistory(tab);
           },
           emit: (event) => {
             if (event.type === "$turn_complete") {
@@ -4116,6 +4174,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           }
           if (ev.role === "assistant_final") {
             appendDesktopAssistantFinalUsage(ev, tab.currentSession);
+            emitUsageHistory(tab);
           }
           for (const kev of rt.eventizer.consume(ev, rt.ctx)) {
             emit(
@@ -4748,6 +4807,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     emitMemory(tab);
     emitLibrary(tab);
     emitQQSettings(tab);
+    emitUsageHistory(tab);
     if (restoredMessages) {
       const meta = loadSessionMeta(tab.currentSession);
       emit(
@@ -5025,6 +5085,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitMemory(t);
         emitLibrary(t);
         emitQQSettings(t);
+        emitUsageHistory(t);
         if (!hasKey) emit({ type: "$needs_setup", reason: "no_api_key" }, t.id);
         else if (t.toolset) emit({ type: "$ready" }, t.id);
         void emitBalance(t);
@@ -5834,6 +5895,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       emitSettings(tab);
       return;
     }
+    if (msg.cmd === "optional_components_get") {
+      emitOptionalComponents(tab);
+      return;
+    }
     if (msg.cmd === "context_diagnostics_get") {
       emitCtxBreakdown(tab);
       return;
@@ -6452,6 +6517,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           tab.id,
         );
         finishDesktopCommand(tab);
+        return;
+      }
+      if (
+        shouldUseLightAskForDesktopInput(msg.text, {
+          planOneShot: msg.planOneShot === true,
+        })
+      ) {
+        runLightAskOnTab(tab, msg.text, msg.clientId);
         return;
       }
       if (!msg.planOneShot && !msg.text.trim().startsWith("/")) {

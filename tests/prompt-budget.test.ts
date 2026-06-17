@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CODE_SYSTEM_PROMPT, codeSystemPrompt } from "../src/code/prompt.js";
+import { countTokensBounded } from "../src/tokenizer.js";
 import { ToolRegistry } from "../src/tools.js";
 import { registerChoiceTool } from "../src/tools/choice.js";
 import { registerFilesystemTools } from "../src/tools/filesystem.js";
@@ -20,8 +21,10 @@ import { registerWebTools } from "../src/tools/web.js";
 
 /** Base system prompt — no memory, no .gitignore, no built-in skills index. */
 const SYSTEM_PROMPT_BUDGET = 24_500;
+const SYSTEM_PROMPT_TOKEN_BUDGET = 3_000;
 /** Adds the built-in skills index `applySkillsIndex` injects on top of the base. */
 const SYSTEM_PROMPT_BUDGET_WITH_SKILLS = 26_500;
+const SYSTEM_PROMPT_TOKEN_BUDGET_WITH_SKILLS = 3_800;
 /** Full code-mode tool spec list — descriptions + JSON-schema parameters, all 35 tools. */
 const TOOL_LIST_BUDGET = 40_000;
 
@@ -70,6 +73,10 @@ describe("prompt budget — cache prefix size regression net", () => {
     expect(actual).toBeLessThanOrEqual(SYSTEM_PROMPT_BUDGET);
   });
 
+  it("system prompt stays under the token budget", () => {
+    expect(countTokensBounded(CODE_SYSTEM_PROMPT)).toBeLessThanOrEqual(SYSTEM_PROMPT_TOKEN_BUDGET);
+  });
+
   it("code-mode tool list stays under the byte budget", () => {
     const root = mkdtempSync(join(tmpdir(), "jupiter-budget-"));
     try {
@@ -114,6 +121,7 @@ describe("prompt budget — cache prefix size regression net", () => {
     try {
       const built = codeSystemPrompt(root);
       expect(built.length).toBeLessThanOrEqual(SYSTEM_PROMPT_BUDGET_WITH_SKILLS);
+      expect(countTokensBounded(built)).toBeLessThanOrEqual(SYSTEM_PROMPT_TOKEN_BUDGET_WITH_SKILLS);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

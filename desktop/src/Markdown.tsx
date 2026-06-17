@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
-import { Check, ChevronDown, Copy, ExternalLink, FileText } from "lucide-react";
+import { Check, Copy, ExternalLink, FileText } from "lucide-react";
 import {
   Children,
   cloneElement,
@@ -52,7 +52,7 @@ export const WorkspaceProvider = WorkspaceContext.Provider;
 
 const KNOWN_EXTS =
   "ts|tsx|mts|cts|js|jsx|mjs|cjs|py|pyi|rs|go|json|jsonc|md|mdx|txt|csv|pdf|doc|docx|xls|xlsx|ppt|pptx|css|scss|less|html|htm|xml|svg|yaml|yml|toml|sh|bash|zsh|fish|sql|rb|java|kt|swift|c|cpp|cc|cxx|h|hpp|hxx|cs|php|lua|dart|ex|exs|erl|hs|clj|cljs|zig|vue|svelte|graphql|gql|proto";
-const PATH_SEG = "[\\w.@()+~%#=-]+";
+const PATH_SEG = "[^\\s\\\\/:\uFF1A`'\"()\\[\\]{}<>|?*]+";
 const FILE_NAME_SOURCE = `${PATH_SEG}\\.(?:${KNOWN_EXTS})`;
 const FILE_REF_SOURCE = [
   `[A-Za-z]:[\\\\/](?:${PATH_SEG}[\\\\/])*${FILE_NAME_SOURCE}`,
@@ -148,9 +148,9 @@ function FilePill({ path, line }: { path: string; line?: string }) {
       className={`file-pill ${done ? "done" : ""}`}
       role="button"
       tabIndex={0}
+      aria-label={display}
       data-jupiter-file-path={path}
       data-jupiter-file-line={line}
-      aria-label={display}
       onClick={previewOrOpen}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -168,18 +168,6 @@ function FilePill({ path, line }: { path: string; line?: string }) {
       <span className="file-pill-path">{path}</span>
       {line && <span className="file-pill-line">:{line}</span>}
       {done && <Check size={12} className="file-pill-check" />}
-      <button
-        type="button"
-        className="file-pill-menu-btn"
-        aria-label={t("fileActions.menu", { path: display })}
-        onClick={(e) => {
-          e.stopPropagation();
-          const rect = e.currentTarget.getBoundingClientRect();
-          openMenuAt(rect.left, rect.bottom + 4);
-        }}
-      >
-        <ChevronDown size={12} />
-      </button>
       {menuAnchor ? (
         <FileActionMenu
           anchor={menuAnchor}

@@ -269,6 +269,33 @@ export interface UsageAggregate {
   subagents?: SubagentAggregate;
 }
 
+export interface UsageHistoryDay {
+  day: string;
+  turns: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  costUsd: number;
+  claudeEquivUsd: number;
+  cacheSavingsUsd: number;
+}
+
+export interface UsageHistoryMonth {
+  month: string;
+  label: string;
+  start: number;
+  end: number;
+  total: UsageHistoryDay;
+  days: UsageHistoryDay[];
+}
+
+export interface UsageHistoryAggregate {
+  generatedAt: number;
+  recordCount: number;
+  months: UsageHistoryMonth[];
+}
+
 /** Rolled-up view of all `kind: "subagent"` records. */
 export interface SubagentAggregate {
   total: number;
@@ -353,6 +380,108 @@ export function aggregateUsage(
     lastSeen,
     subagents,
   };
+}
+
+export interface UsageHistoryOptions {
+  now?: number;
+  monthCount?: number;
+}
+
+function monthKey(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function dayKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function monthLabel(date: Date): string {
+  return new Intl.DateTimeFormat("en", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+function emptyHistoryDay(day: string): UsageHistoryDay {
+  return {
+    day,
+    turns: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    cacheHitTokens: 0,
+    cacheMissTokens: 0,
+    costUsd: 0,
+    claudeEquivUsd: 0,
+    cacheSavingsUsd: 0,
+  };
+}
+
+function addRecordToHistoryDay(day: UsageHistoryDay, record: UsageRecord): void {
+  day.turns += 1;
+  day.promptTokens += record.promptTokens;
+  day.completionTokens += record.completionTokens;
+  day.cacheHitTokens += record.cacheHitTokens;
+  day.cacheMissTokens += record.cacheMissTokens;
+  day.costUsd += record.costUsd;
+  day.claudeEquivUsd += record.claudeEquivUsd;
+  day.cacheSavingsUsd += cacheSavingsUsd(record.model, record.cacheHitTokens);
+}
+
+export function aggregateUsageHistory(
+  records: UsageRecord[],
+  opts: UsageHistoryOptions = {},
+): UsageHistoryAggregate {
+  const generatedAt = opts.now ?? Date.now();
+  const monthCount = Math.max(1, Math.min(36, Math.floor(opts.monthCount ?? 13)));
+  const now = new Date(generatedAt);
+  const monthEntries: UsageHistoryMonth[] = [];
+  const byMonth = new Map<string, UsageHistoryMonth>();
+
+  for (let i = 0; i < monthCount; i += 1) {
+    const startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const endDate = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 1));
+    const key = monthKey(startDate);
+    const month: UsageHistoryMonth = {
+      month: key,
+      label: monthLabel(startDate),
+      start: startDate.getTime(),
+      end: endDate.getTime(),
+      total: emptyHistoryDay(key),
+      days: [],
+    };
+    monthEntries.push(month);
+    byMonth.set(key, month);
+  }
+
+  const dayMaps = new Map<string, Map<string, UsageHistoryDay>>();
+  for (const record of records) {
+    const date = new Date(record.ts);
+    const key = monthKey(date);
+    const month = byMonth.get(key);
+    if (!month || record.ts < month.start || record.ts >= month.end) continue;
+    addRecordToHistoryDay(month.total, record);
+    const dKey = dayKey(date);
+    let days = dayMaps.get(key);
+    if (!days) {
+      days = new Map();
+      dayMaps.set(key, days);
+    }
+    let day = days.get(dKey);
+    if (!day) {
+      day = emptyHistoryDay(dKey);
+      days.set(dKey, day);
+    }
+    addRecordToHistoryDay(day, record);
+  }
+
+  for (const month of monthEntries) {
+    month.days = Array.from(dayMaps.get(month.month)?.values() ?? []).sort((a, b) =>
+      a.day.localeCompare(b.day),
+    );
+  }
+
+  return { generatedAt, recordCount: records.length, months: monthEntries };
 }
 
 /** File-size helper for the stats header — "1.2 MB" etc. Returns "" if missing. */

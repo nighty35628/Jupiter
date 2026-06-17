@@ -29,7 +29,7 @@ export const ESCALATION_CONTRACT = escalationContract("deepseek-v4-flash");
 
 export const NEGATIVE_CLAIM_RULE = `Negative claims ("X is missing", "Y isn't implemented", "there's no Z") are the #1 hallucination shape. They feel safe to write because no citation seems possible — but that's exactly why you must NOT write them on instinct.
 
-If you have a search tool (\`search_content\`, \`grep\`, web search), call it FIRST before asserting absence:
+If you have a search tool (\`search_content\`, \`grep\`, \`web_research\`, web search), call it FIRST before asserting absence:
 - Returns matches → you were wrong; correct yourself and cite the matches.
 - Returns nothing → state the absence WITH the search query as evidence: \`No callers of \\\`foo()\\\` found (search_content "foo").\`
 

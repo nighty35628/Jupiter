@@ -7,8 +7,10 @@ vi.mock("./cards", () => ({
   AssistantText: () => null,
   PlanCardView: () => null,
   ShellCard: () => null,
+  SkillCard: () => null,
   ToolCard: () => null,
   ReasoningCard: () => null,
+  deriveRunSkillUsage: () => null,
 }));
 
 import {
