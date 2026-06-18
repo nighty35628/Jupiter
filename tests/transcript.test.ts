@@ -152,4 +152,23 @@ describe("transcript writer / reader round-trip", () => {
       recoverable: true,
     });
   });
+
+  it("redacts sensitive tool args and content before writing records", () => {
+    const rec = recordFromLoopEvent(
+      {
+        turn: 1,
+        role: "tool",
+        content: "Authorization: Bearer abc123\npassword=hunter2",
+        toolName: "web_fetch",
+        toolArgs:
+          '{"url":"https://example.com","apiKey":"sk-secret","headers":{"Authorization":"Bearer abc123"}}',
+      },
+      { model: "deepseek-chat", prefixHash: "abc123def456" },
+    );
+
+    expect(rec.content).toBe("Authorization: [redacted]\npassword=[redacted]");
+    expect(rec.args).toBe(
+      '{"url":"https://example.com","apiKey":"[redacted]","headers":{"Authorization":"[redacted]"}}',
+    );
+  });
 });

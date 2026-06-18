@@ -263,6 +263,7 @@ export const de: TranslationSchema = {
       ...EN.slash.stats,
       description:
         "Sitzungsübergreifendes Kosten-Dashboard (heute / Woche / Monat / gesamt · Cache-Treffer · vs. Claude)",
+      argsHint: "[history]",
     },
     cost: {
       ...EN.slash.cost,
@@ -424,6 +425,12 @@ export const de: TranslationSchema = {
       argsHint: "<Frage>",
       description:
         "Kurze Randfrage stellen — wird von Grund auf beantwortet, nie zum Gesprächskontext hinzugefügt",
+    },
+    ask: {
+      ...EN.slash.ask,
+      argsHint: "<Frage>",
+      description:
+        "Schnelle Frage ohne Tools stellen und den Austausch in der aktuellen Sitzung speichern",
     },
     "search-engine": {
       ...EN.slash["search-engine"],

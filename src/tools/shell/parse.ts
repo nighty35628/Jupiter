@@ -394,4 +394,44 @@ export function isCommandAllowed(
   return chainAllowed(chain, (seg) => isAllowed(seg, extra, projectRoot, sensitivePathConfig));
 }
 
+function hasWritingRedirect(chain: CommandChain): boolean {
+  for (const seg of chain.segments) {
+    for (const redirect of seg.redirects) {
+      if (redirect.kind !== "<" && redirect.kind !== "2>&1") return true;
+    }
+  }
+  return false;
+}
+
+// Plan-mode exploration only: ignore user allowlists/yolo and reject writing redirects.
+export function isReadOnlyShellCommand(
+  cmd: string,
+  projectRoot?: string,
+  sensitivePathConfig?: { prefixes?: readonly string[]; patterns?: readonly string[] },
+): boolean {
+  let chain: CommandChain | null;
+  try {
+    chain = parseCommandChain(cmd);
+  } catch {
+    return false;
+  }
+  if (chain === null) return isAllowed(cmd, [], projectRoot, sensitivePathConfig);
+  if (hasWritingRedirect(chain)) return false;
+  const targets = redirectTargets(chain);
+  if (targets.length > 0 && !projectRoot) return false;
+  if (projectRoot) {
+    if (redirectsEscapeSandbox(chain, projectRoot)) return false;
+    if (
+      hasSensitivePathArgs(
+        targets,
+        projectRoot,
+        sensitivePathConfig?.prefixes,
+        sensitivePathConfig?.patterns,
+      )
+    )
+      return false;
+  }
+  return chainAllowed(chain, (seg) => isAllowed(seg, [], projectRoot, sensitivePathConfig));
+}
+
 export { derivePrefix } from "@jupiter/core-utils";

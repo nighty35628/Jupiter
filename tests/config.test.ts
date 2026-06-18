@@ -10,6 +10,7 @@ import {
   clearProjectPathAllowed,
   clearProjectShellAllowed,
   editModeHintShown,
+  inspectEndpointSources,
   isPlausibleKey,
   loadApiKey,
   loadBaiduApiKey,
@@ -305,6 +306,36 @@ describe("config", () => {
     const ep = loadEndpoint(path);
     expect(ep.baseUrl).toBe("https://new-api.example.com/v1");
     expect(ep.apiKey).toBeUndefined();
+  });
+
+  it("inspectEndpointSources explains env tuple shadowing config apiKey", () => {
+    process.env.DEEPSEEK_BASE_URL = "https://env-proxy.example.com";
+    process.env.DEEPSEEK_API_KEY = "sk-env-tuple-token-abc";
+    writeConfig(
+      { baseUrl: "https://config-only.example.com", apiKey: "sk-config-token-xyz1234" },
+      path,
+    );
+
+    const sources = inspectEndpointSources(path);
+
+    expect(sources.baseUrlSource).toBe("env:DEEPSEEK_BASE_URL");
+    expect(sources.apiKeySource).toBe("env:DEEPSEEK_API_KEY");
+    expect(sources.apiKeyPreview).toBe(redactKey("sk-env-tuple-token-abc"));
+    expect(sources.shadowedConfigApiKey).toBe(true);
+    expect(sources.shadowedEnvApiKey).toBe(false);
+  });
+
+  it("inspectEndpointSources explains config baseUrl shadowing env apiKey", () => {
+    process.env.DEEPSEEK_API_KEY = "sk-env-default-token-abc";
+    writeConfig({ baseUrl: "https://config.example.com", apiKey: "sk-config-token-xyz1234" }, path);
+
+    const sources = inspectEndpointSources(path);
+
+    expect(sources.baseUrlSource).toBe(`config:${path}#baseUrl`);
+    expect(sources.apiKeySource).toBe(`config:${path}#apiKey`);
+    expect(sources.apiKeyPreview).toBe(redactKey("sk-config-token-xyz1234"));
+    expect(sources.shadowedConfigApiKey).toBe(false);
+    expect(sources.shadowedEnvApiKey).toBe(true);
   });
 
   it("loads pricingOverride with valid non-negative fields", () => {

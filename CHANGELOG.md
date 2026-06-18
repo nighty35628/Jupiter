@@ -3,6 +3,50 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] — 2026-06-18
+
+### 中文
+
+**机器可读运行输出。** `jupiter run` 新增 `--format json` 与 `--json`，输出稳定 JSONL 事件流，覆盖
+`session_start`、assistant delta/final、tool start/result、usage、error 和 done。事件文本、工具参数与
+transcript 记录会复用统一脱敏逻辑，避免把 API key、Authorization、cookie、password 等敏感字段写进自动化输出。
+
+**Slash 与桌面命令统一。** CLI/TUI slash 命令抽出共享 registry，桌面端 slash 命令列表直接由同一份
+`SLASH_COMMANDS` 生成，减少 help、suggestions 与桌面镜像之间的重复维护。`/ask` handler 也接入 TUI dispatcher，
+用于在当前交互会话里触发无工具快速问答。
+
+**诊断与配置可观测性。** `doctor` 增加 endpoint source 检查，明确 base URL/API key 来自环境变量还是配置文件，
+并提示被遮蔽的配置来源；同时把桌面可选组件检测扩展到 CLI doctor。`stats history` 的 JSON/表格输出继续补齐
+历史用量字段，便于脚本化读取。
+
+**Shell 安全与测试覆盖。** shell 解析新增操作符检测和高风险参数降级逻辑，避免 `git branch -D`、重定向输出、
+`find -exec/-delete` 等命令误走只读 allowlist。新增 run JSON、doctor JSON、shell、usage、transcript 和
+desktop slash registry 测试。
+
+**版本同步。** 桌面端、根包、Tauri、Cargo、CHANGELOG、README 和 release notes 版本统一为 `1.0.4`。
+
+### English
+
+**Machine-readable run output.** `jupiter run` now supports `--format json` and `--json`, emitting a stable JSONL event
+stream for `session_start`, assistant delta/final, tool start/result, usage, error, and done records. Event text, tool
+arguments, and transcript records use shared redaction so API keys, Authorization headers, cookies, passwords, and
+similar secrets do not leak into automation output.
+
+**Unified slash and desktop commands.** CLI/TUI slash commands now live in a shared registry, and the desktop slash
+command list is generated from the same `SLASH_COMMANDS` source. This removes duplicated help, suggestion, and desktop
+mirror maintenance. The `/ask` handler is wired into the TUI dispatcher for quick no-tool questions inside the active
+interactive session.
+
+**Diagnostics and config observability.** `doctor` now reports whether the base URL and API key came from environment
+variables or config files, including shadowed sources, and brings desktop optional-component detection into CLI doctor.
+`stats history` JSON/table output also fills in more usage-history fields for scripts.
+
+**Shell safety and tests.** Shell parsing now detects operators up front and demotes risky allowlisted arguments, so
+commands such as `git branch -D`, output redirects, and `find -exec/-delete` do not bypass confirmation as read-only
+commands. Tests were added for run JSON, doctor JSON, shell parsing, usage, transcripts, and the desktop slash registry.
+
+**Version alignment.** Desktop, root package, Tauri, Cargo, CHANGELOG, README, and release notes are aligned on `1.0.4`.
+
 ## [1.0.3] — 2026-06-17
 
 ### 中文

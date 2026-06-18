@@ -148,5 +148,6 @@ describe("doctorCommand --json (integration)", () => {
         method: "GET",
       }),
     );
+    expect(checks.some((c) => c.id.startsWith("optional-"))).toBe(true);
   });
 });

@@ -86,6 +86,19 @@ describe("handleSlash", () => {
     expect(ctx!.spec.cmd).toBe("language");
   });
 
+  it("/ask runs the lightweight ask callback and posts the answer asynchronously", async () => {
+    const runLightAsk = vi.fn(async () => "quick answer");
+    const postInfo = vi.fn();
+    const result = handleSlash("ask", ["what", "is", "cache?"], makeLoop(), {
+      runLightAsk,
+      postInfo,
+    });
+
+    expect(result.info).toBe("asking without tools...");
+    expect(runLightAsk).toHaveBeenCalledWith("what is cache?");
+    await vi.waitFor(() => expect(postInfo).toHaveBeenCalledWith("≫ ask\nquick answer"));
+  });
+
   it("/new drops in-memory context AND clears scrollback", () => {
     const loop = makeLoop();
     loop.log.append({ role: "user", content: "message 1" });
@@ -720,7 +733,7 @@ describe("handleSlash", () => {
     // Case-insensitive.
     expect(suggestSlashCommands("HE").map((s) => s.cmd)).toEqual(["help"]);
     // Empty prefix returns the full non-advanced release list, including code commands.
-    expect(suggestSlashCommands("", true)).toHaveLength(49);
+    expect(suggestSlashCommands("", true)).toHaveLength(50);
     expect(suggestSlashCommands("", true).map((s) => s.cmd)).toContain("logs");
     expect(suggestSlashCommands("", true).map((s) => s.cmd)).toContain("language");
     expect(suggestSlashCommands("lan").map((s) => s.cmd)).toContain("language");

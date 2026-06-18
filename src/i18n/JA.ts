@@ -341,6 +341,7 @@ export const JA: TranslationSchema = {
     stats: {
       description:
         "セッション横断のコストダッシュボード（今日/週/月/全期間 · キャッシュヒット · Claude比較）",
+      argsHint: "[history]",
     },
     cost: {
       description:
@@ -452,6 +453,10 @@ export const JA: TranslationSchema = {
     },
     btw: {
       description: "簡単な脇道の質問 — 白紙状態から回答し、会話コンテキストには追加されません",
+      argsHint: "<question>",
+    },
+    ask: {
+      description: "ツールなしの軽量質問を行い、このやり取りを現在のセッションに保存します",
       argsHint: "<question>",
     },
     "search-engine": {

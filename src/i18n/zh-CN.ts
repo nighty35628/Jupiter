@@ -317,6 +317,7 @@ export const zhCN: TranslationSchema = {
     update: { description: "显示当前版本与最新版本及升级命令" },
     stats: {
       description: "跨会话成本仪表板（今日 / 本周 / 本月 / 全部 · 缓存命中 · 与 Claude 对比）",
+      argsHint: "[history]",
     },
     cost: {
       description: "空 → 上一轮花费（使用卡片）；带文本 → 估算发送成本（最坏情况 + 可能缓存命中）",
@@ -431,6 +432,10 @@ export const zhCN: TranslationSchema = {
     },
     btw: {
       description: "顺便问一下 — 从空白上下文回答，不写入会话历史",
+      argsHint: "<question>",
+    },
+    ask: {
+      description: "轻量无工具问答，并将这轮问答保存到当前会话",
       argsHint: "<question>",
     },
     "search-engine": {

@@ -6,7 +6,12 @@ import {
   projectSettingsPath,
 } from "@/hooks.js";
 import { t } from "@/i18n/index.js";
-import { aggregateUsage, defaultUsageLogPath, readUsageLog } from "@/telemetry/usage.js";
+import {
+  aggregateUsage,
+  aggregateUsageHistory,
+  defaultUsageLogPath,
+  readUsageLog,
+} from "@/telemetry/usage.js";
 import {
   VERSION,
   compareVersions,
@@ -14,7 +19,7 @@ import {
   detectNpmInstallPrefix,
 } from "@/version.js";
 import { runDoctorChecks } from "../../../commands/doctor.js";
-import { renderDashboard } from "../../../commands/stats.js";
+import { renderDashboard, renderHistory } from "../../../commands/stats.js";
 import { MANUAL_UPDATE_COMMANDS, planUpdate } from "../../../commands/update.js";
 import type { SlashHandler } from "../dispatch.js";
 
@@ -128,7 +133,7 @@ const update: SlashHandler = (_args, _loop, ctx) => {
   return { info: lines.join("\n") };
 };
 
-const stats: SlashHandler = () => {
+const stats: SlashHandler = (args) => {
   const path = defaultUsageLogPath();
   const records = readUsageLog(path);
   if (records.length === 0) {
@@ -142,6 +147,10 @@ const stats: SlashHandler = () => {
         t("handlers.admin.statsWillAppear"),
       ].join("\n"),
     };
+  }
+  const sub = (args[0] ?? "").toLowerCase();
+  if (sub === "history" || sub === "hist") {
+    return { info: renderHistory(aggregateUsageHistory(records), path) };
   }
   const agg = aggregateUsage(records);
   return { info: renderDashboard(agg, path) };

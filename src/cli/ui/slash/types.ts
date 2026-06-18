@@ -4,8 +4,10 @@ import type { McpServerSummary } from "../../../mcp/summary.js";
 import type { JobRegistry } from "../../../tools/jobs.js";
 import type { PlanStep } from "../../../tools/plan.js";
 import type { CodeUndoOutput } from "../undo-context.js";
+import type { SlashCommandSpec } from "./registry.js";
 
 export type { McpServerSummary } from "../../../mcp/summary.js";
+export type { SlashArgCompleter, SlashCommandSpec, SlashGroup } from "./registry.js";
 
 export interface SlashResult {
   /** Text to display back to the user as a system/info line. */
@@ -84,6 +86,8 @@ export interface SlashContext {
   /** stop_job is async; handlers return synchronously and let the registry resolve in the background. */
   jobs?: JobRegistry;
   postInfo?: (text: string) => void;
+  /** Lightweight no-tool ask path. Saves the exchange to the current session when wired by App. */
+  runLightAsk?: (question: string) => Promise<string>;
   /** Push a structured Doctor card with check-by-check status; used by `/doctor`. */
   postDoctor?: (
     checks: ReadonlyArray<{ label: string; level: "ok" | "warn" | "fail"; detail: string }>,
@@ -180,30 +184,6 @@ export interface SlashContext {
   };
   /** Current session id — included in `/feedback`'s diagnostic block when present. */
   sessionId?: string;
-}
-
-export type SlashGroup =
-  | "chat"
-  | "setup"
-  | "info"
-  | "session"
-  | "extend"
-  | "code"
-  | "jobs"
-  | "advanced";
-
-export interface SlashCommandSpec {
-  cmd: string;
-  summary: string;
-  contextual?: "code";
-  /** Visual category in the suggestions palette + /help. `advanced` collapses by default. */
-  group: SlashGroup;
-  /** If the command takes args, hint text shown after the name. */
-  argsHint?: string;
-  /** First-arg picker source. `"path"` async-lists the filesystem for directory completion (used by `/cwd`). */
-  argCompleter?: "models" | "mcp-resources" | "mcp-prompts" | "skills" | "path" | readonly string[];
-  /** Alternate names — typing any of these resolves to `cmd` for dispatch / suggestion / arg-context. */
-  aliases?: readonly string[];
 }
 
 export interface SlashArgContext {

@@ -5,7 +5,10 @@ import { t } from "../../i18n/index.js";
 import {
   type UsageAggregate,
   type UsageBucket,
+  type UsageHistoryAggregate,
+  type UsageHistoryDay,
   aggregateUsage,
+  aggregateUsageHistory,
   bucketCacheHitRatio,
   bucketSavingsFraction,
   defaultUsageLogPath,
@@ -20,6 +23,8 @@ export interface StatsOptions {
   logPath?: string;
   /** Inject a fixed timestamp (tests) so rolling windows are deterministic. */
   now?: number;
+  /** Render monthly + daily history instead of the rolling-window dashboard. */
+  history?: boolean;
 }
 
 export function statsCommand(opts: StatsOptions): void {
@@ -69,7 +74,11 @@ function dashboard(opts: StatsOptions): void {
   }
 
   const agg = aggregateUsage(records, { now: opts.now });
-  console.log(renderDashboard(agg, path));
+  console.log(
+    opts.history
+      ? renderHistory(aggregateUsageHistory(records, { now: opts.now }), path)
+      : renderDashboard(agg, path),
+  );
 }
 
 /** Pure renderer — pulled out so tests can assert on the string directly. */
@@ -107,6 +116,64 @@ export function renderDashboard(agg: UsageAggregate, logPath: string): string {
     lines.push(renderSubagentSection(agg.subagents));
   }
   return lines.join("\n");
+}
+
+export function renderHistory(history: UsageHistoryAggregate, logPath: string): string {
+  const lines: string[] = [];
+  const size = formatLogSize(logPath);
+  lines.push(`Jupiter usage history — ${logPath}${size ? ` (${size})` : ""}`);
+  lines.push(`records: ${history.recordCount}`);
+  lines.push("");
+  lines.push(historyHeader("month"));
+  lines.push(divider());
+  for (const month of history.months) {
+    if (month.total.turns === 0) continue;
+    lines.push(historyRow(month.label, month.total));
+  }
+  if (!lines.some((line) => /\$\d/.test(line))) {
+    lines.push("(no usage in the selected history window)");
+  }
+
+  const current = history.months[0];
+  const recentDays = current?.days.filter((day) => day.turns > 0).slice(-14) ?? [];
+  if (recentDays.length > 0) {
+    lines.push("", `Recent days — ${current?.label ?? ""}`, historyHeader("day"), divider());
+    for (const day of recentDays) {
+      lines.push(historyRow(day.day, day));
+    }
+  }
+  return lines.join("\n");
+}
+
+function historyHeader(label: string): string {
+  return [
+    pad(label, 16),
+    pad("turns", 8, "right"),
+    pad("input tok", 11, "right"),
+    pad("output tok", 11, "right"),
+    pad("cache hit", 10, "right"),
+    pad("cost (USD)", 14, "right"),
+    pad("cache saved", 14, "right"),
+  ].join("  ");
+}
+
+function historyRow(label: string, item: UsageHistoryDay): string {
+  const input = item.cacheHitTokens + item.cacheMissTokens;
+  const hit =
+    input > 0
+      ? `${((item.cacheHitTokens / input) * 100).toFixed(1)}%`
+      : item.turns > 0
+        ? "0.0%"
+        : "—";
+  return [
+    pad(label, 16),
+    pad(item.turns.toString(), 8, "right"),
+    pad(input.toLocaleString(), 11, "right"),
+    pad(item.completionTokens.toLocaleString(), 11, "right"),
+    pad(hit, 10, "right"),
+    pad(`$${item.costUsd.toFixed(6)}`, 14, "right"),
+    pad(item.cacheSavingsUsd > 0 ? `$${item.cacheSavingsUsd.toFixed(4)}` : "—", 14, "right"),
+  ].join("  ");
 }
 
 function renderSubagentSection(sub: NonNullable<UsageAggregate["subagents"]>): string {

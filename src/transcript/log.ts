@@ -1,6 +1,11 @@
 /** Transcripts are receipts (cost/usage/prefix); sessions are memory (ChatMessages). Don't conflate. */
 
 import { type WriteStream, createWriteStream, readFileSync } from "node:fs";
+import {
+  redactEventJsonString,
+  redactEventText,
+  redactEventValue,
+} from "../core/event-redaction.js";
 import type { LoopEvent } from "../loop.js";
 import type { RawUsage } from "../types.js";
 
@@ -66,12 +71,12 @@ export function recordFromLoopEvent(
     ts: new Date().toISOString(),
     turn: ev.turn,
     role: ev.role,
-    content: ev.content,
+    content: redactEventText(ev.content),
   };
   if (ev.toolName !== undefined) rec.tool = ev.toolName;
-  if (ev.toolArgs !== undefined) rec.args = ev.toolArgs;
-  if (ev.error !== undefined) rec.error = ev.error;
-  if (ev.errorDetail !== undefined) rec.errorDetail = ev.errorDetail;
+  if (ev.toolArgs !== undefined) rec.args = redactEventJsonString(ev.toolArgs);
+  if (ev.error !== undefined) rec.error = redactEventText(ev.error);
+  if (ev.errorDetail !== undefined) rec.errorDetail = redactEventValue(ev.errorDetail);
   if (ev.stats) {
     rec.usage = {
       prompt_tokens: ev.stats.usage.promptTokens,

@@ -11,7 +11,7 @@ import {
   type RunCommandResult,
   runCommand,
 } from "./shell/exec.js";
-import { isCommandAllowed } from "./shell/parse.js";
+import { isCommandAllowed, isReadOnlyShellCommand } from "./shell/parse.js";
 import { saveTruncatedResult } from "./truncated-result-saver.js";
 
 export {
@@ -21,6 +21,7 @@ export {
   isAllowed,
   isCommandAllowed,
   isDqEscape,
+  isReadOnlyShellCommand,
   tokenizeCommand,
 } from "./shell/parse.js";
 export type { ResolveExecutableOptions, RunCommandResult } from "./shell/exec.js";
@@ -89,15 +90,14 @@ export function registerShellTools(registry: ToolRegistry, opts: ShellToolsOptio
     name: "run_command",
     description:
       'Run a shell command in the project root; returns combined stdout+stderr. Allowlisted read-only / test / lint / typecheck commands run immediately; mutating / network / install commands gate on user confirmation.\n\nDO NOT use run_command for file operations — use write_file, edit_file, multi_edit, copy_file, move_file, or delete_file instead. Shell utilities (echo, cp, sed, cat, tee, perl, python -c, etc.) bypass validation, lack rollback, and will trigger user confirmation gates that waste turns.\n\nNo real shell — argv parsed natively for cross-platform parity:\n• Supported: chains `|`/`||`/`&&`/`;` (each segment allowlist-checked) and file redirects `>`/`>>`/`<`/`2>`/`2>>`/`2>&1`/`&>`.\n• Rejected: background `&`, heredoc `<<`, `$(…)`, subshells, `$VAR` expansion, glob expansion. Quote operator chars as literals (`grep "a|b" file`).\n• `cd` is rejected in chains. By default, run generated scripts from the directory where the script was written; do not assume an input/data directory is the cwd. Pass input/data paths as arguments unless the command truly depends on that cwd. For package tools, use `npm --prefix <dir>`, `git -C <dir>`, `cargo -C <dir>`.\n• Filter at source — `grep -c` / `wc -l` / narrower paths over unbounded dumps.',
-    // Plan-mode gate: allow allowlisted commands through (git status,
-    // cargo check, ls, grep …) so the model can actually investigate
-    // during planning. Anything that would otherwise trigger a
-    // confirmation prompt is treated as "not read-only" and bounced.
+    // Plan-mode gate: only strict built-in read-only commands pass here.
+    // Do not honor yolo/allowAll or project allowlist entries in plan mode:
+    // planning should remain an exploration phase even when execution mode
+    // is permissive.
     readOnlyCheck: (args: { command?: unknown }) => {
-      if (isAllowAll()) return true;
       const cmd = typeof args?.command === "string" ? args.command.trim() : "";
       if (!cmd) return false;
-      return isCommandAllowed(cmd, getExtraAllowed(), rootDir, opts.sensitivePaths);
+      return isReadOnlyShellCommand(cmd, rootDir, opts.sensitivePaths);
     },
     parameters: {
       type: "object",

@@ -330,6 +330,7 @@ export const EN: TranslationSchema = {
     stats: {
       description:
         "cross-session cost dashboard (today / week / month / all-time · cache hit · vs Claude)",
+      argsHint: "[history]",
     },
     cost: {
       description:
@@ -448,6 +449,10 @@ export const EN: TranslationSchema = {
     btw: {
       description:
         "ask a quick side question — answered from a blank slate, never added to the conversation context",
+      argsHint: "<question>",
+    },
+    ask: {
+      description: "ask a quick no-tool question and save the exchange in the current session",
       argsHint: "<question>",
     },
     "search-engine": {

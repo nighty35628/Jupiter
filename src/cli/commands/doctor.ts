@@ -6,12 +6,14 @@ import { join, resolve } from "node:path";
 import { DeepSeekClient, pickPrimaryBalance } from "../../client.js";
 import {
   defaultConfigPath,
+  inspectEndpointSources,
   loadEndpoint,
   loadProxyConfig,
   normalizeMcpConfig,
   readConfig,
   resolveSemanticEmbeddingConfig,
 } from "../../config.js";
+import { detectOptionalComponents } from "../../desktop/optional-components.js";
 import { loadDotenv } from "../../env.js";
 import { loadHooks } from "../../hooks.js";
 import { t } from "../../i18n/index.js";
@@ -52,7 +54,39 @@ export async function runDoctorChecks(projectRoot: string): Promise<DoctorCheck[
     checkOllama(projectRoot),
     checkProject(projectRoot),
   ]);
-  return [r[0], r[1], ...checkProxy(), r[2], r[3], r[4], r[5], r[6], r[7]];
+  return [
+    r[0],
+    r[1],
+    checkEndpointSource(),
+    ...checkProxy(),
+    r[2],
+    r[3],
+    r[4],
+    r[5],
+    r[6],
+    r[7],
+    ...checkOptionalComponents(),
+  ];
+}
+
+function checkEndpointSource(): Check {
+  const sources = inspectEndpointSources();
+  const parts = [
+    `baseUrl=${sources.baseUrlSource}`,
+    `apiKey=${sources.apiKeySource}${sources.apiKeyPreview ? ` (${sources.apiKeyPreview})` : ""}`,
+  ];
+  if (sources.shadowedConfigApiKey) {
+    parts.push("config apiKey ignored because env baseUrl owns the endpoint tuple");
+  }
+  if (sources.shadowedEnvApiKey) {
+    parts.push("env DEEPSEEK_API_KEY ignored because config baseUrl owns the endpoint tuple");
+  }
+  return {
+    id: "endpoint-source",
+    label: "endpoint src ",
+    level: sources.shadowedConfigApiKey || sources.shadowedEnvApiKey ? "warn" : "ok",
+    detail: parts.join("; "),
+  };
 }
 
 /** Probe hosts used to show users what's going through the proxy vs. direct. Cheap (no I/O), purely a routing simulation against the same NO_PROXY patterns the dispatcher uses. */
@@ -124,6 +158,33 @@ function checkProxy(): Check[] {
     detail: probes.join(", "),
   };
   return [proxyCheck, routingCheck];
+}
+
+function checkOptionalComponents(): Check[] {
+  const components = detectOptionalComponents();
+  const browserAvailable = components.some(
+    (component) => component.capability === "browser-automation" && component.state === "available",
+  );
+  return components.map((component): Check => {
+    const isBrowser = component.capability === "browser-automation";
+    const level: Level =
+      component.state === "available" || (isBrowser && browserAvailable) ? "ok" : "warn";
+    const detail =
+      component.state === "available"
+        ? [
+            component.version ?? "available",
+            component.executablePath ? `at ${component.executablePath}` : null,
+          ]
+            .filter(Boolean)
+            .join(" ")
+        : `missing — ${component.installHint ?? component.homepageUrl ?? "install if needed"}`;
+    return {
+      id: `optional-${component.id}`,
+      label: `optional ${component.name}`.slice(0, 13).padEnd(13),
+      level,
+      detail: `${component.capability}: ${detail}`,
+    };
+  });
 }
 
 const TTY = process.stdout.isTTY && process.env.TERM !== "dumb";

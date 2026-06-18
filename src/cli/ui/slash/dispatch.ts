@@ -2,6 +2,7 @@ import { t } from "../../../i18n/index.js";
 import type { CacheFirstLoop } from "../../../loop.js";
 import { resolveSlashAlias } from "./commands.js";
 import { handlers as adminHandlers } from "./handlers/admin.js";
+import { handlers as askHandlers } from "./handlers/ask.js";
 import { handlers as basicHandlers } from "./handlers/basic.js";
 import { handlers as dashboardHandlers } from "./handlers/dashboard.js";
 import { handlers as diffHandlers } from "./handlers/diff.js";
@@ -32,6 +33,7 @@ export type SlashHandler = (args: string[], loop: CacheFirstLoop, ctx: SlashCont
 
 const HANDLERS: Record<string, SlashHandler> = {
   ...adminHandlers,
+  ...askHandlers,
   ...basicHandlers,
   ...dashboardHandlers,
   ...dingtalkHandlers,

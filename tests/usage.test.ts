@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { renderDashboard } from "../src/cli/commands/stats.js";
+import { renderDashboard, renderHistory } from "../src/cli/commands/stats.js";
 import { Usage } from "../src/client.js";
 import {
   type UsageRecord,
@@ -546,5 +546,34 @@ describe("renderDashboard", () => {
     // Each em-dash represents an empty cell.
     const emDashCount = (out.match(/—/g) ?? []).length;
     expect(emDashCount).toBeGreaterThan(0);
+  });
+});
+
+describe("renderHistory", () => {
+  it("renders non-empty months and recent days", () => {
+    const now = Date.UTC(2026, 5, 18);
+    const history = aggregateUsageHistory(
+      [
+        {
+          ts: Date.UTC(2026, 5, 17),
+          session: "s",
+          model: "deepseek-v4-flash",
+          promptTokens: 100,
+          completionTokens: 20,
+          cacheHitTokens: 80,
+          cacheMissTokens: 20,
+          costUsd: 0.001,
+          claudeEquivUsd: 0.01,
+        },
+      ],
+      { now, monthCount: 2 },
+    );
+
+    const out = renderHistory(history, "/tmp/fake.jsonl");
+
+    expect(out).toContain("Jupiter usage history");
+    expect(out).toContain("June 2026");
+    expect(out).toContain("2026-06-17");
+    expect(out).toContain("80.0%");
   });
 });

@@ -241,6 +241,7 @@ export const ru: TranslationSchema = {
       ...EN.slash.stats,
       description:
         "межсессионная панель стоимости (сегодня / неделя / месяц / всё время · кэш-попадания · vs Claude)",
+      argsHint: "[history]",
     },
     cost: {
       ...EN.slash.cost,
@@ -382,6 +383,10 @@ export const ru: TranslationSchema = {
       ...EN.slash.btw,
       description:
         "быстрый побочный вопрос — отвечается с чистого листа, не добавляется в контекст разговора",
+    },
+    ask: {
+      ...EN.slash.ask,
+      description: "быстрый вопрос без инструментов с сохранением обмена в текущей сессии",
     },
     "search-engine": {
       ...EN.slash["search-engine"],

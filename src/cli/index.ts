@@ -29,6 +29,14 @@ import { startCpuProfile, stopAndSaveCpuProfile } from "./cpu-prof.js";
 import { resolveBareCommandMode, resolveContinueFlag, resolveDefaults } from "./resolve.js";
 import { markPhase } from "./startup-profile.js";
 
+function parseRunFormat(raw: unknown, json: unknown): "text" | "json" | null {
+  if (json === true) return "json";
+  if (raw === undefined || raw === "text") return "text";
+  if (raw === "json" || raw === "jsonl") return "json";
+  process.stderr.write(`Invalid --format=${String(raw)} (expected "text", "json", or "jsonl")\n`);
+  return null;
+}
+
 async function maybeStartCpuProfile(flag: unknown): Promise<boolean> {
   if (flag === undefined || flag === false) return false;
   await startCpuProfile(typeof flag === "string" ? flag : undefined);
@@ -347,8 +355,15 @@ program
   .option("--mcp-prefix <str>", t("ui.mcpPrefixHintShort"))
   .option("--no-config", t("ui.noConfigHint"))
   .option("--no-proxy", t("ui.noProxyHint"))
+  .option("--format <format>", "output format: text or jsonl", "text")
+  .option("--json", "output a JSONL event stream")
   .action(async (task: string, opts) => {
     persistEffortFlag(opts.effort);
+    const format = parseRunFormat(opts.format, opts.json);
+    if (!format) {
+      process.exitCode = 1;
+      return;
+    }
     const defaults = resolveDefaults({
       model: opts.model,
       mcp: opts.mcp as string[],
@@ -364,6 +379,7 @@ program
       transcript: opts.transcript,
       mcp: defaults.mcp,
       mcpPrefix: opts.mcpPrefix,
+      format,
     });
   });
 
@@ -429,9 +445,10 @@ program
 program
   .command("stats [transcript]")
   .description(t("cli.stats"))
-  .action(async (transcript: string | undefined) => {
+  .option("--history", "show monthly and recent daily usage history")
+  .action(async (transcript: string | undefined, opts) => {
     const { statsCommand } = await import("./commands/stats.js");
-    statsCommand({ transcript });
+    statsCommand({ transcript, history: !!opts.history });
   });
 
 program

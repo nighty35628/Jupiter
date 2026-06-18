@@ -821,10 +821,25 @@ export interface ResolvedEndpoint {
   apiKey: string | undefined;
 }
 
+export interface ResolvedEndpointSources extends ResolvedEndpoint {
+  configPath: string;
+  baseUrlSource: string;
+  apiKeySource: string;
+  apiKeyPreview: string | undefined;
+  shadowedConfigApiKey: boolean;
+  shadowedEnvApiKey: boolean;
+}
+
 // DEEPSEEK_BASE_URL is the original name; DEEPSEEK_API_BASE_URL is accepted as an
 // alias so users who copy the OPENAI_BASE_URL pattern land on a working name (#1876).
 export function resolveBaseUrlEnv(): string | undefined {
   return process.env.DEEPSEEK_BASE_URL || process.env.DEEPSEEK_API_BASE_URL || undefined;
+}
+
+function resolveBaseUrlEnvSource(): string | undefined {
+  if (process.env.DEEPSEEK_BASE_URL) return "env:DEEPSEEK_BASE_URL";
+  if (process.env.DEEPSEEK_API_BASE_URL) return "env:DEEPSEEK_API_BASE_URL";
+  return undefined;
 }
 
 // (baseUrl, apiKey) is a tuple: whichever source defines baseUrl owns apiKey too,
@@ -841,6 +856,57 @@ export function loadEndpoint(path: string = defaultConfigPath()): ResolvedEndpoi
   return {
     baseUrl: undefined,
     apiKey: process.env.DEEPSEEK_API_KEY ?? cfg.apiKey,
+  };
+}
+
+export function inspectEndpointSources(
+  path: string = defaultConfigPath(),
+): ResolvedEndpointSources {
+  const envBaseUrl = resolveBaseUrlEnv();
+  const envBaseUrlSource = resolveBaseUrlEnvSource();
+  const envApiKey = process.env.DEEPSEEK_API_KEY;
+  const cfg = readConfig(path);
+
+  if (envBaseUrl) {
+    return {
+      baseUrl: envBaseUrl,
+      apiKey: envApiKey,
+      configPath: path,
+      baseUrlSource: envBaseUrlSource ?? "env",
+      apiKeySource: envApiKey ? "env:DEEPSEEK_API_KEY" : "missing (env baseUrl owns apiKey)",
+      apiKeyPreview: envApiKey ? redactKey(envApiKey) : undefined,
+      shadowedConfigApiKey: Boolean(cfg.apiKey),
+      shadowedEnvApiKey: false,
+    };
+  }
+
+  if (cfg.baseUrl) {
+    return {
+      baseUrl: cfg.baseUrl,
+      apiKey: cfg.apiKey,
+      configPath: path,
+      baseUrlSource: `config:${path}#baseUrl`,
+      apiKeySource: cfg.apiKey ? `config:${path}#apiKey` : "missing (config baseUrl owns apiKey)",
+      apiKeyPreview: cfg.apiKey ? redactKey(cfg.apiKey) : undefined,
+      shadowedConfigApiKey: false,
+      shadowedEnvApiKey: Boolean(envApiKey),
+    };
+  }
+
+  const apiKey = envApiKey ?? cfg.apiKey;
+  return {
+    baseUrl: undefined,
+    apiKey,
+    configPath: path,
+    baseUrlSource: "default:api.deepseek.com",
+    apiKeySource: envApiKey
+      ? "env:DEEPSEEK_API_KEY"
+      : cfg.apiKey
+        ? `config:${path}#apiKey`
+        : "missing",
+    apiKeyPreview: apiKey ? redactKey(apiKey) : undefined,
+    shadowedConfigApiKey: false,
+    shadowedEnvApiKey: false,
   };
 }
 

@@ -58,6 +58,7 @@ import {
 import { Eventizer } from "../../core/eventize.js";
 import { pauseGate } from "../../core/pause-gate.js";
 import { autoResolveVerdict, shouldAutoResolveCheckpoint } from "../../core/pause-policy.js";
+import { runDesktopLightAsk } from "../../desktop/ask-light.js";
 import type { DingTalkChannel } from "../../dingtalk/channel.js";
 import { useDingTalkChannel } from "../../dingtalk/use-dingtalk-channel.js";
 import type { FeishuChannel } from "../../feishu/channel.js";
@@ -99,7 +100,7 @@ import { loadSlashUsage, recordSlashUse } from "../../slash-usage.js";
 import type { TelegramChannel } from "../../telegram/channel.js";
 import { useTelegramChannel } from "../../telegram/use-telegram-channel.js";
 import { type SessionSummary, resolveContextTokens } from "../../telemetry/stats.js";
-import { defaultUsageLogPath } from "../../telemetry/usage.js";
+import { appendUsage, defaultUsageLogPath } from "../../telemetry/usage.js";
 import { warmupTokenizer } from "../../tokenizer.js";
 import type { ToolRegistry } from "../../tools.js";
 import type { ChoiceOption } from "../../tools/choice.js";
@@ -2156,6 +2157,32 @@ function AppInner({
 
   const writeTranscript = useTranscriptWriter(transcriptRef, model, prefixHash);
 
+  const runLightAsk = useCallback(
+    async (question: string): Promise<string> => {
+      setBusy(true);
+      try {
+        const result = await runDesktopLightAsk({
+          client: loop.client,
+          model: loop.model,
+          reasoningEffort: loop.reasoningEffort,
+          prefixHash,
+          text: question,
+          turn: loop.currentTurn + 1,
+          recordExchange: (exchange) => {
+            const stats = loop.recordLightAskExchange(exchange);
+            appendUsage({ session: session ?? null, model: stats.model, usage: stats.usage });
+            setSummary(loop.stats.summary());
+          },
+          emit: () => {},
+        });
+        return result.content;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [loop, prefixHash, session],
+  );
+
   /**
    * Toggle plan mode on the local state AND on the ToolRegistry. The
    * registry's copy is what actually gates dispatch; the local state
@@ -3081,6 +3108,7 @@ function AppInner({
                 : fromTelegram
                   ? telegram.sendInfo
                   : log.pushInfo,
+          runLightAsk,
           postDoctor: (checks) => log.showDoctor(checks),
           postUsage: (args) => log.showUsageVerbose(args),
           postKeys: (args) =>
@@ -3672,6 +3700,7 @@ function AppInner({
       isLoopFiring,
       clearFiringFlag,
       startWalkthrough,
+      runLightAsk,
       startDashboard,
       stopDashboard,
       getDashboardUrl,

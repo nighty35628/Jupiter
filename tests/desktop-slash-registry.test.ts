@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { DESKTOP_CLI_SLASH_COMMANDS, parseDesktopSlash } from "../desktop/src/cli-slash.js";
-import { SLASH_COMMANDS } from "../src/cli/ui/slash/commands.js";
+import { SLASH_COMMANDS } from "../src/cli/ui/slash/registry.js";
 
 describe("desktop CLI slash registry", () => {
-  it("covers every CLI slash command", () => {
-    const desktop = new Set(DESKTOP_CLI_SLASH_COMMANDS.map((spec) => spec.cmd));
-    const missing = SLASH_COMMANDS.map((spec) => spec.cmd).filter((cmd) => !desktop.has(cmd));
+  it("is derived from the shared CLI slash command registry", () => {
+    const sharedDesktopShape = SLASH_COMMANDS.map(({ cmd, summary, argsHint, aliases }) => ({
+      cmd,
+      summary,
+      ...(argsHint ? { argsHint } : {}),
+      ...(aliases ? { aliases } : {}),
+    }));
 
-    expect(missing).toEqual([]);
+    expect(DESKTOP_CLI_SLASH_COMMANDS).toEqual(sharedDesktopShape);
   });
 
   it("accepts bare undo and rewind as desktop command shortcuts", () => {

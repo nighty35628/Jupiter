@@ -12,6 +12,7 @@ import {
   injectPowerShellUtf8,
   isAllowed,
   isCommandAllowed,
+  isReadOnlyShellCommand,
   prepareSpawn,
   quoteForCmdExe,
   registerShellTools,
@@ -394,6 +395,18 @@ describe("isAllowed", () => {
       expect(isCommandAllowed("cat < ~/.ssh/id_rsa", [], projectRoot)).toBe(false);
       expect(isCommandAllowed("cat < README.md", [], projectRoot)).toBe(true);
     });
+
+    it("uses a stricter read-only classifier for plan mode", () => {
+      expect(isReadOnlyShellCommand("git status", projectRoot)).toBe(true);
+      expect(isReadOnlyShellCommand("git status | grep main", projectRoot)).toBe(true);
+      expect(isReadOnlyShellCommand("git status 2>&1", projectRoot)).toBe(true);
+      expect(isReadOnlyShellCommand("cat < README.md", projectRoot)).toBe(true);
+
+      expect(isCommandAllowed("git status > ./output.txt", [], projectRoot)).toBe(true);
+      expect(isReadOnlyShellCommand("git status > ./output.txt", projectRoot)).toBe(false);
+      expect(isReadOnlyShellCommand("npm install left-pad", projectRoot)).toBe(false);
+      expect(isReadOnlyShellCommand("deploy-prod", projectRoot)).toBe(false);
+    });
   });
 
   // Issue #2081 — allowlisted commands with path arguments that resolve
@@ -747,6 +760,52 @@ describe("registerShellTools — dispatch integration", () => {
     });
     expect(afterYolo).toMatch(/user denied/);
     expect(afterYolo).toMatch(/node -e/);
+  });
+
+  it("plan mode ignores yolo/allowAll for shell commands", async () => {
+    const registry = new ToolRegistry();
+    registerShellTools(registry, {
+      rootDir: tmp,
+      allowAll: true,
+    });
+    registry.setPlanMode(true);
+
+    const out = await registry.dispatch(
+      "run_command",
+      JSON.stringify({ command: "node -e \"process.stdout.write('mutated')\"" }),
+    );
+    const parsed = JSON.parse(out);
+    expect(parsed.rejectedReason).toBe("plan-mode");
+    expect(parsed.error).toMatch(/unavailable in plan mode/);
+  });
+
+  it("plan mode ignores project allowlist entries for shell commands", async () => {
+    const registry = new ToolRegistry();
+    registerShellTools(registry, {
+      rootDir: tmp,
+      extraAllowed: ["node -e"],
+    });
+    registry.setPlanMode(true);
+
+    const out = await registry.dispatch(
+      "run_command",
+      JSON.stringify({ command: "node -e \"process.stdout.write('allowed outside plan')\"" }),
+    );
+    const parsed = JSON.parse(out);
+    expect(parsed.rejectedReason).toBe("plan-mode");
+  });
+
+  it("plan mode rejects output redirection even for otherwise allowlisted shell commands", async () => {
+    const registry = new ToolRegistry();
+    registerShellTools(registry, { rootDir: tmp });
+    registry.setPlanMode(true);
+
+    const out = await registry.dispatch(
+      "run_command",
+      JSON.stringify({ command: "git status > ./plan-output.txt" }),
+    );
+    const parsed = JSON.parse(out);
+    expect(parsed.rejectedReason).toBe("plan-mode");
   });
 
   it("run_background dispatch starts a job, list_jobs sees it, job_output reads it, stop_job ends it", async () => {
