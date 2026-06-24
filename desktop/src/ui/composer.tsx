@@ -1368,7 +1368,10 @@ export function Composer({
               <button
                 type="button"
                 className="model-pill"
-                onClick={() => setModelMenuOpen((v) => !v)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setModelMenuOpen((v) => !v);
+                }}
                 title={t("composer.switchModel")}
               >
                 <I.brain size={12} />
@@ -1599,7 +1602,11 @@ function ModelEffortMenu({
   return (
     <div
       className="composer-model-menu"
-      onMouseDown={(e) => e.preventDefault()}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => e.stopPropagation()}
     >
       <div className="composer-menu-head">
         <I.brain size={13} />
@@ -1612,7 +1619,10 @@ function ModelEffortMenu({
             type="button"
             className="composer-model-option"
             data-active={m === modelLabel}
-            onClick={() => onPickModel(m)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPickModel(m);
+            }}
           >
             <span className="ico">
               {m === modelLabel ? <I.check size={12} /> : <I.brain size={12} />}
@@ -1629,16 +1639,19 @@ function ModelEffortMenu({
         <span>{t("composer.switchEffort")}</span>
       </div>
       <div className="composer-effort-grid">
-        {EFFORTS.map((e) => (
+        {EFFORTS.map((effort) => (
           <button
-            key={e}
+            key={effort}
             type="button"
             className="composer-effort-option"
-            data-active={e === currentEffort}
-            title={t(`effort.${e}Desc` as TKey)}
-            onClick={() => onPickEffort(e)}
+            data-active={effort === currentEffort}
+            title={t(`effort.${effort}Desc` as TKey)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPickEffort(effort);
+            }}
           >
-            {e}
+            {effort}
           </button>
         ))}
       </div>

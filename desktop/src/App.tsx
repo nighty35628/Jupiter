@@ -36,6 +36,7 @@ export { pathToFileUrl } from "./file-preview";
 import type { FeishuDesktopSettingsState } from "./feishu-settings";
 import { getLang, getLangLabel, getSupportedLangs, setLang, t, useLang } from "./i18n";
 import { I } from "./icons";
+import { openExternalUrl } from "./open-external";
 import {
   type ApprovalSnapshot,
   deriveDesktopNotifications,
@@ -5891,7 +5892,7 @@ export function App() {
         updateCheck.status === "error"
           ? updateCheck.releaseUrls
           : DEFAULT_UPDATE_RELEASE_URLS;
-      openUrl(urls[source]).catch(() => undefined);
+      openExternalUrl(urls[source]).catch(() => undefined);
     },
     [updateCheck],
   );

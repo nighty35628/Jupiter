@@ -73,8 +73,10 @@ jobs:
     runs-on: ${{ matrix.target.os }}
     # secrets.* isn't accessible from step-level if:, so expose presence as a
     # job-level env. Treat "true"/"false" strings as booleans downstream.
+    # Require the full Apple set before taking the signed macOS path; partial
+    # setup should still produce unsigned DMGs instead of failing the release.
     env:
-      HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' && secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -197,7 +199,7 @@ jobs:
       # unsigned path separate from the optional macOS signing block.
       - name: Build Tauri bundle (unsigned)
         if: >-
-          !startsWith(matrix.target.os, 'macos-') || env.HAS_APPLE_CERT != 'true'
+          !startsWith(matrix.target.os, 'macos-') || env.HAS_APPLE_SIGNING != 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -213,7 +215,7 @@ jobs:
           args: ${{ matrix.target.args }}
 
       - name: Build Tauri bundle (macOS, signed + notarized)
-        if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_CERT == 'true'
+        if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_SIGNING == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -264,7 +266,7 @@ jobs:
           printf '  %s\n' "${files[@]}"
 
       - name: Verify app Node inherits TCC grants (macOS)
-        if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_CERT == 'true'
+        if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_SIGNING == 'true'
         working-directory: desktop
         shell: bash
         run: |

@@ -324,6 +324,36 @@ describe("App streaming events", () => {
     expect(document.querySelectorAll(".empty-suggestion")).toHaveLength(4);
   });
 
+  it("does not open an external browser when switching the composer model", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-model", "/tmp/jupiter-streaming-test");
+
+    const app = activeApp();
+    const modelPill = app.querySelector<HTMLButtonElement>(".composer-model-wrap .model-pill");
+    expect(modelPill).toBeTruthy();
+    fireEvent.click(modelPill!);
+
+    await waitFor(() => expect(app.querySelector(".composer-model-menu")).toBeTruthy());
+    const proOption = Array.from(
+      app.querySelectorAll<HTMLButtonElement>(".composer-model-option"),
+    ).find((button) => button.textContent?.includes("deepseek-v4-pro"));
+    expect(proOption).toBeTruthy();
+    fireEvent.click(proOption!);
+
+    expect(openUrl).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(sentRpcCommands()).toContainEqual(
+        expect.objectContaining({
+          cmd: "settings_save",
+          model: "deepseek-v4-pro",
+          tabId: "tab-model",
+        }),
+      ),
+    );
+  });
+
   it("updates the top tab title when the workspace changes", async () => {
     render(<App />);
 
@@ -386,6 +416,31 @@ describe("App streaming events", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /don't remind again|不再提示/i }));
     expect(sentRpcCommands()).toContainEqual({ cmd: "update_disable_prompts" });
+  });
+
+  it("does not open a blank browser when update release URLs are empty", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-update-empty", "/tmp/jupiter-streaming-test");
+
+    await emitRpc({
+      type: "$update_check",
+      mode: "auto",
+      status: "available",
+      currentVersion: "0.99.9",
+      latestVersion: "0.99.10",
+      releaseUrls: {
+        gitee: "",
+        github: "about:blank",
+      },
+    });
+
+    vi.mocked(openUrl).mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /gitee/i }));
+    fireEvent.click(screen.getByRole("button", { name: /github/i }));
+
+    expect(openUrl).not.toHaveBeenCalled();
   });
 
   it("does not show the startup splash again when switching to a newly opened tab", async () => {

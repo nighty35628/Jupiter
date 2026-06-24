@@ -71,8 +71,11 @@ describe("desktop release packaging", () => {
   });
 
   it("does not require macOS signing verification for unsigned builds", () => {
+    expect(releaseWorkflow).toContain("HAS_APPLE_SIGNING:");
+    expect(releaseWorkflow).toContain("secrets.APPLE_CERTIFICATE_PASSWORD != ''");
+    expect(releaseWorkflow).toContain("secrets.APPLE_PASSWORD != ''");
     expect(releaseWorkflow).toContain(
-      "if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_CERT == 'true'",
+      "if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_SIGNING == 'true'",
     );
   });
 

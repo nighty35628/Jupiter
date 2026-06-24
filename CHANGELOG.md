@@ -3,6 +3,39 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] — 2026-06-24
+
+### 中文
+
+**桌面外部链接保护。** 桌面端新增 `openExternalUrl` 统一入口，只允许 `http:` 与 `https:` 链接交给系统浏览器打开，
+空字符串、`about:blank`、相对路径和非网页协议会被忽略。更新提示中的 Gitee/GitHub 按钮也会复用这层保护，避免
+release URL 为空时打开空白浏览器页。
+
+**Composer 菜单点击修正。** 模型与 reasoning effort 菜单现在会阻止点击事件向外冒泡，切换模型或 effort 时不会
+误触发外层点击处理，也不会打开外部浏览器。补充了覆盖模型切换和空 release URL 的桌面流测试。
+
+**发布签名保护。** macOS release workflow 现在要求 Apple 证书、证书密码、签名身份、Apple ID、app-specific
+password 和 Team ID 全部存在时才走签名与 notarization；Apple secrets 只配置一部分时会回退到 unsigned DMG，
+避免发布任务因为半配置签名材料失败。
+
+**版本同步。** 桌面端、根包、Tauri、Cargo、CHANGELOG、README 和 release notes 版本统一为 `1.0.5`。
+
+### English
+
+**Desktop external-link guard.** Desktop now uses a shared `openExternalUrl` helper that only sends `http:` and
+`https:` links to the system browser. Empty strings, `about:blank`, relative paths, and non-web protocols are ignored.
+The update prompt's Gitee/GitHub buttons use the same guard, so missing release URLs no longer open blank browser pages.
+
+**Composer menu click fix.** Model and reasoning-effort menus now stop click propagation, so switching the model or
+effort no longer triggers outer click handlers or opens the external browser by accident. Desktop streaming tests cover
+model switching and empty release URLs.
+
+**Release signing guard.** The macOS release workflow now requires the complete Apple signing set before taking the
+signed and notarized path: certificate, certificate password, signing identity, Apple ID, app-specific password, and
+Team ID. Partial Apple secret setup falls back to unsigned DMGs instead of failing the release job.
+
+**Version alignment.** Desktop, root package, Tauri, Cargo, CHANGELOG, README, and release notes are aligned on `1.0.5`.
+
 ## [1.0.4] — 2026-06-18
 
 ### 中文

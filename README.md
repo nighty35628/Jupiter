@@ -68,7 +68,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 桌面安装包发布在 GitHub Releases：
 
-- 当前版本：`desktop-v1.0.4`
+- 当前版本：`desktop-v1.0.5`
 - [最新版本](https://github.com/nighty35628/Jupiter/releases/latest)
 - [全部版本](https://github.com/nighty35628/Jupiter/releases)
 
@@ -217,7 +217,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 Desktop installers are published on GitHub Releases:
 
-- Current version: `desktop-v1.0.4`
+- Current version: `desktop-v1.0.5`
 - [Latest Release](https://github.com/nighty35628/Jupiter/releases/latest)
 - [All Releases](https://github.com/nighty35628/Jupiter/releases)
 
