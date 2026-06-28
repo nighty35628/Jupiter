@@ -3,7 +3,7 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.5] — 2026-06-24
+## [1.0.5] — 2026-06-24, republished 2026-06-28
 
 ### 中文
 
@@ -13,6 +13,13 @@ release URL 为空时打开空白浏览器页。
 
 **Composer 菜单点击修正。** 模型与 reasoning effort 菜单现在会阻止点击事件向外冒泡，切换模型或 effort 时不会
 误触发外层点击处理，也不会打开外部浏览器。补充了覆盖模型切换和空 release URL 的桌面流测试。
+
+**会话标题本地生成。** 自动会话命名不再额外调用模型生成标题，改为从用户首句本地提取可读标题。这样可以避免
+标题生成请求触发额外网络调用、模型不可用回退和相关副作用，同时保留路径、mention、URL 与命令文本的可读性。
+
+**可选组件检测修正。** 浏览器自动化组件检测现在只确认 Chrome/Edge/Chromium 可执行文件是否存在，不再通过
+`--version` 执行浏览器二进制；FFmpeg 等命令行组件仍会读取版本。这个补丁避免 Windows 默认浏览器 shim 或 GUI
+浏览器在检测时被意外拉起。
 
 **发布签名保护。** macOS release workflow 现在要求 Apple 证书、证书密码、签名身份、Apple ID、app-specific
 password 和 Team ID 全部存在时才走签名与 notarization；Apple secrets 只配置一部分时会回退到 unsigned DMG，
@@ -29,6 +36,14 @@ The update prompt's Gitee/GitHub buttons use the same guard, so missing release 
 **Composer menu click fix.** Model and reasoning-effort menus now stop click propagation, so switching the model or
 effort no longer triggers outer click handlers or opens the external browser by accident. Desktop streaming tests cover
 model switching and empty release URLs.
+
+**Local session titles.** Automatic session naming no longer calls a model just to generate the display title. It now
+derives a readable title from the user's first sentence locally, avoiding extra network calls, unavailable-title-model
+fallbacks, and related side effects while preserving paths, mentions, URLs, and command text.
+
+**Optional component detection fix.** Browser automation detection now only checks that Chrome, Edge, or Chromium
+executables exist instead of running browser binaries with `--version`; command-line components such as FFmpeg still
+report versions. This avoids launching Windows default-browser shims or GUI browsers during detection.
 
 **Release signing guard.** The macOS release workflow now requires the complete Apple signing set before taking the
 signed and notarized path: certificate, certificate password, signing identity, Apple ID, app-specific password, and

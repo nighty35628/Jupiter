@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  buildSessionTitleMessages,
   generateSessionTitle,
   makeSessionNameFromTitle,
   normalizeGeneratedSessionTitle,
   shouldAutoNameSession,
+  titleFromFirstSentence,
 } from "../src/session-title.js";
 
 describe("session title generation", () => {
@@ -27,7 +27,24 @@ describe("session title generation", () => {
     ).toBe("修复-会话-损坏");
   });
 
+  it("adds a suffix when a generated title would collide with an existing session", () => {
+    expect(
+      makeSessionNameFromTitle("Fix login", {
+        exists: (name) => name === "Fix-login",
+      }),
+    ).toBe("Fix-login-2");
+    expect(
+      makeSessionNameFromTitle("Fix login", {
+        currentName: "Fix-login",
+        exists: () => true,
+      }),
+    ).toBe("Fix-login");
+    expect(makeSessionNameFromTitle("!!!", { exists: () => false })).toBeNull();
+  });
+
   it("only auto-names default first-turn sessions that have not been named before", () => {
+    expect(shouldAutoNameSession(undefined, {}, 1)).toBe(false);
+    expect(shouldAutoNameSession("default", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("default-20260517123456", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("desktop-20260517123456-1", {}, 1)).toBe(true);
     expect(shouldAutoNameSession("desktop-20260611123456789-1-2", {}, 1)).toBe(true);
@@ -44,84 +61,61 @@ describe("session title generation", () => {
     );
   });
 
-  it("builds a no-tools prompt from the conversation head and tail", () => {
-    const messages = buildSessionTitleMessages({
+  it("uses the first Chinese sentence as a local title", () => {
+    expect(titleFromFirstSentence("请修复登录失败。顺便加测试")).toBe("请修复登录失败");
+    expect(titleFromFirstSentence("修复 Vite HMR 卡住的问题！后面不该进标题")).toBe(
+      "修复 Vite HMR 卡住的问题",
+    );
+  });
+
+  it("uses the first English sentence as a local title", () => {
+    expect(titleFromFirstSentence("Fix login failure. Add tests too")).toBe("Fix login failure");
+    expect(titleFromFirstSentence("Can you inspect this? Then patch it")).toBe(
+      "Can you inspect this",
+    );
+    expect(titleFromFirstSentence("Fix login\nAdd tests too")).toBe("Fix login");
+  });
+
+  it("preserves development targets in first-sentence titles", () => {
+    expect(titleFromFirstSentence("@src/session-title.ts 帮我改标题。顺便补测试")).toBe(
+      "@src/session-title.ts 帮我改标题",
+    );
+    expect(titleFromFirstSentence("/Users/reedom/Jupiter/src/session-title.ts 帮我审核")).toBe(
+      "/Users/reedom/Jupiter/src/session-title.ts 帮我审核",
+    );
+    expect(titleFromFirstSentence("https://example.com/a.b?x=1 看这个链接。后面忽略")).toBe(
+      "https://example.com/a.b?x=1 看这个链接",
+    );
+    expect(titleFromFirstSentence("pnpm test 报错; 后面忽略")).toBe("pnpm test 报错");
+  });
+
+  it("returns null for empty or punctuation-only first sentences", () => {
+    expect(titleFromFirstSentence("")).toBeNull();
+    expect(titleFromFirstSentence("   ")).toBeNull();
+    expect(titleFromFirstSentence("!!!")).toBeNull();
+  });
+
+  it("truncates long first-sentence titles", () => {
+    expect(
+      titleFromFirstSentence(
+        "Fix the generated session title naming rule so it uses only the first user sentence before anything else.",
+      ),
+    ).toBe("Fix the generated session title naming rule so");
+  });
+
+  it("does not call a model when generating session titles", async () => {
+    const client = {
+      chat: vi.fn(async () => {
+        throw new Error("title generation must not call model");
+      }),
+    };
+    const title = await generateSessionTitle(client, "deepseek-v4-pro", {
       workspace: "/work/jupiter",
-      userText: "Please fix the session corruption bug",
-      assistantText: "Implemented safer JSONL rewriting and recovery tests.",
+      userText: "修复会话命名。后面这句不该进标题",
+      assistantText: "ignored",
     });
-    expect(messages).toHaveLength(2);
-    expect(messages[0]!.role).toBe("system");
-    expect(messages[1]!.content).toContain("Please fix the session corruption bug");
-    expect(messages[1]!.content).toContain("Implemented safer JSONL rewriting");
-  });
 
-  it("uses the low-effort flash model for generated titles", async () => {
-    const calls: unknown[] = [];
-    const title = await generateSessionTitle(
-      {
-        async chat(opts) {
-          calls.push(opts);
-          return { content: "修复粘贴附件" };
-        },
-      },
-      "deepseek-v4-pro",
-      {
-        workspace: "/work/jupiter",
-        userText: "粘贴文件不生效",
-        assistantText: "修复了桌面剪贴板路径读取。",
-      },
-    );
-
-    expect(title).toBe("修复粘贴附件");
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      model: "deepseek-v4-flash",
-      reasoningEffort: "low",
-      thinking: "disabled",
-    });
-  });
-
-  it("falls back to the active model when the flash title model is unavailable", async () => {
-    const calls: unknown[] = [];
-    const title = await generateSessionTitle(
-      {
-        async chat(opts) {
-          calls.push(opts);
-          if (calls.length === 1) throw new Error("model not found");
-          return { content: "修复会话标题" };
-        },
-      },
-      "deepseek-v4-pro",
-      {
-        workspace: "/work/jupiter",
-        userText: "对话名还是一长串数字",
-        assistantText: "修复标题生成回退逻辑。",
-      },
-    );
-
-    expect(title).toBe("修复会话标题");
-    expect(calls).toHaveLength(2);
-    expect(calls[0]).toMatchObject({ model: "deepseek-v4-flash" });
-    expect(calls[1]).toMatchObject({ model: "deepseek-v4-pro" });
-  });
-
-  it("uses a readable local title instead of leaving timestamp sessions when title models fail", async () => {
-    const title = await generateSessionTitle(
-      {
-        async chat() {
-          throw new Error("network unavailable");
-        },
-      },
-      "deepseek-v4-pro",
-      {
-        workspace: "/work/jupiter",
-        userText: "现在对话名还是 20260615 这样的一长串数字，想办法修复",
-        assistantText: "已定位自动命名失败。",
-      },
-    );
-
-    expect(title).toBe("现在对话名还是");
-    expect(title).not.toMatch(/^\d{8,}/);
+    expect(title).toBe("修复会话命名");
+    expect(client.chat).not.toHaveBeenCalled();
   });
 });

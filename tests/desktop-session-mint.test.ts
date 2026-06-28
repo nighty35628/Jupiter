@@ -35,7 +35,7 @@ describe("desktop session minting", () => {
     expect(loadSessionMeta(second).workspace).toBe(workspace);
   });
 
-  it("renames timestamp desktop sessions after model title generation", () => {
+  it("renames timestamp desktop sessions after local title generation", () => {
     const workspace = "/tmp/jupiter-workspace";
     const session = mintSessionFor(workspace);
     const title = `修复粘贴文件-${tmp.split(/[\\/]/).pop()}`;

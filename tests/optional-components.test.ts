@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { detectOptionalComponents, installHintFor } from "../src/desktop/optional-components.js";
 
 describe("detectOptionalComponents", () => {
@@ -34,6 +34,35 @@ describe("detectOptionalComponents", () => {
       version: "ffmpeg version 6.1",
       executablePath: "/usr/bin/ffmpeg",
     });
+  });
+
+  it("does not execute browser binaries while detecting availability", () => {
+    const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+    const ffmpegPath = "C:\\Tools\\ffmpeg.exe";
+    const runVersion = vi.fn((path: string) =>
+      path === ffmpegPath ? "ffmpeg version 6.1" : "unexpected browser probe",
+    );
+
+    const components = detectOptionalComponents({
+      platform: "win32",
+      env: { ProgramFiles: "C:\\Program Files", PATH: "C:\\Tools" },
+      exists: (path) => path === chromePath,
+      which: (command) => (command === "ffmpeg" ? ffmpegPath : null),
+      runVersion,
+    });
+
+    expect(components.find((c) => c.id === "browser-chrome")).toMatchObject({
+      state: "available",
+      executablePath: chromePath,
+      version: undefined,
+    });
+    expect(components.find((c) => c.id === "ffmpeg")).toMatchObject({
+      state: "available",
+      executablePath: ffmpegPath,
+      version: "ffmpeg version 6.1",
+    });
+    expect(runVersion).toHaveBeenCalledTimes(1);
+    expect(runVersion).toHaveBeenCalledWith(ffmpegPath, undefined);
   });
 
   it("returns platform-specific install hints", () => {

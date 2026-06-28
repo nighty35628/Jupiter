@@ -241,6 +241,11 @@ function resolveExecutable(
   return undefined;
 }
 
+function shouldProbeVersion(spec: ComponentSpec): boolean {
+  // Browser version probes can launch GUI windows on Windows/default-browser shims.
+  return spec.capability !== "browser-automation";
+}
+
 export function detectOptionalComponents(options: DetectorOptions = {}): OptionalComponentStatus[] {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
@@ -268,7 +273,9 @@ export function detectOptionalComponents(options: DetectorOptions = {}): Optiona
       ...base,
       state: "available" as const,
       executablePath,
-      version: runVersion(executablePath, spec.versionArgs) ?? undefined,
+      version: shouldProbeVersion(spec)
+        ? (runVersion(executablePath, spec.versionArgs) ?? undefined)
+        : undefined,
     };
   });
 }
