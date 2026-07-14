@@ -759,6 +759,8 @@ export const JA: TranslationSchema = {
     contextOverflowTooMany: "トークンが多すぎます",
     auth401:
       "認証に失敗しました (DeepSeek 401): {inner}。APIキーが拒否されました。`jupiter setup` または `export DEEPSEEK_API_KEY=sk-...` で修正してください。https://platform.deepseek.com/api_keys から取得できます。",
+    auth403:
+      "アクセスが拒否されました (DeepSeek 403): {inner}。APIキーは有効ですが、このモデルまたはエンドポイントを使用する権限がない可能性があります。",
     balance402:
       "残高不足 (DeepSeek 402): {inner}。https://platform.deepseek.com/top_up でチャージしてください — 残高がゼロでなくなるとパネルヘッダーに表示されます。",
     badparam422: "無効なパラメータ (DeepSeek 422): {inner}",
@@ -779,6 +781,7 @@ export const JA: TranslationSchema = {
       "アップストリームサービス利用不可 ({status}) at {host} — 設定されたAPIエンドポイントがサーバーエラーを返しました。Jupiterのバグではありません。バックオフ付きで4回再試行済みです。",
     upstream5xxActionRetry:
       " 対処: (1) ローカル/プロキシモデルサーバーが起動しているか確認, (2) 待って再試行, (3) /model でモデル切替。",
+    upstreamHttp: "アップストリーム {host} が HTTP {status} を返しました: {inner}",
     innerNoMessage: "(メッセージなし)",
     reasonAborted: "[ユーザーにより中断 (Esc) — ここまでの調査内容をサマリーします]",
     reasonContextGuard:

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { canonicalizeToolSpec, canonicalizeToolSpecs } from "../tool-contract.js";
 import type { ChatMessage, ToolSpec } from "../types.js";
 import { readTailMessages } from "./session.js";
 
@@ -21,7 +22,7 @@ export class ImmutablePrefix {
 
   constructor(opts: ImmutablePrefixOptions) {
     this.system = opts.system;
-    this._toolSpecs = [...(opts.toolSpecs ?? [])];
+    this._toolSpecs = canonicalizeToolSpecs(opts.toolSpecs ?? []);
     this.fewShots = Object.freeze([...(opts.fewShots ?? [])]);
   }
 
@@ -57,7 +58,7 @@ export class ImmutablePrefix {
     const name = spec.function?.name;
     if (!name) return false;
     if (this._toolSpecs.some((t) => t.function?.name === name)) return false;
-    this._toolSpecs.push(spec);
+    this._toolSpecs = canonicalizeToolSpecs([...this._toolSpecs, canonicalizeToolSpec(spec)]);
     this._fingerprintCache = null;
     this._frozenToolsCache = null;
     return true;

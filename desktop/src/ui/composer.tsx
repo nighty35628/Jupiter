@@ -1180,6 +1180,22 @@ export function Composer({
             </div>
           ) : null}
 
+          {askArmed ? (
+            <div className="composer-ask-notice" role="status">
+              <I.info size={12} />
+              <span>{t("composer.askModeNotice")}</span>
+              <button
+                type="button"
+                className="composer-ask-notice-close"
+                aria-label={t("composer.askModeNoticeClose")}
+                title={t("composer.askModeNoticeClose")}
+                onClick={() => onAskArmedChange?.(false)}
+              >
+                <I.x size={10} />
+              </button>
+            </div>
+          ) : null}
+
           <div className="composer-textarea-wrap">
             <div className="composer-backdrop" ref={backdropRef} aria-hidden="true">
               {backdropContent}
@@ -1326,12 +1342,12 @@ export function Composer({
                 type="button"
                 className="composer-ask-toggle"
                 data-active={askArmed}
+                aria-pressed={askArmed}
                 title={t("composer.askModeHint")}
-                aria-label={t("composer.askMode")}
+                aria-label={t("composer.askModeAria")}
                 onClick={() => onAskArmedChange?.(!askArmed)}
               >
-                <I.info size={12} />
-                <span>{t("composer.askMode")}</span>
+                <span>{askArmed ? t("composer.askModeActive") : t("composer.askMode")}</span>
               </button>
 
               <PermissionModeMenu

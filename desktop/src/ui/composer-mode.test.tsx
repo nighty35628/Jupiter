@@ -134,13 +134,54 @@ describe("desktop permission mode copy", () => {
       onSend,
     });
 
-    expect(screen.getByRole("button", { name: "询问模式" }).textContent).toContain("询问");
+    const askButton = screen.getByRole("button", { name: "下一条消息直接回答" });
+    expect(askButton.getAttribute("aria-pressed")).toBe("true");
+    expect(askButton.textContent).toContain("询问 · 下一条");
+    expect(screen.getByText("下一条将直接回答，不使用工具、资料库或项目上下文。")).toBeTruthy();
 
     fireEvent.click(document.querySelector(".send-btn")!);
 
     expect(onSend).toHaveBeenCalledWith({ ask: true });
     expect(setAskArmed).toHaveBeenCalledWith(false);
     expect(onEditModeChange).not.toHaveBeenCalled();
+  });
+
+  it("toggles the one-shot Ask button without changing permission mode", () => {
+    const setAskArmed = vi.fn();
+    const onEditModeChange = vi.fn();
+    renderComposer({
+      askArmed: false,
+      onAskArmedChange: setAskArmed,
+      onEditModeChange,
+    });
+
+    const askButton = screen.getByRole("button", { name: "下一条消息直接回答" });
+    expect(askButton.getAttribute("aria-pressed")).toBe("false");
+    expect(askButton.textContent).toContain("询问");
+    expect(document.querySelector(".composer-ask-notice")).toBeNull();
+
+    fireEvent.click(askButton);
+
+    expect(setAskArmed).toHaveBeenCalledWith(true);
+    expect(onEditModeChange).not.toHaveBeenCalled();
+  });
+
+  it("dismisses the one-shot Ask notice from the inline close button", () => {
+    const setAskArmed = vi.fn();
+    renderComposer({ askArmed: true, onAskArmedChange: setAskArmed });
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭询问模式" }));
+
+    expect(setAskArmed).toHaveBeenCalledWith(false);
+  });
+
+  it("does not include Ask payload when the Ask button is off", () => {
+    const onSend = vi.fn();
+    renderComposer({ draft: "你好", askArmed: false, onSend });
+
+    fireEvent.click(document.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith(undefined);
   });
 
   it("keeps the plus menu compact and removes the duplicate image attach entry", () => {
@@ -180,6 +221,9 @@ describe("desktop permission mode copy", () => {
     expect(narrowRule).toContain("height: 26px;");
     expect(narrowRule).toContain(".composer-permission-label");
     expect(narrowRule).toContain(".composer-permission-chev");
+    expect(narrowRule).toContain(".composer-ask-toggle");
+    expect(narrowRule).toContain(".composer-ask-notice");
+    expect(narrowRule).toContain('aria-pressed="true"');
     expect(narrowRule).toContain("display: none;");
   });
 

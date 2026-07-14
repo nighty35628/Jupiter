@@ -1101,6 +1101,28 @@ function PageGeneral({
         </div>
         <div className="setting-row">
           <div className="l">
+            <div className="n">{t("settings.showAiVisibleDetails")}</div>
+            <div className="h">{t("settings.showAiVisibleDetailsHint")}</div>
+          </div>
+          <div className="seg-ctrl" role="group" aria-label={t("settings.showAiVisibleDetails")}>
+            <button
+              type="button"
+              data-on={settings.showAiVisibleDetails !== false}
+              onClick={() => onSave({ showAiVisibleDetails: true })}
+            >
+              {t("settings.shown")}
+            </button>
+            <button
+              type="button"
+              data-on={settings.showAiVisibleDetails === false}
+              onClick={() => onSave({ showAiVisibleDetails: false })}
+            >
+              {t("settings.hidden")}
+            </button>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="l">
             <div className="n">{t("settings.libraryRetrievalMode")}</div>
             <div className="h">{t("settings.libraryRetrievalModeHint")}</div>
             <div className="h warn">{t("settings.libraryRetrievalAlwaysWarning")}</div>

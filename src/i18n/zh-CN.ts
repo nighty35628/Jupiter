@@ -719,6 +719,7 @@ export const zhCN: TranslationSchema = {
     contextOverflowTooMany: "tokens 数量过多",
     auth401:
       "认证失败（DeepSeek 401）：{inner}。你的 API key 被拒绝。运行 `jupiter setup` 或 `export DEEPSEEK_API_KEY=sk-...` 修复。在 https://platform.deepseek.com/api_keys 获取 key。",
+    auth403: "访问被拒绝（DeepSeek 403）：{inner}。API key 有效，但可能无权使用该模型或接口。",
     balance402:
       "余额不足（DeepSeek 402）：{inner}。在 https://platform.deepseek.com/top_up 充值 — 余额非零时面板顶栏会显示。",
     badparam422: "参数错误（DeepSeek 422）：{inner}",
@@ -739,6 +740,7 @@ export const zhCN: TranslationSchema = {
       "上游服务不可用（{status}），目标地址 {host} — 你配置的 API 端点返回了服务器错误，不是 Jupiter 故障。已按指数退避重试 4 次。",
     upstream5xxActionRetry:
       " 建议：(1) 确认本地/代理模型服务在线，(2) 等一会儿再重试，(3) 用 /model 切换模型。",
+    upstreamHttp: "上游 {host} 返回 HTTP {status}：{inner}",
     innerNoMessage: "（无错误信息）",
     reasonAborted: "[用户已中断（Esc） — 正在总结到目前为止的发现]",
     reasonContextGuard: "[上下文额度即将耗尽 — 在下一次调用溢出之前先总结]",

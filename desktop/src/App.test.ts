@@ -46,6 +46,7 @@ import {
   rollbackTargetForMessage,
   shouldShowSettingsChangeToast,
   shouldShowThinkingFooter,
+  tabBusyFromIncomingEvent,
   toggleWindowExpanded,
 } from "./App";
 import { getThreadMaxWidth, getVisibleContextWidth } from "./ui/thread-layout";
@@ -162,6 +163,31 @@ function makePathPrompt(
     data: { prefix: "/workspace", intent },
   };
 }
+
+describe("Desktop App error lifecycle", () => {
+  it("keeps a running turn busy until the explicit completion event", () => {
+    const busy = {
+      ...initialState(),
+      busy: true,
+      activeSkill: { name: "review", runAs: "inline" as const },
+    };
+    const withError = reduce(busy, {
+      t: "incoming",
+      event: { type: "$error", message: "Stop hook warning" },
+    });
+
+    expect(withError.busy).toBe(true);
+    expect(withError.activeSkill).toEqual(busy.activeSkill);
+    expect(tabBusyFromIncomingEvent({ type: "$error", message: "warning" })).toBeNull();
+
+    const completed = reduce(withError, {
+      t: "incoming",
+      event: { type: "$turn_complete" },
+    });
+    expect(completed.busy).toBe(false);
+    expect(completed.activeSkill).toBeNull();
+  });
+});
 
 describe("Desktop App reducer — usage", () => {
   it("uses stable transcript keys for virtualized message rendering", () => {
@@ -351,6 +377,55 @@ describe("Desktop App reducer — usage", () => {
     });
   });
 
+  it("removes only the definitely-unsent optimistic user message", () => {
+    const state = {
+      ...initialState(),
+      ready: true,
+      busy: true,
+      messages: [
+        { kind: "user" as const, text: "older", clientId: "c-1", turn: 1 },
+        { kind: "user" as const, text: "unsent", clientId: "c-2", turn: 2 },
+      ],
+    };
+
+    const next = reduce(state, { t: "rpc_not_sent", clientId: "c-2" });
+    expect(next.busy).toBe(false);
+    expect(next.messages).toEqual([
+      { kind: "user", text: "older", clientId: "c-1", turn: 1 },
+    ]);
+  });
+
+  it("clears stale approvals when the shared RPC process exits", () => {
+    const prompt = makeShellPrompt("echo ok");
+    const state = {
+      ...initialState(),
+      ready: true,
+      busy: true,
+      pendingConfirms: [
+        { id: 1, kind: "run_command" as const, command: "echo ok", prompt },
+      ],
+      pendingPathAccess: [
+        {
+          id: 2,
+          path: "/tmp",
+          intent: "read" as const,
+          toolName: "read_file",
+          sandboxRoot: "/tmp",
+          allowPrefix: "/tmp",
+          prompt,
+        },
+      ],
+      pendingChoices: [{ id: 3, question: "Pick", options: [], allowCustom: false }],
+    };
+
+    const next = reduce(state, { t: "rpc_exit", code: 1 });
+    expect(next.ready).toBe(false);
+    expect(next.busy).toBe(false);
+    expect(next.pendingConfirms).toEqual([]);
+    expect(next.pendingPathAccess).toEqual([]);
+    expect(next.pendingChoices).toEqual([]);
+  });
+
   it("computes rollback targets from conversation messages instead of stale UI turns", () => {
     const messages = [
       { kind: "user" as const, text: "first", clientId: "c-1", turn: 1 },
@@ -411,7 +486,7 @@ describe("Desktop App reducer — usage", () => {
     expect(next.usage.lastCallCacheMiss).toBe(1234);
   });
 
-  it("settles the pending assistant message when an error ends the turn (#1660)", () => {
+  it("settles pending assistant content on error but waits for explicit turn completion", () => {
     const base = initialState();
     const state = {
       ...base,
@@ -438,11 +513,17 @@ describe("Desktop App reducer — usage", () => {
       },
     });
 
-    expect(next.busy).toBe(false);
+    expect(next.busy).toBe(true);
     const assistant = next.messages.find((m) => m.kind === "assistant");
     expect(assistant?.pending).toBe(false);
     const error = next.messages.find((m) => m.kind === "error");
     expect(error?.message).toBe("SSE body read failed: terminated");
+
+    const completed = reduce(next, {
+      t: "incoming",
+      event: { type: "$turn_complete" },
+    });
+    expect(completed.busy).toBe(false);
   });
 
   it("creates a pending assistant when a live delta arrives before turn started", () => {

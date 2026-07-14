@@ -12,13 +12,18 @@ import {
   type JsonRpcRequest,
   type ListPromptsResult,
   type ListResourcesResult,
+  type ListToolsResult,
   MCP_PROTOCOL_VERSION,
   type McpTool,
   type ReadResourceResult,
 } from "../src/mcp/types.js";
+import { ImmutablePrefix } from "../src/memory/runtime.js";
+import { ToolRegistry } from "../src/tools.js";
 
 interface FakeServerOptions {
   tools: McpTool[];
+  /** Optional paginated tools/list handler. */
+  listTools?: (cursor: string | undefined) => ListToolsResult;
   /** Server's response per (name, args). Called for tools/call. */
   callHandler?: (name: string, args: Record<string, unknown>) => CallToolResult;
   /** Return an error from tools/call instead of a result. */
@@ -105,7 +110,9 @@ class FakeMcpTransport implements McpTransport {
         return {
           jsonrpc: "2.0",
           id: req.id,
-          result: { tools: this.opts.tools },
+          result: this.opts.listTools
+            ? this.opts.listTools((req.params as { cursor?: string } | undefined)?.cursor)
+            : { tools: this.opts.tools },
         };
       case "tools/call": {
         const params = req.params as { name: string; arguments?: Record<string, unknown> };
@@ -298,6 +305,127 @@ describe("McpClient: tools/list + tools/call", () => {
     await client.close();
   });
 
+  it("sends an opaque cursor verbatim, including an empty string", async () => {
+    const received: JsonRpcRequest[] = [];
+    const transport = new FakeMcpTransport({ tools: [], received });
+    const client = new McpClient({ transport });
+    await client.initialize();
+
+    await client.listTools("");
+    const request = received.findLast((entry) => entry.method === "tools/list");
+    expect(request?.params).toEqual({ cursor: "" });
+
+    await client.close();
+  });
+
+  it("collects all pages in server order, including an empty intermediate page", async () => {
+    const cursors: Array<string | undefined> = [];
+    const transport = new FakeMcpTransport({
+      tools: [],
+      listTools: (cursor) => {
+        cursors.push(cursor);
+        if (cursor === undefined) {
+          return {
+            tools: [{ name: "alpha", inputSchema: { type: "object" } }],
+            nextCursor: "",
+          };
+        }
+        if (cursor === "") return { tools: [], nextCursor: "page-3" };
+        return { tools: [{ name: "omega", inputSchema: { type: "object" } }] };
+      },
+    });
+    const client = new McpClient({ transport });
+    await client.initialize();
+
+    const tools = await client.listAllTools();
+    expect(cursors).toEqual([undefined, "", "page-3"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["alpha", "omega"]);
+
+    await client.close();
+  });
+
+  it("rejects repeated and cyclic cursors", async () => {
+    const transport = new FakeMcpTransport({
+      tools: [],
+      listTools: (cursor) => {
+        if (cursor === undefined) return { tools: [], nextCursor: "A" };
+        if (cursor === "A") return { tools: [], nextCursor: "B" };
+        return { tools: [], nextCursor: "A" };
+      },
+    });
+    const client = new McpClient({ transport });
+    await client.initialize();
+
+    await expect(client.listAllTools()).rejects.toThrow(/repeated cursor.*A/);
+
+    await client.close();
+  });
+
+  it("enforces page and tool limits", async () => {
+    const transport = new FakeMcpTransport({
+      tools: [],
+      listTools: (cursor) =>
+        cursor === undefined
+          ? {
+              tools: [
+                { name: "one", inputSchema: {} },
+                { name: "two", inputSchema: {} },
+              ],
+              nextCursor: "more",
+            }
+          : { tools: [{ name: "three", inputSchema: {} }], nextCursor: "again" },
+    });
+    const client = new McpClient({ transport });
+    await client.initialize();
+
+    await expect(client.listAllTools({ maxPages: 1 })).rejects.toThrow(/1-page limit/);
+    await expect(client.listAllTools({ maxTools: 2 })).rejects.toThrow(/2-tool limit/);
+    await expect(client.listAllTools({ maxPages: 0 })).rejects.toThrow(/positive integer/);
+
+    await client.close();
+  });
+
+  it("rejects empty and duplicate tool names across pages", async () => {
+    const duplicateTransport = new FakeMcpTransport({
+      tools: [],
+      listTools: (cursor) =>
+        cursor === undefined
+          ? { tools: [{ name: "same", inputSchema: {} }], nextCursor: "next" }
+          : { tools: [{ name: "same", inputSchema: {} }] },
+    });
+    const duplicateClient = new McpClient({ transport: duplicateTransport });
+    await duplicateClient.initialize();
+    await expect(duplicateClient.listAllTools()).rejects.toThrow(/duplicate tool name: same/);
+    await duplicateClient.close();
+
+    const emptyClient = new McpClient({
+      transport: new FakeMcpTransport({ tools: [{ name: "", inputSchema: {} }] }),
+    });
+    await emptyClient.initialize();
+    await expect(emptyClient.listAllTools()).rejects.toThrow(/empty name/);
+    await emptyClient.close();
+  });
+
+  it("stops between pages when pagination is cancelled", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const transport = new FakeMcpTransport({
+      tools: [],
+      listTools: () => {
+        calls++;
+        controller.abort();
+        return { tools: [], nextCursor: "never-requested" };
+      },
+    });
+    const client = new McpClient({ transport });
+    await client.initialize();
+
+    await expect(client.listAllTools({ signal: controller.signal })).rejects.toThrow(/aborted/);
+    expect(calls).toBe(1);
+
+    await client.close();
+  });
+
   it("surfaces server errors as rejected promises", async () => {
     const transport = new FakeMcpTransport({
       tools: SAMPLE_TOOLS,
@@ -311,6 +439,61 @@ describe("McpClient: tools/list + tools/call", () => {
 });
 
 describe("bridgeMcpTools (MCP → ToolRegistry)", () => {
+  it("does not register a partial catalog when a later page fails", async () => {
+    const transport = new FakeMcpTransport({
+      tools: [],
+      listTools: (cursor) => {
+        if (cursor === undefined) {
+          return {
+            tools: [{ name: "page_one", inputSchema: { type: "object" } }],
+            nextCursor: "page-2",
+          };
+        }
+        throw new Error("page two failed");
+      },
+    });
+    const client = new McpClient({ transport });
+    const registry = new ToolRegistry();
+    await client.initialize();
+
+    await expect(bridgeMcpTools(client, { registry })).rejects.toThrow(/page two failed/);
+    expect(registry.has("page_one")).toBe(false);
+    expect(registry.size).toBe(0);
+
+    await client.close();
+  });
+
+  it("produces the same tool specs and prefix fingerprint as an equivalent single page", async () => {
+    const catalog: McpTool[] = [
+      { name: "zeta", description: "last", inputSchema: { type: "object" } },
+      { name: "alpha", description: "first", inputSchema: { type: "object" } },
+    ];
+    const singleClient = new McpClient({
+      transport: new FakeMcpTransport({ tools: catalog }),
+    });
+    const pagedClient = new McpClient({
+      transport: new FakeMcpTransport({
+        tools: [],
+        listTools: (cursor) =>
+          cursor === undefined
+            ? { tools: [catalog[0]!], nextCursor: "next" }
+            : { tools: [catalog[1]!] },
+      }),
+    });
+    await singleClient.initialize();
+    await pagedClient.initialize();
+
+    const single = await bridgeMcpTools(singleClient);
+    const paged = await bridgeMcpTools(pagedClient);
+    expect(paged.registry.specs()).toEqual(single.registry.specs());
+    expect(
+      new ImmutablePrefix({ system: "test", toolSpecs: paged.registry.specs() }).fingerprint,
+    ).toBe(new ImmutablePrefix({ system: "test", toolSpecs: single.registry.specs() }).fingerprint);
+
+    await singleClient.close();
+    await pagedClient.close();
+  });
+
   it("registers every MCP tool into a ToolRegistry and dispatch calls through the client", async () => {
     const transport = new FakeMcpTransport({
       tools: [
@@ -493,15 +676,13 @@ describe("bridgeMcpTools: result-size cap", () => {
     };
     const big = "A".repeat(200_000);
     const client = {
-      listTools: async () => ({
-        tools: [
-          {
-            name: "dump",
-            description: "returns a massive string",
-            inputSchema: { type: "object", properties: {} },
-          },
-        ],
-      }),
+      listAllTools: async () => [
+        {
+          name: "dump",
+          description: "returns a massive string",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
       callTool: async () => ({ content: [{ type: "text" as const, text: big }] }),
     } as unknown as McpClient;
     // Default cap (32k): enough to confirm the feature bites.

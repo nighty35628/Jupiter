@@ -17,11 +17,13 @@ import {
   type ListPromptsResult,
   type ListResourcesParams,
   type ListResourcesResult,
+  type ListToolsParams,
   type ListToolsResult,
   MCP_PROTOCOL_VERSION,
   type McpClientInfo,
   type McpProgressHandler,
   type McpRoot,
+  type McpTool,
   type ProgressNotificationParams,
   type ReadResourceParams,
   type ReadResourceResult,
@@ -40,6 +42,23 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timeout: NodeJS.Timeout;
+}
+
+export const DEFAULT_MAX_TOOL_LIST_PAGES = 100;
+export const DEFAULT_MAX_LISTED_TOOLS = 10_000;
+
+export interface ListAllToolsOptions {
+  signal?: AbortSignal;
+  maxPages?: number;
+  maxTools?: number;
+}
+
+function positiveIntegerOption(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+    throw new Error(`MCP tools/list ${name} must be a positive integer`);
+  }
+  return resolved;
 }
 
 export class McpClient {
@@ -133,10 +152,66 @@ export class McpClient {
     return result;
   }
 
-  /** List tools the server exposes. */
-  async listTools(): Promise<ListToolsResult> {
+  /** List one page of tools the server exposes. Cursors are opaque, including an empty string. */
+  async listTools(cursor?: string, opts: { signal?: AbortSignal } = {}): Promise<ListToolsResult> {
     this.assertInitialized();
-    return this.request<ListToolsResult>("tools/list", {});
+    return this.request<ListToolsResult>(
+      "tools/list",
+      {
+        ...(cursor !== undefined ? { cursor } : {}),
+      } satisfies ListToolsParams,
+      opts.signal,
+    );
+  }
+
+  /** Collect a complete tools/list catalog before exposing any tools to callers. */
+  async listAllTools(opts: ListAllToolsOptions = {}): Promise<McpTool[]> {
+    this.assertInitialized();
+    const maxPages = positiveIntegerOption(opts.maxPages, DEFAULT_MAX_TOOL_LIST_PAGES, "maxPages");
+    const maxTools = positiveIntegerOption(opts.maxTools, DEFAULT_MAX_LISTED_TOOLS, "maxTools");
+    const tools: McpTool[] = [];
+    const seenNames = new Set<string>();
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    let pages = 0;
+
+    while (true) {
+      if (opts.signal?.aborted) throw new Error("MCP tools/list pagination aborted by user");
+      if (pages >= maxPages) {
+        throw new Error(`MCP tools/list exceeded the ${maxPages}-page limit`);
+      }
+
+      const result = await this.listTools(cursor, { signal: opts.signal });
+      pages++;
+      if (!result || !Array.isArray(result.tools)) {
+        throw new Error("MCP tools/list returned a non-array tools field");
+      }
+
+      for (const tool of result.tools) {
+        if (!tool || typeof tool.name !== "string" || tool.name.length === 0) {
+          throw new Error("MCP tools/list returned a tool with an empty name");
+        }
+        if (seenNames.has(tool.name)) {
+          throw new Error(`MCP tools/list returned duplicate tool name: ${tool.name}`);
+        }
+        if (tools.length >= maxTools) {
+          throw new Error(`MCP tools/list exceeded the ${maxTools}-tool limit`);
+        }
+        seenNames.add(tool.name);
+        tools.push(tool);
+      }
+
+      const nextCursor = result.nextCursor;
+      if (nextCursor === undefined) return tools;
+      if (typeof nextCursor !== "string") {
+        throw new Error("MCP tools/list returned a non-string nextCursor");
+      }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error(`MCP tools/list returned a repeated cursor: ${JSON.stringify(nextCursor)}`);
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
   }
 
   /** Abort sends `notifications/cancelled` and rejects immediately; late server responses are dropped. */

@@ -630,6 +630,7 @@ export type SettingsEvent = {
   contextTokens?: Record<string, number>;
   libraryRetrievalMode?: "off" | "on_demand" | "always";
   showSystemEvents?: boolean;
+  showAiVisibleDetails?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
   memoryGlobalEnabled?: boolean;
@@ -769,6 +770,7 @@ export type SettingsPatch = {
   contextTokens?: Record<string, number>;
   libraryRetrievalMode?: "off" | "on_demand" | "always";
   showSystemEvents?: boolean;
+  showAiVisibleDetails?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
   memoryGlobalEnabled?: boolean;

@@ -69,8 +69,8 @@ export async function reconnectMcpServer(args: ReconnectArgs): Promise<Reconnect
   const next = new McpClient({ transport, workspaceDir, requestTimeoutMs: args.requestTimeoutMs });
   try {
     await next.initialize();
-    const listed = await next.listTools();
-    const drift = classifyToolListDrift(toolsToSpecs(args.beforeTools), toolsToSpecs(listed.tools));
+    const listedTools = await next.listAllTools();
+    const drift = classifyToolListDrift(toolsToSpecs(args.beforeTools), toolsToSpecs(listedTools));
     // Identity is always free — accept it regardless of `accept`. The opt-in
     // controls only whether append-drift also gets through.
     const acceptedKind: "identity" | "append" | null =
@@ -90,7 +90,7 @@ export async function reconnectMcpServer(args: ReconnectArgs): Promise<Reconnect
       };
     }
     const addedTools =
-      acceptedKind === "append" ? listed.tools.filter((t) => drift.added.includes(t.name)) : [];
+      acceptedKind === "append" ? listedTools.filter((t) => drift.added.includes(t.name)) : [];
     // Swap.
     const old = args.host.client;
     args.host.client = next;
@@ -98,7 +98,7 @@ export async function reconnectMcpServer(args: ReconnectArgs): Promise<Reconnect
     return {
       ok: true,
       kind: acceptedKind,
-      afterTools: listed.tools,
+      afterTools: listedTools,
       addedTools,
       ms: Date.now() - t0,
     };

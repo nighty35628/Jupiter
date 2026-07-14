@@ -72,6 +72,93 @@ function initOk(req: JsonRpcRequest): JsonRpcMessage {
 }
 
 describe("inspectMcpServer", () => {
+  it("reports the complete paginated tool catalog in server order", async () => {
+    const cursors: Array<string | undefined> = [];
+    const transport = new HandlerTransport({
+      initialize: initOk,
+      "tools/list": (req) => {
+        const cursor = (req.params as { cursor?: string } | undefined)?.cursor;
+        cursors.push(cursor);
+        return cursor === undefined
+          ? {
+              jsonrpc: "2.0",
+              id: req.id,
+              result: {
+                tools: [{ name: "first", inputSchema: { type: "object" } }],
+                nextCursor: "second-page",
+              },
+            }
+          : {
+              jsonrpc: "2.0",
+              id: req.id,
+              result: { tools: [{ name: "second", inputSchema: { type: "object" } }] },
+            };
+      },
+      "resources/list": (req) => ({
+        jsonrpc: "2.0",
+        id: req.id,
+        result: { resources: [] },
+      }),
+      "prompts/list": (req) => ({
+        jsonrpc: "2.0",
+        id: req.id,
+        result: { prompts: [] },
+      }),
+    });
+    const client = new McpClient({ transport });
+    await client.initialize();
+
+    const report = await inspectMcpServer(client);
+    expect(cursors).toEqual([undefined, "second-page"]);
+    expect(report.tools).toEqual({
+      supported: true,
+      items: [
+        { name: "first", inputSchema: { type: "object" } },
+        { name: "second", inputSchema: { type: "object" } },
+      ],
+    });
+
+    await client.close();
+  });
+
+  it("marks only the tools section failed when a later tool page errors", async () => {
+    const transport = new HandlerTransport({
+      initialize: initOk,
+      "tools/list": (req) =>
+        (req.params as { cursor?: string } | undefined)?.cursor === undefined
+          ? {
+              jsonrpc: "2.0",
+              id: req.id,
+              result: { tools: [], nextCursor: "page-2" },
+            }
+          : {
+              jsonrpc: "2.0",
+              id: req.id,
+              error: { code: -32000, message: "page two unavailable" },
+            },
+      "resources/list": (req) => ({
+        jsonrpc: "2.0",
+        id: req.id,
+        result: { resources: [] },
+      }),
+      "prompts/list": (req) => ({
+        jsonrpc: "2.0",
+        id: req.id,
+        result: { prompts: [] },
+      }),
+    });
+    const client = new McpClient({ transport });
+    await client.initialize();
+
+    const report = await inspectMcpServer(client);
+    expect(report.tools.supported).toBe(false);
+    if (!report.tools.supported) expect(report.tools.reason).toMatch(/page two unavailable/);
+    expect(report.resources.supported).toBe(true);
+    expect(report.prompts.supported).toBe(true);
+
+    await client.close();
+  });
+
   it("reports server info, capabilities, tools, resources, prompts — full-support server", async () => {
     const transport = new HandlerTransport({
       initialize: initOk,

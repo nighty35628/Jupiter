@@ -60,6 +60,7 @@ import {
   rewriteSession,
   sessionPath,
 } from "./memory/session.js";
+import { sanitizeProviderErrorText } from "./provider-http-error.js";
 import { type RepairReport, ToolCallRepair } from "./repair/index.js";
 import { SessionStats, type TurnStats } from "./telemetry/stats.js";
 import { ToolRegistry } from "./tools.js";
@@ -1035,6 +1036,7 @@ export class CacheFirstLoop {
         const cause = err instanceof Error ? err : new Error(String(err));
         const retryable = !is4xxError(cause) && cause.name !== "AbortError";
         const { code, phase } = errorMeta(cause);
+        const safeCauseMessage = sanitizeProviderErrorText(cause.message, { maxChars: 4096 });
         yield {
           turn: this._turn,
           role: "error",
@@ -1042,7 +1044,7 @@ export class CacheFirstLoop {
           error: formatLoopError(err as Error, probe, { upstreamHost }),
           errorDetail: {
             name: cause.name,
-            message: cause.message,
+            message: safeCauseMessage,
             phase,
             code,
             retryable,

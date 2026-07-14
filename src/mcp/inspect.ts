@@ -23,7 +23,7 @@ export type SectionResult<T> =
 export async function inspectMcpServer(client: McpClient): Promise<InspectionReport> {
   const t0 = Date.now();
   // Always try all three listings — some servers omit capability flags but still serve the methods.
-  const tools = await trySection<McpTool>(() => client.listTools().then((r) => r.tools));
+  const tools = await trySection<McpTool>(() => client.listAllTools());
   const resources = await trySection<McpResource>(() =>
     client.listResources().then((r) => r.resources),
   );

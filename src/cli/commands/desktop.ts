@@ -62,6 +62,7 @@ import {
   loadReasoningEffort,
   loadRecentWorkspaces,
   loadResolvedSkillPaths,
+  loadShowAiVisibleDetails,
   loadShowSystemEvents,
   loadSkillPackSources,
   loadSubagentModels,
@@ -87,6 +88,7 @@ import {
   saveProcessCardsDefaultOpen,
   savePromptHistory,
   saveReasoningEffort,
+  saveShowAiVisibleDetails,
   saveShowSystemEvents,
   saveSkillPackSources,
   saveSubagentModels,
@@ -177,6 +179,7 @@ import {
   cleanupJupiterStorage,
   scanJupiterStorage,
 } from "../../desktop/storage-manager.js";
+import { DesktopTurnAdmission } from "../../desktop/turn-admission.js";
 import {
   DESKTOP_UPDATE_RELEASE_URLS,
   type DesktopUpdateCheckResult,
@@ -380,6 +383,7 @@ type InMessage = { tabId?: string } & (
       contextTokens?: Record<string, number>;
       libraryRetrievalMode?: LibraryRetrievalMode;
       showSystemEvents?: boolean;
+      showAiVisibleDetails?: boolean;
       processCardsDefaultOpen?: boolean;
       memoryConfirmWrites?: boolean;
       memoryGlobalEnabled?: boolean;
@@ -498,6 +502,7 @@ interface SettingsEvent {
   contextTokens?: Record<string, number>;
   libraryRetrievalMode?: LibraryRetrievalMode;
   showSystemEvents?: boolean;
+  showAiVisibleDetails?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
   memoryGlobalEnabled?: boolean;
@@ -1218,6 +1223,7 @@ function emitSettings(tab: Tab): void {
       contextTokens: readConfig().contextTokens,
       libraryRetrievalMode: loadLibraryRetrievalMode(),
       showSystemEvents: loadShowSystemEvents(),
+      showAiVisibleDetails: loadShowAiVisibleDetails(),
       processCardsDefaultOpen: loadProcessCardsDefaultOpen(),
       memoryConfirmWrites: loadMemoryConfirmWrites(),
       memoryGlobalEnabled: loadMemoryGlobalEnabled(),
@@ -1336,6 +1342,8 @@ function loadSessionIntoTab(
   // otherwise the flag stays true and suppresses the first turn's events (#1217).
   if (tab.aborter) tab.switching = true;
   actions.abortTurn(tab);
+  tab.turnAdmission.invalidate();
+  tab.switching = false;
   actions.cancelPendingGates(tab);
   tab.currentSession = name;
   tab.editHistory = [];
@@ -1921,6 +1929,8 @@ interface Tab {
   currentTurnEditEntry: EditHistoryEntry | null;
   /** True while a session switch is in progress — prevents stale events from the old turn. */
   switching: boolean;
+  /** Single-flight lease for top-level model turns in this tab. */
+  turnAdmission: DesktopTurnAdmission;
   hooks: ResolvedHook[];
 }
 
@@ -2467,6 +2477,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   function startNewChatInTab(tab: Tab): void {
     if (tab.aborter) tab.switching = true;
     abortTurn(tab);
+    tab.turnAdmission.invalidate();
+    tab.switching = false;
     cancelPendingGates(tab);
     tab.currentSession = mintSessionFor(tab.rootDir);
     tab.editHistory = [];
@@ -2510,7 +2522,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       onError?: (message: string) => void;
     },
   ): void {
-    if (!tab.runtime) return;
+    const ownsMainTurn = clientId?.startsWith("btw-") === true;
+    if (!tab.runtime) {
+      const message = "/btw failed: the tab runtime is not ready.";
+      emit({ type: "$error", message }, tab.id);
+      hooks?.onError?.(message);
+      if (ownsMainTurn) emit({ type: "$turn_complete" }, tab.id);
+      return;
+    }
     void (async () => {
       try {
         const reply = await tab.runtime!.loop.client.chat({
@@ -2540,12 +2559,19 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         const message = `/btw failed: ${(err as Error).message}`;
         emit({ type: "$error", message }, tab.id);
         hooks?.onError?.(message);
+      } finally {
+        if (ownsMainTurn) emit({ type: "$turn_complete" }, tab.id);
       }
     })();
   }
 
   function runLightAskOnTab(tab: Tab, text: string, clientId?: string): void {
     if (!tab.runtime) return;
+    const generation = tab.turnAdmission.begin();
+    if (generation === null) {
+      emit({ type: "$error", message: "This tab already has a turn in progress." }, tab.id);
+      return;
+    }
     const rt = tab.runtime;
     tab.aborter = new AbortController();
     const turn = rt.loop.currentTurn + 1;
@@ -2622,10 +2648,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitSessions(tab);
         void emitBalance(tab);
       } catch (err) {
-        emit({ type: "$error", message: `/ask failed: ${(err as Error).message}` }, tab.id);
+        if (tab.turnAdmission.isCurrent(generation)) {
+          emit({ type: "$error", message: `/ask failed: ${(err as Error).message}` }, tab.id);
+        }
       } finally {
-        tab.aborter = null;
-        emit({ type: "$turn_complete" }, tab.id);
+        if (tab.turnAdmission.isCurrent(generation)) {
+          tab.aborter = null;
+          tab.turnAdmission.finish(generation);
+          emit({ type: "$turn_complete" }, tab.id);
+        }
       }
     });
   }
@@ -3937,6 +3968,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       nextEditHistoryId: 1,
       currentTurnEditEntry: null,
       switching: false,
+      turnAdmission: new DesktopTurnAdmission(),
       hooks: loadHooks({ projectRoot: dir }),
     };
     tab.subagentSink.current = (ev) => emitDesktopSubagentEvent(tab, ev);
@@ -4055,6 +4087,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
 
   async function closeTab(tab: Tab): Promise<void> {
     abortTurn(tab);
+    tab.turnAdmission.invalidate();
     try {
       await tab.toolset?.jobs.shutdown();
     } catch {
@@ -4089,242 +4122,253 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     } = {},
   ): Promise<void> {
     if (!tab.runtime) return;
-    const rt = tab.runtime;
-    const modelText = opts.planOneShot ? buildOneShotPlanPrompt(text) : text;
-    tab.currentTurnEditEntry = null;
-    tab.aborter = new AbortController();
-    if (opts.planOneShot) beginOneShotPlanGuard(tab);
+    const generation = tab.turnAdmission.begin();
+    if (generation === null) {
+      emit({ type: "$error", message: "This tab already has a turn in progress." }, tab.id);
+      return;
+    }
     const fromFeishu = opts.fromFeishu === true;
     const fromDingTalk = opts.fromDingTalk === true;
-    if (fromQQ) markQQTurnStarted(qqRuntime.routing, tab.id);
-    if (fromFeishu) markQQTurnStarted(feishuRuntime.routing, tab.id);
-    if (fromDingTalk) markQQTurnStarted(dingtalkRuntime.routing, tab.id);
-    if (fromQQ && qqRuntime.channel && shouldRouteQQForTab(qqRuntime.routing, tab.id)) {
-      void qqRuntime.channel.sendTurnReceipt().catch((err) => {
-        emit(
-          {
-            type: "$error",
-            message: `qq turn receipt failed: ${(err as Error).message}`,
-          },
-          tab.id,
-        );
-      });
-    }
-    if (fromFeishu && feishuRuntime.channel && shouldRouteQQForTab(feishuRuntime.routing, tab.id)) {
-      void feishuRuntime.channel.sendTurnReceipt().catch((err) => {
-        emit(
-          {
-            type: "$error",
-            message: `feishu turn receipt failed: ${(err as Error).message}`,
-          },
-          tab.id,
-        );
-      });
-    }
-    if (
-      fromDingTalk &&
-      dingtalkRuntime.channel &&
-      shouldRouteQQForTab(dingtalkRuntime.routing, tab.id)
-    ) {
-      void dingtalkRuntime.channel.sendTurnReceipt().catch((err) => {
-        emit(
-          {
-            type: "$error",
-            message: `dingtalk turn receipt failed: ${(err as Error).message}`,
-          },
-          tab.id,
-        );
-      });
-    }
-    let lastAssistantText = "";
-    const sessionAtTurnStart = tab.currentSession;
-    const sessionMetaBeforeTurn = sessionAtTurnStart ? loadSessionMeta(sessionAtTurnStart) : {};
-    if (tab.hooks.some((h) => h.event === "UserPromptSubmit")) {
-      const report = await runHooks({
-        hooks: tab.hooks,
-        payload: { event: "UserPromptSubmit", cwd: tab.rootDir, prompt: text },
-      });
-      for (const o of report.outcomes) {
-        if (o.decision === "pass") continue;
-        emit({ type: "$error", message: formatHookOutcomeMessage(o) }, tab.id);
+    try {
+      const rt = tab.runtime;
+      const modelText = opts.planOneShot ? buildOneShotPlanPrompt(text) : text;
+      tab.currentTurnEditEntry = null;
+      tab.aborter = new AbortController();
+      if (opts.planOneShot) beginOneShotPlanGuard(tab);
+      if (fromQQ) markQQTurnStarted(qqRuntime.routing, tab.id);
+      if (fromFeishu) markQQTurnStarted(feishuRuntime.routing, tab.id);
+      if (fromDingTalk) markQQTurnStarted(dingtalkRuntime.routing, tab.id);
+      if (fromQQ && qqRuntime.channel && shouldRouteQQForTab(qqRuntime.routing, tab.id)) {
+        void qqRuntime.channel.sendTurnReceipt().catch((err) => {
+          emit(
+            {
+              type: "$error",
+              message: `qq turn receipt failed: ${(err as Error).message}`,
+            },
+            tab.id,
+          );
+        });
       }
-      if (report.blocked) {
-        tab.aborter = null;
-        emit({ type: "$turn_complete" }, tab.id);
-        if (fromQQ) markQQTurnFinished(qqRuntime.routing, tab.id);
-        if (fromFeishu) markQQTurnFinished(feishuRuntime.routing, tab.id);
-        if (fromDingTalk) markQQTurnFinished(dingtalkRuntime.routing, tab.id);
-        return;
+      if (
+        fromFeishu &&
+        feishuRuntime.channel &&
+        shouldRouteQQForTab(feishuRuntime.routing, tab.id)
+      ) {
+        void feishuRuntime.channel.sendTurnReceipt().catch((err) => {
+          emit(
+            {
+              type: "$error",
+              message: `feishu turn receipt failed: ${(err as Error).message}`,
+            },
+            tab.id,
+          );
+        });
       }
-    }
-    await tabContext.run(tab.id, async () => {
-      try {
-        let emittedTurnContext = false;
-        for await (const ev of rt.loop.step(modelText)) {
-          if (!emittedTurnContext) {
-            emittedTurnContext = true;
-            emitCtxBreakdown(tab);
-          }
-          if (
-            ev.role === "assistant_final" &&
-            ev.content &&
-            !isAbortSyntheticFinal(ev.content, ev.forcedSummary)
-          ) {
-            lastAssistantText = ev.content;
-          }
-          if (ev.role === "assistant_final") {
-            appendDesktopAssistantFinalUsage(ev, tab.currentSession);
-            emitUsageHistory(tab);
-          }
-          for (const kev of rt.eventizer.consume(ev, rt.ctx)) {
-            emit(
-              kev.type === "user.message" && clientId
-                ? { ...kev, text: opts.displayText ?? text, clientId }
-                : kev,
-              tab.id,
-            );
-          }
-          if (ev.role === "assistant_final" || ev.role === "tool") {
-            emitCtxBreakdown(tab);
-          }
-          // Memory tools mutate disk state behind the loop's back — the UI
-          // panel won't know until we re-emit. Without this the right-hand
-          // panel only updates on tab reopen.
-          if (ev.role === "tool" && (ev.toolName === "remember" || ev.toolName === "forget")) {
-            emitMemory(tab);
-          }
-          if (tab.aborter?.signal.aborted) break;
+      if (
+        fromDingTalk &&
+        dingtalkRuntime.channel &&
+        shouldRouteQQForTab(dingtalkRuntime.routing, tab.id)
+      ) {
+        void dingtalkRuntime.channel.sendTurnReceipt().catch((err) => {
+          emit(
+            {
+              type: "$error",
+              message: `dingtalk turn receipt failed: ${(err as Error).message}`,
+            },
+            tab.id,
+          );
+        });
+      }
+      let lastAssistantText = "";
+      const sessionAtTurnStart = tab.currentSession;
+      const sessionMetaBeforeTurn = sessionAtTurnStart ? loadSessionMeta(sessionAtTurnStart) : {};
+      if (tab.hooks.some((h) => h.event === "UserPromptSubmit")) {
+        const report = await runHooks({
+          hooks: tab.hooks,
+          payload: { event: "UserPromptSubmit", cwd: tab.rootDir, prompt: text },
+        });
+        for (const o of report.outcomes) {
+          if (o.decision === "pass") continue;
+          emit({ type: "$error", message: formatHookOutcomeMessage(o) }, tab.id);
         }
-      } catch (err) {
-        emit({ type: "$error", message: (err as Error).message }, tab.id);
-      } finally {
+        if (report.blocked) {
+          return;
+        }
+      }
+      await tabContext.run(tab.id, async () => {
+        try {
+          let emittedTurnContext = false;
+          for await (const ev of rt.loop.step(modelText)) {
+            if (!emittedTurnContext) {
+              emittedTurnContext = true;
+              emitCtxBreakdown(tab);
+            }
+            if (
+              ev.role === "assistant_final" &&
+              ev.content &&
+              !isAbortSyntheticFinal(ev.content, ev.forcedSummary)
+            ) {
+              lastAssistantText = ev.content;
+            }
+            if (ev.role === "assistant_final") {
+              appendDesktopAssistantFinalUsage(ev, tab.currentSession);
+              emitUsageHistory(tab);
+            }
+            for (const kev of rt.eventizer.consume(ev, rt.ctx)) {
+              emit(
+                kev.type === "user.message" && clientId
+                  ? { ...kev, text: opts.displayText ?? text, clientId }
+                  : kev,
+                tab.id,
+              );
+            }
+            if (ev.role === "assistant_final" || ev.role === "tool") {
+              emitCtxBreakdown(tab);
+            }
+            // Memory tools mutate disk state behind the loop's back — the UI
+            // panel won't know until we re-emit. Without this the right-hand
+            // panel only updates on tab reopen.
+            if (ev.role === "tool" && (ev.toolName === "remember" || ev.toolName === "forget")) {
+              emitMemory(tab);
+            }
+            if (tab.aborter?.signal.aborted) break;
+          }
+        } catch (err) {
+          emit({ type: "$error", message: (err as Error).message }, tab.id);
+        } finally {
+          // If a session switch happened while this turn was running,
+          // suppress stale events to avoid UI state corruption (#1217).
+          if (tab.turnAdmission.isCurrent(generation) && !tab.switching) {
+            if (
+              fromQQ &&
+              lastAssistantText &&
+              qqRuntime.channel &&
+              shouldRouteQQForTab(qqRuntime.routing, tab.id)
+            ) {
+              await qqRuntime.channel.sendResponse(lastAssistantText).catch((err) => {
+                emit(
+                  {
+                    type: "$error",
+                    message: `qq send failed: ${(err as Error).message}`,
+                  },
+                  tab.id,
+                );
+              });
+            }
+            if (
+              fromFeishu &&
+              lastAssistantText &&
+              feishuRuntime.channel &&
+              shouldRouteQQForTab(feishuRuntime.routing, tab.id)
+            ) {
+              await feishuRuntime.channel.sendResponse(lastAssistantText).catch((err) => {
+                emit(
+                  {
+                    type: "$error",
+                    message: `feishu send failed: ${(err as Error).message}`,
+                  },
+                  tab.id,
+                );
+              });
+            }
+            if (
+              fromDingTalk &&
+              lastAssistantText &&
+              dingtalkRuntime.channel &&
+              shouldRouteQQForTab(dingtalkRuntime.routing, tab.id)
+            ) {
+              await dingtalkRuntime.channel.sendResponse(lastAssistantText).catch((err) => {
+                emit(
+                  {
+                    type: "$error",
+                    message: `dingtalk send failed: ${(err as Error).message}`,
+                  },
+                  tab.id,
+                );
+              });
+            }
+            const sessionName = tab.currentSession;
+            if (sessionName) {
+              const metaBeforeStats = loadSessionMeta(sessionName);
+              const nextTurnCount = (metaBeforeStats.turnCount ?? 0) + (lastAssistantText ? 1 : 0);
+              patchSessionMeta(sessionName, {
+                lastAssistantCompletedAt: Date.now(),
+                ...(lastAssistantText ? { turnCount: nextTurnCount } : {}),
+              });
+              if (
+                sessionName === sessionAtTurnStart &&
+                lastAssistantText.trim() &&
+                shouldAutoNameSession(sessionName, sessionMetaBeforeTurn, nextTurnCount)
+              ) {
+                void generateSessionTitle(rt.loop.client, rt.loop.model, {
+                  workspace: tab.rootDir,
+                  userText: text,
+                  assistantText: lastAssistantText,
+                }).then(
+                  (title) => {
+                    if (!title) return;
+                    try {
+                      applyGeneratedDesktopSessionTitle({
+                        sessionName,
+                        title,
+                        workspace: tab.rootDir,
+                        onRenamed: (nextName) => {
+                          if (tab.currentSession !== sessionName) return;
+                          tab.currentSession = nextName;
+                          rt.loop.sessionName = nextName;
+                          rt.loop.log.setSessionPath(sessionPath(nextName));
+                        },
+                      });
+                      emitCurrentSessionReconciled(tab);
+                      emitSessions(tab);
+                    } catch {
+                      // Title generation is best-effort display metadata.
+                    }
+                  },
+                  () => undefined,
+                );
+              }
+            }
+            emitCurrentSessionReconciled(tab);
+            if (tab.planTotalSteps > 0 && tab.completedStepIds.size >= tab.planTotalSteps) {
+              tab.completedStepIds.clear();
+              tab.planTotalSteps = 0;
+              emit({ type: "$plan_cleared" }, tab.id);
+            }
+            emitSessions(tab);
+            void emitBalance(tab);
+            if (tab.hooks.some((h) => h.event === "Stop")) {
+              const stopReport = await runHooks({
+                hooks: tab.hooks,
+                payload: {
+                  event: "Stop",
+                  cwd: tab.rootDir,
+                  lastAssistantText,
+                  last_assistant_message: lastAssistantText,
+                  turn: rt.loop.stats.summary().turns,
+                },
+              });
+              for (const o of stopReport.outcomes) {
+                if (o.decision === "pass") continue;
+                emit({ type: "$error", message: formatHookOutcomeMessage(o) }, tab.id);
+              }
+            }
+          }
+        }
+      });
+    } finally {
+      if (tab.turnAdmission.isCurrent(generation)) {
+        const shouldEmitCompletion = tabs.has(tab.id);
         if (opts.planOneShot) restoreOneShotPlanGuard(tab);
         tab.aborter = null;
-        // If a session switch happened while this turn was running,
-        // suppress stale events to avoid UI state corruption (#1217).
-        if (!tab.switching) {
-          if (
-            fromQQ &&
-            lastAssistantText &&
-            qqRuntime.channel &&
-            shouldRouteQQForTab(qqRuntime.routing, tab.id)
-          ) {
-            await qqRuntime.channel.sendResponse(lastAssistantText).catch((err) => {
-              emit(
-                {
-                  type: "$error",
-                  message: `qq send failed: ${(err as Error).message}`,
-                },
-                tab.id,
-              );
-            });
-          }
-          if (
-            fromFeishu &&
-            lastAssistantText &&
-            feishuRuntime.channel &&
-            shouldRouteQQForTab(feishuRuntime.routing, tab.id)
-          ) {
-            await feishuRuntime.channel.sendResponse(lastAssistantText).catch((err) => {
-              emit(
-                {
-                  type: "$error",
-                  message: `feishu send failed: ${(err as Error).message}`,
-                },
-                tab.id,
-              );
-            });
-          }
-          if (
-            fromDingTalk &&
-            lastAssistantText &&
-            dingtalkRuntime.channel &&
-            shouldRouteQQForTab(dingtalkRuntime.routing, tab.id)
-          ) {
-            await dingtalkRuntime.channel.sendResponse(lastAssistantText).catch((err) => {
-              emit(
-                {
-                  type: "$error",
-                  message: `dingtalk send failed: ${(err as Error).message}`,
-                },
-                tab.id,
-              );
-            });
-          }
-          const sessionName = tab.currentSession;
-          if (sessionName) {
-            const metaBeforeStats = loadSessionMeta(sessionName);
-            const nextTurnCount = (metaBeforeStats.turnCount ?? 0) + (lastAssistantText ? 1 : 0);
-            patchSessionMeta(sessionName, {
-              lastAssistantCompletedAt: Date.now(),
-              ...(lastAssistantText ? { turnCount: nextTurnCount } : {}),
-            });
-            if (
-              sessionName === sessionAtTurnStart &&
-              lastAssistantText.trim() &&
-              shouldAutoNameSession(sessionName, sessionMetaBeforeTurn, nextTurnCount)
-            ) {
-              void generateSessionTitle(rt.loop.client, rt.loop.model, {
-                workspace: tab.rootDir,
-                userText: text,
-                assistantText: lastAssistantText,
-              }).then(
-                (title) => {
-                  if (!title) return;
-                  try {
-                    applyGeneratedDesktopSessionTitle({
-                      sessionName,
-                      title,
-                      workspace: tab.rootDir,
-                      onRenamed: (nextName) => {
-                        if (tab.currentSession !== sessionName) return;
-                        tab.currentSession = nextName;
-                        rt.loop.sessionName = nextName;
-                        rt.loop.log.setSessionPath(sessionPath(nextName));
-                      },
-                    });
-                    emitCurrentSessionReconciled(tab);
-                    emitSessions(tab);
-                  } catch {
-                    // Title generation is best-effort display metadata.
-                  }
-                },
-                () => undefined,
-              );
-            }
-          }
-          emitCurrentSessionReconciled(tab);
-          emit({ type: "$turn_complete" }, tab.id);
-          if (tab.planTotalSteps > 0 && tab.completedStepIds.size >= tab.planTotalSteps) {
-            tab.completedStepIds.clear();
-            tab.planTotalSteps = 0;
-            emit({ type: "$plan_cleared" }, tab.id);
-          }
-          emitSessions(tab);
-          void emitBalance(tab);
-          if (tab.hooks.some((h) => h.event === "Stop")) {
-            const stopReport = await runHooks({
-              hooks: tab.hooks,
-              payload: {
-                event: "Stop",
-                cwd: tab.rootDir,
-                lastAssistantText,
-                last_assistant_message: lastAssistantText,
-                turn: rt.loop.stats.summary().turns,
-              },
-            });
-            for (const o of stopReport.outcomes) {
-              if (o.decision === "pass") continue;
-              emit({ type: "$error", message: formatHookOutcomeMessage(o) }, tab.id);
-            }
-          }
-        }
         if (fromQQ) markQQTurnFinished(qqRuntime.routing, tab.id);
         if (fromFeishu) markQQTurnFinished(feishuRuntime.routing, tab.id);
         if (fromDingTalk) markQQTurnFinished(dingtalkRuntime.routing, tab.id);
         tab.switching = false;
+        tab.turnAdmission.finish(generation);
+        if (shouldEmitCompletion) emit({ type: "$turn_complete" }, tab.id);
       }
-    });
+    }
   }
 
   async function switchWorkspace(tab: Tab, nextDir: string): Promise<void> {
@@ -4339,6 +4383,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
     abortTurn(tab);
+    tab.turnAdmission.invalidate();
+    tab.switching = false;
     try {
       await tab.toolset?.jobs.shutdown();
     } catch {
@@ -5940,6 +5986,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           saveDesktopCloseBehavior(msg.desktopCloseBehavior);
         }
         if (msg.showSystemEvents !== undefined) saveShowSystemEvents(msg.showSystemEvents);
+        if (msg.showAiVisibleDetails !== undefined) {
+          saveShowAiVisibleDetails(msg.showAiVisibleDetails);
+        }
         if (msg.processCardsDefaultOpen !== undefined) {
           saveProcessCardsDefaultOpen(msg.processCardsDefaultOpen);
         }

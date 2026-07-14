@@ -271,6 +271,9 @@ export interface JupiterConfig {
     /** When false, suppresses the quiet inline dividers for fold / abort / rate-limit
      *  warnings (severity="high" from the kernel). Default true. */
     showSystemEvents?: boolean;
+    /** Desktop-only visibility preference for the read-only "AI visible content"
+     *  summary. Does not change prompt construction. Default true. */
+    showAiVisibleDetails?: boolean;
     /** When true, completed reasoning/tool/shell process cards open by default.
      *  Running and failed process cards remain open regardless. Default false. */
     processCardsDefaultOpen?: boolean;
@@ -1616,6 +1619,16 @@ export function loadShowSystemEvents(path: string = defaultConfigPath()): boolea
 export function saveShowSystemEvents(on: boolean, path: string = defaultConfigPath()): void {
   const cfg = readConfig(path);
   cfg.thread = { ...(cfg.thread ?? {}), showSystemEvents: on };
+  writeConfig(cfg, path);
+}
+
+export function loadShowAiVisibleDetails(path: string = defaultConfigPath()): boolean {
+  return readConfig(path).thread?.showAiVisibleDetails !== false;
+}
+
+export function saveShowAiVisibleDetails(on: boolean, path: string = defaultConfigPath()): void {
+  const cfg = readConfig(path);
+  cfg.thread = { ...(cfg.thread ?? {}), showAiVisibleDetails: on };
   writeConfig(cfg, path);
 }
 

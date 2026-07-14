@@ -8,9 +8,42 @@ import {
   healLoadedMessagesByTokens,
   stripHallucinatedToolMarkup,
 } from "../src/loop.js";
+import { ProviderHttpError } from "../src/provider-http-error.js";
 import type { ChatMessage } from "../src/types.js";
 
 describe("formatLoopError", () => {
+  it("formats a structured relay error without DeepSeek-specific advice", () => {
+    const raw = new ProviderHttpError({
+      status: 429,
+      baseUrl: "https://relay.example/v1",
+      rawBody: '{"error":{"message":"upstream channel exhausted"}}',
+    });
+    const out = formatLoopError(raw);
+    expect(out).toContain("relay.example");
+    expect(out).toContain("429");
+    expect(out).toContain("upstream channel exhausted");
+    expect(out).not.toContain("2500");
+  });
+
+  it("formats every structured 5xx status and retains its safe reason", () => {
+    const raw = new ProviderHttpError({
+      status: 520,
+      baseUrl: "https://api.deepseek.com",
+      rawBody: '{"error":{"message":"edge provider failed"}}',
+    });
+    const out = formatLoopError(raw);
+    expect(out).toContain("520");
+    expect(out).toContain("edge provider failed");
+  });
+
+  it("redacts credentials from legacy string-shaped errors", () => {
+    const secret = "sk-live-abcdefghijklmnop";
+    const raw = new Error(`DeepSeek 401: {"error":{"message":"invalid api key: ${secret}"}}`);
+    const out = formatLoopError(raw);
+    expect(out).not.toContain(secret);
+    expect(out).toContain("[redacted]");
+  });
+
   it("annotates a DeepSeek 400 'maximum context length' error", () => {
     const raw = new Error(
       'DeepSeek 400: {"error":{"message":"This model\'s maximum context length is 131072 tokens. ' +

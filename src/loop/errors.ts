@@ -1,5 +1,10 @@
 import type { DeepSeekClient } from "../client.js";
 import { t } from "../i18n/index.js";
+import {
+  ProviderHttpError,
+  extractProviderErrorDetail,
+  sanitizeProviderErrorText,
+} from "../provider-http-error.js";
 
 export interface DeepSeekProbeResult {
   reachable: boolean;
@@ -24,29 +29,38 @@ export function formatLoopError(
     return t("errors.contextOverflow", { requested });
   }
 
-  const m = /^DeepSeek (\d{3}):\s*([\s\S]*)$/.exec(msg);
+  if (err instanceof ProviderHttpError) {
+    return formatProviderHttpError(err, probe);
+  }
+
+  const m = /^(?:DeepSeek|Upstream\s+\S+) (\d{3}):?\s*([\s\S]*)$/.exec(msg);
   if (!m) return msg;
   const status = m[1] ?? "";
   const body = m[2] ?? "";
   const inner = extractDeepSeekErrorMessage(body);
 
   if (status === "401") return t("errors.auth401", { inner });
+  if (status === "403") return t("errors.auth403", { inner });
   if (status === "402") return t("errors.balance402", { inner });
   if (status === "422") return t("errors.badparam422", { inner });
   if (status === "400") return t("errors.badrequest400", { inner });
   if (status === "429") return t("errors.concurrency429", { inner });
-  if (is5xxStatus(status)) return format5xx(status, probe, opts?.upstreamHost);
+  if (is5xxStatus(status)) {
+    return appendProviderDetail(format5xx(status, probe, opts?.upstreamHost), inner);
+  }
   return msg;
 }
 
 export function is5xxError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
+  if (err instanceof ProviderHttpError) return err.status >= 500 && err.status <= 599;
   const m = /^DeepSeek (5\d{2}):/.exec(err.message ?? "");
   return m !== null;
 }
 
 export function is4xxError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
+  if (err instanceof ProviderHttpError) return err.status >= 400 && err.status <= 499;
   return /^DeepSeek (4\d{2}):/.test(err.message ?? "");
 }
 
@@ -78,7 +92,7 @@ export function isDeepSeekHost(baseUrl: string | undefined | null): boolean {
 }
 
 function is5xxStatus(status: string): boolean {
-  return status === "500" || status === "502" || status === "503" || status === "504";
+  return /^5\d{2}$/.test(status);
 }
 
 function format5xx(
@@ -132,17 +146,32 @@ export function errorLabelFor(reason: "aborted" | "context-guard" | "stuck"): st
 }
 
 function extractDeepSeekErrorMessage(body: string): string {
-  const trimmed = body.trim();
-  if (!trimmed) return t("errors.innerNoMessage");
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (parsed && typeof parsed === "object") {
-      const obj = parsed as { error?: { message?: unknown }; message?: unknown };
-      if (obj.error && typeof obj.error.message === "string") return obj.error.message;
-      if (typeof obj.message === "string") return obj.message;
-    }
-  } catch {
-    /* not JSON — fall through */
+  return extractProviderErrorDetail(body) || t("errors.innerNoMessage");
+}
+
+function formatProviderHttpError(err: ProviderHttpError, probe?: DeepSeekProbeResult): string {
+  const status = String(err.status);
+  const inner = err.safeDetail || t("errors.innerNoMessage");
+  if (err.providerHost !== "api.deepseek.com") {
+    return t("errors.upstreamHttp", {
+      host: err.providerHost,
+      status,
+      inner,
+    });
   }
-  return trimmed;
+  if (status === "401") return t("errors.auth401", { inner });
+  if (status === "403") return t("errors.auth403", { inner });
+  if (status === "402") return t("errors.balance402", { inner });
+  if (status === "422") return t("errors.badparam422", { inner });
+  if (status === "400") return t("errors.badrequest400", { inner });
+  if (status === "429") return t("errors.concurrency429", { inner });
+  if (is5xxStatus(status)) {
+    return appendProviderDetail(formatDeepSeek5xx(status, probe), err.safeDetail);
+  }
+  return sanitizeProviderErrorText(err.message);
+}
+
+function appendProviderDetail(base: string, detail: string): string {
+  if (!detail || detail === t("errors.innerNoMessage")) return base;
+  return `${base} ${detail}`;
 }

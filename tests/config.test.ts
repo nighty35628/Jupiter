@@ -35,6 +35,7 @@ import {
   loadRateLimit,
   loadReasoningEffort,
   loadSemanticEmbeddingUserConfig,
+  loadShowAiVisibleDetails,
   loadSkillPackSources,
   loadSubagentModels,
   loadTheme,
@@ -56,6 +57,7 @@ import {
   savePromptHistory,
   saveReasoningEffort,
   saveSemanticEmbeddingConfig,
+  saveShowAiVisibleDetails,
   saveSkillPackSources,
   saveSubagentModels,
   saveTheme,
@@ -966,6 +968,20 @@ describe("config", () => {
       expect(readConfig(path).libraryRetrievalMode).toBe("always");
       writeConfig({ libraryRetrievalMode: "eager" as never }, path);
       expect(loadLibraryRetrievalMode(path)).toBe("on_demand");
+    });
+  });
+
+  describe("showAiVisibleDetails", () => {
+    it("defaults on and round-trips through thread settings", () => {
+      expect(loadShowAiVisibleDetails(path)).toBe(true);
+
+      saveShowAiVisibleDetails(false, path);
+      expect(readConfig(path).thread?.showAiVisibleDetails).toBe(false);
+      expect(loadShowAiVisibleDetails(path)).toBe(false);
+
+      saveShowAiVisibleDetails(true, path);
+      expect(readConfig(path).thread?.showAiVisibleDetails).toBe(true);
+      expect(loadShowAiVisibleDetails(path)).toBe(true);
     });
   });
 

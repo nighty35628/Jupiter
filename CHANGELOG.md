@@ -3,6 +3,59 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] — 2026-07-14
+
+### 中文
+
+**桌面 RPC 发送可靠性。** Tauri `rpc_send` 现在会返回结构化失败阶段，区分核心未启动、写入失败和 flush
+失败。桌面端会串行发送 RPC、在核心不可用时暂停继续发送，并只在确认命令未送达时回滚乐观消息；送达状态未知时会
+保留忙碌状态和审批锁，避免重复提交或错误恢复草稿。
+
+**单标签回合准入。** 桌面后端新增单标签回合 lease，普通回合、轻量 `/ask`、`/btw` 和远程通道回合不会在同一标签
+重叠运行。切换会话、切换工作区或关闭标签时会失效旧回合，减少陈旧事件污染当前 UI 状态。
+
+**AI 可见内容摘要。** 右侧上下文面板新增“AI 可见内容”摘要，展示当前对话可能使用的对话记录、系统规则类别、
+工具数量、文件、记忆和工作区状态。设置页新增开关，可隐藏这个只读摘要；Ask 模式按钮和提示也做了更清晰的文案与
+可访问性更新。
+
+**Provider 错误脱敏。** DeepSeek 和自定义上游的 HTTP 错误现在会提取有限长度的安全详情，过滤 ANSI、控制字符、
+HTML、Authorization、API key、JWT、cookie、password 等敏感片段。错误提示新增 403 和非 DeepSeek 上游 HTTP
+场景，并在 loop error detail 中使用脱敏文本。
+
+**MCP 与工具契约稳定性。** MCP `tools/list` 支持 cursor 分页，会完整收集工具目录并检查页数、工具数、重复工具名
+和重复 cursor。工具 schema 会 canonicalize 后再进入工具列表和不可变前缀，降低工具顺序变化导致的前缀/cache 抖动。
+MCP inspect、bridge 和 reconnect 均改用完整工具列表。
+
+**版本同步。** 桌面端、根包、Tauri、Cargo、CHANGELOG、README 和 release notes 版本统一为 `1.0.6`。
+
+### English
+
+**More reliable desktop RPC sends.** Tauri `rpc_send` now returns structured failure stages for core-not-started,
+write-failed, and flush-failed cases. The desktop app serializes RPC writes, pauses sending when the core is unavailable,
+and rolls back optimistic user messages only when a command definitely was not sent; unknown-delivery failures keep the
+busy state and approval locks instead of risking duplicate submissions.
+
+**Single-turn admission per tab.** The desktop backend now uses a per-tab turn lease so normal turns, lightweight
+`/ask`, `/btw`, and remote-channel turns cannot overlap in the same tab. Session switches, workspace switches, and tab
+closes invalidate old turns to reduce stale event leakage into the current UI state.
+
+**AI-visible content summary.** The right context panel now includes an "AI visible content" summary for conversation
+history, system-rule category, tool count, files, memory, and workspace state that may be available to the current chat.
+Settings adds a show/hide control for this read-only summary, and Ask mode received clearer labels, status text, and
+accessibility updates.
+
+**Sanitized provider errors.** HTTP errors from DeepSeek and custom upstream providers now extract bounded safe details
+while filtering ANSI/control characters, HTML, Authorization headers, API keys, JWTs, cookies, passwords, and similar
+secret fragments. User-facing errors now cover 403 and non-DeepSeek upstream HTTP responses, and loop error details use
+sanitized text.
+
+**Stable MCP and tool contracts.** MCP `tools/list` now supports cursor pagination, collecting the complete tool catalog
+with page, tool-count, duplicate-name, and repeated-cursor guards. Tool schemas are canonicalized before they enter the
+tool list and immutable prefix, reducing prefix/cache churn from tool ordering changes. MCP inspect, bridge, and
+reconnect all use the complete tool list.
+
+**Version alignment.** Desktop, root package, Tauri, Cargo, CHANGELOG, README, and release notes are aligned on `1.0.6`.
+
 ## [1.0.5] — 2026-06-24, republished 2026-06-28
 
 ### 中文

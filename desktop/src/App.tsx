@@ -44,6 +44,11 @@ import {
   shouldShowCompletionToast,
 } from "./notifications";
 import { parseOneShotPlanCommand } from "./one-shot-plan";
+import {
+  RpcSendFailure,
+  coerceRpcSendFailure,
+  isDefinitelyUnsent,
+} from "./rpc-send";
 import type {
   BrowserAutomationStatus,
   CheckpointVerdict,
@@ -389,6 +394,7 @@ export type Settings = {
   contextTokens?: Record<string, number>;
   libraryRetrievalMode?: "off" | "on_demand" | "always";
   showSystemEvents?: boolean;
+  showAiVisibleDetails?: boolean;
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
   memoryGlobalEnabled?: boolean;
@@ -623,7 +629,7 @@ function parseLibrarySources(raw: string | null): LibrarySource[] {
   }
 }
 
-function tabBusyFromIncomingEvent(ev: IncomingEvent): boolean | null {
+export function tabBusyFromIncomingEvent(ev: IncomingEvent): boolean | null {
   switch (ev.type) {
     case "$tab_opened":
       return ev.busy ?? null;
@@ -631,8 +637,6 @@ function tabBusyFromIncomingEvent(ev: IncomingEvent): boolean | null {
       return ev.busy ?? false;
     case "$session_empty":
     case "$turn_complete":
-    case "$error":
-    case "error":
       return false;
     case "user.message":
     case "model.turn.started":
@@ -653,6 +657,7 @@ type Action =
   | { t: "incoming"; event: IncomingEvent }
   | { t: "set_busy"; busy: boolean }
   | { t: "rpc_exit"; code: number | null }
+  | { t: "rpc_not_sent"; clientId: string }
   | { t: "clear" }
   | { t: "resolve_confirm"; id: number }
   | { t: "resolve_path_access"; id: number }
@@ -858,6 +863,12 @@ function reduceRaw(state: State, action: Action): State {
         activeSkill: null,
         queuedSends: [],
         sideChats: [],
+        pendingConfirms: [],
+        pendingPathAccess: [],
+        pendingChoices: [],
+        pendingPlans: [],
+        pendingCheckpoints: [],
+        pendingRevisions: [],
         messages: [
           ...state.messages,
           {
@@ -866,6 +877,16 @@ function reduceRaw(state: State, action: Action): State {
             id: nextErrorId(),
           },
         ],
+      };
+    case "rpc_not_sent":
+      return {
+        ...state,
+        busy: false,
+        transientStatus: null,
+        activeSkill: null,
+        messages: state.messages.filter(
+          (message) => !(message.kind === "user" && message.clientId === action.clientId),
+        ),
       };
     case "incoming":
       return applyIncoming(state, action.event);
@@ -1912,6 +1933,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           contextTokens: ev.contextTokens,
           libraryRetrievalMode: ev.libraryRetrievalMode,
           showSystemEvents: ev.showSystemEvents,
+          showAiVisibleDetails: ev.showAiVisibleDetails,
           processCardsDefaultOpen: ev.processCardsDefaultOpen,
           memoryConfirmWrites: ev.memoryConfirmWrites,
           memoryGlobalEnabled: ev.memoryGlobalEnabled,
@@ -1955,17 +1977,14 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       // ones so a session full of self-repaired loops doesn't look
       // like everything's on fire (#1456-followup).
       const recoverable = ev.type === "error" ? ev.recoverable : false;
-      // Loop has returned (any error path ends the turn); flip the still-
-      // streaming assistant message to settled so the UI doesn't keep
-      // showing a "thinking" spinner above the error card (#1660).
+      // An error card is not a lifecycle boundary: hooks and other async
+      // cleanup may still be running. Only $turn_complete releases queued input.
       const settled = state.messages.map((m) =>
         m.kind === "assistant" && m.pending ? { ...m, pending: false } : m,
       );
       return {
         ...state,
-        busy: false,
         transientStatus: null,
-        activeSkill: null,
         messages: [
           ...settled,
           {
@@ -2325,6 +2344,25 @@ function defaultExportFilename(session: string): string {
 
 type TabAction = Action;
 type TabDispatcher = (action: TabAction) => void;
+type ApprovalResponseKind = "confirm" | "path" | "choice" | "plan" | "checkpoint" | "revision";
+
+function approvalResponseKey(kind: ApprovalResponseKind, id: number): string {
+  return `${kind}:${id}`;
+}
+
+function ApprovalResponseLock({
+  locked,
+  children,
+}: {
+  locked: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <fieldset className="approval-response-lock" disabled={locked} aria-busy={locked}>
+      {children}
+    </fieldset>
+  );
+}
 
 type TabRuntimeSnapshot = {
   currentSession?: string;
@@ -2351,7 +2389,8 @@ interface TabRuntimeProps {
   active: boolean;
   currency: "CNY" | "USD";
   registerDispatch: (tabId: string, d: TabDispatcher | null) => void;
-  sendRpcToTab: (tabId: string, cmd: OutgoingCommand) => void;
+  sendRpcToTab: (tabId: string, cmd: OutgoingCommand) => Promise<void>;
+  rpcTransportAvailable: boolean;
   onRuntimeSnapshot: (tabId: string, snapshot: TabRuntimeSnapshot) => void;
   registerRuntimeControls: (tabId: string, controls: TabRuntimeControls | null) => void;
   onNewTab: () => void;
@@ -2393,6 +2432,7 @@ function TabRuntimeInner({
   currency,
   registerDispatch,
   sendRpcToTab,
+  rpcTransportAvailable,
   onRuntimeSnapshot,
   registerRuntimeControls,
   onNewTab,
@@ -2527,6 +2567,10 @@ function TabRuntimeInner({
     checkpoints: [],
     revisions: [],
   });
+  const [pendingApprovalResponses, setPendingApprovalResponses] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const pendingApprovalResponsesRef = useRef<Set<string>>(new Set());
   const wasBusyRef = useRef(false);
   const busyStartedAtRef = useRef<number | null>(null);
   const abortDraftRef = useRef<string | null>(null);
@@ -2750,6 +2794,24 @@ function TabRuntimeInner({
   const markOptimisticBusy = useCallback(() => {
     optimisticBusyRef.current = true;
   }, []);
+  const sendOptimisticRpc = useCallback(
+    (
+      cmd: OutgoingCommand,
+      opts: { clientId: string; restoreDraft?: string },
+    ): void => {
+      const pending = sendRpc(cmd);
+      void pending.catch((failure) => {
+        if (!isDefinitelyUnsent(failure)) return;
+        optimisticBusyRef.current = false;
+        clearAbortDraft();
+        dispatch({ t: "rpc_not_sent", clientId: opts.clientId });
+        if (opts.restoreDraft !== undefined) {
+          setDraft((current) => (current.length === 0 ? opts.restoreDraft! : current));
+        }
+      });
+    },
+    [clearAbortDraft, sendRpc],
+  );
   const isTabBusy = useCallback(() => state.busy || optimisticBusyRef.current, [state.busy]);
 
   const queryMentions = useCallback(
@@ -3165,7 +3227,13 @@ function TabRuntimeInner({
     (override?: string, payload?: ComposerSendPayload) => {
       const text = (override ?? draft).trim();
       const hiddenMentions = payload?.hiddenMentions?.filter(Boolean) ?? [];
-      if ((!text && hiddenMentions.length === 0) || !state.ready || state.busy) return;
+      if (
+        (!text && hiddenMentions.length === 0) ||
+        !state.ready ||
+        !rpcTransportAvailable ||
+        state.busy
+      )
+        return;
 
       const settingsCommand = parseSlashSettingsCommand(text);
       if (settingsCommand) {
@@ -3203,12 +3271,15 @@ function TabRuntimeInner({
         recordAbortDraft("user_input", oneShotPlanCommand.text);
         markOptimisticBusy();
         dispatch({ t: "send_user", text: oneShotPlanCommand.text, clientId });
-        sendRpc({
-          cmd: "user_input",
-          text: oneShotPlanCommand.text,
-          clientId,
-          planOneShot: true,
-        });
+        sendOptimisticRpc(
+          {
+            cmd: "user_input",
+            text: oneShotPlanCommand.text,
+            clientId,
+            planOneShot: true,
+          },
+          { clientId, ...(!override ? { restoreDraft: text } : {}) },
+        );
         if (!override) setDraft("");
         return;
       }
@@ -3231,7 +3302,10 @@ function TabRuntimeInner({
         recordAbortDraft("btw", text);
         markOptimisticBusy();
         dispatch({ t: "send_user", text, clientId, rollbackable: false });
-        sendRpc({ cmd: "btw", text: question });
+        sendOptimisticRpc(
+          { cmd: "btw", text: question, clientId },
+          { clientId, ...(!override ? { restoreDraft: text } : {}) },
+        );
         if (!override) setDraft("");
         return;
       }
@@ -3255,7 +3329,10 @@ function TabRuntimeInner({
         recordAbortDraft("ask_light", question);
         markOptimisticBusy();
         dispatch({ t: "send_user", text: question, clientId });
-        sendRpc({ cmd: "ask_light", text: question, clientId });
+        sendOptimisticRpc(
+          { cmd: "ask_light", text: question, clientId },
+          { clientId, ...(!override ? { restoreDraft: text } : {}) },
+        );
         if (!override) setDraft("");
         return;
       }
@@ -3274,7 +3351,10 @@ function TabRuntimeInner({
           recordAbortDraft("user_input", text);
           markOptimisticBusy();
           dispatch({ t: "send_user", text, clientId, rollbackable: false });
-          sendRpc({ cmd: "slash", text, clientId });
+          sendOptimisticRpc(
+            { cmd: "slash", text, clientId },
+            { clientId, ...(!override ? { restoreDraft: text } : {}) },
+          );
           if (!override) setDraft("");
           return;
         }
@@ -3305,11 +3385,14 @@ function TabRuntimeInner({
             args: trimmedArgs,
             clientId,
           });
-          sendRpc({
-            cmd: "skill_run",
-            name: skill.name,
-            args: trimmedArgs || undefined,
-          });
+          sendOptimisticRpc(
+            {
+              cmd: "skill_run",
+              name: skill.name,
+              args: trimmedArgs || undefined,
+            },
+            { clientId, ...(!override ? { restoreDraft: text } : {}) },
+          );
           if (!override) setDraft("");
           return;
         }
@@ -3322,7 +3405,10 @@ function TabRuntimeInner({
         recordAbortDraft("ask_light", text);
         markOptimisticBusy();
         dispatch({ t: "send_user", text, clientId });
-        sendRpc({ cmd: "ask_light", text, clientId });
+        sendOptimisticRpc(
+          { cmd: "ask_light", text, clientId },
+          { clientId, ...(!override ? { restoreDraft: text } : {}) },
+        );
         if (!override) setDraft("");
         return;
       }
@@ -3339,13 +3425,19 @@ function TabRuntimeInner({
       recordAbortDraft("user_input", wireText);
       markOptimisticBusy();
       dispatch({ t: "send_user", text: displayText, clientId });
-      sendRpc({
-        cmd: "user_input",
-        text: wireText,
-        displayText,
-        clientId,
-        planOneShot: planFirst,
-      });
+      sendOptimisticRpc(
+        {
+          cmd: "user_input",
+          text: wireText,
+          displayText,
+          clientId,
+          planOneShot: planFirst,
+        },
+        {
+          clientId,
+          ...(!override ? { restoreDraft: text || hiddenMentionText } : {}),
+        },
+      );
       if (!override) setDraft("");
     },
     [
@@ -3353,7 +3445,9 @@ function TabRuntimeInner({
       state.ready,
       state.busy,
       state.skills,
+      rpcTransportAvailable,
       sendRpc,
+      sendOptimisticRpc,
       recordAbortDraft,
       markOptimisticBusy,
       addLibraryFilesFromMessage,
@@ -3418,21 +3512,22 @@ function TabRuntimeInner({
   );
 
   useEffect(() => {
-    if (state.busy || !state.ready || state.queuedSends.length === 0) return;
+    if (state.busy || !state.ready || !rpcTransportAvailable || state.queuedSends.length === 0)
+      return;
     const next = state.queuedSends[0];
     if (!next) return;
     dispatch({ t: "shift_queued_send" });
     send(next);
-  }, [state.busy, state.ready, state.queuedSends, send]);
+  }, [rpcTransportAvailable, state.busy, state.ready, state.queuedSends, send]);
   const sendSideChat = useCallback(
     (text: string) => {
-      const next = nextSideChatSend({ text, ready: state.ready });
+      const next = nextSideChatSend({ text, ready: state.ready && rpcTransportAvailable });
       if (!next) return;
       const id = `side-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       dispatch({ t: "side_chat_sent", id, question: next.question });
       sendRpc({ cmd: "btw", text: next.question, clientId: id });
     },
-    [sendRpc, state.ready],
+    [rpcTransportAvailable, sendRpc, state.ready],
   );
 
   useEffect(() => {
@@ -3526,12 +3621,67 @@ function TabRuntimeInner({
     if (!state.busy) optimisticBusyRef.current = false;
   }, [state.busy]);
 
+  const submitApprovalResponse = useCallback(
+    (key: string, cmd: OutgoingCommand, resolve: () => void) => {
+      if (!rpcTransportAvailable || pendingApprovalResponsesRef.current.has(key)) return;
+      const nextPending = new Set(pendingApprovalResponsesRef.current);
+      nextPending.add(key);
+      pendingApprovalResponsesRef.current = nextPending;
+      setPendingApprovalResponses(nextPending);
+      void sendRpc(cmd).then(
+        () => {
+          const settled = new Set(pendingApprovalResponsesRef.current);
+          settled.delete(key);
+          pendingApprovalResponsesRef.current = settled;
+          setPendingApprovalResponses(settled);
+          resolve();
+        },
+        () => {
+          // Delivery is unknown. Keep the approval visibly locked until a
+          // domain event or rpc:exit proves what happened.
+        },
+      );
+    },
+    [rpcTransportAvailable, sendRpc],
+  );
+
+  useEffect(() => {
+    const live = new Set<string>([
+      ...state.pendingConfirms.map((item) => approvalResponseKey("confirm", item.id)),
+      ...state.pendingPathAccess.map((item) => approvalResponseKey("path", item.id)),
+      ...state.pendingChoices.map((item) => approvalResponseKey("choice", item.id)),
+      ...state.pendingPlans.map((item) => approvalResponseKey("plan", item.id)),
+      ...state.pendingCheckpoints.map((item) => approvalResponseKey("checkpoint", item.id)),
+      ...state.pendingRevisions.map((item) => approvalResponseKey("revision", item.id)),
+    ]);
+    const nextPending = new Set(
+      [...pendingApprovalResponsesRef.current].filter((key) => live.has(key)),
+    );
+    if (
+      nextPending.size === pendingApprovalResponsesRef.current.size &&
+      [...nextPending].every((key) => pendingApprovalResponsesRef.current.has(key))
+    )
+      return;
+    pendingApprovalResponsesRef.current = nextPending;
+    setPendingApprovalResponses(nextPending);
+  }, [
+    state.pendingCheckpoints,
+    state.pendingChoices,
+    state.pendingConfirms,
+    state.pendingPathAccess,
+    state.pendingPlans,
+    state.pendingRevisions,
+  ]);
+
   const resolveConfirm = useCallback(
     (id: number, response: ConfirmationChoice) => {
-      sendRpc({ cmd: "confirm_response", id, response });
-      dispatch({ t: "resolve_confirm", id });
+      submitApprovalResponse(
+        approvalResponseKey("confirm", id),
+        { cmd: "confirm_response", id, response },
+        () => dispatch({ t: "resolve_confirm", id }),
+      );
     },
-    [sendRpc],
+    [submitApprovalResponse],
   );
   const onApproveConfirm = useCallback(
     (id: number) => resolveConfirm(id, { type: "run_once" }),
@@ -3547,38 +3697,53 @@ function TabRuntimeInner({
   );
   const resolvePathAccess = useCallback(
     (id: number, response: ConfirmationChoice) => {
-      sendRpc({ cmd: "confirm_response", id, response });
-      dispatch({ t: "resolve_path_access", id });
+      submitApprovalResponse(
+        approvalResponseKey("path", id),
+        { cmd: "confirm_response", id, response },
+        () => dispatch({ t: "resolve_path_access", id }),
+      );
     },
-    [sendRpc],
+    [submitApprovalResponse],
   );
   const resolveChoice = useCallback(
     (id: number, response: ChoiceVerdict) => {
-      sendRpc({ cmd: "choice_response", id, response });
-      dispatch({ t: "resolve_choice", id });
+      submitApprovalResponse(
+        approvalResponseKey("choice", id),
+        { cmd: "choice_response", id, response },
+        () => dispatch({ t: "resolve_choice", id }),
+      );
     },
-    [sendRpc],
+    [submitApprovalResponse],
   );
   const resolvePlan = useCallback(
     (id: number, response: PlanVerdict) => {
-      sendRpc({ cmd: "plan_response", id, response });
-      dispatch({ t: "resolve_plan", id, verdict: response });
+      submitApprovalResponse(
+        approvalResponseKey("plan", id),
+        { cmd: "plan_response", id, response },
+        () => dispatch({ t: "resolve_plan", id, verdict: response }),
+      );
     },
-    [sendRpc],
+    [submitApprovalResponse],
   );
   const resolveCheckpoint = useCallback(
     (id: number, response: CheckpointVerdict) => {
-      sendRpc({ cmd: "checkpoint_response", id, response });
-      dispatch({ t: "resolve_checkpoint", id, verdict: response });
+      submitApprovalResponse(
+        approvalResponseKey("checkpoint", id),
+        { cmd: "checkpoint_response", id, response },
+        () => dispatch({ t: "resolve_checkpoint", id, verdict: response }),
+      );
     },
-    [sendRpc],
+    [submitApprovalResponse],
   );
   const resolveRevision = useCallback(
     (id: number, response: RevisionVerdict) => {
-      sendRpc({ cmd: "revision_response", id, response });
-      dispatch({ t: "resolve_revision", id, verdict: response });
+      submitApprovalResponse(
+        approvalResponseKey("revision", id),
+        { cmd: "revision_response", id, response },
+        () => dispatch({ t: "resolve_revision", id, verdict: response }),
+      );
     },
-    [sendRpc],
+    [submitApprovalResponse],
   );
 
   const messageItems = state.messages;
@@ -4127,7 +4292,7 @@ function TabRuntimeInner({
       setDraft={setDraft}
       onSend={(payload) => send(undefined, payload)}
       onAbort={abort}
-      disabled={!state.ready}
+      disabled={!state.ready || !rpcTransportAvailable}
       busy={state.busy}
       busyLabel={state.busy ? t("app.thinkingNow") : undefined}
       busyElapsedMs={elapsed}
@@ -4294,9 +4459,7 @@ function TabRuntimeInner({
               setActive={setActiveTabId}
               onClose={(id) => {
                 if (tabsList.length <= 1) return;
-                invoke("rpc_send", {
-                  line: JSON.stringify({ cmd: "tab_close", tabId: id }),
-                }).catch((err) => console.error("tab_close failed", err));
+                void sendRpcToTab(id, { cmd: "tab_close" });
               }}
               onNew={onNewTab}
               singleTab={tabsList.length <= 1}
@@ -4397,7 +4560,16 @@ function TabRuntimeInner({
                               onApproveConfirm={onApproveConfirm}
                               onRejectConfirm={onRejectConfirm}
                               onAlwaysAllowConfirm={onAlwaysAllowConfirm}
-                              pendingConfirms={state.pendingConfirms}
+                              pendingConfirms={
+                                rpcTransportAvailable
+                                  ? state.pendingConfirms.filter(
+                                      (confirm) =>
+                                        !pendingApprovalResponses.has(
+                                          approvalResponseKey("confirm", confirm.id),
+                                        ),
+                                    )
+                                  : []
+                              }
                               rollbackAvailable={rollbackAvailable}
                               onRollback={() => {
                                 if (rollbackTarget)
@@ -4505,63 +4677,105 @@ function TabRuntimeInner({
               !state.ready ? (
                 <div className="pending-approvals">
                   {state.pendingPlans.map((p) => (
-                    <PlanApprovalCard
+                    <ApprovalResponseLock
                       key={`pp-${p.id}`}
-                      p={p}
-                      onApprove={() => resolvePlan(p.id, { type: "approve" })}
-                      onRefine={() => resolvePlan(p.id, { type: "refine" })}
-                      onCancel={() => resolvePlan(p.id, { type: "cancel" })}
-                    />
+                      locked={
+                        !rpcTransportAvailable ||
+                        pendingApprovalResponses.has(approvalResponseKey("plan", p.id))
+                      }
+                    >
+                      <PlanApprovalCard
+                        p={p}
+                        onApprove={() => resolvePlan(p.id, { type: "approve" })}
+                        onRefine={() => resolvePlan(p.id, { type: "refine" })}
+                        onCancel={() => resolvePlan(p.id, { type: "cancel" })}
+                      />
+                    </ApprovalResponseLock>
                   ))}
                   {state.pendingCheckpoints.map((c) => (
-                    <CheckpointApprovalCard
+                    <ApprovalResponseLock
                       key={`cp-${c.id}`}
-                      c={c}
-                      onContinue={() => resolveCheckpoint(c.id, { type: "continue" })}
-                      onRevise={() => resolveCheckpoint(c.id, { type: "revise" })}
-                      onStop={() => resolveCheckpoint(c.id, { type: "stop" })}
-                    />
+                      locked={
+                        !rpcTransportAvailable ||
+                        pendingApprovalResponses.has(approvalResponseKey("checkpoint", c.id))
+                      }
+                    >
+                      <CheckpointApprovalCard
+                        c={c}
+                        onContinue={() => resolveCheckpoint(c.id, { type: "continue" })}
+                        onRevise={() => resolveCheckpoint(c.id, { type: "revise" })}
+                        onStop={() => resolveCheckpoint(c.id, { type: "stop" })}
+                      />
+                    </ApprovalResponseLock>
                   ))}
                   {state.pendingRevisions.map((r) => (
-                    <RevisionApprovalCard
+                    <ApprovalResponseLock
                       key={`rv-${r.id}`}
-                      r={r}
-                      onAccept={() => resolveRevision(r.id, { type: "accepted" })}
-                      onReject={() => resolveRevision(r.id, { type: "rejected" })}
-                    />
+                      locked={
+                        !rpcTransportAvailable ||
+                        pendingApprovalResponses.has(approvalResponseKey("revision", r.id))
+                      }
+                    >
+                      <RevisionApprovalCard
+                        r={r}
+                        onAccept={() => resolveRevision(r.id, { type: "accepted" })}
+                        onReject={() => resolveRevision(r.id, { type: "rejected" })}
+                      />
+                    </ApprovalResponseLock>
                   ))}
                   {state.pendingConfirms.map((c) => (
-                    <ConfirmApprovalCard
+                    <ApprovalResponseLock
                       key={`cc-${c.id}`}
-                      prompt={c.prompt}
-                      onAllow={() => resolveConfirm(c.id, { type: "run_once" })}
-                      onAlwaysAllow={(prefix) =>
-                        resolveConfirm(c.id, { type: "always_allow", prefix })
+                      locked={
+                        !rpcTransportAvailable ||
+                        pendingApprovalResponses.has(approvalResponseKey("confirm", c.id))
                       }
-                      onDeny={() => resolveConfirm(c.id, { type: "deny" })}
-                    />
+                    >
+                      <ConfirmApprovalCard
+                        prompt={c.prompt}
+                        onAllow={() => resolveConfirm(c.id, { type: "run_once" })}
+                        onAlwaysAllow={(prefix) =>
+                          resolveConfirm(c.id, { type: "always_allow", prefix })
+                        }
+                        onDeny={() => resolveConfirm(c.id, { type: "deny" })}
+                      />
+                    </ApprovalResponseLock>
                   ))}
                   {state.pendingPathAccess.map((p) => (
-                    <PathAccessApprovalCard
+                    <ApprovalResponseLock
                       key={`pa-${p.id}`}
-                      prompt={p.prompt}
-                      onAllow={() => resolvePathAccess(p.id, { type: "run_once" })}
-                      onAlwaysAllow={(prefix) =>
-                        resolvePathAccess(p.id, {
-                          type: "always_allow",
-                          prefix,
-                        })
+                      locked={
+                        !rpcTransportAvailable ||
+                        pendingApprovalResponses.has(approvalResponseKey("path", p.id))
                       }
-                      onDeny={() => resolvePathAccess(p.id, { type: "deny" })}
-                    />
+                    >
+                      <PathAccessApprovalCard
+                        prompt={p.prompt}
+                        onAllow={() => resolvePathAccess(p.id, { type: "run_once" })}
+                        onAlwaysAllow={(prefix) =>
+                          resolvePathAccess(p.id, {
+                            type: "always_allow",
+                            prefix,
+                          })
+                        }
+                        onDeny={() => resolvePathAccess(p.id, { type: "deny" })}
+                      />
+                    </ApprovalResponseLock>
                   ))}
                   {state.pendingChoices.map((c) => (
-                    <ChoiceApprovalCard
+                    <ApprovalResponseLock
                       key={`ch-${c.id}`}
-                      c={c}
-                      onPick={(optionId) => resolveChoice(c.id, { type: "pick", optionId })}
-                      onCancel={() => resolveChoice(c.id, { type: "cancel" })}
-                    />
+                      locked={
+                        !rpcTransportAvailable ||
+                        pendingApprovalResponses.has(approvalResponseKey("choice", c.id))
+                      }
+                    >
+                      <ChoiceApprovalCard
+                        c={c}
+                        onPick={(optionId) => resolveChoice(c.id, { type: "pick", optionId })}
+                        onCancel={() => resolveChoice(c.id, { type: "cancel" })}
+                      />
+                    </ApprovalResponseLock>
                   ))}
                   {!state.ready ? (
                     <div
@@ -4655,7 +4869,7 @@ function TabRuntimeInner({
               mentionResults={state.mentionResults}
               sideChats={state.sideChats}
               sideChatBusy={state.sideChats.some((entry) => entry.status === "pending")}
-              sideChatDisabled={!state.ready}
+              sideChatDisabled={!state.ready || !rpcTransportAvailable}
               onSideChatSend={sendSideChat}
               visible={bottomCollapsed ? !ctxCollapsed && !contextInfoOpen : !bottomCollapsed}
               placement={bottomCollapsed ? "side" : "bottom"}
@@ -5629,6 +5843,7 @@ export function App() {
   const [splashOn, setSplashOn] = useState<boolean>(() => shouldShowSplash());
   const [startupFailure, setStartupFailure] = useState<StartupFailureState | null>(null);
   const [startupRetryNonce, setStartupRetryNonce] = useState(0);
+  const [rpcTransportFailure, setRpcTransportFailure] = useState<RpcSendFailure | null>(null);
   const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, TabRuntimeSnapshot>>({});
   const [sidebarSessions, setSidebarSessions] = useState<SessionInfo[]>([]);
   const [sidebarImportSources, setSidebarImportSources] = useState<ExternalSessionApp[]>([]);
@@ -5638,12 +5853,15 @@ export function App() {
   const dispatchersRef = useRef<Map<string, TabDispatcher>>(new Map());
   const pendingEventsRef = useRef<Map<string, TabAction[]>>(new Map());
   const runtimeControlsRef = useRef<Map<string, TabRuntimeControls>>(new Map());
-  const rpcSendQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const rpcSendQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const rpcTransportFailureRef = useRef<RpcSendFailure | null>(null);
   const startupStderrRef = useRef<string[]>([]);
   const tabsRef = useRef<TabMeta[]>([]);
+  const knownTabIdsRef = useRef<Set<string>>(new Set());
   const pendingRestoredFocusRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     tabsRef.current = tabs;
+    knownTabIdsRef.current = new Set(tabs.map((tab) => tab.id));
   }, [tabs]);
 
   const [pendingUpdate, setPendingUpdate] = useState<AvailableUpdateEvent | null>(null);
@@ -5817,23 +6035,53 @@ export function App() {
     }
   }, []);
 
-  const sendRpcToTab = useCallback((tabId: string, cmd: OutgoingCommand) => {
-    if (!tabId) return;
-    const payload = { tabId, ...cmd };
-    const line = JSON.stringify(payload);
-    const write = (): Promise<void> =>
-      invoke("rpc_send", { line })
-        .then(() => undefined)
-        .catch((err) => {
-          console.error(`${cmd.cmd} failed`, err);
-        });
-    const current = rpcSendQueuesRef.current.get(tabId) ?? Promise.resolve();
-    const next = current.then(write, write);
-    rpcSendQueuesRef.current.set(
-      tabId,
-      next.catch(() => {}),
-    );
+  const invokeRpcLine = useCallback((line: string, label: string): Promise<void> => {
+    const blocked = rpcTransportFailureRef.current;
+    if (blocked) {
+      return Promise.reject(
+        new RpcSendFailure(
+          "blocked",
+          `RPC send blocked after transport failure: ${blocked.message}`,
+          blocked,
+        ),
+      );
+    }
+    return invoke("rpc_send", { line })
+      .then(() => undefined)
+      .catch((err) => {
+        const failure = coerceRpcSendFailure(err);
+        rpcTransportFailureRef.current = failure;
+        setRpcTransportFailure(failure);
+        console.error(`${label} failed`, err);
+        throw failure;
+      });
   }, []);
+
+  const enqueueRpcLine = useCallback(
+    (line: string, label: string): Promise<void> => {
+      const write = (): Promise<void> => invokeRpcLine(line, label);
+      const current = rpcSendQueueRef.current;
+      const next = current.then(write, write);
+      rpcSendQueueRef.current = next.catch(() => {});
+      return next;
+    },
+    [invokeRpcLine],
+  );
+
+  const sendRpcToTab = useCallback(
+    (tabId: string, cmd: OutgoingCommand): Promise<void> => {
+      if (!tabId) {
+        const failure = new RpcSendFailure("unknown", "RPC tab id is missing");
+        const rejected = Promise.reject<void>(failure);
+        void rejected.catch(() => undefined);
+        return rejected;
+      }
+      const payload = { tabId, ...cmd };
+      const line = JSON.stringify(payload);
+      return enqueueRpcLine(line, cmd.cmd);
+    },
+    [enqueueRpcLine],
+  );
 
   const onRuntimeSnapshot = useCallback((tabId: string, snapshot: TabRuntimeSnapshot) => {
     setRuntimeSnapshots((prev) => {
@@ -5869,11 +6117,12 @@ export function App() {
     setStartupRetryNonce((n) => n + 1);
   }, []);
 
-  const sendGlobalRpc = useCallback((cmd: OutgoingCommand) => {
-    invoke("rpc_send", { line: JSON.stringify(cmd) }).catch((err) =>
-      console.error(`${cmd.cmd} failed`, err),
-    );
-  }, []);
+  const sendGlobalRpc = useCallback(
+    (cmd: OutgoingCommand) => {
+      void enqueueRpcLine(JSON.stringify(cmd), cmd.cmd).catch(() => undefined);
+    },
+    [enqueueRpcLine],
+  );
 
   const checkForUpdates = useCallback(
     (manual: boolean) => {
@@ -5930,6 +6179,7 @@ export function App() {
             }
 
             if (ev.type === "$tab_opened" && tabId) {
+              knownTabIdsRef.current.add(tabId);
               const delayRestoredFocus = Boolean(ev.active && ev.restoringSession);
               if (delayRestoredFocus) {
                 pendingRestoredFocusRef.current.add(tabId);
@@ -5966,6 +6216,7 @@ export function App() {
               return;
             }
             if (ev.type === "$tab_closed" && tabId) {
+              knownTabIdsRef.current.delete(tabId);
               setTabs((prev) => prev.filter((t) => t.id !== tabId));
               setActiveTabId((prev) => {
                 if (prev !== tabId) return prev;
@@ -5981,7 +6232,10 @@ export function App() {
               dispatchersRef.current.delete(tabId);
               pendingEventsRef.current.delete(tabId);
               runtimeControlsRef.current.delete(tabId);
-              rpcSendQueuesRef.current.delete(tabId);
+              return;
+            }
+
+            if (tabId && !knownTabIdsRef.current.has(tabId) && !dispatchersRef.current.has(tabId)) {
               return;
             }
 
@@ -6079,6 +6333,13 @@ export function App() {
           console.warn("[jupiter stderr]", e.payload.data);
         }),
         listen<{ code: number | null }>("rpc:exit", (e) => {
+          const failure = new RpcSendFailure(
+            "unknown",
+            `Jupiter core exited (code ${e.payload.code ?? "?"}); pending command delivery is unknown`,
+          );
+          rpcTransportFailureRef.current = failure;
+          setRpcTransportFailure(failure);
+          rpcSendQueueRef.current = Promise.resolve();
           if (dispatchersRef.current.size === 0) {
             setStartupFailure(
               coerceStartupFailure(
@@ -6099,16 +6360,23 @@ export function App() {
       cleanups.push(...subs);
       try {
         await invoke("rpc_spawn");
+        rpcTransportFailureRef.current = null;
+        setRpcTransportFailure(null);
+        rpcSendQueueRef.current = Promise.resolve();
         // WebView reload (DevTools F5, host respawn) keeps the Node child
         // alive but loses every $tab_opened / $settings / $needs_setup that
         // already fired. Ask the desktop server to re-emit them.
         if (!cancelled) {
-          await invoke("rpc_send", {
-            line: JSON.stringify({ cmd: "desktop_resync" }),
-          });
+          await enqueueRpcLine(JSON.stringify({ cmd: "desktop_resync" }), "desktop_resync");
         }
       } catch (err) {
         if (!cancelled) {
+          const failure =
+            err instanceof RpcSendFailure
+              ? err
+              : new RpcSendFailure("not_spawned", String(err), err);
+          rpcTransportFailureRef.current = failure;
+          setRpcTransportFailure(failure);
           setStartupFailure(coerceStartupFailure(err, startupStderrRef.current));
           console.error("rpc_spawn failed", err);
         }
@@ -6119,30 +6387,24 @@ export function App() {
       cancelled = true;
       for (const c of cleanups) c();
     };
-  }, [deliverToTab, startupRetryNonce]);
+  }, [deliverToTab, enqueueRpcLine, startupRetryNonce]);
 
   // Tell the backend which tab is focused so a restart can reopen on it (#1244).
   useEffect(() => {
     if (!activeTabId) return;
-    invoke("rpc_send", {
-      line: JSON.stringify({ cmd: "tab_activate", tabId: activeTabId }),
-    }).catch(() => {});
-  }, [activeTabId]);
+    sendGlobalRpc({ cmd: "tab_activate", tabId: activeTabId });
+  }, [activeTabId, sendGlobalRpc]);
 
   const openTab = useCallback(() => {
-    invoke("rpc_send", { line: JSON.stringify({ cmd: "tab_open" }) }).catch((err) =>
-      console.error("tab_open failed", err),
-    );
-  }, []);
+    sendGlobalRpc({ cmd: "tab_open" });
+  }, [sendGlobalRpc]);
 
   const closeTab = useCallback(
     (id: string) => {
       if (tabs.length <= 1) return;
-      invoke("rpc_send", {
-        line: JSON.stringify({ cmd: "tab_close", tabId: id }),
-      }).catch((err) => console.error("tab_close failed", err));
+      void sendRpcToTab(id, { cmd: "tab_close" });
     },
-    [tabs.length],
+    [sendRpcToTab, tabs.length],
   );
 
   useEffect(() => {
@@ -6265,6 +6527,7 @@ export function App() {
           data-ctx-collapsed={ctxCollapsed}
           data-bottom-collapsed={bottomCollapsed}
           data-context-info-open={activeContextInfoOpen}
+          data-rpc-transport-failed={rpcTransportFailure ? true : undefined}
           style={{
             ["--side-width" as string]: sideCollapsed ? "0px" : `${sideWidth}px`,
             ["--ctx-width" as string]:
@@ -6274,6 +6537,20 @@ export function App() {
             ["--composer-max-width" as string]: `${shellThreadMaxWidth}px`,
           }}
         >
+          {rpcTransportFailure ? (
+            <div
+              className="rpc-transport-banner"
+              role="alert"
+              title={rpcTransportFailure.message}
+            >
+              <I.warn size={15} aria-hidden="true" />
+              <span>
+                {rpcTransportFailure.stage === "not_spawned"
+                  ? t("app.rpcNotStarted")
+                  : t("app.rpcDeliveryUnknown")}
+              </span>
+            </div>
+          ) : null}
           <Sidebar
             sessions={sidebarSessions}
             sessionActivity={sidebarSessionActivity}
@@ -6358,6 +6635,7 @@ export function App() {
               currency={currency}
               registerDispatch={registerDispatch}
               sendRpcToTab={sendRpcToTab}
+              rpcTransportAvailable={!rpcTransportFailure}
               onRuntimeSnapshot={onRuntimeSnapshot}
               registerRuntimeControls={registerRuntimeControls}
               onNewTab={openTab}

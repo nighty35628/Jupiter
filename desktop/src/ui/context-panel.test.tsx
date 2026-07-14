@@ -946,6 +946,99 @@ describe("ContextPanel files", () => {
     expect(screen.getByText("100")).toBeTruthy();
   });
 
+  it("shows a read-only AI visible content summary without exposing raw sources", () => {
+    render(
+      <ContextInfoPopover
+        open
+        settings={settings}
+        usage={{
+          ...usage,
+          contextDiagnostics: {
+            systemTokens: 120,
+            toolsTokens: 80,
+            logTokens: 240,
+            inputTokens: 0,
+            memoryTokens: 40,
+            summaryTokens: 10,
+            ctxMax: 1000,
+            toolsCount: 3,
+            logMessages: 42,
+            topTools: [],
+            lastPromptTokens: 490,
+            lastCacheHitTokens: 0,
+            lastCacheMissTokens: 490,
+            sessionCacheHitRatio: 0,
+            totalCostUsd: 0,
+            turns: 2,
+          },
+        }}
+        mcpSpecs={[
+          {
+            raw: "filesystem=npx --token secret-token",
+            name: "filesystem",
+            transport: "stdio",
+            summary: "filesystem",
+            status: "connected",
+            toolCount: 3,
+          },
+        ]}
+        mcpBridged
+        subagents={[]}
+        sessionFiles={[
+          { path: "src/new-file.ts", status: "m" },
+          { path: "README.md", status: "c" },
+        ]}
+        memory={[
+          {
+            kind: "structured",
+            path: "/repo/.jupiter/memory/user.md",
+            name: "user",
+            description: "User preference",
+            scope: "project",
+          },
+        ]}
+        memoryDetail={null}
+        onOpenSubagent={() => {}}
+        onReadMemory={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("AI visible content")).toBeTruthy();
+    expect(screen.getByText("Conversation")).toBeTruthy();
+    expect(screen.getByText("42 messages")).toBeTruthy();
+    expect(screen.getByText("System rules")).toBeTruthy();
+    expect(screen.getByText("Connected tools")).toBeTruthy();
+    expect(screen.getAllByText("3 tools").length).toBeGreaterThan(0);
+    expect(screen.getByText("Files")).toBeTruthy();
+    expect(screen.getByText("2 tracked")).toBeTruthy();
+    expect(screen.getByText("Saved memory")).toBeTruthy();
+    expect(screen.getByText("1 entries")).toBeTruthy();
+    expect(screen.getByText("Workspace")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("secret-token");
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
+  it("hides AI visible content details when the setting is disabled", () => {
+    render(
+      <ContextInfoPopover
+        open
+        settings={{ ...settings, showAiVisibleDetails: false }}
+        usage={usage}
+        mcpSpecs={[]}
+        mcpBridged={false}
+        subagents={[]}
+        sessionFiles={[]}
+        memory={[]}
+        memoryDetail={null}
+        onOpenSubagent={() => {}}
+        onReadMemory={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText("AI visible content")).toBeNull();
+    expect(screen.getByText("Context · tokens")).toBeTruthy();
+  });
+
   it("shows all context information in the floating info card and opens the child transcript", () => {
     const onOpenSubagent = vi.fn();
     render(

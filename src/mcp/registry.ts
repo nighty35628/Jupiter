@@ -193,12 +193,8 @@ export async function bridgeMcpTools(
     readyTimeoutMs: opts.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
     serverName,
   };
-  const listed = await client.listTools();
-  for (const mcpTool of listed.tools) {
-    if (!mcpTool.name) {
-      result.skipped.push({ name: "?", reason: "empty tool name" });
-      continue;
-    }
+  const listedTools = await client.listAllTools();
+  for (const mcpTool of listedTools) {
     const registeredName = registerSingleMcpTool(mcpTool, env);
     if (registeredName) result.registeredNames.push(registeredName);
   }

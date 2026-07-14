@@ -90,6 +90,11 @@ export interface McpTool {
   inputSchema: McpToolSchema;
 }
 
+export interface ListToolsParams {
+  /** Opaque pagination cursor returned by a previous tools/list response. */
+  cursor?: string;
+}
+
 export interface ListToolsResult {
   tools: McpTool[];
   nextCursor?: string;

@@ -313,6 +313,23 @@ describe("SettingsModal", () => {
     expect(onSave).toHaveBeenCalledWith({ processCardsDefaultOpen: true });
   });
 
+  it("saves the AI visible content detail preference", () => {
+    const onSave = vi.fn();
+    renderSettings({ onSave });
+
+    const group = screen.getByRole("group", {
+      name: /AI visible content|AI 可见内容/,
+    });
+    expect(within(group).getByRole("button", { name: /shown|显示/ }).getAttribute("data-on")).toBe(
+      "true",
+    );
+
+    fireEvent.click(within(group).getByRole("button", { name: /hidden|隐藏/ }));
+
+    expect(onSave).toHaveBeenCalledWith({ showAiVisibleDetails: false });
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
   it("saves the workspace library retrieval mode and warns about always-on token use", () => {
     const onSave = vi.fn();
     renderSettings({ onSave });

@@ -171,6 +171,7 @@ export function ContextInfoPopover({
   mcpSpecs,
   mcpBridged,
   subagents,
+  sessionFiles,
   memory,
   memoryDetail,
   onOpenSubagent,
@@ -209,6 +210,16 @@ export function ContextInfoPopover({
           </div>
           <ContextTokenPanel usage={usage} />
           <div className="context-info-scroll">
+            {settings?.showAiVisibleDetails !== false ? (
+              <CtxAiVisibleContent
+                settings={settings}
+                usage={usage}
+                mcpSpecs={mcpSpecs}
+                mcpBridged={mcpBridged}
+                sessionFiles={sessionFiles}
+                memory={memory}
+              />
+            ) : null}
             <CtxGitInfo settings={settings} />
             <CtxSubagents runs={subagents} onOpen={onOpenSubagent} />
             <CtxTools specs={mcpSpecs} bridged={mcpBridged} />
@@ -216,6 +227,128 @@ export function ContextInfoPopover({
           </div>
         </div>
       </PanelErrorBoundary>
+    </div>
+  );
+}
+
+function CtxAiVisibleContent({
+  settings,
+  usage,
+  mcpSpecs,
+  mcpBridged,
+  sessionFiles,
+  memory,
+}: {
+  settings: Settings | null;
+  usage: UsageStats;
+  mcpSpecs: McpSpecInfo[];
+  mcpBridged: boolean;
+  sessionFiles: SessionFile[];
+  memory: MemoryEntryInfo[];
+}) {
+  const diagnostics = usage.contextDiagnostics;
+  const toolsFromDiagnostics = diagnostics?.toolsCount ?? 0;
+  const toolsFromMcp = mcpSpecs.reduce((sum, spec) => sum + (spec.toolCount ?? 0), 0);
+  const toolCount = Math.max(toolsFromDiagnostics, toolsFromMcp);
+  const connectedMcpServers = mcpSpecs.filter((spec) => spec.status === "connected").length;
+  const touchedFiles = sessionFiles.length;
+  const modifiedFiles = sessionFiles.filter((file) => file.status === "m").length;
+  const memoryEnabled = settings?.memoryGlobalEnabled !== false;
+  const rows: Array<{ key: string; label: string; value: string; detail?: string; active: boolean }> = [
+    {
+      key: "conversation",
+      label: t("contextPanel.aiVisibleConversation"),
+      value: diagnostics
+        ? t("contextPanel.aiVisibleConversationValue", { count: diagnostics.logMessages })
+        : t("contextPanel.aiVisiblePending"),
+      detail: t("contextPanel.aiVisibleConversationHint"),
+      active: Boolean(diagnostics && diagnostics.logMessages > 0),
+    },
+    {
+      key: "rules",
+      label: t("contextPanel.aiVisibleSystemRules"),
+      value: diagnostics
+        ? diagnostics.systemTokens > 0
+          ? t("contextPanel.aiVisibleIncluded")
+          : t("contextPanel.aiVisibleNotObserved")
+        : t("contextPanel.aiVisiblePending"),
+      detail: t("contextPanel.aiVisibleSystemRulesHint"),
+      active: Boolean(diagnostics && diagnostics.systemTokens > 0),
+    },
+    {
+      key: "tools",
+      label: t("contextPanel.aiVisibleTools"),
+      value:
+        toolCount > 0
+          ? t("contextPanel.aiVisibleToolsValue", { count: toolCount })
+          : t("contextPanel.aiVisibleToolsEmpty"),
+      detail:
+        mcpSpecs.length > 0
+          ? t(
+              mcpBridged
+                ? "contextPanel.aiVisibleMcpServers"
+                : "contextPanel.aiVisibleMcpNotBridged",
+              { ready: connectedMcpServers, count: mcpSpecs.length },
+            )
+          : t("contextPanel.aiVisibleBuiltinTools"),
+      active: toolCount > 0,
+    },
+    {
+      key: "files",
+      label: t("contextPanel.aiVisibleFiles"),
+      value:
+        touchedFiles > 0
+          ? t("contextPanel.aiVisibleFilesValue", { count: touchedFiles })
+          : t("contextPanel.aiVisibleFilesEmpty"),
+      detail:
+        touchedFiles > 0
+          ? t("contextPanel.aiVisibleFilesDetail", { modified: modifiedFiles })
+          : undefined,
+      active: touchedFiles > 0,
+    },
+    {
+      key: "memory",
+      label: t("contextPanel.aiVisibleMemory"),
+      value: memoryEnabled
+        ? memory.length > 0
+          ? t("contextPanel.aiVisibleMemoryValue", { count: memory.length })
+          : t("contextPanel.aiVisibleMemoryEmpty")
+        : t("contextPanel.aiVisibleMemoryOff"),
+      detail: t("contextPanel.aiVisibleMemoryHint"),
+      active: memoryEnabled && memory.length > 0,
+    },
+    {
+      key: "workspace",
+      label: t("contextPanel.aiVisibleWorkspace"),
+      value: settings?.workspaceDir
+        ? t("contextPanel.aiVisibleWorkspaceValue")
+        : t("contextPanel.aiVisibleWorkspaceEmpty"),
+      detail: t("contextPanel.aiVisibleWorkspaceHint"),
+      active: Boolean(settings?.workspaceDir),
+    },
+  ];
+
+  return (
+    <div className="ctx-block ctx-ai-visible">
+      <div className="h">
+        <span>{t("contextPanel.aiVisibleTitle")}</span>
+        <span className="right">
+          {diagnostics ? t("contextPanel.aiVisibleObserved") : t("contextPanel.aiVisiblePendingShort")}
+        </span>
+      </div>
+      <div className="ctx-ai-visible-hint">{t("contextPanel.aiVisibleHint")}</div>
+      <div className="ctx-ai-visible-list">
+        {rows.map((row) => (
+          <div className="ctx-ai-visible-row" data-active={row.active} key={row.key}>
+            <span className="ctx-ai-visible-dot" aria-hidden="true" />
+            <span className="ctx-ai-visible-copy">
+              <span className="ctx-ai-visible-label">{row.label}</span>
+              {row.detail ? <span className="ctx-ai-visible-detail">{row.detail}</span> : null}
+            </span>
+            <span className="ctx-ai-visible-value">{row.value}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

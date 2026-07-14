@@ -308,6 +308,7 @@ export interface TranslationSchema {
     contextOverflow: string;
     contextOverflowTooMany: string;
     auth401: string;
+    auth403: string;
     balance402: string;
     badparam422: string;
     badrequest400: string;
@@ -319,6 +320,7 @@ export interface TranslationSchema {
     deepseek5xxActionRetry: string;
     upstream5xxHead: string;
     upstream5xxActionRetry: string;
+    upstreamHttp: string;
     innerNoMessage: string;
     reasonAborted: string;
     reasonContextGuard: string;

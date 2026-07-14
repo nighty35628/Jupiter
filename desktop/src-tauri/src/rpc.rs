@@ -40,6 +40,38 @@ struct ExitEvent {
     code: Option<i32>,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RpcSendFailureStage {
+    NotSpawned,
+    WriteFailed,
+    FlushFailed,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct RpcSendError {
+    stage: RpcSendFailureStage,
+    message: String,
+}
+
+impl RpcSendError {
+    fn new(stage: RpcSendFailureStage, message: impl Into<String>) -> Self {
+        Self {
+            stage,
+            message: message.into(),
+        }
+    }
+}
+
+fn write_rpc_line(writer: &mut impl Write, line: &str) -> std::result::Result<(), RpcSendError> {
+    writeln!(writer, "{line}")
+        .map_err(|e| RpcSendError::new(RpcSendFailureStage::WriteFailed, format!("write: {e}")))?;
+    writer
+        .flush()
+        .map_err(|e| RpcSendError::new(RpcSendFailureStage::FlushFailed, format!("flush: {e}")))?;
+    Ok(())
+}
+
 fn resolve_cli(app: &AppHandle) -> Result<(String, Vec<String>)> {
     if let Ok(custom) = env::var("JUPITER_CLI") {
         let mut parts = custom.split_whitespace().map(String::from);
@@ -321,10 +353,70 @@ pub fn rpc_kill(state: State<'_, RpcState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn rpc_send(state: State<'_, RpcState>, line: String) -> Result<(), String> {
+pub fn rpc_send(state: State<'_, RpcState>, line: String) -> std::result::Result<(), RpcSendError> {
     let mut guard = state.inner.lock();
-    let handle = guard.as_mut().ok_or("rpc not spawned")?;
-    writeln!(handle.stdin, "{line}").map_err(|e| format!("write: {e}"))?;
-    handle.stdin.flush().map_err(|e| format!("flush: {e}"))?;
-    Ok(())
+    let handle = guard
+        .as_mut()
+        .ok_or_else(|| RpcSendError::new(RpcSendFailureStage::NotSpawned, "rpc not spawned"))?;
+    write_rpc_line(&mut handle.stdin, &line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    struct TestWriter {
+        fail_write: bool,
+        fail_flush: bool,
+        bytes: Vec<u8>,
+    }
+
+    impl Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.fail_write {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "write broke"));
+            }
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.fail_flush {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "flush broke"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn classifies_write_and_flush_failures_without_conflating_delivery() {
+        let mut write_failure = TestWriter {
+            fail_write: true,
+            fail_flush: false,
+            bytes: vec![],
+        };
+        let err = write_rpc_line(&mut write_failure, "hello").unwrap_err();
+        assert_eq!(err.stage, RpcSendFailureStage::WriteFailed);
+
+        let mut flush_failure = TestWriter {
+            fail_write: false,
+            fail_flush: true,
+            bytes: vec![],
+        };
+        let err = write_rpc_line(&mut flush_failure, "hello").unwrap_err();
+        assert_eq!(err.stage, RpcSendFailureStage::FlushFailed);
+        assert_eq!(flush_failure.bytes, b"hello\n");
+    }
+
+    #[test]
+    fn serializes_failure_stage_for_the_tauri_frontend() {
+        let value = serde_json::to_value(RpcSendError::new(
+            RpcSendFailureStage::NotSpawned,
+            "rpc not spawned",
+        ))
+        .unwrap();
+        assert_eq!(value["stage"], "not_spawned");
+        assert_eq!(value["message"], "rpc not spawned");
+    }
 }

@@ -274,6 +274,44 @@ button:disabled {
   transition: none;
 }
 
+.app[data-rpc-transport-failed="true"] {
+  grid-template-rows: 38px 30px 34px minmax(0, 1fr) var(--bottom-height);
+  grid-template-areas:
+    "title      title      title"
+    "tabs       tabs       tabs"
+    "transport  transport  transport"
+    "side       main       ctx"
+    "side       bottom     bottom";
+}
+
+.rpc-transport-banner {
+  grid-area: transport;
+  z-index: 74;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 16px;
+  border-bottom: 1px solid color-mix(in oklch, var(--warning) 42%, var(--border));
+  background: color-mix(in oklch, var(--panel) 90%, var(--warning) 10%);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.rpc-transport-banner svg {
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
+.rpc-transport-banner span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 html[data-platform="macos"] .app {
   overflow: hidden;
   border-radius: 14px;
@@ -4907,17 +4945,18 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 }
 .composer-ask-toggle {
   height: 28px;
-  max-width: 96px;
-  padding: 0 8px;
+  max-width: 112px;
+  padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  color: var(--fg-2);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
   font-size: 12.5px;
+  font-weight: 560;
   font-family: inherit;
   cursor: pointer;
   flex: 0 1 auto;
@@ -4930,10 +4969,66 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   white-space: nowrap;
 }
 .composer-ask-toggle:hover,
-.composer-ask-toggle[data-active="true"] {
+.composer-ask-toggle:focus-visible {
   color: var(--fg);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.composer-ask-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+.composer-ask-toggle[data-active="true"],
+.composer-ask-toggle[aria-pressed="true"] {
+  color: var(--tone-info);
+  border-color: color-mix(in srgb, var(--tone-info) 60%, var(--border));
+  background: color-mix(in srgb, var(--tone-info-soft) 72%, transparent);
+}
+.composer-ask-notice {
+  min-height: 24px;
+  margin: 0 8px 4px;
+  padding: 4px 5px 4px 8px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--tone-info) 42%, var(--border));
+  background: color-mix(in srgb, var(--tone-info-soft) 72%, transparent);
+  color: var(--fg-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-caption);
+  line-height: 1.25;
+}
+.composer-ask-notice svg {
+  color: var(--tone-info);
+  flex: 0 0 auto;
+}
+.composer-ask-notice > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-ask-notice-close {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.composer-ask-notice-close:hover,
+.composer-ask-notice-close:focus-visible {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--tone-info) 14%, transparent);
+}
+.composer-ask-notice-close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--tone-info) 42%, transparent);
+  outline-offset: 1px;
 }
 .composer-plus-menu,
 .composer-mode-menu {
@@ -5510,6 +5605,61 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 .context-info-scroll .ctx-block:last-child {
   margin-bottom: 0;
+}
+.ctx-ai-visible {
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--panel) 72%, transparent);
+  padding: 10px;
+}
+.ctx-ai-visible-hint {
+  margin: -2px 0 10px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: 1.45;
+}
+.ctx-ai-visible-list {
+  display: grid;
+  gap: 8px;
+}
+.ctx-ai-visible-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) max-content;
+  gap: 8px;
+  align-items: start;
+  font-size: var(--font-size-caption);
+}
+.ctx-ai-visible-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.ctx-ai-visible-row[data-active="true"] .ctx-ai-visible-dot {
+  background: var(--success);
+}
+.ctx-ai-visible-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ctx-ai-visible-label {
+  color: var(--fg);
+  font-weight: var(--font-weight-title);
+  overflow-wrap: anywhere;
+}
+.ctx-ai-visible-detail {
+  color: var(--muted);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.ctx-ai-visible-value {
+  color: var(--fg-2);
+  text-align: right;
+  white-space: nowrap;
 }
 .ctx-git-info {
   border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
@@ -9891,6 +10041,18 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   min-height: 0;
 }
 
+.approval-response-lock {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.approval-response-lock:disabled button {
+  cursor: wait;
+  opacity: 0.52;
+}
+
 /* ============================================================
    TASK CARD — multi-step execution
    ============================================================ */
@@ -11350,6 +11512,21 @@ html[data-platform="macos"] .app {
   .composer .composer-permission-label,
   .composer .composer-permission-chev {
     display: none;
+  }
+  .composer .composer-ask-toggle {
+    height: 26px;
+    max-width: 76px;
+    padding: 0 8px;
+    justify-content: center;
+  }
+  .composer .composer-ask-toggle[data-active="true"],
+  .composer .composer-ask-toggle[aria-pressed="true"] {
+    max-width: 112px;
+  }
+  .composer .composer-ask-notice {
+    min-height: 24px;
+    margin: 0 6px 4px;
+    padding: 4px 5px 4px 7px;
   }
 }
 @container composer (max-width: 520px) {
@@ -13472,10 +13649,15 @@ html[data-platform="macos"] .app {
 }
 
 .composer-ask-toggle {
-  max-width: 92px;
-  padding: 0 7px;
+  max-width: 112px;
+  padding: 0 10px;
   gap: 5px;
   font-size: var(--font-size-ui-sm);
+}
+
+.composer-ask-toggle[data-active="true"],
+.composer-ask-toggle[aria-pressed="true"] {
+  max-width: 128px;
 }
 
 .composer-foot .model-pill {

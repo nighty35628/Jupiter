@@ -1,5 +1,6 @@
 import { type EventSourceMessage, createParser } from "eventsource-parser";
 import { loadRateLimit, resolveBaseUrlEnv } from "./config.js";
+import { providerHttpErrorFromResponse } from "./provider-http-error.js";
 import { type RetryOptions, fetchWithRetry } from "./retry.js";
 import type { ChatMessage, ChatRequestOptions, RawUsage, ToolCall, ToolSpec } from "./types.js";
 
@@ -312,7 +313,10 @@ export class DeepSeekClient {
         { ...this.retry, signal },
       );
       if (!resp.ok) {
-        throw new Error(`DeepSeek ${resp.status}: ${await resp.text()}`);
+        throw await providerHttpErrorFromResponse(resp, {
+          baseUrl: this.baseUrl,
+          knownSecrets: [this.apiKey],
+        });
       }
       const data: any = await resp.json();
       const choice = data.choices?.[0]?.message ?? {};
@@ -364,9 +368,16 @@ export class DeepSeekClient {
       clearTimeout(timer);
       throw err;
     }
-    if (!resp.ok || !resp.body) {
+    if (!resp.ok) {
       clearTimeout(timer);
-      throw new Error(`DeepSeek ${resp.status}: ${await resp.text().catch(() => "")}`);
+      throw await providerHttpErrorFromResponse(resp, {
+        baseUrl: this.baseUrl,
+        knownSecrets: [this.apiKey],
+      });
+    }
+    if (!resp.body) {
+      clearTimeout(timer);
+      throw new Error("DeepSeek stream response has no body");
     }
 
     const queue: StreamChunk[] = [];

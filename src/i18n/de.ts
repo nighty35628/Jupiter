@@ -749,6 +749,8 @@ export const de: TranslationSchema = {
     contextOverflowTooMany: "Zu viele Tokens",
     auth401:
       "Authentifizierung fehlgeschlagen (DeepSeek 401): {inner}. Dein API-Schlüssel wird abgewiesen. Behebe mit `jupiter setup` oder `export DEEPSEEK_API_KEY=sk-...`. Erhalte einen unter https://platform.deepseek.com/api_keys.",
+    auth403:
+      "Zugriff verweigert (DeepSeek 403): {inner}. Der API-Schlüssel ist gültig, darf dieses Modell oder diesen Endpunkt aber möglicherweise nicht verwenden.",
     balance402:
       "Kontoguthaben aufgebraucht (DeepSeek 402): {inner}. Lade auf unter https://platform.deepseek.com/top_up — der Panel-Header zeigt dein Guthaben, sobald es nicht Null ist.",
     badparam422: "Ungültiger Parameter (DeepSeek 422): {inner}",
@@ -769,6 +771,7 @@ export const de: TranslationSchema = {
       "Upstream-Dienst nicht verfügbar ({status}) bei {host} — der konfigurierte API-Endpunkt hat einen Serverfehler zurückgegeben, kein Jupiter-Fehler. Bereits 4× mit Backoff wiederholt.",
     upstream5xxActionRetry:
       " Versuche: (1) Prüfen, ob der lokale/Proxy-Modell-Server läuft, (2) warten und wiederholen, (3) /model zum Modellwechsel.",
+    upstreamHttp: "Upstream {host} gab HTTP {status} zurück: {inner}",
     innerNoMessage: "(keine Nachricht)",
     reasonAborted:
       "[vom Benutzer abgebrochen (Esc) — fasse zusammen, was ich bisher gefunden habe]",

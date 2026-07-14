@@ -354,6 +354,27 @@ describe("App streaming events", () => {
     );
   });
 
+  it("does not open an external browser during startup or read-only desktop panels", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-no-browser", "/tmp/jupiter-streaming-test");
+
+    expect(openUrl).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show information" }));
+    expect(screen.getByText("AI visible content")).toBeTruthy();
+    expect(openUrl).not.toHaveBeenCalled();
+
+    const moreButton = screen.getByTitle("More");
+    fireEvent.click(moreButton);
+    const morePopup = moreButton.parentElement;
+    if (!morePopup) throw new Error("missing more popup wrapper");
+    fireEvent.click(within(morePopup).getByText("Settings"));
+    expect(screen.getByText("Current workspace")).toBeTruthy();
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
   it("updates the top tab title when the workspace changes", async () => {
     render(<App />);
 
@@ -401,7 +422,9 @@ describe("App streaming events", () => {
     expect(openUrl).toHaveBeenCalledWith("https://gitee.com/nighty35628/jupiter/releases");
 
     fireEvent.click(screen.getByRole("button", { name: /skip this version|跳过当前版本/i }));
-    expect(sentRpcCommands()).toContainEqual({ cmd: "update_skip", version: "0.99.10" });
+    await waitFor(() =>
+      expect(sentRpcCommands()).toContainEqual({ cmd: "update_skip", version: "0.99.10" }),
+    );
 
     await emitRpc({
       type: "$update_check",
@@ -415,7 +438,9 @@ describe("App streaming events", () => {
       },
     });
     fireEvent.click(screen.getByRole("button", { name: /don't remind again|不再提示/i }));
-    expect(sentRpcCommands()).toContainEqual({ cmd: "update_disable_prompts" });
+    await waitFor(() =>
+      expect(sentRpcCommands()).toContainEqual({ cmd: "update_disable_prompts" }),
+    );
   });
 
   it("does not open a blank browser when update release URLs are empty", async () => {
@@ -765,6 +790,50 @@ describe("App streaming events", () => {
     });
     expect(visibleMain().textContent).not.toContain("loaded history");
     expect(within(activeApp()).getByTitle("stop")).toBeTruthy();
+  });
+
+  it("drops late session snapshots for closed tabs before a tab id is reused", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-reused", "/tmp/ws-old");
+    await emitRpc({
+      type: "$session_loaded",
+      tabId: "tab-reused",
+      name: "desktop-old",
+      messages: [{ kind: "user", text: "old prompt" }],
+      carryover: {
+        totalCostUsd: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0,
+        totalCompletionTokens: 0,
+      },
+    });
+    await waitFor(() => {
+      expect(visibleMain().textContent).toContain("old prompt");
+    });
+
+    await emitRpc({ type: "$tab_closed", tabId: "tab-reused" });
+    await emitRpc({
+      type: "$session_loaded",
+      tabId: "tab-reused",
+      name: "desktop-stale",
+      messages: [{ kind: "user", text: "stale closed prompt" }],
+      carryover: {
+        totalCostUsd: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0,
+        totalCompletionTokens: 0,
+      },
+    });
+
+    await emitBootstrap("tab-reused", "/tmp/ws-new");
+
+    await waitFor(() => {
+      expect(screen.getByText("What should we do in Jupiter today?")).toBeTruthy();
+    });
+    expect(document.body.textContent).not.toContain("stale closed prompt");
+    expect(document.body.textContent).not.toContain("old prompt");
   });
 
   it("renders live subagent activity as an in-thread card", async () => {
@@ -1137,6 +1206,220 @@ describe("App streaming events", () => {
           .map((item) => item.cmd)
           .filter((cmd) => cmd === "user_input" || cmd === "session_load"),
       ).toEqual(["user_input", "session_load"]);
+    });
+  });
+
+  it("restores the composer only when rpc_send proves the command was not sent", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap();
+    tauri.invoke.mockImplementation(
+      (cmd: string, payload?: unknown): ReturnType<typeof tauri.defaultInvoke> => {
+        if (cmd === "rpc_send") {
+          const parsed = JSON.parse((payload as { line: string }).line);
+          if (parsed.cmd === "user_input") {
+            return Promise.reject<void>({ stage: "not_spawned", message: "rpc not spawned" });
+          }
+        }
+        return Promise.resolve();
+      },
+    );
+
+    const textarea = screen.getByPlaceholderText(
+      "Ask the agent / describe a task…",
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "definitely unsent" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => expect(activeApp().querySelector(".rpc-transport-banner")).toBeTruthy());
+    const restored = screen.getByPlaceholderText(
+      "Ask the agent / describe a task…",
+    ) as HTMLTextAreaElement;
+    expect(restored.value).toBe("definitely unsent");
+    expect(restored.disabled).toBe(true);
+    expect(visibleMain().querySelector(".msg.user")).toBeNull();
+  });
+
+  it("keeps optimistic state and pauses further sends when delivery is unknown", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap();
+    let userInputCalls = 0;
+    tauri.invoke.mockImplementation(
+      (cmd: string, payload?: unknown): ReturnType<typeof tauri.defaultInvoke> => {
+        if (cmd === "rpc_send") {
+          const parsed = JSON.parse((payload as { line: string }).line);
+          if (parsed.cmd === "user_input") {
+            userInputCalls++;
+            return Promise.reject<void>({ stage: "flush_failed", message: "flush: broken pipe" });
+          }
+        }
+        return Promise.resolve();
+      },
+    );
+
+    const textarea = screen.getByPlaceholderText(
+      "Ask the agent / describe a task…",
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "delivery unknown" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => expect(activeApp().querySelector(".rpc-transport-banner")).toBeTruthy());
+    const paused = screen.getByPlaceholderText(
+      "Ask the agent / describe a task…",
+    ) as HTMLTextAreaElement;
+    expect(paused.value).toBe("");
+    expect(paused.disabled).toBe(true);
+    expect(visibleMain().textContent).toContain("delivery unknown");
+
+    fireEvent.change(paused, { target: { value: "must stay paused" } });
+    fireEvent.keyDown(paused, { key: "Enter" });
+    await act(async () => Promise.resolve());
+    expect(userInputCalls).toBe(1);
+  });
+
+  it("suspends the shared queue and rolls back a command blocked behind a failed write", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-one", "/tmp/ws");
+    await emitBootstrap("tab-two", "/tmp/ws");
+    await emitRpc({
+      type: "$tab_opened",
+      tabId: "tab-one",
+      workspaceDir: "/tmp/ws",
+      active: true,
+    });
+
+    const sentUserInputs: string[] = [];
+    let rejectFirst: ((reason?: unknown) => void) | undefined;
+    tauri.invoke.mockImplementation((cmd: string, payload?: unknown) => {
+      if (cmd === "rpc_send") {
+        const parsed = JSON.parse((payload as { line: string }).line);
+        if (parsed.cmd === "user_input") {
+          sentUserInputs.push(parsed.text);
+          if (parsed.text === "first tab") {
+            return new Promise<void>((_resolve, reject) => {
+              rejectFirst = reject;
+            });
+          }
+        }
+      }
+      return Promise.resolve();
+    });
+
+    const firstComposer = within(visibleMain()).getByPlaceholderText(
+      "Ask the agent / describe a task…",
+    );
+    fireEvent.change(firstComposer, { target: { value: "first tab" } });
+    fireEvent.keyDown(firstComposer, { key: "Enter" });
+    await waitFor(() => expect(sentUserInputs).toEqual(["first tab"]));
+
+    await emitRpc({
+      type: "$tab_opened",
+      tabId: "tab-two",
+      workspaceDir: "/tmp/ws",
+      active: true,
+    });
+    const secondComposer = within(visibleMain()).getByPlaceholderText(
+      "Ask the agent / describe a task…",
+    );
+    fireEvent.change(secondComposer, { target: { value: "second tab" } });
+    fireEvent.keyDown(secondComposer, { key: "Enter" });
+    await act(async () => Promise.resolve());
+    expect(sentUserInputs).toEqual(["first tab"]);
+
+    await act(async () => {
+      rejectFirst?.({ stage: "write_failed", message: "write: broken pipe" });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(activeApp().querySelector(".rpc-transport-banner")).toBeTruthy());
+    expect(sentUserInputs).toEqual(["first tab"]);
+    const blockedComposer = within(visibleMain()).getByPlaceholderText(
+      "Ask the agent / describe a task…",
+    ) as HTMLTextAreaElement;
+    await waitFor(() => expect(blockedComposer.value).toBe("second tab"));
+    expect(blockedComposer.disabled).toBe(true);
+    expect(visibleMain().querySelector(".msg.user")).toBeNull();
+  });
+
+  it("locks an approval before writing and keeps it locked when delivery is unknown", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap();
+    await emitRpc({
+      type: "$confirm_required",
+      tabId: "tab-1",
+      id: 77,
+      kind: "shell",
+      command: "echo safe",
+      prompt: {
+        id: 77,
+        kind: "shell",
+        tone: "warn",
+        title: "Run command",
+        subtitle: "echo safe",
+        preview: "echo safe",
+        data: { prefix: "echo" },
+        actions: [
+          { id: "run_once", label: "Run once", kind: "allow_once" },
+          { id: "deny", label: "Deny", kind: "reject" },
+        ],
+      },
+    });
+
+    let confirmCalls = 0;
+    let rejectWrite: ((reason?: unknown) => void) | undefined;
+    tauri.invoke.mockImplementation((cmd: string, payload?: unknown) => {
+      if (cmd === "rpc_send") {
+        const parsed = JSON.parse((payload as { line: string }).line);
+        if (parsed.cmd === "confirm_response") {
+          confirmCalls++;
+          return new Promise<void>((_resolve, reject) => {
+            rejectWrite = reject;
+          });
+        }
+      }
+      return Promise.resolve();
+    });
+
+    const approve = screen.getByRole("button", { name: "Run once" });
+    fireEvent.click(approve);
+    await waitFor(() => expect(confirmCalls).toBe(1));
+    expect((approve.closest("fieldset") as HTMLFieldSetElement).disabled).toBe(true);
+
+    await act(async () => {
+      rejectWrite?.({ stage: "write_failed", message: "write: broken pipe" });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(activeApp().querySelector(".rpc-transport-banner")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Run once" })).toBeTruthy();
+    fireEvent.click(approve);
+    expect(confirmCalls).toBe(1);
+  });
+
+  it("tags a composer /btw request so the backend can complete its busy lifecycle", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap();
+    tauri.invoke.mockClear();
+
+    const textarea = screen.getByPlaceholderText("Ask the agent / describe a task…");
+    fireEvent.change(textarea, { target: { value: "/btw what changed?" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      const command = sentRpcCommands().find((item) => item.cmd === "btw");
+      expect(command).toMatchObject({
+        tabId: "tab-1",
+        cmd: "btw",
+        text: "what changed?",
+      });
+      expect(command?.clientId).toMatch(/^btw-\d+$/);
     });
   });
 

@@ -747,6 +747,8 @@ export const EN: TranslationSchema = {
     contextOverflowTooMany: "too many tokens",
     auth401:
       "Authentication failed (DeepSeek 401): {inner}. Your API key is rejected. Fix with `jupiter setup` or `export DEEPSEEK_API_KEY=sk-...`. Get one at https://platform.deepseek.com/api_keys.",
+    auth403:
+      "Access denied (DeepSeek 403): {inner}. The key is valid, but it may not be allowed to use this model or endpoint.",
     balance402:
       "Out of balance (DeepSeek 402): {inner}. Top up at https://platform.deepseek.com/top_up — the panel header shows your balance once it's non-zero.",
     badparam422: "Invalid parameter (DeepSeek 422): {inner}",
@@ -767,6 +769,7 @@ export const EN: TranslationSchema = {
       "Upstream service unavailable ({status}) at {host} — the configured API endpoint returned a server error, not a Jupiter bug. Already retried 4× with backoff.",
     upstream5xxActionRetry:
       " Try: (1) check that the local/proxy model server is up, (2) wait and retry, (3) /model to switch model.",
+    upstreamHttp: "Upstream {host} returned HTTP {status}: {inner}",
     innerNoMessage: "(no message)",
     reasonAborted: "[aborted by user (Esc) — summarizing what I found so far]",
     reasonContextGuard:

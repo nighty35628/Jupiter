@@ -1,6 +1,7 @@
 import type { PauseGate } from "./core/pause-gate.js";
 import { truncateForModel, truncateForModelByTokens } from "./mcp/registry.js";
 import { analyzeSchema, flattenSchema, nestArguments } from "./repair/flatten.js";
+import { canonicalizeToolSpecs } from "./tool-contract.js";
 import {
   type NormalizedToolRateLimitConfig,
   type ToolRateLimitOption,
@@ -172,14 +173,16 @@ export class ToolRegistry {
   }
 
   specs(): ToolSpec[] {
-    return [...this._tools.values()].map((t) => ({
-      type: "function",
-      function: {
-        name: t.name,
-        description: t.description ?? "",
-        parameters: t.flatSchema ?? t.parameters ?? { type: "object", properties: {} },
-      },
-    }));
+    return canonicalizeToolSpecs(
+      [...this._tools.values()].map((t) => ({
+        type: "function",
+        function: {
+          name: t.name,
+          description: t.description ?? "",
+          parameters: t.flatSchema ?? t.parameters ?? { type: "object", properties: {} },
+        },
+      })),
+    );
   }
 
   async dispatch(
