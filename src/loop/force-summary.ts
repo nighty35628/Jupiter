@@ -20,7 +20,7 @@ export interface ForceSummaryContext {
   model: string;
 }
 
-export async function* forceSummaryAfterIterLimit(
+export async function* forceSummaryAfterGuard(
   ctx: ForceSummaryContext,
   opts: { reason: ForceSummaryReason },
 ): AsyncGenerator<LoopEvent> {

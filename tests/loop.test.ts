@@ -2483,35 +2483,29 @@ describe("CacheFirstLoop — mid-turn steer injection", () => {
     });
   });
 
-  it("stops at DEFAULT_MAX_ITER_PER_TURN and forces summary (#2037 BUG-028)", async () => {
-    // Build a client that always returns a tool call — the loop would
-    // run forever without the iteration cap. Use unique call IDs AND
-    // unique arguments so the storm breaker (threshold=3 for identical
-    // (name, args) tuples) doesn't fire first.
-    const infiniteResponses: FakeResponseShape[] = Array.from(
-      { length: CacheFirstLoop.DEFAULT_MAX_ITER_PER_TURN + 50 },
-      (_, i) => ({
-        content: "",
-        tool_calls: [
-          {
-            id: `call_${i}`,
-            type: "function" as const,
-            function: { name: "noop", arguments: JSON.stringify({ i }) },
-          },
-        ],
-      }),
-    );
-    // The last response (force-summary) must be a plain text reply.
-    infiniteResponses.push({ content: "Here is what I found." });
+  it("continues past the former 50-round cap until the model finishes", async () => {
+    const toolRounds = 55;
+    const responses: FakeResponseShape[] = Array.from({ length: toolRounds }, (_, i) => ({
+      content: "",
+      tool_calls: [
+        {
+          id: `call_${i}`,
+          type: "function" as const,
+          function: { name: "noop", arguments: JSON.stringify({ i }) },
+        },
+      ],
+    }));
+    responses.push({ content: "Finished after a long tool run." });
 
-    const fetchMock = fakeFetch(infiniteResponses);
+    const fetchMock = fakeFetch(responses);
     const client = new DeepSeekClient({ apiKey: "sk-test", fetch: fetchMock });
     const tools = new ToolRegistry();
+    const noop = vi.fn(async () => "ok");
     tools.register({
       name: "noop",
       description: "does nothing",
       parameters: { type: "object", properties: {} },
-      fn: async () => "ok",
+      fn: noop,
     });
 
     const loop = new CacheFirstLoop({
@@ -2522,74 +2516,15 @@ describe("CacheFirstLoop — mid-turn steer injection", () => {
     });
 
     const events: any[] = [];
-    for await (const ev of loop.step("do stuff forever")) {
+    for await (const ev of loop.step("finish a tool-heavy task")) {
       events.push(ev);
     }
 
-    // Must have emitted the iteration-limit warning.
-    const warnEv = events.find(
-      (e) => e.role === "warning" && /iteration cap/i.test(e.content ?? ""),
+    expect(events.some((e) => e.role === "warning" && /iteration cap/i.test(e.content ?? ""))).toBe(
+      false,
     );
-    expect(warnEv).toBeDefined();
-
-    // Must have produced a final summary (forced).
-    const finalEv = events.find((e) => e.role === "assistant_final");
-    expect(finalEv).toBeDefined();
-
-    // The loop must NOT have run all 150 iterations — it should stop
-    // at DEFAULT_MAX_ITER_PER_TURN + 1 (the summary call).
-    // Tool dispatches = DEFAULT_MAX_ITER_PER_TURN (one per iter).
-    // The +1 is the summary API call recorded as a turn.
-    expect(fetchMock).toHaveBeenCalledTimes(CacheFirstLoop.DEFAULT_MAX_ITER_PER_TURN + 1);
-  });
-
-  it("respects custom maxIterPerTurn option", async () => {
-    const customCap = 3;
-    const infiniteResponses: FakeResponseShape[] = Array.from(
-      { length: customCap + 50 },
-      (_, i) => ({
-        content: "",
-        tool_calls: [
-          {
-            id: `call_${i}`,
-            type: "function" as const,
-            function: { name: "noop", arguments: JSON.stringify({ i }) },
-          },
-        ],
-      }),
-    );
-    infiniteResponses.push({ content: "Summary." });
-
-    const fetchMock = fakeFetch(infiniteResponses);
-    const client = new DeepSeekClient({ apiKey: "sk-test", fetch: fetchMock });
-    const tools = new ToolRegistry();
-    tools.register({
-      name: "noop",
-      description: "does nothing",
-      parameters: { type: "object", properties: {} },
-      fn: async () => "ok",
-    });
-
-    const loop = new CacheFirstLoop({
-      client,
-      prefix: new ImmutablePrefix({ system: "be brief", toolSpecs: tools.specs() }),
-      tools,
-      stream: false,
-      maxIterPerTurn: customCap,
-    });
-
-    const events: any[] = [];
-    for await (const ev of loop.step("do stuff forever")) {
-      events.push(ev);
-    }
-
-    const warnEv = events.find(
-      (e) => e.role === "warning" && /iteration cap/i.test(e.content ?? ""),
-    );
-    expect(warnEv).toBeDefined();
-    expect(warnEv!.content).toContain(String(customCap));
-
-    // Tool dispatches = customCap (one per iter) + 1 force-summary call.
-    expect(fetchMock).toHaveBeenCalledTimes(customCap + 1);
+    expect(events.find((e) => e.role === "done")?.content).toBe("Finished after a long tool run.");
+    expect(noop).toHaveBeenCalledTimes(toolRounds);
+    expect(fetchMock).toHaveBeenCalledTimes(toolRounds + 1);
   });
 });

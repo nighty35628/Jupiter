@@ -4,7 +4,15 @@ import type { ChatMessage } from "../src/types.js";
 
 type BuildLoadedMessages = (records: ChatMessage[]) => Array<{
   kind: "assistant" | "user";
-  segments?: Array<{ kind: string; text?: string; args?: string; result?: string }>;
+  displayTruncated?: boolean | { originalChars: number; visibleChars: number };
+  segments?: Array<{
+    kind: string;
+    text?: string;
+    args?: string;
+    result?: string;
+    segmentCount?: number;
+    charCount?: number;
+  }>;
 }>;
 
 describe("desktop session loading", () => {
@@ -35,15 +43,16 @@ describe("desktop session loading", () => {
     }
 
     const loaded = buildLoadedMessages!(records);
-    const firstAssistant = loaded.find((m) => m.kind === "assistant");
-    expect(firstAssistant).toBeDefined();
-    const reasoning = firstAssistant!.segments!.find((s) => s.kind === "reasoning");
-    const text = firstAssistant!.segments!.find((s) => s.kind === "text");
-    const tool = firstAssistant!.segments!.find((s) => s.kind === "tool");
+    const assistants = loaded.filter((message) => message.kind === "assistant");
+    const folded = assistants.find((message) => message.displayTruncated === true);
+    const newest = assistants.at(-1);
 
-    expect(reasoning?.text?.length).toBeLessThan(huge.length / 10);
-    expect(text?.text?.length).toBeLessThan(huge.length / 10);
-    expect(tool?.args?.length).toBeLessThan(huge.length / 10);
-    expect(tool?.result?.length).toBeLessThan(huge.length / 10);
+    expect(Buffer.byteLength(JSON.stringify(loaded), "utf8")).toBeLessThanOrEqual(256 * 1024);
+    expect(folded?.segments).toContainEqual(
+      expect.objectContaining({ kind: "elision", segmentCount: expect.any(Number) }),
+    );
+    expect(
+      newest?.segments?.some((segment) => segment.kind === "text" && segment.text === huge),
+    ).toBe(true);
   });
 });

@@ -27,14 +27,38 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install desktop dependencies
+        run: npm --prefix desktop ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux desktop build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
       - name: Lint (biome)
         run: npm run lint
+
+      - name: Lint desktop pet module
+        run: npx biome check desktop/src/pets
 
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Build desktop frontend
+        run: npm --prefix desktop run build
+
+      - name: Prepare desktop Node sidecar
+        run: npm --prefix desktop run bundle:node
+
       - name: Build (tsup + dashboard)
         run: npm run build
+
+      - name: Test desktop native layer
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked
 
       - name: Test (vitest + coverage)
         run: npm run test:coverage

@@ -3,6 +3,69 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] — 2026-07-17
+
+### 中文
+
+**桌面宠物与浮动伙伴。** 桌面端新增宠物浮窗、设置页和状态联动，内置 companion cube、Jupiter sprout、origami
+fox、cloudsmith、lantern jelly、copperwing 和 ink dragon 七个伙伴。宠物会跟随 idle、waiting、running、review、
+failure 等对话状态切换动画，支持拖动、点击回到主窗口、减少动态效果，以及在设置页切换或刷新。
+
+**自定义宠物安全扫描。** Tauri 原生层新增 `~/.jupiter/pets` 目录准备与宠物目录扫描，只接受受限目录内的 v2
+宠物包，限制包数量、manifest、spritesheet 和 thumbnail 大小，拒绝 symlink/junction，并校验 ID、WebP 尺寸、
+缩略图和 asset protocol 路径，降低自定义资源加载风险。
+
+**大会话载入与转录预算。** 会话 snapshot 现在携带稳定的 sessionId、bindingId 和 requestId，并记录会话涉及的文件。
+桌面端接收经过预算裁剪的 transcript payload，长 assistant 段落会显示折叠占位和尾部预览，长用户消息会标记截断；
+完整记录仍保存在磁盘，可按回合加载完整内容，避免大历史直接压垮渲染器。
+
+**会话复制与 Markdown 导出。** 桌面后端新增会话复制和导出命令，支持跨平台写入剪贴板，并把会话格式化为 Markdown。
+导出的 Markdown 会保留用户、assistant、reasoning、工具调用和工具结果结构，reasoning 使用可折叠详情块，工具内容
+使用 fenced code block，便于归档和分享。
+
+**流式输出与回合提交稳定性。** 桌面事件管线新增有序 delta batcher，只合并相邻且兼容的 `model.delta`，并让非
+delta 事件作为 FIFO 屏障保序。后端新增 turn committed 事件、最近客户端消息记录和轻量 Ask 去重路径，减少重连、
+切会话或本地恢复时的重复用户消息与乱序流式输出。
+
+**原生诊断与 CI 覆盖。** 桌面原生层新增 JSONL 诊断日志，记录 native lifecycle、pet overlay 和事件状态并自动轮转。
+CI 现在会安装桌面依赖、构建桌面前端、打包 Node sidecar、检查宠物模块并运行 Tauri cargo tests，让桌面发布前的
+验证覆盖更完整。
+
+**版本同步。** 桌面端、根包、Tauri、Cargo、CHANGELOG、README 和 release notes 版本统一为 `1.0.7`。
+
+### English
+
+**Desktop pets and floating companions.** The desktop app now includes a pet overlay, a settings page, and activity-aware
+animation state. Seven built-in companions are available: companion cube, Jupiter sprout, origami fox, cloudsmith,
+lantern jelly, copperwing, and ink dragon. Pets react to idle, waiting, running, review, failure, and related chat states,
+support dragging, clicking back to the main window, reduced motion, switching, and refresh from settings.
+
+**Safer custom pet loading.** The Tauri native layer now prepares and scans `~/.jupiter/pets` for v2 pet packages under
+tight boundaries. It limits package count, manifest size, spritesheet size, thumbnail size, rejects symlinks and
+junctions, validates IDs, WebP dimensions, thumbnails, and asset-protocol paths, reducing risk when loading custom
+resources.
+
+**Large-session loading and transcript budgets.** Session snapshots now carry stable sessionId, bindingId, requestId,
+and the files referenced by the session. The renderer receives a bounded transcript payload: long assistant content is
+shown as elision placeholders with tail previews, long user messages are marked as truncated, and full records stay on
+disk so a single turn can be loaded on demand instead of overwhelming the renderer.
+
+**Session copy and Markdown export.** The desktop backend adds session copy and export commands with cross-platform
+clipboard support and Markdown formatting. Exported Markdown preserves user, assistant, reasoning, tool-call, and
+tool-result structure; reasoning is kept in collapsible detail blocks and tool content uses fenced code blocks for
+archiving and sharing.
+
+**Streaming and turn-commit stability.** Desktop events now pass through an ordered delta batcher that only coalesces
+adjacent compatible `model.delta` events while preserving non-delta events as FIFO barriers. The backend also adds turn
+committed events, recent client-message tracking, and a lightweight Ask de-duplication path to reduce duplicate user
+messages and out-of-order streams after reconnects, session switches, or local recovery.
+
+**Native diagnostics and CI coverage.** The native desktop layer writes rotating JSONL diagnostics for lifecycle,
+pet-overlay, and event state. CI now installs desktop dependencies, builds the desktop frontend, bundles the Node
+sidecar, checks the pet module, and runs Tauri cargo tests so desktop release validation covers more of the actual app.
+
+**Version alignment.** Desktop, root package, Tauri, Cargo, CHANGELOG, README, and release notes are aligned on `1.0.7`.
+
 ## [1.0.6] — 2026-07-14
 
 ### 中文

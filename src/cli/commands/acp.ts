@@ -31,7 +31,6 @@ import {
   loadEndpoint,
   loadEngineeringLifecycleMode,
   loadLibraryRetrievalMode,
-  loadMaxIterPerTurn,
   loadModel,
   loadReasoningEffort,
   normalizeMcpConfig,
@@ -189,7 +188,6 @@ async function buildSession(opts: {
     tools: toolset.tools,
     model,
     budgetUsd: opts.budgetUsd,
-    maxIterPerTurn: loadMaxIterPerTurn(),
     session: `acp-${timestampSuffix()}`,
   });
   return {

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { SessionLoadedEvent } from "./protocol";
 
 vi.mock("./CommandPalette", () => ({
   CommandPalette: () => null,
@@ -105,7 +106,27 @@ function initialState(): Parameters<typeof reduce>[0] {
     activeSkill: null,
     queuedSends: [],
     sideChats: [],
+    bindingId: 0,
+    pendingTurnLoads: {},
+    expandedTurns: [],
+    sessionActionResult: null,
     retryNonce: 0,
+  };
+}
+
+function loadedSnapshot(
+  reason: SessionLoadedEvent["snapshot"]["reason"] = "load",
+  bindingId = 1,
+): Pick<SessionLoadedEvent, "snapshot" | "sessionFiles"> {
+  return {
+    snapshot: {
+      sessionId: "session-1",
+      bindingId,
+      reason,
+      payloadBytes: 0,
+      truncated: false,
+    },
+    sessionFiles: [],
   };
 }
 
@@ -566,6 +587,7 @@ describe("Desktop App reducer — usage", () => {
       {
         kind: "assistant",
         turn: 1,
+        messageId: "a-live-1",
         pending: true,
         segments: [
           { kind: "reasoning", text: "thinking..." },
@@ -610,6 +632,7 @@ describe("Desktop App reducer — usage", () => {
         name: "desktop-20260617000100-1",
         busy: false,
         messages: [],
+        ...loadedSnapshot(),
         carryover: {
           totalCostUsd: 0.12,
           cacheHitTokens: 80,
@@ -1062,18 +1085,21 @@ describe("desktop message rollback availability", () => {
       event: {
         type: "$session_loaded",
         name: "demo-session",
+        ...loadedSnapshot(),
         messages: [
-          { kind: "user", text: "first" },
+          { kind: "user", text: "first", turn: 1, messageId: "u-1" },
           {
             kind: "assistant",
             turn: 1,
+            messageId: "a-1",
             segments: [{ kind: "text", text: "done" }],
             pending: false,
           },
-          { kind: "user", text: "second" },
+          { kind: "user", text: "second", turn: 2, messageId: "u-2" },
           {
             kind: "assistant",
             turn: 2,
+            messageId: "a-2",
             segments: [{ kind: "text", text: "done again" }],
             pending: false,
           },
@@ -1101,17 +1127,20 @@ describe("desktop message rollback availability", () => {
       event: {
         type: "$session_loaded",
         name: "legacy-session",
+        ...loadedSnapshot(),
         messages: [
-          { kind: "user", text: "first" },
+          { kind: "user", text: "first", turn: 1, messageId: "u-1" },
           {
             kind: "assistant",
             turn: 1,
+            messageId: "a-1",
             segments: [{ kind: "text", text: "old answer" }],
             pending: false,
           },
           {
             kind: "assistant",
             turn: 2,
+            messageId: "a-2",
             segments: [{ kind: "text", text: "legacy colliding answer" }],
             pending: false,
           },
@@ -1192,11 +1221,13 @@ describe("desktop message rollback availability", () => {
       event: {
         type: "$session_reconciled",
         name: "demo-session",
+        ...loadedSnapshot("resync"),
         messages: [
-          { kind: "user", text: "hello" },
+          { kind: "user", text: "hello", turn: 1, messageId: "u-1" },
           {
             kind: "assistant",
             turn: 1,
+            messageId: "a-1",
             segments: [
               { kind: "reasoning", text: "thinking" },
               { kind: "text", text: "done" },
@@ -1250,7 +1281,10 @@ describe("desktop message rollback availability", () => {
       event: {
         type: "$session_reconciled",
         name: "demo-session",
-        messages: [{ kind: "user", text: "hello" }],
+        ...loadedSnapshot("resync"),
+        messages: [
+          { kind: "user", text: "hello", turn: 1, messageId: "u-1" },
+        ],
         carryover: {
           totalCostUsd: 0.01,
           cacheHitTokens: 10,
@@ -1270,6 +1304,62 @@ describe("desktop message rollback availability", () => {
       },
     ]);
     expect(next.usage.totalPromptTokens).toBe(15);
+  });
+
+  it("ignores a stale session load after a newer sidebar selection", () => {
+    const state = {
+      ...initialState(),
+      currentSession: "new-session",
+      currentSessionId: "new-id",
+      bindingId: 4,
+      pendingLoadRequestId: "load-new",
+      messages: [{ kind: "user" as const, text: "keep me", clientId: "c-1", turn: 1 }],
+    };
+    const next = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "$session_loaded",
+        name: "old-session",
+        ...loadedSnapshot("load", 3),
+        snapshot: {
+          ...loadedSnapshot("load", 3).snapshot,
+          requestId: "load-old",
+        },
+        messages: [],
+        carryover: {
+          totalCostUsd: 0,
+          cacheHitTokens: 0,
+          cacheMissTokens: 0,
+          totalCompletionTokens: 0,
+        },
+      },
+    });
+
+    expect(next).toBe(state);
+  });
+
+  it("ignores a full-turn response from an old session binding", () => {
+    const state = {
+      ...initialState(),
+      currentSession: "demo-session",
+      currentSessionId: "current-id",
+      bindingId: 2,
+      pendingTurnLoads: { 1: "turn-current" },
+    };
+    const next = reduce(state, {
+      t: "incoming",
+      event: {
+        type: "$session_turn_loaded",
+        name: "demo-session",
+        sessionId: "old-id",
+        bindingId: 1,
+        requestId: "turn-current",
+        turn: 1,
+        messages: [],
+      },
+    });
+
+    expect(next).toBe(state);
   });
 
   it("shows the thinking footer only until live assistant output starts", () => {

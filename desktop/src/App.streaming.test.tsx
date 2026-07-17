@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauri = vi.hoisted(() => {
   const listeners = new Map<string, Array<(event: { payload: unknown }) => void>>();
+  const listenFailures = new Set<string>();
   const defaultInvoke = (cmd: string, payload?: unknown) => {
     if (cmd === "rpc_spawn" || cmd === "rpc_send") return Promise.resolve();
     if (cmd === "read_file_preview") {
@@ -32,6 +33,7 @@ const tauri = vi.hoisted(() => {
   const invoke = vi.fn(defaultInvoke);
   return {
     listeners,
+    listenFailures,
     invoke,
     defaultInvoke,
     emit(event: string, payload: unknown) {
@@ -51,7 +53,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
+  emitTo: vi.fn(() => Promise.resolve()),
   listen: vi.fn(async (event: string, handler: (event: { payload: unknown }) => void) => {
+    if (tauri.listenFailures.has(event)) throw new Error(`listen failed: ${event}`);
     const bucket = tauri.listeners.get(event) ?? [];
     bucket.push(handler);
     tauri.listeners.set(event, bucket);
@@ -70,6 +74,10 @@ vi.mock("@tauri-apps/api/window", () => ({
     setFullscreen: vi.fn(() => Promise.resolve()),
     toggleMaximize: vi.fn(() => Promise.resolve()),
     minimize: vi.fn(() => Promise.resolve()),
+    unminimize: vi.fn(() => Promise.resolve()),
+    show: vi.fn(() => Promise.resolve()),
+    hide: vi.fn(() => Promise.resolve()),
+    setFocus: vi.fn(() => Promise.resolve()),
     close: vi.fn(() => Promise.resolve()),
     listen: vi.fn(() => Promise.resolve(() => {})),
   }),
@@ -276,6 +284,7 @@ function visibleMain(): HTMLElement {
 
 beforeEach(() => {
   tauri.listeners.clear();
+  tauri.listenFailures.clear();
   tauri.invoke.mockReset();
   tauri.invoke.mockImplementation(tauri.defaultInvoke);
   vi.mocked(openDialog).mockReset();
@@ -293,6 +302,19 @@ afterEach(() => {
 });
 
 describe("App streaming events", () => {
+  it("cleans up listeners that registered before a sibling subscription fails", async () => {
+    tauri.listenFailures.add("rpc:stderr");
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Jupiter could not start" })).toBeTruthy(),
+    );
+    expect(tauri.listeners.get("rpc:event") ?? []).toHaveLength(0);
+    expect(tauri.listeners.get("rpc:exit") ?? []).toHaveLength(0);
+    expect(tauri.invoke).not.toHaveBeenCalledWith("rpc_spawn");
+  });
+
   it("starts a blank chat with the composer centered and workspace picker in the composer", async () => {
     render(<App />);
 

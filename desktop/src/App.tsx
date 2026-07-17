@@ -25,6 +25,12 @@ import { type AbortDraftSource, nextAbortDraftCandidate, restoreAbortedDraft } f
 import { DESKTOP_CLI_SLASH_COMMANDS, isKnownDesktopCliSlash, parseDesktopSlash } from "./cli-slash";
 import type { DingTalkDesktopSettingsState } from "./dingtalk-settings";
 import {
+  installRendererDiagnostics,
+  recordIncomingDiagnostic,
+  recordUserSend,
+  reportDesktopDiagnostic,
+} from "./diagnostics";
+import {
   type FilePreview,
   type FilePreviewTarget,
   pathToFileUrl,
@@ -45,10 +51,17 @@ import {
 } from "./notifications";
 import { parseOneShotPlanCommand } from "./one-shot-plan";
 import {
-  RpcSendFailure,
-  coerceRpcSendFailure,
-  isDefinitelyUnsent,
-} from "./rpc-send";
+  petIncomingAffectsActivity,
+  petOutgoingWaitsForDelivery,
+  reducePetIncoming,
+  reducePetOutgoing,
+} from "./pets/activity";
+import { useDesktopPets } from "./pets/catalog";
+import { usePetOverlayBridge } from "./pets/overlay-bridge";
+import type { PetOverlaySnapshot } from "./pets/overlay-protocol";
+import { compactPetTaskTitle, derivePetTaskActivities } from "./pets/overlay-state";
+import type { DesktopPetUi, PetTabActivity } from "./pets/types";
+import { RpcSendFailure, coerceRpcSendFailure, isDefinitelyUnsent } from "./rpc-send";
 import type {
   BrowserAutomationStatus,
   CheckpointVerdict,
@@ -61,6 +74,7 @@ import type {
   IncomingEvent,
   JobInfo,
   LibrarySource,
+  LoadedMessage,
   McpSpecInfo,
   MemoryDetail,
   MemoryEntryInfo,
@@ -201,6 +215,7 @@ function responsiveStage(width: number): ResponsiveStage {
 export type AssistantSegment =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
+  | { kind: "elision"; segmentCount: number; charCount: number }
   | {
       kind: "tool";
       callId: string;
@@ -223,6 +238,8 @@ export type ChatMessage =
       text: string;
       clientId: string;
       turn: number;
+      messageId?: string;
+      displayTruncated?: { originalChars: number };
       rollbackable?: boolean;
       skill?: SkillOrigin;
     }
@@ -231,6 +248,8 @@ export type ChatMessage =
       turn: number;
       segments: AssistantSegment[];
       pending: boolean;
+      messageId?: string;
+      displayTruncated?: boolean;
     }
   | { kind: "workflow"; run: WorkflowRun }
   | { kind: "subagent"; run: SubagentRunInfo }
@@ -435,6 +454,12 @@ type State = {
   transientStatus: string | null;
   model?: string;
   currentSession?: string;
+  currentSessionId?: string;
+  bindingId: number;
+  pendingLoadRequestId?: string;
+  pendingTurnLoads: Record<number, string>;
+  expandedTurns: number[];
+  sessionActionResult: Extract<IncomingEvent, { type: "$session_action_result" }> | null;
   messages: ChatMessage[];
   pendingConfirms: PendingConfirm[];
   pendingPathAccess: PendingPathAccess[];
@@ -673,6 +698,9 @@ type Action =
   | { t: "dequeue_send"; index: number }
   | { t: "prioritize_queued_send"; index: number }
   | { t: "shift_queued_send" }
+  | { t: "begin_session_load"; requestId: string }
+  | { t: "begin_turn_load"; turn: number; requestId: string }
+  | { t: "clear_session_action_result"; requestId: string }
   | { t: "side_chat_sent"; id: string; question: string }
   | { t: "settings_patch"; patch: SettingsPatch }
   | { t: "push_status"; text: string };
@@ -741,9 +769,9 @@ export function chatMessageKey(message: ChatMessage | undefined, index: number):
   if (!message) return `missing-${index}`;
   switch (message.kind) {
     case "user":
-      return `user-${message.clientId || message.turn}`;
+      return `user-${message.messageId ?? message.clientId ?? message.turn}`;
     case "assistant":
-      return `assistant-${message.turn}-${index}`;
+      return `assistant-${message.messageId ?? `${message.turn}-${index}`}`;
     case "workflow":
       return `workflow-${message.run.id}`;
     case "subagent":
@@ -792,7 +820,9 @@ function nextErrorId(): string {
 }
 
 function upsertWorkflowRunMessage(messages: ChatMessage[], run: WorkflowRun): ChatMessage[] {
-  const index = messages.findIndex((message) => message.kind === "workflow" && message.run.id === run.id);
+  const index = messages.findIndex(
+    (message) => message.kind === "workflow" && message.run.id === run.id,
+  );
   if (index < 0) return [...messages, { kind: "workflow", run }];
   const next = [...messages];
   next[index] = { kind: "workflow", run };
@@ -810,7 +840,9 @@ function upsertSubagentRunMessage(messages: ChatMessage[], run: SubagentRunInfo)
 }
 
 export function reduce(state: State, action: Action): State {
-  return withElidedTranscript(reduceRaw(state, action));
+  const next = reduceRaw(state, action);
+  if (action.t === "incoming" && action.event.type === "model.delta") return next;
+  return withElidedTranscript(next);
 }
 
 function reduceRaw(state: State, action: Action): State {
@@ -829,6 +861,7 @@ function reduceRaw(state: State, action: Action): State {
             kind: "user",
             text: action.text,
             clientId: action.clientId,
+            messageId: action.clientId,
             turn,
             ...(rollbackable ? {} : { rollbackable: false }),
           },
@@ -847,6 +880,7 @@ function reduceRaw(state: State, action: Action): State {
             kind: "user",
             text: `/${action.skill.name}${argsLine}`,
             clientId: action.clientId,
+            messageId: action.clientId,
             turn: Math.max(1, latestConversationTurn(state.messages)),
             rollbackable: false,
             skill: action.skill,
@@ -891,6 +925,7 @@ function reduceRaw(state: State, action: Action): State {
     case "incoming":
       return applyIncoming(state, action.event);
     case "set_busy":
+      if (state.busy === action.busy) return state;
       return {
         ...state,
         busy: action.busy,
@@ -913,6 +948,11 @@ function reduceRaw(state: State, action: Action): State {
         busy: false,
         transientStatus: null,
         currentSession: undefined,
+        currentSessionId: undefined,
+        bindingId: state.bindingId + 1,
+        pendingLoadRequestId: undefined,
+        pendingTurnLoads: {},
+        expandedTurns: [],
         messages: [],
         pendingConfirms: [],
         pendingPathAccess: [],
@@ -1017,6 +1057,17 @@ function reduceRaw(state: State, action: Action): State {
     }
     case "shift_queued_send":
       return { ...state, queuedSends: state.queuedSends.slice(1) };
+    case "begin_session_load":
+      return { ...state, pendingLoadRequestId: action.requestId };
+    case "begin_turn_load":
+      return {
+        ...state,
+        pendingTurnLoads: { ...state.pendingTurnLoads, [action.turn]: action.requestId },
+      };
+    case "clear_session_action_result":
+      return state.sessionActionResult?.requestId === action.requestId
+        ? { ...state, sessionActionResult: null }
+        : state;
     case "side_chat_sent":
       return {
         ...state,
@@ -1034,7 +1085,7 @@ function reduceRaw(state: State, action: Action): State {
 }
 
 function withElidedTranscript(state: State): State {
-  const messages = elideTranscriptMessages(state.messages);
+  const messages = elideTranscriptMessages(state.messages, new Set(state.expandedTurns));
   return messages === state.messages ? state : { ...state, messages };
 }
 
@@ -1255,8 +1306,7 @@ function mergeFinalSegments(
 
 function isAbortSyntheticFinal(ev: { content?: string; forcedSummary?: boolean }): boolean {
   return (
-    ev.forcedSummary === true &&
-    /^\[aborted by user \(Esc\) — /.test((ev.content ?? "").trim())
+    ev.forcedSummary === true && /^\[aborted by user \(Esc\) — /.test((ev.content ?? "").trim())
   );
 }
 
@@ -1273,7 +1323,8 @@ function sessionFilesForMessages(messages: ChatMessage[]): SessionFile[] {
 }
 
 export function applyIncoming(state: State, ev: IncomingEvent): State {
-  return withElidedTranscript(applyIncomingRaw(state, ev));
+  const next = applyIncomingRaw(state, ev);
+  return ev.type === "model.delta" ? next : withElidedTranscript(next);
 }
 
 type SessionSnapshotEvent = Extract<
@@ -1281,40 +1332,69 @@ type SessionSnapshotEvent = Extract<
   { type: "$session_loaded" | "$session_reconciled" }
 >;
 
+function loadedMessagesToChat(messages: LoadedMessage[], sessionId: string): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.kind === "user") {
+      return {
+        kind: "user" as const,
+        text: message.text,
+        clientId: `loaded:${sessionId}:${message.messageId}`,
+        messageId: message.messageId,
+        turn: message.turn,
+        displayTruncated: message.displayTruncated,
+      };
+    }
+    const segments: AssistantSegment[] = message.segments.map((segment) => {
+      if (segment.kind === "tool") {
+        return {
+          kind: "tool",
+          callId: segment.callId,
+          name: segment.name,
+          args: segment.args,
+          startedAt: 0,
+          result: segment.result,
+          ok: segment.ok,
+          durationMs: 0,
+        };
+      }
+      return segment;
+    });
+    return {
+      kind: "assistant" as const,
+      turn: message.turn,
+      messageId: message.messageId,
+      segments,
+      pending: false,
+      displayTruncated: message.displayTruncated,
+    };
+  });
+}
+
 function applySessionSnapshot(
   state: State,
   ev: SessionSnapshotEvent,
   opts: { resetUi: boolean },
 ): State {
+  const snapshot = ev.snapshot ?? {
+    sessionId: `legacy:${ev.name}`,
+    bindingId:
+      state.currentSession && state.currentSession !== ev.name
+        ? state.bindingId + 1
+        : state.bindingId,
+    reason: opts.resetUi ? ("load" as const) : ("resync" as const),
+    payloadBytes: 0,
+    truncated: false,
+  };
+  if (
+    snapshot.requestId &&
+    state.pendingLoadRequestId &&
+    snapshot.requestId !== state.pendingLoadRequestId
+  ) {
+    return state;
+  }
+  if (snapshot.bindingId < state.bindingId) return state;
   const sessionName = ev.name;
-  let loadedUserTurn = 0;
-  const loaded: ChatMessage[] = ev.messages.map((m, i) => {
-    if (m.kind === "user") {
-      loadedUserTurn += 1;
-      return {
-        kind: "user",
-        text: m.text,
-        clientId: `c-loaded-${i}`,
-        turn: loadedUserTurn,
-      };
-    }
-    const segments: AssistantSegment[] = m.segments.map((s) => {
-      if (s.kind === "tool") {
-        return {
-          kind: "tool",
-          callId: s.callId,
-          name: s.name,
-          args: s.args,
-          startedAt: 0,
-          result: s.result,
-          ok: s.ok,
-          durationMs: 0,
-        };
-      }
-      return s;
-    });
-    return { kind: "assistant", turn: m.turn, segments, pending: false };
-  });
+  const loaded = loadedMessagesToChat(ev.messages, snapshot.sessionId);
   const usage = {
     ...zeroUsage(),
     totalCostUsd: ev.carryover.totalCostUsd,
@@ -1336,9 +1416,12 @@ function applySessionSnapshot(
     return {
       ...state,
       currentSession: sessionName,
+      currentSessionId: snapshot.sessionId,
+      bindingId: snapshot.bindingId,
+      pendingLoadRequestId: undefined,
       messages: nextMessages,
       usage,
-      sessionFiles,
+      sessionFiles: ev.sessionFiles ?? sessionFiles,
       transientStatus: null,
     };
   }
@@ -1350,6 +1433,11 @@ function applySessionSnapshot(
     busy: ev.busy ?? false,
     transientStatus: keepLiveMessages ? state.transientStatus : null,
     currentSession: sessionName,
+    currentSessionId: snapshot.sessionId,
+    bindingId: snapshot.bindingId,
+    pendingLoadRequestId: undefined,
+    pendingTurnLoads: {},
+    expandedTurns: [],
     messages: nextMessages,
     pendingConfirms: keepLiveMessages ? state.pendingConfirms : [],
     pendingPathAccess: keepLiveMessages ? state.pendingPathAccess : [],
@@ -1359,7 +1447,7 @@ function applySessionSnapshot(
     pendingRevisions: keepLiveMessages ? state.pendingRevisions : [],
     activePlan: keepLiveMessages ? state.activePlan : null,
     usage,
-    sessionFiles: sessionFilesForMessages(nextMessages),
+    sessionFiles: ev.sessionFiles ?? sessionFilesForMessages(nextMessages),
     subagents: keepLiveMessages ? state.subagents : [],
     activeSkill: ev.busy ? state.activeSkill : null,
     queuedSends: keepLiveMessages ? state.queuedSends : [],
@@ -1540,6 +1628,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
             kind: "user",
             text: ev.text,
             clientId: ev.clientId ?? `remote-${ev.id}`,
+            messageId: ev.clientId ?? `remote-${ev.id}`,
             turn: ev.turn > 0 ? ev.turn : nextMessageTurn(state.messages),
           },
         ],
@@ -1716,16 +1805,15 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         mcpSpecs: Array.isArray(ev.specs) ? ev.specs : [],
         mcpBridged: Boolean(ev.bridged),
       };
-    case "$subagent_event":
-      {
-        const subagents = reduceSubagentRuns(state.subagents, ev, state.currentSession);
-        const run = subagents.find((entry) => entry.runId === ev.runId);
-        return {
-          ...state,
-          subagents,
-          messages: run ? upsertSubagentRunMessage(state.messages, run) : state.messages,
-        };
-      }
+    case "$subagent_event": {
+      const subagents = reduceSubagentRuns(state.subagents, ev, state.currentSession);
+      const run = subagents.find((entry) => entry.runId === ev.runId);
+      return {
+        ...state,
+        subagents,
+        messages: run ? upsertSubagentRunMessage(state.messages, run) : state.messages,
+      };
+    }
     case "$skills":
       return { ...state, skills: ev.items, skillRoots: ev.roots ?? [] };
     case "$ctx_breakdown": {
@@ -1948,6 +2036,68 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "$session_reconciled": {
       return applySessionSnapshot(state, ev, { resetUi: false });
     }
+    case "$session_turn_loaded": {
+      if (
+        ev.name !== state.currentSession ||
+        ev.sessionId !== state.currentSessionId ||
+        ev.bindingId !== state.bindingId ||
+        state.pendingTurnLoads[ev.turn] !== ev.requestId
+      ) {
+        return state;
+      }
+      const loaded = loadedMessagesToChat(ev.messages, ev.sessionId);
+      const firstIndex = state.messages.findIndex(
+        (message) =>
+          (message.kind === "user" || message.kind === "assistant") && message.turn === ev.turn,
+      );
+      const messages = state.messages.filter(
+        (message) =>
+          !((message.kind === "user" || message.kind === "assistant") && message.turn === ev.turn),
+      );
+      messages.splice(firstIndex >= 0 ? firstIndex : messages.length, 0, ...loaded);
+      const pendingTurnLoads = { ...state.pendingTurnLoads };
+      delete pendingTurnLoads[ev.turn];
+      return {
+        ...state,
+        messages,
+        pendingTurnLoads,
+        expandedTurns: [...new Set([...state.expandedTurns, ev.turn])],
+      };
+    }
+    case "$session_action_result":
+      return { ...state, sessionActionResult: ev };
+    case "$turn_committed": {
+      if (
+        (state.currentSessionId && ev.sessionId !== state.currentSessionId) ||
+        ev.bindingId < state.bindingId
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        currentSession: ev.name,
+        currentSessionId: ev.sessionId,
+        bindingId: ev.bindingId,
+        sessionFiles: ev.sessionFiles,
+        usage: {
+          ...state.usage,
+          totalCostUsd: ev.carryover.totalCostUsd,
+          totalPromptTokens: ev.carryover.cacheHitTokens + ev.carryover.cacheMissTokens,
+          totalCompletionTokens: ev.carryover.totalCompletionTokens,
+          cacheHitTokens: ev.carryover.cacheHitTokens,
+          cacheMissTokens: ev.carryover.cacheMissTokens,
+        },
+      };
+    }
+    case "$session_renamed":
+      if (
+        ev.sessionId !== state.currentSessionId ||
+        ev.bindingId !== state.bindingId ||
+        state.currentSession !== ev.previousName
+      ) {
+        return state;
+      }
+      return { ...state, currentSession: ev.name };
     case "$session_empty": {
       // The sidecar successfully ran loadSessionMessages but the jsonl is
       // empty / all-malformed. Without this, the click looks like a no-op
@@ -2006,7 +2156,13 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         transientStatus: null,
         messages: [
           ...state.messages,
-          { kind: "assistant", turn: ev.turn, segments: [], pending: true },
+          {
+            kind: "assistant",
+            turn: ev.turn,
+            messageId: `a-live-${ev.turn}`,
+            segments: [],
+            pending: true,
+          },
         ],
       };
     case "model.delta": {
@@ -2040,7 +2196,13 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         transientStatus: null,
         messages: [
           ...state.messages,
-          { kind: "assistant", turn: ev.turn, segments, pending: true },
+          {
+            kind: "assistant",
+            turn: ev.turn,
+            messageId: `a-live-${ev.turn}`,
+            segments,
+            pending: true,
+          },
         ],
       };
     }
@@ -2098,6 +2260,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
             {
               kind: "assistant",
               turn: ev.turn,
+              messageId: `a-live-${ev.turn}`,
               segments: finalSegments,
               pending: false,
             },
@@ -2282,52 +2445,6 @@ export function formatWorkflowRunMarkdown(run: WorkflowRun): string {
   return `${lines.join("\n").trim()}\n`;
 }
 
-function formatConversationMarkdown(messages: ChatMessage[], userLabel: string): string {
-  return messages
-    .map((m) => {
-      if (m.kind === "user") return `### ${userLabel}\n\n${m.text}`;
-      if (m.kind === "assistant") {
-        const body = m.segments
-          .map((s) => {
-            if (s.kind === "text") return s.text;
-            if (s.kind === "reasoning")
-              return `<details>\n<summary>${t("app.exportReasoningSummary")}</summary>\n\n${s.text}\n\n</details>`;
-            if (s.kind === "tool") {
-              const arg = s.args ? `\n\n\`\`\`json\n${s.args}\n\`\`\`` : "";
-              const res = s.result ? `\n\n\`\`\`\n${s.result}\n\`\`\`` : "";
-              return `> **${t("app.exportToolLabel")} · \`${s.name}\`**${arg}${res}`;
-            }
-            return "";
-          })
-          .filter(Boolean)
-          .join("\n\n");
-        return `### Jupiter\n\n${body}`;
-      }
-      if (m.kind === "workflow") {
-        return formatWorkflowRunMarkdown(m.run);
-      }
-      if (m.kind === "subagent") {
-        const lines = [
-          "### Subagent",
-          "",
-          `- Task: ${m.run.task}`,
-          `- Status: ${m.run.status}`,
-          m.run.skillName ? `- Skill: ${m.run.skillName}` : null,
-          m.run.model ? `- Model: ${m.run.model}` : null,
-          typeof m.run.turns === "number" ? `- Turns: ${m.run.turns}` : null,
-          typeof m.run.costUsd === "number" ? `- Cost: $${m.run.costUsd.toFixed(4)}` : null,
-          m.run.summary ? `\n${m.run.summary}` : null,
-          m.run.error ? `\nError: ${m.run.error}` : null,
-        ].filter((line): line is string => line !== null);
-        return lines.join("\n");
-      }
-      if (m.kind === "error") return `### Error\n\n${m.message}`;
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n\n---\n\n");
-}
-
 function sanitizeFilename(name: string): string {
   return (
     name
@@ -2375,6 +2492,7 @@ type TabRuntimeSnapshot = {
   model?: string;
   hasMessages: boolean;
   contextInfoOpen: boolean;
+  settingsOpen: boolean;
 };
 
 type TabRuntimeControls = {
@@ -2407,6 +2525,7 @@ interface TabRuntimeProps {
   onSetFontFamily: (family: FontFamily) => void;
   customFontFamily: string;
   onSetCustomFontFamily: (family: string) => void;
+  petUi: DesktopPetUi;
   sideCollapsed: boolean;
   ctxCollapsed: boolean;
   bottomCollapsed: boolean;
@@ -2449,6 +2568,7 @@ function TabRuntimeInner({
   onSetFontFamily,
   customFontFamily,
   onSetCustomFontFamily,
+  petUi,
   sideCollapsed,
   ctxCollapsed,
   bottomCollapsed,
@@ -2472,6 +2592,10 @@ function TabRuntimeInner({
     needsSetup: false,
     busy: false,
     transientStatus: null,
+    bindingId: 0,
+    pendingTurnLoads: {},
+    expandedTurns: [],
+    sessionActionResult: null,
     messages: [],
     pendingConfirms: [],
     pendingPathAccess: [],
@@ -2543,6 +2667,8 @@ function TabRuntimeInner({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const contextTabIdRef = useRef(0);
   const browserRequestIdRef = useRef(0);
+  const turnLoadRequestIdRef = useRef(0);
+  const sessionActionRequestIdRef = useRef(0);
   const migratedLibraryStorageKeysRef = useRef<Set<string>>(new Set());
   const threadRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -2614,6 +2740,7 @@ function TabRuntimeInner({
       model: state.settings?.model ?? state.model,
       hasMessages: state.messages.length > 0,
       contextInfoOpen,
+      settingsOpen,
     });
   }, [
     contextInfoOpen,
@@ -2628,6 +2755,7 @@ function TabRuntimeInner({
     state.settings?.model,
     state.settings?.recentWorkspaces,
     state.settings?.workspaceDir,
+    settingsOpen,
     tabId,
   ]);
   const activeContextTab = useMemo(
@@ -2729,7 +2857,12 @@ function TabRuntimeInner({
   }, [tabId, registerDispatch]);
 
   const sendRpc = useCallback(
-    (cmd: OutgoingCommand) => sendRpcToTab(tabId, cmd),
+    (cmd: OutgoingCommand) => {
+      if ((cmd.cmd === "user_input" || cmd.cmd === "ask_light") && cmd.clientId) {
+        recordUserSend(cmd.clientId);
+      }
+      return sendRpcToTab(tabId, cmd);
+    },
     [sendRpcToTab, tabId],
   );
   useEffect(() => {
@@ -2795,10 +2928,7 @@ function TabRuntimeInner({
     optimisticBusyRef.current = true;
   }, []);
   const sendOptimisticRpc = useCallback(
-    (
-      cmd: OutgoingCommand,
-      opts: { clientId: string; restoreDraft?: string },
-    ): void => {
+    (cmd: OutgoingCommand, opts: { clientId: string; restoreDraft?: string }): void => {
       const pending = sendRpc(cmd);
       void pending.catch((failure) => {
         if (!isDefinitelyUnsent(failure)) return;
@@ -3046,10 +3176,7 @@ function TabRuntimeInner({
     [sendRpc],
   );
   const connectDingTalk = useCallback(() => sendRpc({ cmd: "dingtalk_connect" }), [sendRpc]);
-  const disconnectDingTalk = useCallback(
-    () => sendRpc({ cmd: "dingtalk_disconnect" }),
-    [sendRpc],
-  );
+  const disconnectDingTalk = useCallback(() => sendRpc({ cmd: "dingtalk_disconnect" }), [sendRpc]);
   const saveDingTalkConfig = useCallback(
     (patch: { clientId?: string; clientSecret?: string; requireMentionInGroup?: boolean }) =>
       sendRpc({ cmd: "dingtalk_config_save", ...patch }),
@@ -3128,6 +3255,21 @@ function TabRuntimeInner({
     setToast({ msg, yolo: opts?.yolo });
     window.setTimeout(() => setToast(null), opts?.duration ?? 1600);
   }, []);
+
+  useEffect(() => {
+    const result = state.sessionActionResult;
+    if (!result) return;
+    if (result.ok) {
+      flashToast(result.action === "copy" ? t("app.toast.copiedMd") : t("app.toast.exportedMd"));
+    } else {
+      flashToast(
+        result.action === "copy"
+          ? t("app.toast.copyFailed", { error: result.error ?? "unknown error" })
+          : t("app.toast.exportFailed", { error: result.error ?? "unknown error" }),
+      );
+    }
+    dispatch({ t: "clear_session_action_result", requestId: result.requestId });
+  }, [flashToast, state.sessionActionResult]);
 
   const applyReasoningEffort = useCallback(
     (reasoningEffort: Settings["reasoningEffort"]) => {
@@ -3316,10 +3458,7 @@ function TabRuntimeInner({
         if (!question) {
           dispatch({
             t: "push_status",
-            text:
-              getLang() === "zh-CN"
-                ? "▸ 用法：/ask 你的问题"
-                : "▸ Usage: /ask your question",
+            text: getLang() === "zh-CN" ? "▸ 用法：/ask 你的问题" : "▸ Usage: /ask your question",
           });
           if (!override) setDraft("/ask ");
           return;
@@ -3509,6 +3648,40 @@ function TabRuntimeInner({
       sendRpc({ cmd: "rollback_to_turn", turn, role });
     },
     [clearAbortDraft, sendRpc],
+  );
+  const loadFullTurn = useCallback(
+    (turn: number) => {
+      if (!state.currentSession) return;
+      turnLoadRequestIdRef.current += 1;
+      const requestId = `turn-${tabId}-${turn}-${turnLoadRequestIdRef.current}`;
+      dispatch({ t: "begin_turn_load", turn, requestId });
+      void sendRpc({
+        cmd: "session_turn_load",
+        name: state.currentSession,
+        turn,
+        requestId,
+      });
+    },
+    [sendRpc, state.currentSession, tabId],
+  );
+  const copyFullTurn = useCallback(
+    (turn: number) => {
+      if (!state.currentSession) return Promise.reject(new Error("no active session"));
+      sessionActionRequestIdRef.current += 1;
+      return sendRpc({
+        cmd: "session_copy",
+        name: state.currentSession,
+        turn,
+        requestId: `copy-${tabId}-${sessionActionRequestIdRef.current}`,
+        labels: {
+          user: t("app.exportUserLabel"),
+          assistant: "Jupiter",
+          reasoning: t("app.exportReasoningSummary"),
+          tool: t("app.exportToolLabel"),
+        },
+      });
+    },
+    [sendRpc, state.currentSession, tabId],
   );
 
   useEffect(() => {
@@ -4321,9 +4494,7 @@ function TabRuntimeInner({
       onOpenSourceSearch={openLibrarySearch}
       variant={variant}
       workspacePickerLabel={variant === "hero" ? workspaceLabel : undefined}
-      onOpenWorkspacePicker={
-        variant === "hero" ? openWorkspacePickerFromComposer : undefined
-      }
+      onOpenWorkspacePicker={variant === "hero" ? openWorkspacePickerFromComposer : undefined}
       queuedSends={state.queuedSends}
       onQueueWhileBusy={(text) => {
         dispatch({ t: "enqueue_send", text });
@@ -4344,9 +4515,7 @@ function TabRuntimeInner({
   );
 
   const exportConversation = useCallback(async () => {
-    const userLabel = t("app.exportUserLabel");
-    const md = formatConversationMarkdown(state.messages, userLabel);
-    if (!md) {
+    if (state.messages.length === 0 || !state.currentSession) {
       flashToast(t("app.toast.emptySession"));
       return;
     }
@@ -4358,13 +4527,24 @@ function TabRuntimeInner({
         title: t("app.toast.exportDialogTitle"),
       });
       if (!path) return;
-      await invoke("write_text_file", { path, content: md });
-      flashToast(t("app.toast.exportedMd"));
+      sessionActionRequestIdRef.current += 1;
+      await sendRpc({
+        cmd: "session_export",
+        name: state.currentSession,
+        path,
+        requestId: `export-${tabId}-${sessionActionRequestIdRef.current}`,
+        labels: {
+          user: t("app.exportUserLabel"),
+          assistant: "Jupiter",
+          reasoning: t("app.exportReasoningSummary"),
+          tool: t("app.exportToolLabel"),
+        },
+      });
     } catch (err) {
       console.error("export failed", err);
       flashToast(t("app.toast.exportFailed", { error: String(err) }));
     }
-  }, [state.messages, session, flashToast]);
+  }, [state.messages.length, state.currentSession, session, flashToast, sendRpc, tabId]);
 
   const exportWorkflowRun = useCallback(
     async (run: WorkflowRun) => {
@@ -4387,15 +4567,25 @@ function TabRuntimeInner({
   );
 
   const conversationCopy = useCallback(() => {
-    const userLabel = t("app.exportUserLabel");
-    const md = formatConversationMarkdown(state.messages, userLabel);
-    if (!md) {
+    if (state.messages.length === 0 || !state.currentSession) {
       flashToast(t("app.toast.emptySession"));
       return;
     }
-    void navigator.clipboard.writeText(md);
-    flashToast(t("app.toast.copiedMd"));
-  }, [state.messages, flashToast]);
+    sessionActionRequestIdRef.current += 1;
+    void sendRpc({
+      cmd: "session_copy",
+      name: state.currentSession,
+      requestId: `copy-${tabId}-${sessionActionRequestIdRef.current}`,
+      labels: {
+        user: t("app.exportUserLabel"),
+        assistant: "Jupiter",
+        reasoning: t("app.exportReasoningSummary"),
+        tool: t("app.exportToolLabel"),
+      },
+    }).catch((err) => {
+      flashToast(t("app.toast.copyFailed", { error: String(err) }));
+    });
+  }, [state.messages.length, state.currentSession, flashToast, sendRpc, tabId]);
 
   const threadVirtuosoComponents = useMemo(
     () => ({
@@ -4412,9 +4602,7 @@ function TabRuntimeInner({
         : undefined,
       Footer: () => (
         <div className="thread-bottom-spacer">
-          <ThinkingBottomIndicator
-            active={shouldShowThinkingFooter(state.messages, state.busy)}
-          />
+          <ThinkingBottomIndicator active={shouldShowThinkingFooter(state.messages, state.busy)} />
         </div>
       ),
     }),
@@ -4578,6 +4766,13 @@ function TabRuntimeInner({
                               processCardsDefaultOpen={
                                 state.settings?.processCardsDefaultOpen ?? false
                               }
+                              onLoadFullTurn={
+                                m.displayTruncated ? () => loadFullTurn(m.turn) : undefined
+                              }
+                              loadingFullTurn={Boolean(state.pendingTurnLoads[m.turn])}
+                              onCopyFull={
+                                m.displayTruncated ? () => copyFullTurn(m.turn) : undefined
+                              }
                             />
                             {stats ? <DiffStats stats={stats} /> : null}
                           </div>
@@ -4606,7 +4801,9 @@ function TabRuntimeInner({
                                 void exportWorkflowRun(m.run);
                               }}
                               onCopyResult={() => {
-                                void navigator.clipboard.writeText(formatWorkflowRunMarkdown(m.run));
+                                void navigator.clipboard.writeText(
+                                  formatWorkflowRunMarkdown(m.run),
+                                );
                                 flashToast(t("app.toast.copiedMd"));
                               }}
                             />
@@ -4984,6 +5181,8 @@ function TabRuntimeInner({
                 onSetFontFamily={onSetFontFamily}
                 customFontFamily={customFontFamily}
                 onSetCustomFontFamily={onSetCustomFontFamily}
+                petUi={petUi}
+                active={active}
                 initialPage={settingsPage}
                 mcpSpecs={state.mcpSpecs}
                 mcpBridged={state.mcpBridged}
@@ -5838,6 +6037,7 @@ const DEFAULT_UPDATE_RELEASE_URLS: UpdateReleaseUrls = {
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 
 export function App() {
+  const language = useLang();
   const [tabs, setTabs] = useState<TabMeta[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>("");
   const [splashOn, setSplashOn] = useState<boolean>(() => shouldShowSplash());
@@ -5845,11 +6045,15 @@ export function App() {
   const [startupRetryNonce, setStartupRetryNonce] = useState(0);
   const [rpcTransportFailure, setRpcTransportFailure] = useState<RpcSendFailure | null>(null);
   const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, TabRuntimeSnapshot>>({});
+  const [petActivityByTab, setPetActivityByTab] = useState<Record<string, PetTabActivity>>({});
+  const petActivityByTabRef = useRef(petActivityByTab);
+  petActivityByTabRef.current = petActivityByTab;
+  const petUi = useDesktopPets();
   const [sidebarSessions, setSidebarSessions] = useState<SessionInfo[]>([]);
   const [sidebarImportSources, setSidebarImportSources] = useState<ExternalSessionApp[]>([]);
-  const [sidebarImportCandidates, setSidebarImportCandidates] = useState<ExternalSessionCandidate[]>(
-    [],
-  );
+  const [sidebarImportCandidates, setSidebarImportCandidates] = useState<
+    ExternalSessionCandidate[]
+  >([]);
   const dispatchersRef = useRef<Map<string, TabDispatcher>>(new Map());
   const pendingEventsRef = useRef<Map<string, TabAction[]>>(new Map());
   const runtimeControlsRef = useRef<Map<string, TabRuntimeControls>>(new Map());
@@ -5859,6 +6063,8 @@ export function App() {
   const tabsRef = useRef<TabMeta[]>([]);
   const knownTabIdsRef = useRef<Set<string>>(new Set());
   const pendingRestoredFocusRef = useRef<Set<string>>(new Set());
+  const sessionLoadRequestIdRef = useRef(0);
+  useEffect(() => installRendererDiagnostics(), []);
   useEffect(() => {
     tabsRef.current = tabs;
     knownTabIdsRef.current = new Set(tabs.map((tab) => tab.id));
@@ -6017,6 +6223,32 @@ export function App() {
     }
   }, []);
 
+  const updatePetFromIncoming = useCallback((tabId: string, event: IncomingEvent) => {
+    if (!petIncomingAffectsActivity(event)) return;
+    setPetActivityByTab((current) => {
+      const previous = current[tabId];
+      const next = reducePetIncoming(previous, event);
+      return next === previous ? current : { ...current, [tabId]: next };
+    });
+  }, []);
+
+  const updatePetFromOutgoing = useCallback(
+    (tabId: string, command: OutgoingCommand, expectedCompletionSequence?: number) => {
+      setPetActivityByTab((current) => {
+        const previous = current[tabId];
+        if (
+          expectedCompletionSequence !== undefined &&
+          (previous?.completionSequence ?? 0) !== expectedCompletionSequence
+        ) {
+          return current;
+        }
+        const next = reducePetOutgoing(previous, command);
+        return next === previous ? current : { ...current, [tabId]: next };
+      });
+    },
+    [],
+  );
+
   const registerDispatch = useCallback((tabId: string, d: TabDispatcher | null) => {
     if (d) {
       dispatchersRef.current.set(tabId, d);
@@ -6076,11 +6308,21 @@ export function App() {
         void rejected.catch(() => undefined);
         return rejected;
       }
+      const updateAfterDelivery = petOutgoingWaitsForDelivery(cmd);
+      const expectedCompletionSequence =
+        petActivityByTabRef.current[tabId]?.completionSequence ?? 0;
+      if (!updateAfterDelivery) updatePetFromOutgoing(tabId, cmd);
       const payload = { tabId, ...cmd };
       const line = JSON.stringify(payload);
-      return enqueueRpcLine(line, cmd.cmd);
+      const delivery = enqueueRpcLine(line, cmd.cmd);
+      if (updateAfterDelivery) {
+        void delivery
+          .then(() => updatePetFromOutgoing(tabId, cmd, expectedCompletionSequence))
+          .catch(() => undefined);
+      }
+      return delivery;
     },
-    [enqueueRpcLine],
+    [enqueueRpcLine, updatePetFromOutgoing],
   );
 
   const onRuntimeSnapshot = useCallback((tabId: string, snapshot: TabRuntimeSnapshot) => {
@@ -6097,7 +6339,8 @@ export function App() {
         current.recentWorkspaces === snapshot.recentWorkspaces &&
         current.model === snapshot.model &&
         current.hasMessages === snapshot.hasMessages &&
-        current.contextInfoOpen === snapshot.contextInfoOpen
+        current.contextInfoOpen === snapshot.contextInfoOpen &&
+        current.settingsOpen === snapshot.settingsOpen
       ) {
         return prev;
       }
@@ -6159,15 +6402,17 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let acceptingSubscriptions = true;
     const cleanups: Array<() => void> = [];
 
     const setup = async () => {
       startupStderrRef.current = [];
       setStartupFailure(null);
-      const subs = await Promise.all([
+      const subscriptionPromises = [
         listen<{ data: string }>("rpc:event", (e) => {
           try {
             const ev = JSON.parse(e.payload.data) as IncomingEvent;
+            recordIncomingDiagnostic(ev, e.payload.data.length);
             const tabId = ev.tabId;
 
             if (ev.type === "$update_check") {
@@ -6179,6 +6424,7 @@ export function App() {
             }
 
             if (ev.type === "$tab_opened" && tabId) {
+              updatePetFromIncoming(tabId, ev);
               knownTabIdsRef.current.add(tabId);
               const delayRestoredFocus = Boolean(ev.active && ev.restoringSession);
               if (delayRestoredFocus) {
@@ -6229,6 +6475,12 @@ export function App() {
                 delete next[tabId];
                 return next;
               });
+              setPetActivityByTab((prev) => {
+                if (!(tabId in prev)) return prev;
+                const next = { ...prev };
+                delete next[tabId];
+                return next;
+              });
               dispatchersRef.current.delete(tabId);
               pendingEventsRef.current.delete(tabId);
               runtimeControlsRef.current.delete(tabId);
@@ -6238,6 +6490,8 @@ export function App() {
             if (tabId && !knownTabIdsRef.current.has(tabId) && !dispatchersRef.current.has(tabId)) {
               return;
             }
+
+            if (tabId) updatePetFromIncoming(tabId, ev);
 
             if (ev.type === "$settings" && tabId) {
               setTabs((prev) =>
@@ -6281,7 +6535,15 @@ export function App() {
             if (target) {
               const busy = tabBusyFromIncomingEvent(ev);
               if (busy !== null) {
-                setTabs((prev) => prev.map((t) => (t.id === target ? { ...t, busy } : t)));
+                setTabs((prev) => {
+                  let changed = false;
+                  const next = prev.map((tab) => {
+                    if (tab.id !== target || tab.busy === busy) return tab;
+                    changed = true;
+                    return { ...tab, busy };
+                  });
+                  return changed ? next : prev;
+                });
               }
               if (ev.type === "$mention_results") {
                 deliverToTab(target, {
@@ -6333,6 +6595,7 @@ export function App() {
           console.warn("[jupiter stderr]", e.payload.data);
         }),
         listen<{ code: number | null }>("rpc:exit", (e) => {
+          reportDesktopDiagnostic({ name: "rpc_exit", code: e.payload.code ?? -1 });
           const failure = new RpcSendFailure(
             "unknown",
             `Jupiter core exited (code ${e.payload.code ?? "?"}); pending command delivery is unknown`,
@@ -6351,13 +6614,40 @@ export function App() {
           for (const dispatch of dispatchersRef.current.values()) {
             dispatch({ t: "rpc_exit", code: e.payload.code });
           }
+          setPetActivityByTab((current) => {
+            const next: Record<string, PetTabActivity> = {};
+            for (const [tabId, activity] of Object.entries(current)) {
+              next[tabId] = {
+                ...activity,
+                busy: false,
+                activeToolCalls: [],
+                pendingApprovals: [],
+                skillRunning: false,
+              };
+            }
+            return next;
+          });
         }),
-      ]);
+      ];
+      for (const subscription of subscriptionPromises) {
+        void subscription.then(
+          (unsubscribe) => {
+            if (cancelled || !acceptingSubscriptions) unsubscribe();
+            else cleanups.push(unsubscribe);
+          },
+          () => undefined,
+        );
+      }
+      try {
+        await Promise.all(subscriptionPromises);
+      } catch (error) {
+        acceptingSubscriptions = false;
+        for (const cleanup of cleanups.splice(0)) cleanup();
+        throw error;
+      }
       if (cancelled) {
-        for (const u of subs) u();
         return;
       }
-      cleanups.push(...subs);
       try {
         await invoke("rpc_spawn");
         rpcTransportFailureRef.current = null;
@@ -6382,12 +6672,17 @@ export function App() {
         }
       }
     };
-    void setup();
+    void setup().catch((error) => {
+      if (cancelled) return;
+      setStartupFailure(coerceStartupFailure(error, startupStderrRef.current));
+      console.error("desktop event setup failed", error);
+    });
     return () => {
       cancelled = true;
+      acceptingSubscriptions = false;
       for (const c of cleanups) c();
     };
-  }, [deliverToTab, enqueueRpcLine, startupRetryNonce]);
+  }, [deliverToTab, enqueueRpcLine, startupRetryNonce, updatePetFromIncoming]);
 
   // Tell the backend which tab is focused so a restart can reopen on it (#1244).
   useEffect(() => {
@@ -6502,6 +6797,68 @@ export function App() {
     }
     return activity;
   }, [runtimeSnapshots]);
+  const petTaskActivities = useMemo(
+    () =>
+      derivePetTaskActivities(
+        tabs.map((tab) => {
+          const snapshot = runtimeSnapshots[tab.id];
+          const session = snapshot?.currentSession
+            ? snapshot.sessions.find((item) => item.name === snapshot.currentSession)
+            : undefined;
+          const workspaceDir = snapshot?.workspaceDir ?? tab.workspaceDir;
+          const workspaceName = workspaceDir?.split(/[\\/]/).filter(Boolean).pop();
+          const rawTitle = session?.summary || session?.name || workspaceName || t("pets.currentTask");
+          const modifiedAt = session ? Date.parse(session.mtime) : Number.NaN;
+          return {
+            tabId: tab.id,
+            title: compactPetTaskTitle(rawTitle, t("pets.currentTask")),
+            active: tab.id === activeTabId,
+            busy: Boolean(snapshot?.busy || tab.busy),
+            modifiedAt: Number.isFinite(modifiedAt) ? modifiedAt : undefined,
+            activity: petActivityByTab[tab.id],
+          };
+        }),
+      ),
+    [activeTabId, language, petActivityByTab, runtimeSnapshots, tabs],
+  );
+  const petOverlaySnapshot = useMemo<PetOverlaySnapshot>(
+    () => ({
+      version: 1,
+      enabled: petUi.preferences.enabled,
+      pet: petUi.selectedPet,
+      activeTabId,
+      activities: petTaskActivities,
+      language,
+      theme,
+      themeStyle,
+    }),
+    [
+      activeTabId,
+      language,
+      petTaskActivities,
+      petUi.preferences.enabled,
+      petUi.selectedPet,
+      theme,
+      themeStyle,
+    ],
+  );
+  const openPetTask = useCallback((tabId: string) => {
+    const target = tabsRef.current.some((tab) => tab.id === tabId)
+      ? tabId
+      : (tabsRef.current[0]?.id ?? "");
+    if (target) setActiveTabId(target);
+    const mainWindow = getCurrentWindow();
+    void (async () => {
+      try {
+        await mainWindow.unminimize();
+        await mainWindow.show();
+        await mainWindow.setFocus();
+      } catch {
+        // The browser-only development preview has no native window to focus.
+      }
+    })();
+  }, []);
+  usePetOverlayBridge(petOverlaySnapshot, openPetTask);
   const shellThreadMaxWidth = getThreadMaxWidth({
     viewportWidth,
     visibleSide: sideCollapsed ? 0 : sideWidth,
@@ -6538,11 +6895,7 @@ export function App() {
           }}
         >
           {rpcTransportFailure ? (
-            <div
-              className="rpc-transport-banner"
-              role="alert"
-              title={rpcTransportFailure.message}
-            >
+            <div className="rpc-transport-banner" role="alert" title={rpcTransportFailure.message}>
               <I.warn size={15} aria-hidden="true" />
               <span>
                 {rpcTransportFailure.stage === "not_spawned"
@@ -6569,10 +6922,16 @@ export function App() {
             }}
             onLoadSession={(name) => {
               runtimeControlsRef.current.get(activeTabId)?.clearAbortDraft();
+              sessionLoadRequestIdRef.current += 1;
+              const requestId = `load-${activeTabId}-${sessionLoadRequestIdRef.current}`;
+              if (!activeBusy) {
+                deliverToTab(activeTabId, { t: "begin_session_load", requestId });
+              }
               sendRpcToTab(activeTabId, {
                 cmd: "session_load",
                 name,
                 openInNewTab: activeBusy,
+                requestId,
               });
             }}
             onDeleteSession={(name) => sendRpcToTab(activeTabId, { cmd: "session_delete", name })}
@@ -6652,6 +7011,7 @@ export function App() {
               onSetFontFamily={setFontFamily}
               customFontFamily={customFontFamily}
               onSetCustomFontFamily={setCustomFontFamily}
+              petUi={petUi}
               sideCollapsed={sideCollapsed}
               ctxCollapsed={ctxCollapsed}
               bottomCollapsed={bottomCollapsed}

@@ -74,20 +74,23 @@ export async function runDesktopLightAsk(args: {
     usage: Usage;
     reasoningContent?: string | null;
   }) => void;
+  emitUserMessage?: boolean;
   emit: (event: LightAskEmitEvent) => void;
 }): Promise<{ content: string; usage: Usage; costUsd: number }> {
   const text = args.text.trim();
   if (!text) throw new Error("ask_light requires non-empty text");
   const ts = () => new Date().toISOString();
   let id = Date.now();
-  args.emit({
-    type: "user.message",
-    id: id++,
-    ts: ts(),
-    turn: args.turn,
-    text,
-    clientId: args.clientId,
-  });
+  if (args.emitUserMessage !== false) {
+    args.emit({
+      type: "user.message",
+      id: id++,
+      ts: ts(),
+      turn: args.turn,
+      text,
+      clientId: args.clientId,
+    });
+  }
   args.emit({
     type: "model.turn.started",
     id: id++,

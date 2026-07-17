@@ -1,20 +1,138 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod pets;
 mod rpc;
 mod terminal;
 
 use rpc::{rpc_kill, rpc_send, rpc_spawn, RpcState};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
+use tauri::utils::config::Color;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_window_state::StateFlags;
 use terminal::{terminal_kill, terminal_resize, terminal_spawn, terminal_write, TerminalState};
 
 const TRAY_MENU_SHOW: &str = "show";
 const TRAY_MENU_QUIT: &str = "quit";
+const PET_OVERLAY_LABEL: &str = "pet-overlay";
+const PET_OVERLAY_WIDTH: f64 = 248.0;
+const PET_OVERLAY_HEIGHT: f64 = 220.0;
+const DIAGNOSTIC_LOG_MAX_BYTES: u64 = 1024 * 1024;
+static DIAGNOSTIC_LOG_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDiagnosticEvent {
+    name: String,
+    duration_ms: Option<f64>,
+    size_bytes: Option<f64>,
+    count: Option<u64>,
+    code: Option<i32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDiagnosticRecord<'a> {
+    timestamp_ms: u64,
+    version: &'a str,
+    os: &'a str,
+    arch: &'a str,
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<i32>,
+}
+
+fn diagnostic_log_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(
+        PathBuf::from(home)
+            .join(".jupiter")
+            .join("logs")
+            .join("desktop-diagnostics.jsonl"),
+    )
+}
+
+fn append_desktop_diagnostic(event: &DesktopDiagnosticEvent) -> Result<(), String> {
+    if event.name.is_empty()
+        || event.name.len() > 64
+        || !event
+            .name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return Err("invalid diagnostic event name".into());
+    }
+    let duration_ms = event
+        .duration_ms
+        .filter(|value| value.is_finite() && *value >= 0.0);
+    let size_bytes = event
+        .size_bytes
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| value.min(u64::MAX as f64) as u64);
+    let path = diagnostic_log_path().ok_or("home directory is unavailable")?;
+    let _guard = DIAGNOSTIC_LOG_LOCK
+        .lock()
+        .map_err(|_| "diagnostic log lock is poisoned")?;
+    let parent = path.parent().ok_or("diagnostic log path has no parent")?;
+    std::fs::create_dir_all(parent).map_err(|error| format!("diagnostic mkdir failed: {error}"))?;
+    if std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() >= DIAGNOSTIC_LOG_MAX_BYTES) {
+        let backup = path.with_extension("jsonl.1");
+        let _ = std::fs::remove_file(&backup);
+        std::fs::rename(&path, backup)
+            .map_err(|error| format!("diagnostic rotation failed: {error}"))?;
+    }
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    let record = DesktopDiagnosticRecord {
+        timestamp_ms,
+        version: env!("CARGO_PKG_VERSION"),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        name: &event.name,
+        duration_ms,
+        size_bytes,
+        count: event.count,
+        code: event.code,
+    };
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("diagnostic open failed: {error}"))?;
+    serde_json::to_writer(&mut file, &record)
+        .map_err(|error| format!("diagnostic serialize failed: {error}"))?;
+    std::io::Write::write_all(&mut file, b"\n")
+        .map_err(|error| format!("diagnostic write failed: {error}"))
+}
+
+fn append_native_diagnostic(name: &str) {
+    let _ = append_desktop_diagnostic(&DesktopDiagnosticEvent {
+        name: name.to_string(),
+        duration_ms: None,
+        size_bytes: None,
+        count: Some(1),
+        code: None,
+    });
+}
+
+#[tauri::command]
+fn desktop_diagnostic_event(event: DesktopDiagnosticEvent) -> Result<(), String> {
+    append_desktop_diagnostic(&event)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DesktopCloseBehavior {
@@ -64,6 +182,69 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 fn persisted_window_state_flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED
+}
+
+fn default_pet_overlay_position(
+    work_x: i32,
+    work_y: i32,
+    work_width: u32,
+    work_height: u32,
+    scale_factor: f64,
+) -> (f64, f64) {
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    let margin_x = 20.0;
+    let margin_y = 18.0;
+    let x = work_x as f64 / scale + work_width as f64 / scale - PET_OVERLAY_WIDTH - margin_x;
+    let y = work_y as f64 / scale + work_height as f64 / scale - PET_OVERLAY_HEIGHT - margin_y;
+    (x, y)
+}
+
+fn create_pet_overlay(app: &mut tauri::App) -> tauri::Result<()> {
+    if app.get_webview_window(PET_OVERLAY_LABEL).is_some() {
+        return Ok(());
+    }
+    let (x, y) = app
+        .primary_monitor()?
+        .map(|monitor| {
+            let work_area = monitor.work_area();
+            default_pet_overlay_position(
+                work_area.position.x,
+                work_area.position.y,
+                work_area.size.width,
+                work_area.size.height,
+                monitor.scale_factor(),
+            )
+        })
+        .unwrap_or((32.0, 96.0));
+
+    WebviewWindowBuilder::new(
+        app,
+        PET_OVERLAY_LABEL,
+        WebviewUrl::App("index.html?window=pet-overlay".into()),
+    )
+    .title("Jupiter Pet")
+    .inner_size(PET_OVERLAY_WIDTH, PET_OVERLAY_HEIGHT)
+    .position(x, y)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .closable(false)
+    .decorations(false)
+    .transparent(true)
+    .background_color(Color(0, 0, 0, 0))
+    .shadow(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .accept_first_mouse(true)
+    .focused(false)
+    .visible(false)
+    .build()?;
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -1129,9 +1310,17 @@ fn main() {
                 return;
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if desktop_close_behavior() == DesktopCloseBehavior::CloseToTray {
+                let close_behavior = desktop_close_behavior();
+                append_native_diagnostic(match close_behavior {
+                    DesktopCloseBehavior::CloseToTray => "window_close_to_tray",
+                    DesktopCloseBehavior::CloseToQuit => "window_close_to_quit",
+                });
+                if close_behavior == DesktopCloseBehavior::CloseToTray {
                     api.prevent_close();
                     let _ = window.hide();
+                } else if let Some(pet) = window.app_handle().get_webview_window(PET_OVERLAY_LABEL)
+                {
+                    let _ = pet.close();
                 }
             }
         })
@@ -1158,12 +1347,17 @@ fn main() {
             read_file_preview,
             read_file_bytes,
             write_text_file,
+            desktop_diagnostic_event,
+            pets::pet_catalog_scan,
+            pets::pet_directory_prepare,
             read_clipboard_file_paths,
             save_clipboard_image
         ])
         .setup(|app| {
+            append_native_diagnostic("native_started");
             std::thread::spawn(|| purge_old_pasted_images(Duration::from_secs(24 * 60 * 60)));
             install_tray(app)?;
+            create_pet_overlay(app)?;
             if let Some(w) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
                 enforce_macos_native_chrome(&w);
@@ -1203,6 +1397,7 @@ fn main() {
             // don't always run. ExitRequested fires before that, so we kill the
             // Node child here too — belt-and-braces vs the Drop on RpcHandle.
             tauri::RunEvent::ExitRequested { .. } => {
+                append_native_diagnostic("native_exit_requested");
                 let state = app.state::<RpcState>();
                 let _ = rpc::rpc_kill(state);
             }
@@ -1218,8 +1413,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        docx_xml_to_text, parse_clipboard_file_paths, parse_desktop_close_behavior,
-        persisted_window_state_flags, sanitize_image_extension, DesktopCloseBehavior,
+        default_pet_overlay_position, docx_xml_to_text, parse_clipboard_file_paths,
+        parse_desktop_close_behavior, persisted_window_state_flags, sanitize_image_extension,
+        DesktopCloseBehavior,
     };
     use serde_json::json;
     use tauri_plugin_window_state::StateFlags;
@@ -1250,6 +1446,17 @@ mod tests {
     #[test]
     fn rejects_overlong_extensions() {
         assert_eq!(sanitize_image_extension(Some("verylongext")), "png");
+    }
+
+    #[test]
+    fn pet_overlay_starts_inside_the_monitor_work_area_at_hidpi() {
+        let (x, y) = default_pet_overlay_position(0, 0, 1920, 1040, 2.0);
+        assert_eq!(x, 692.0);
+        assert_eq!(y, 282.0);
+
+        let (fallback_x, fallback_y) = default_pet_overlay_position(-1920, 0, 1920, 1080, 0.0);
+        assert_eq!(fallback_x, -268.0);
+        assert_eq!(fallback_y, 842.0);
     }
 
     #[test]

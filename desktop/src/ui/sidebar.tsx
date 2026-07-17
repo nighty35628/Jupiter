@@ -990,6 +990,7 @@ export function Sidebar({
         {sessions.length === 0 ? renderEmptyState() : projectSection}
       </div>
 
+
       <div className="side-foot">
         <button type="button" className="row" onClick={onOpenSettings}>
           <span className="ico">

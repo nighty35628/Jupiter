@@ -98,7 +98,8 @@ describe("loop persists user message at step entry (issue #943)", () => {
       session: sessionName,
     });
 
-    for await (const ev of loop.step("happy path")) {
+    const onUserPersisted = vi.fn();
+    for await (const ev of loop.step("happy path", { onUserPersisted })) {
       if (ev.role === "done") break;
     }
 
@@ -110,6 +111,43 @@ describe("loop persists user message at step entry (issue #943)", () => {
     // No duplicate user copies.
     const userMsgs = persisted.filter((m) => m.role === "user");
     expect(userMsgs).toHaveLength(1);
+    expect(onUserPersisted).toHaveBeenCalledWith(1);
+  });
+
+  it("does not report a persistence acknowledgement when no session log exists", async () => {
+    const client = new DeepSeekClient({
+      apiKey: "sk-test",
+      fetch: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content: "ok" },
+                  finish_reason: "stop",
+                },
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ) as unknown as typeof fetch,
+    });
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+    });
+    const onUserPersisted = vi.fn();
+    const onUserPersistFailed = vi.fn();
+
+    for await (const ev of loop.step("memory only", { onUserPersisted, onUserPersistFailed })) {
+      if (ev.role === "done") break;
+    }
+
+    expect(onUserPersisted).not.toHaveBeenCalled();
+    expect(onUserPersistFailed).toHaveBeenCalledWith(1);
   });
 
   it("persists send-time healing of dangling tool_calls so the session does not stay poisoned", async () => {

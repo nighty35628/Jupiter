@@ -84,7 +84,7 @@ export interface SubagentResult {
   skillName?: string;
   /** Zero-filled when no API calls landed so consumers always see a valid shape. */
   usage: Usage;
-  /** True when the child terminated via forceSummaryAfterIterLimit (storm-breaker / context-guard) — `output` carries the partial synthesis the model managed to produce; not a full answer. User-abort forced summaries do NOT set this (their content is a UX placeholder, routed to `error`). */
+  /** True when the child terminated via forceSummaryAfterGuard (storm-breaker / context-guard) — `output` carries the partial synthesis the model managed to produce; not a full answer. User-abort forced summaries do NOT set this (their content is a UX placeholder, routed to `error`). */
   forcedSummary?: boolean;
 }
 

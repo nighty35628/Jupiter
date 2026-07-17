@@ -11,14 +11,7 @@ import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 import "katex/dist/katex.min.css";
 import { createRoot } from "react-dom/client";
-import { App } from "./App";
-import {
-  THEME,
-  defaultStyleForTheme,
-  isTheme,
-  isThemeStyle,
-  themeForStyle,
-} from "./theme";
+import { THEME, defaultStyleForTheme, isTheme, isThemeStyle, themeForStyle } from "./theme";
 
 const stored = localStorage.getItem("jupiter.theme");
 const storedStyle = localStorage.getItem("jupiter.themeStyle");
@@ -42,6 +35,12 @@ const platform = /Mac|macOS/i.test(navigator.userAgent)
 document.documentElement.dataset.platform = platform;
 document.body.dataset.platform = platform;
 
+const isPetOverlay = new URLSearchParams(window.location.search).get("window") === "pet-overlay";
+if (isPetOverlay) {
+  document.documentElement.dataset.window = "pet-overlay";
+  document.body.dataset.window = "pet-overlay";
+}
+
 // Packaged builds: block F5 / Ctrl+R — webview reload drops React state
 // and flashes white. Dev keeps the shortcuts for HMR fallback.
 if (!import.meta.env.DEV) {
@@ -59,4 +58,9 @@ if (!import.meta.env.DEV) {
 const host = document.getElementById("root");
 if (!host) throw new Error("#root missing");
 
-createRoot(host).render(<App />);
+const root = createRoot(host);
+if (isPetOverlay) {
+  void import("./pets/overlay").then(({ PetOverlayApp }) => root.render(<PetOverlayApp />));
+} else {
+  void import("./App").then(({ App }) => root.render(<App />));
+}

@@ -27,7 +27,7 @@ import {
   isDeepSeekHost,
   probeDeepSeekReachable,
 } from "./loop/errors.js";
-import { type ForceSummaryContext, forceSummaryAfterIterLimit } from "./loop/force-summary.js";
+import { type ForceSummaryContext, forceSummaryAfterGuard } from "./loop/force-summary.js";
 import {
   fixToolCallPairing,
   healLoadedMessages,
@@ -111,8 +111,6 @@ export interface CacheFirstLoopOptions {
   reasoningEffort?: ReasoningEffort;
   /** Soft USD cap — warns at 80%, refuses next turn at 100%. Opt-in (default no cap). */
   budgetUsd?: number;
-  /** Maximum tool-call iterations per turn. Overrides config/env. Default 50. */
-  maxIterPerTurn?: number;
   session?: string;
   /** PreToolUse + PostToolUse only — UserPromptSubmit / Stop live at the App boundary. */
   hooks?: ResolvedHook[];
@@ -151,10 +149,6 @@ export class CacheFirstLoop {
   readonly scratch = new VolatileScratch();
   readonly stats = new SessionStats();
   readonly repair: ToolCallRepair;
-  /** Hard iteration cap per turn — prevents runaway tool-call loops from
-   *  burning unlimited API budget. The model gets one final force-summary
-   *  call when the cap fires. Override via JUPITER_MAX_ITER env var. */
-  static readonly DEFAULT_MAX_ITER_PER_TURN = 50;
   /** Files the model has read this session; gates edit_file / multi_edit so SEARCH text matches on-disk bytes. Cleared on fold / mechanical truncate (the model's byte-level view of the elided history is gone). In-memory only — naturally empty on resume. */
   readonly readTracker = new ReadTracker();
 
@@ -164,8 +158,6 @@ export class CacheFirstLoop {
   stream: boolean;
   reasoningEffort: ReasoningEffort;
   budgetUsd: number | null;
-  /** Maximum tool-call iterations per turn. Config > env > default (50). */
-  maxIterPerTurn: number;
   /** One-shot 80% warning latch — cleared by setBudget so a bump re-arms at the new boundary. */
   private _budgetWarned = false;
   sessionName: string | null;
@@ -241,7 +233,6 @@ export class CacheFirstLoop {
     this.hookCwd = opts.hookCwd ?? process.cwd();
     this.confirmationGate = opts.confirmationGate ?? defaultPauseGate;
     this._rebuildSystem = opts.rebuildSystem ?? null;
-    this.maxIterPerTurn = opts.maxIterPerTurn ?? CacheFirstLoop.DEFAULT_MAX_ITER_PER_TURN;
 
     this._streamPreference = opts.stream ?? true;
     this.stream = this._streamPreference;
@@ -363,27 +354,34 @@ export class CacheFirstLoop {
     return this.context.getLogTokens();
   }
 
-  appendAndPersist(message: ChatMessage): void {
+  appendAndPersist(message: ChatMessage): boolean {
     const retained = shrinkMessageForRetention(message);
     this.log.append(retained);
     if (this.sessionName) {
       try {
         appendSessionMessage(this.sessionName, retained);
+        return true;
       } catch {
         /* disk full or permission denied shouldn't kill the chat */
       }
     }
+    return false;
   }
 
-  recordLightAskExchange(args: {
-    userInput: string;
+  beginLightAsk(userInput: string): { turn: number; persisted: boolean } {
+    this._turn++;
+    return {
+      turn: this._turn,
+      persisted: this.appendAndPersist({ role: "user", content: userInput }),
+    };
+  }
+
+  recordLightAskResponse(args: {
     assistantContent: string;
     model: string;
     usage: Usage;
     reasoningContent?: string | null;
   }): TurnStats {
-    this._turn++;
-    this.appendAndPersist({ role: "user", content: args.userInput });
     this.appendAndPersist(
       buildAssistantMessage(args.assistantContent, [], args.model, args.reasoningContent ?? null),
     );
@@ -402,6 +400,17 @@ export class CacheFirstLoop {
       }
     }
     return turnStats;
+  }
+
+  recordLightAskExchange(args: {
+    userInput: string;
+    assistantContent: string;
+    model: string;
+    usage: Usage;
+    reasoningContent?: string | null;
+  }): TurnStats {
+    this.beginLightAsk(args.userInput);
+    return this.recordLightAskResponse(args);
   }
 
   /** Swap the just-appended assistant entry — used by self-correction to restore the original tool_calls without dropping reasoning_content. */
@@ -775,7 +784,13 @@ export class CacheFirstLoop {
     return userText;
   }
 
-  async *step(userInput: string): AsyncGenerator<LoopEvent> {
+  async *step(
+    userInput: string,
+    opts: {
+      onUserPersisted?: (turn: number) => void;
+      onUserPersistFailed?: (turn: number) => void;
+    } = {},
+  ): AsyncGenerator<LoopEvent> {
     // Reset per-turn flags.
     this._steerConsumed = false;
 
@@ -850,7 +865,13 @@ export class CacheFirstLoop {
     // first round-trip still leaves the message in the log; the user can
     // /retry without re-typing.
     const turnStartLogIndex = this.log.length;
-    this.appendAndPersist({ role: "user", content: userInput });
+    const userPersisted = this.appendAndPersist({ role: "user", content: userInput });
+    try {
+      if (userPersisted) opts.onUserPersisted?.(this._turn);
+      else opts.onUserPersistFailed?.(this._turn);
+    } catch {
+      // A UI acknowledgement failure must not cancel the turn.
+    }
     const toolSpecs = this.prefix.tools();
     const rateLimitState = { shown: false };
 
@@ -917,19 +938,6 @@ export class CacheFirstLoop {
         } finally {
           this.resetAbortState();
         }
-        this._steerQueue.length = 0;
-        return;
-      }
-      // Hard iteration cap — prevents runaway tool-call loops from
-      // consuming unlimited API budget. (#2037 BUG-028)
-      if (iter >= this.maxIterPerTurn) {
-        yield {
-          turn: this._turn,
-          role: "warning",
-          severity: "high",
-          content: t("loop.iterLimitReached", { max: this.maxIterPerTurn }),
-        };
-        yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "stuck" });
         this._steerQueue.length = 0;
         return;
       }
@@ -1145,7 +1153,7 @@ export class CacheFirstLoop {
           continue;
         }
         if (allSuppressed) {
-          yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "stuck" });
+          yield* forceSummaryAfterGuard(this.summaryContext(), { reason: "stuck" });
           this._steerQueue.length = 0;
           return;
         }
@@ -1227,7 +1235,7 @@ export class CacheFirstLoop {
         }),
       };
       this.context.trimTrailingToolCalls();
-      yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "context-guard" });
+      yield* forceSummaryAfterGuard(this.summaryContext(), { reason: "context-guard" });
       return true;
     }
     return false;

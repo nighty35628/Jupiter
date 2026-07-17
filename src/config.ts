@@ -291,9 +291,6 @@ export interface JupiterConfig {
   /** Preferred display currency for costs (e.g. "USD" or "CNY"). When unset, falls back
    *  to the wallet currency if available, then defaults to CNY. */
   costCurrency?: string;
-  /** Maximum tool-call iterations per turn. Prevents runaway loops from consuming
-   *  unlimited API budget. Default 50. Env `JUPITER_MAX_ITER` overrides. */
-  maxIterPerTurn?: number;
   projects?: {
     [absoluteRootDir: string]: {
       shellAllowed?: string[];
@@ -1661,18 +1658,6 @@ export function saveMemoryGlobalEnabled(on: boolean, path: string = defaultConfi
   const cfg = readConfig(path);
   cfg.memory = { ...(cfg.memory ?? {}), globalEnabled: on };
   writeConfig(cfg, path);
-}
-
-/** Load the per-turn iteration cap. Config > env > default (50). */
-export function loadMaxIterPerTurn(path: string = defaultConfigPath()): number {
-  const fromConfig = readConfig(path).maxIterPerTurn;
-  if (typeof fromConfig === "number" && fromConfig > 0) return fromConfig;
-  const fromEnv = process.env.JUPITER_MAX_ITER;
-  if (fromEnv) {
-    const n = Number(fromEnv);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 50;
 }
 
 export function loadRecentWorkspaces(path: string = defaultConfigPath()): string[] {

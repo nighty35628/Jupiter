@@ -47,4 +47,29 @@ describe("desktop lightweight ask", () => {
       expect.objectContaining({ type: "$turn_complete" }),
     ]);
   });
+
+  it("can suppress the optimistic user echo when the caller already persisted and acknowledged it", async () => {
+    const events: Array<{ type: string }> = [];
+    await runDesktopLightAsk({
+      client: {
+        chat: vi.fn(async () => ({
+          content: "answer",
+          reasoningContent: null,
+          usage: new Usage(2, 1, 3, 0, 2),
+        })),
+      },
+      model: "deepseek-chat",
+      text: "question",
+      turn: 1,
+      emitUserMessage: false,
+      emit: (event) => events.push(event),
+    });
+
+    expect(events.some((event) => event.type === "user.message")).toBe(false);
+    expect(events.map((event) => event.type)).toEqual([
+      "model.turn.started",
+      "model.final",
+      "$turn_complete",
+    ]);
+  });
 });

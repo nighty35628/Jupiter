@@ -1,17 +1,13 @@
 // @vitest-environment jsdom
 
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings as SettingsType, UsageStats } from "../App";
 import { setLang } from "../i18n";
+import { BUILTIN_PETS } from "../pets/catalog";
+import type { DesktopPetUi } from "../pets/types";
 import type { MemoryEntryInfo, UsageHistoryEvent } from "../protocol";
 import { SettingsModal } from "./settings";
 
@@ -53,6 +49,25 @@ const usage: UsageStats = {
   contextDiagnostics: null,
 };
 
+const petUi: DesktopPetUi = {
+  preferences: { enabled: false, selectedId: "builtin:companion-cube" },
+  builtins: BUILTIN_PETS,
+  catalog: {
+    root: "/tmp/.jupiter/pets",
+    customPets: [],
+    errors: [],
+    loading: false,
+    loaded: true,
+    error: null,
+  },
+  selectedPet: BUILTIN_PETS[0]!,
+  selectedUnavailable: false,
+  setEnabled: vi.fn(),
+  selectPet: vi.fn(),
+  refreshCustomPets: vi.fn(async () => undefined),
+  openCustomPetDirectory: vi.fn(async () => undefined),
+};
+
 function renderSettings({
   settings: settingsOverride,
   onOpenAbout = vi.fn(),
@@ -75,6 +90,9 @@ function renderSettings({
   onRefreshOptionalComponents = vi.fn(),
   usage: usageOverride,
   usageHistory = null,
+  petUi: petUiOverride = petUi,
+  onClose = vi.fn(),
+  rerenderOnPetToggle = false,
 }: {
   settings?: Partial<SettingsType>;
   onOpenAbout?: () => void;
@@ -90,96 +108,197 @@ function renderSettings({
   onRestoreArchivedSession?: (name: string) => void;
   onDeleteArchivedSession?: (name: string) => void;
   onClearArchivedSessions?: () => void;
-  initialPage?: "memory" | "archives" | "shortcuts" | "storage" | "billing" | "components";
+  initialPage?: "memory" | "archives" | "shortcuts" | "storage" | "billing" | "components" | "pets";
   storageScan?: any;
   onScanStorage?: () => void;
   onCleanStorage?: (itemIds: string[]) => void;
   onRefreshOptionalComponents?: () => void;
   usage?: UsageStats;
   usageHistory?: UsageHistoryEvent | null;
+  petUi?: DesktopPetUi;
+  onClose?: () => void;
+  rerenderOnPetToggle?: boolean;
 } = {}) {
-  render(
-    <SettingsModal
-      settings={{ ...settings, ...settingsOverride }}
-      balance={null}
-      usage={usageOverride ?? usage}
-      usageHistory={usageHistory}
-      currency="USD"
-      theme="dark"
-      themeStyle="graphite"
-      onSetTheme={vi.fn()}
-      onSetThemeStyle={vi.fn()}
-      fontScale="medium"
-      onSetFontScale={vi.fn()}
-      fontFamily="sans"
-      onSetFontFamily={vi.fn()}
-      customFontFamily=""
-      onSetCustomFontFamily={vi.fn()}
-      mcpSpecs={[]}
-      mcpBridged={false}
-      skills={[]}
-      skillRoots={[]}
-      memory={memory}
-      memoryDetail={null}
-      archivedSessions={archivedSessions}
-      storageScan={storageScan}
-      qq={null}
-      feishu={null}
-      dingtalk={null}
-      initialPage={initialPage}
-      onClose={vi.fn()}
-      onSave={onSave}
-      onSaveApiKey={vi.fn()}
-      onSignOutApiKey={onSignOutApiKey}
-      onLoadQQ={vi.fn()}
-      onConnectQQ={vi.fn()}
-      onDisconnectQQ={vi.fn()}
-      onSaveQQConfig={vi.fn()}
-      onOpenQQApplyLink={vi.fn()}
-      onLoadFeishu={vi.fn()}
-      onConnectFeishu={vi.fn()}
-      onDisconnectFeishu={vi.fn()}
-      onSaveFeishuConfig={vi.fn()}
-      onOpenFeishuApplyLink={vi.fn()}
-      onLoadDingTalk={vi.fn()}
-      onConnectDingTalk={vi.fn()}
-      onDisconnectDingTalk={vi.fn()}
-      onSaveDingTalkConfig={vi.fn()}
-      onOpenDingTalkApplyLink={vi.fn()}
-      onPickWorkspace={vi.fn()}
-      onAddMcpSpec={vi.fn()}
-      onRemoveMcpSpec={vi.fn()}
-      onEnableMcpSpec={vi.fn()}
-      onDisableMcpSpec={vi.fn()}
-      onReconnectMcpSpecs={vi.fn()}
-      onRefreshOptionalComponents={onRefreshOptionalComponents}
-      onAddSkillPath={vi.fn()}
-      onRemoveSkillPath={vi.fn()}
-      onCreateSkill={vi.fn()}
-      onSetSkillModel={vi.fn()}
-      onReadMemory={onReadMemory}
-      onRefreshMemory={onRefreshMemory}
-      onDeleteMemory={onDeleteMemory}
-      onSaveMemory={onSaveMemory}
-      onRefreshArchivedSessions={onRefreshArchivedSessions}
-      onRestoreArchivedSession={onRestoreArchivedSession}
-      onDeleteArchivedSession={onDeleteArchivedSession}
-      onClearArchivedSessions={onClearArchivedSessions}
-      onScanStorage={onScanStorage}
-      onCleanStorage={onCleanStorage}
-      onOpenAbout={onOpenAbout}
-    />,
-  );
+  function TestSettingsModal() {
+    const [petEnabled, setPetEnabled] = useState(petUiOverride.preferences.enabled);
+    const resolvedPetUi = rerenderOnPetToggle
+      ? {
+          ...petUiOverride,
+          preferences: { ...petUiOverride.preferences, enabled: petEnabled },
+          setEnabled(enabled: boolean) {
+            petUiOverride.setEnabled(enabled);
+            setPetEnabled(enabled);
+          },
+        }
+      : petUiOverride;
+    const resolvedOnClose = rerenderOnPetToggle ? () => onClose() : onClose;
+    return (
+      <SettingsModal
+        settings={{ ...settings, ...settingsOverride }}
+        balance={null}
+        usage={usageOverride ?? usage}
+        usageHistory={usageHistory}
+        currency="USD"
+        theme="dark"
+        themeStyle="graphite"
+        onSetTheme={vi.fn()}
+        onSetThemeStyle={vi.fn()}
+        fontScale="medium"
+        onSetFontScale={vi.fn()}
+        fontFamily="sans"
+        onSetFontFamily={vi.fn()}
+        customFontFamily=""
+        onSetCustomFontFamily={vi.fn()}
+        petUi={resolvedPetUi}
+        mcpSpecs={[]}
+        mcpBridged={false}
+        skills={[]}
+        skillRoots={[]}
+        memory={memory}
+        memoryDetail={null}
+        archivedSessions={archivedSessions}
+        storageScan={storageScan}
+        qq={null}
+        feishu={null}
+        dingtalk={null}
+        initialPage={initialPage}
+        onClose={resolvedOnClose}
+        onSave={onSave}
+        onSaveApiKey={vi.fn()}
+        onSignOutApiKey={onSignOutApiKey}
+        onLoadQQ={vi.fn()}
+        onConnectQQ={vi.fn()}
+        onDisconnectQQ={vi.fn()}
+        onSaveQQConfig={vi.fn()}
+        onOpenQQApplyLink={vi.fn()}
+        onLoadFeishu={vi.fn()}
+        onConnectFeishu={vi.fn()}
+        onDisconnectFeishu={vi.fn()}
+        onSaveFeishuConfig={vi.fn()}
+        onOpenFeishuApplyLink={vi.fn()}
+        onLoadDingTalk={vi.fn()}
+        onConnectDingTalk={vi.fn()}
+        onDisconnectDingTalk={vi.fn()}
+        onSaveDingTalkConfig={vi.fn()}
+        onOpenDingTalkApplyLink={vi.fn()}
+        onPickWorkspace={vi.fn()}
+        onAddMcpSpec={vi.fn()}
+        onRemoveMcpSpec={vi.fn()}
+        onEnableMcpSpec={vi.fn()}
+        onDisableMcpSpec={vi.fn()}
+        onReconnectMcpSpecs={vi.fn()}
+        onRefreshOptionalComponents={onRefreshOptionalComponents}
+        onAddSkillPath={vi.fn()}
+        onRemoveSkillPath={vi.fn()}
+        onCreateSkill={vi.fn()}
+        onSetSkillModel={vi.fn()}
+        onReadMemory={onReadMemory}
+        onRefreshMemory={onRefreshMemory}
+        onDeleteMemory={onDeleteMemory}
+        onSaveMemory={onSaveMemory}
+        onRefreshArchivedSessions={onRefreshArchivedSessions}
+        onRestoreArchivedSession={onRestoreArchivedSession}
+        onDeleteArchivedSession={onDeleteArchivedSession}
+        onClearArchivedSessions={onClearArchivedSessions}
+        onScanStorage={onScanStorage}
+        onCleanStorage={onCleanStorage}
+        onOpenAbout={onOpenAbout}
+      />
+    );
+  }
+
+  return render(<TestSettingsModal />);
 }
 
 describe("SettingsModal", () => {
+  it("toggles the desktop pet and selects a preset from the pets page", () => {
+    const setEnabled = vi.fn();
+    const selectPet = vi.fn();
+    renderSettings({
+      initialPage: "pets",
+      petUi: { ...petUi, setEnabled, selectPet },
+    });
+
+    fireEvent.click(screen.getByRole("switch", { name: /Desktop pet/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /Ink Dragon/ }));
+
+    expect(setEnabled).toHaveBeenCalledWith(true);
+    expect(selectPet).toHaveBeenCalledWith("builtin:ink-dragon");
+  });
+
+  it("keeps keyboard focus on the pet switch when parent callbacks change", () => {
+    vi.useFakeTimers();
+    renderSettings({
+      initialPage: "pets",
+      rerenderOnPetToggle: true,
+    });
+    act(() => vi.runOnlyPendingTimers());
+    const toggle = screen.getByRole("switch", { name: /Desktop pet/ });
+    toggle.focus();
+
+    fireEvent.click(toggle);
+    act(() => vi.runOnlyPendingTimers());
+
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it("expands custom pets and selects a validated package", () => {
+    const selectPet = vi.fn();
+    const customPet = {
+      ...BUILTIN_PETS[0]!,
+      id: "custom:paper-friend",
+      packageId: "paper-friend",
+      displayName: "Paper Friend",
+      source: "custom" as const,
+    };
+    renderSettings({
+      initialPage: "pets",
+      petUi: {
+        ...petUi,
+        selectPet,
+        catalog: { ...petUi.catalog, customPets: [customPet] },
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Custom|自定义/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "Paper Friend" }));
+
+    expect(selectPet).toHaveBeenCalledWith("custom:paper-friend");
+  });
+
+  it("keeps Tab inside settings when unselected custom radios follow the last action", () => {
+    const offsetParent = vi
+      .spyOn(HTMLElement.prototype, "offsetParent", "get")
+      .mockReturnValue(document.body);
+    const customPet = {
+      ...BUILTIN_PETS[0]!,
+      id: "custom:paper-friend",
+      packageId: "paper-friend",
+      displayName: "Paper Friend",
+      source: "custom" as const,
+    };
+    renderSettings({
+      initialPage: "pets",
+      petUi: {
+        ...petUi,
+        catalog: { ...petUi.catalog, customPets: [customPet] },
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Custom|自定义/ }));
+    const refresh = screen.getByRole("button", { name: /Refresh|刷新/ });
+    refresh.focus();
+
+    expect(fireEvent.keyDown(window, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(document.querySelector(".settings-side .row"));
+    offsetParent.mockRestore();
+  });
+
   it("opens About from the general settings page", () => {
     const onOpenAbout = vi.fn();
     renderSettings({ onOpenAbout });
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /About Jupiter|关于 Jupiter/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /About Jupiter|关于 Jupiter/ }));
 
     expect(onOpenAbout).toHaveBeenCalledTimes(1);
   });
@@ -306,9 +425,7 @@ describe("SettingsModal", () => {
         .getAttribute("data-on"),
     ).toBe("true");
 
-    fireEvent.click(
-      within(processGroup).getByRole("button", { name: /expanded|展开/ }),
-    );
+    fireEvent.click(within(processGroup).getByRole("button", { name: /expanded|展开/ }));
 
     expect(onSave).toHaveBeenCalledWith({ processCardsDefaultOpen: true });
   });
@@ -320,9 +437,11 @@ describe("SettingsModal", () => {
     const group = screen.getByRole("group", {
       name: /AI visible content|AI 可见内容/,
     });
-    expect(within(group).getByRole("button", { name: /shown|显示/ }).getAttribute("data-on")).toBe(
-      "true",
-    );
+    expect(
+      within(group)
+        .getByRole("button", { name: /shown|显示/ })
+        .getAttribute("data-on"),
+    ).toBe("true");
 
     fireEvent.click(within(group).getByRole("button", { name: /hidden|隐藏/ }));
 
@@ -338,14 +457,17 @@ describe("SettingsModal", () => {
       name: /Workspace library retrieval|资料库检索/,
     });
     expect(
-      within(group).getByRole("button", { name: /on demand|按需/ }).getAttribute("data-on"),
+      within(group)
+        .getByRole("button", { name: /on demand|按需/ })
+        .getAttribute("data-on"),
     ).toBe("true");
 
     fireEvent.click(within(group).getByRole("button", { name: /always|始终/ }));
 
     expect(onSave).toHaveBeenCalledWith({ libraryRetrievalMode: "always" });
-    expect(screen.getByText(/Always mode can increase token usage|始终模式会增加 token 使用量/))
-      .toBeTruthy();
+    expect(
+      screen.getByText(/Always mode can increase token usage|始终模式会增加 token 使用量/),
+    ).toBeTruthy();
   });
 
   it("signs out of the current API key from the integrations page", () => {
@@ -433,7 +555,9 @@ describe("SettingsModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open install page" }));
     fireEvent.click(screen.getByRole("button", { name: "Detect again" }));
 
-    expect(openUrl).toHaveBeenCalledWith("https://www.libreoffice.org/download/download-libreoffice/");
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://www.libreoffice.org/download/download-libreoffice/",
+    );
     expect(onRefreshOptionalComponents).toHaveBeenCalledTimes(2);
   });
 
@@ -496,43 +620,27 @@ describe("SettingsModal", () => {
       ],
     });
 
-    expect(
-      screen.getAllByText(/Rules and memory|记忆与规则/).length,
-    ).toBeGreaterThan(0);
-    expect(
-      screen.getAllByText(/Project rules|项目规则/).length,
-    ).toBeGreaterThan(0);
-    expect(
-      screen.getAllByText(/Long-term memory|长期记忆/).length,
-    ).toBeGreaterThan(0);
-    expect(
-      screen.getByText(/takes effect in new chats|新会话生效/),
-    ).toBeTruthy();
+    expect(screen.getAllByText(/Rules and memory|记忆与规则/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Project rules|项目规则/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Long-term memory|长期记忆/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/takes effect in new chats|新会话生效/)).toBeTruthy();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /Refresh memory|刷新记忆/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /Refresh memory|刷新记忆/ }));
     expect(onRefreshMemory).toHaveBeenCalledTimes(1);
 
     fireEvent.click(
       screen
         .getAllByRole("button", { name: /Prefer concise answers/ })
-        .find(
-          (button) => !button.getAttribute("aria-label")?.startsWith("Delete"),
-        )!,
+        .find((button) => !button.getAttribute("aria-label")?.startsWith("Delete"))!,
     );
-    expect(onReadMemory).toHaveBeenCalledWith(
-      "/tmp/home/.jupiter/memory/global/pref_one.md",
-    );
+    expect(onReadMemory).toHaveBeenCalledWith("/tmp/home/.jupiter/memory/global/pref_one.md");
 
     fireEvent.click(
       screen.getByRole("button", {
         name: /Delete Prefer concise answers|删除 Prefer concise answers/,
       }),
     );
-    expect(onDeleteMemory).toHaveBeenCalledWith(
-      "/tmp/home/.jupiter/memory/global/pref_one.md",
-    );
+    expect(onDeleteMemory).toHaveBeenCalledWith("/tmp/home/.jupiter/memory/global/pref_one.md");
   });
 
   it("saves structured memory from the settings memory page", () => {
@@ -543,9 +651,7 @@ describe("SettingsModal", () => {
     });
 
     expect(screen.queryByLabelText(/Memory name|记忆名称/)).toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: /New memory|新建记忆/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /New memory|新建记忆/ }));
 
     const editor = screen.getByRole("dialog", {
       name: /Structured memory editor|结构化记忆编辑器/,
@@ -573,9 +679,7 @@ describe("SettingsModal", () => {
     fireEvent.change(screen.getByLabelText(/Expiry|过期/), {
       target: { value: "project_end" },
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: /Save memory|保存记忆/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /Save memory|保存记忆/ }));
 
     expect(onSaveMemory).toHaveBeenCalledWith({
       name: "response_style",

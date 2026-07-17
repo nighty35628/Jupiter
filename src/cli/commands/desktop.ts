@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { existsSync, statSync, writeSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { stdin } from "node:process";
 import { createInterface } from "node:readline";
@@ -49,7 +50,6 @@ import {
   loadExaApiKey,
   loadFeishuConfig,
   loadLibraryRetrievalMode,
-  loadMaxIterPerTurn,
   loadMemoryConfirmWrites,
   loadMemoryGlobalEnabled,
   loadMetasoApiKey,
@@ -119,6 +119,7 @@ import {
 } from "../../core/pause-gate.js";
 import { autoResolveVerdict } from "../../core/pause-policy.js";
 import { runDesktopLightAsk } from "../../desktop/ask-light.js";
+import { writeClipboardText } from "../../desktop/clipboard.js";
 import {
   dingtalkRemoteCommandBypassesBusy,
   dingtalkRemoteDesktopHelpText,
@@ -151,6 +152,7 @@ import {
 import { classifyDesktopNaturalCommandIntent } from "../../desktop/natural-command-intent.js";
 import { buildOneShotPlanPrompt } from "../../desktop/one-shot-plan.js";
 import { detectOptionalComponents } from "../../desktop/optional-components.js";
+import { OrderedDeltaBatcher, type OrderedWireEvent } from "../../desktop/ordered-delta-batcher.js";
 import { resolvePlaywrightBrowser } from "../../desktop/playwright-browser.js";
 import { classifyDesktopQQIngress } from "../../desktop/qq-ingress.js";
 import {
@@ -174,11 +176,22 @@ import {
   takeQQPendingInteraction,
 } from "../../desktop/qq-turn-routing.js";
 import {
+  type SessionMarkdownLabels,
+  assistantTextForTurn,
+  formatSessionMarkdown,
+} from "../../desktop/session-markdown.js";
+import {
   type StorageCleanupResult,
   type StorageScan,
   cleanupJupiterStorage,
   scanJupiterStorage,
 } from "../../desktop/storage-manager.js";
+import {
+  type TranscriptDisplayTruncation,
+  type TranscriptElisionSegment,
+  budgetTranscriptMessages,
+  transcriptPayloadBytes,
+} from "../../desktop/transcript-budget.js";
 import { DesktopTurnAdmission } from "../../desktop/turn-admission.js";
 import {
   DESKTOP_UPDATE_RELEASE_URLS,
@@ -302,7 +315,22 @@ type InMessage = { tabId?: string } & (
   | { cmd: "session_restore_archived"; name: string }
   | { cmd: "session_delete_archived"; name: string }
   | { cmd: "session_clear_archived" }
-  | { cmd: "session_load"; name: string; openInNewTab?: boolean }
+  | { cmd: "session_load"; name: string; openInNewTab?: boolean; requestId?: string }
+  | { cmd: "session_turn_load"; name: string; turn: number; requestId: string }
+  | {
+      cmd: "session_copy";
+      name: string;
+      requestId: string;
+      turn?: number;
+      labels: SessionMarkdownLabels;
+    }
+  | {
+      cmd: "session_export";
+      name: string;
+      path: string;
+      requestId: string;
+      labels: SessionMarkdownLabels;
+    }
   | { cmd: "session_rename"; name: string; title: string }
   | {
       cmd: "session_patch_meta";
@@ -672,6 +700,7 @@ interface TabClosedEvent {
 type LoadedSegment =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
+  | TranscriptElisionSegment
   | {
       kind: "tool";
       callId: string;
@@ -682,13 +711,32 @@ type LoadedSegment =
     };
 
 type LoadedMessage =
-  | { kind: "user"; text: string }
+  | {
+      kind: "user";
+      text: string;
+      turn: number;
+      messageId: string;
+      displayTruncated?: TranscriptDisplayTruncation;
+    }
   | {
       kind: "assistant";
       turn: number;
+      messageId: string;
       segments: LoadedSegment[];
       pending: false;
+      displayTruncated?: boolean;
     };
+
+type SessionSnapshotReason = "load" | "restore" | "resync" | "compact" | "rollback" | "new";
+
+interface SessionSnapshotMeta {
+  sessionId: string;
+  bindingId: number;
+  requestId?: string;
+  reason: SessionSnapshotReason;
+  payloadBytes: number;
+  truncated: boolean;
+}
 
 interface SessionLoadedEvent {
   type: "$session_loaded";
@@ -696,6 +744,8 @@ interface SessionLoadedEvent {
   /** True when this snapshot belongs to a tab that is still running. */
   busy?: boolean;
   messages: LoadedMessage[];
+  snapshot: SessionSnapshotMeta;
+  sessionFiles: LoadedSessionFile[];
   carryover: {
     totalCostUsd: number;
     cacheHitTokens: number;
@@ -706,6 +756,48 @@ interface SessionLoadedEvent {
 
 interface SessionReconciledEvent extends Omit<SessionLoadedEvent, "type"> {
   type: "$session_reconciled";
+}
+
+interface SessionTurnLoadedEvent {
+  type: "$session_turn_loaded";
+  name: string;
+  sessionId: string;
+  bindingId: number;
+  requestId: string;
+  turn: number;
+  messages: LoadedMessage[];
+}
+
+interface SessionActionResultEvent {
+  type: "$session_action_result";
+  requestId: string;
+  action: "copy" | "export";
+  ok: boolean;
+  error?: string;
+}
+
+interface LoadedSessionFile {
+  path: string;
+  status: "c" | "m";
+}
+
+interface TurnCommittedEvent {
+  type: "$turn_committed";
+  name: string;
+  sessionId: string;
+  bindingId: number;
+  turn: number;
+  clientId?: string;
+  sessionFiles: LoadedSessionFile[];
+  carryover: SessionLoadedEvent["carryover"];
+}
+
+interface SessionRenamedEvent {
+  type: "$session_renamed";
+  previousName: string;
+  name: string;
+  sessionId: string;
+  bindingId: number;
 }
 
 interface SessionEmptyEvent {
@@ -952,6 +1044,10 @@ type EmittableEvent =
   | SessionImportResultEvent
   | SessionLoadedEvent
   | SessionReconciledEvent
+  | SessionTurnLoadedEvent
+  | SessionActionResultEvent
+  | TurnCommittedEvent
+  | SessionRenamedEvent
   | SessionEmptyEvent
   | NeedsSetupEvent
   | SettingsEvent
@@ -1035,9 +1131,15 @@ export function writeAllSync(
   }
 }
 
-function emit(ev: EmittableEvent, tabId?: string): void {
-  const payload = tabId ? { ...ev, tabId } : ev;
+function writeDesktopEvent(payload: OrderedWireEvent): void {
   writeAllSync(1, Buffer.from(`${JSON.stringify(payload)}\n`, "utf8"));
+}
+
+const desktopEventBatcher = new OrderedDeltaBatcher(writeDesktopEvent);
+
+function emit(ev: EmittableEvent, tabId?: string): void {
+  const payload = (tabId ? { ...ev, tabId } : ev) as OrderedWireEvent;
+  desktopEventBatcher.push(payload);
 }
 
 async function emitDesktopUpdateCheck(manual: boolean): Promise<void> {
@@ -1059,43 +1161,10 @@ function tailLines(s: string, n: number): string {
   return lines.slice(-n).join("\n");
 }
 
-const LOADED_RECENT_MESSAGE_WINDOW = 120;
-const LOADED_MIN_ELIDE_CHARS = 4096;
-const LOADED_ELIDED_PREFIX = "[elided — older than the last ";
-
-function elideLoadedField(value: string): string {
-  if (value.length <= LOADED_MIN_ELIDE_CHARS) return value;
-  if (value.startsWith(LOADED_ELIDED_PREFIX)) return value;
-  return `${LOADED_ELIDED_PREFIX}${LOADED_RECENT_MESSAGE_WINDOW} messages; ${value.length.toLocaleString()} chars dropped to save memory. Full content is on disk in the session log.]`;
-}
-
-function elideLoadedMessages(messages: LoadedMessage[]): LoadedMessage[] {
-  if (messages.length < LOADED_RECENT_MESSAGE_WINDOW) return messages;
-  const cutoff = messages.length - LOADED_RECENT_MESSAGE_WINDOW;
-  return messages.map((msg, i) => {
-    if (i >= cutoff || msg.kind !== "assistant") return msg;
-    return {
-      ...msg,
-      segments: msg.segments.map((segment) => {
-        switch (segment.kind) {
-          case "reasoning":
-          case "text":
-            return { ...segment, text: elideLoadedField(segment.text) };
-          case "tool":
-            return {
-              ...segment,
-              args: elideLoadedField(segment.args),
-              ...(segment.result !== undefined ? { result: elideLoadedField(segment.result) } : {}),
-            };
-          default:
-            return segment;
-        }
-      }),
-    };
-  });
-}
-
-export function buildLoadedMessages(records: ChatMessage[]): LoadedMessage[] {
+export function buildLoadedMessages(
+  records: ChatMessage[],
+  options: { budget?: boolean } = {},
+): LoadedMessage[] {
   const out: LoadedMessage[] = [];
   let userTurn = 0;
   let orphanAssistantTurn = 0;
@@ -1104,12 +1173,18 @@ export function buildLoadedMessages(records: ChatMessage[]): LoadedMessage[] {
     if (rec.role === "system") continue;
     if (rec.role === "user") {
       userTurn++;
-      out.push({ kind: "user", text: rec.content ?? "" });
+      out.push({
+        kind: "user",
+        text: rec.content ?? "",
+        turn: userTurn,
+        messageId: `u-${userTurn}`,
+      });
       pendingAssistantIdx = -1;
       continue;
     }
     if (rec.role === "assistant") {
-      const turn = userTurn > 0 ? userTurn : ++orphanAssistantTurn;
+      const orphan = userTurn === 0;
+      const turn = orphan ? ++orphanAssistantTurn : userTurn;
       const segments: LoadedSegment[] = [];
       if (rec.reasoning_content) segments.push({ kind: "reasoning", text: rec.reasoning_content });
       if (rec.content) segments.push({ kind: "text", text: rec.content });
@@ -1133,7 +1208,13 @@ export function buildLoadedMessages(records: ChatMessage[]): LoadedMessage[] {
       ) {
         pendingAssistant.segments.push(...segments);
       } else {
-        out.push({ kind: "assistant", turn, segments, pending: false });
+        out.push({
+          kind: "assistant",
+          turn,
+          messageId: orphan ? `a-orphan-${turn}` : `a-${turn}`,
+          segments,
+          pending: false,
+        });
         pendingAssistantIdx = out.length - 1;
       }
       continue;
@@ -1151,7 +1232,100 @@ export function buildLoadedMessages(records: ChatMessage[]): LoadedMessage[] {
       }
     }
   }
-  return elideLoadedMessages(out);
+  return options.budget === false ? out : budgetTranscriptMessages(out);
+}
+
+function collectSessionFiles(records: readonly ChatMessage[]): LoadedSessionFile[] {
+  const byPath = new Map<string, "c" | "m">();
+  const add = (path: unknown, status: "c" | "m") => {
+    if (typeof path !== "string" || !path) return;
+    const current = byPath.get(path);
+    if (current === "m") return;
+    byPath.set(path, status);
+  };
+  for (const record of records) {
+    if (record.role !== "assistant" || !record.tool_calls) continue;
+    for (const call of record.tool_calls) {
+      const name = call.function?.name ?? "";
+      let args: { path?: unknown; edits?: unknown };
+      try {
+        args = JSON.parse(call.function?.arguments ?? "") as typeof args;
+      } catch {
+        continue;
+      }
+      if (name === "read_file") add(args.path, "c");
+      if (name === "edit_file" || name === "write_file") add(args.path, "m");
+      if (name === "multi_edit" && Array.isArray(args.edits)) {
+        for (const edit of args.edits as Array<{ path?: unknown }>) add(edit?.path, "m");
+      }
+    }
+  }
+  return [...byPath].map(([path, status]) => ({ path, status }));
+}
+
+function mergeLoadedSessionFiles(
+  existing: readonly LoadedSessionFile[],
+  additions: readonly LoadedSessionFile[],
+): LoadedSessionFile[] {
+  if (additions.length === 0) return existing as LoadedSessionFile[];
+  const byPath = new Map(existing.map((file) => [file.path, file.status] as const));
+  for (const file of additions) {
+    if (byPath.get(file.path) === "m") continue;
+    byPath.set(file.path, file.status);
+  }
+  return [...byPath].map(([path, status]) => ({ path, status }));
+}
+
+function sessionFilesFromTool(name: string, rawArgs: string): LoadedSessionFile[] {
+  try {
+    const args = JSON.parse(rawArgs) as { path?: unknown; edits?: unknown };
+    if (name === "read_file" && typeof args.path === "string") {
+      return [{ path: args.path, status: "c" }];
+    }
+    if ((name === "edit_file" || name === "write_file") && typeof args.path === "string") {
+      return [{ path: args.path, status: "m" }];
+    }
+    if (name === "multi_edit" && Array.isArray(args.edits)) {
+      return (args.edits as Array<{ path?: unknown }>)
+        .filter((edit): edit is { path: string } => typeof edit?.path === "string")
+        .map((edit) => ({ path: edit.path, status: "m" as const }));
+    }
+  } catch {
+    // The tool itself owns malformed-argument reporting.
+  }
+  return [];
+}
+
+function ensureSessionId(name: string): string {
+  const current = loadSessionMeta(name).sessionId;
+  if (typeof current === "string" && current.length > 0) return current;
+  const sessionId = randomUUID();
+  patchSessionMeta(name, { sessionId });
+  return sessionId;
+}
+
+function rememberAcceptedClientMessage(name: string, clientId: string, turn: number): void {
+  if (!clientId || clientId.length > 256) return;
+  const meta = loadSessionMeta(name);
+  const recent = (meta.recentClientMessages ?? []).filter((item) => item.clientId !== clientId);
+  recent.push({ clientId, turn });
+  patchSessionMeta(name, { recentClientMessages: recent.slice(-64) });
+}
+
+function acceptedClientTurn(name: string, clientId: string | undefined): number | undefined {
+  if (!clientId) return undefined;
+  return loadSessionMeta(name).recentClientMessages?.find((item) => item.clientId === clientId)
+    ?.turn;
+}
+
+function sessionCarryover(name: string): SessionLoadedEvent["carryover"] {
+  const meta = loadSessionMeta(name);
+  return {
+    totalCostUsd: meta.totalCostUsd ?? 0,
+    cacheHitTokens: meta.cacheHitTokens ?? 0,
+    cacheMissTokens: meta.cacheMissTokens ?? 0,
+    totalCompletionTokens: meta.totalCompletionTokens ?? 0,
+  };
 }
 
 function maskApiKey(key: string | undefined): string | undefined {
@@ -1334,6 +1508,7 @@ function loadSessionIntoTab(
     cancelPendingGates: (tab: Tab) => void;
     persistOpenTabs: () => void;
   },
+  requestId?: string,
 ): void {
   const records = loadSessionMessages(name);
   const backfilledWorkspace = patchSessionWorkspaceIfMissing(name, tab.rootDir);
@@ -1346,12 +1521,15 @@ function loadSessionIntoTab(
   tab.switching = false;
   actions.cancelPendingGates(tab);
   tab.currentSession = name;
+  tab.sessionId = ensureSessionId(name);
+  tab.bindingId += 1;
   tab.editHistory = [];
   tab.nextEditHistoryId = 1;
   tab.currentTurnEditEntry = null;
   actions.persistOpenTabs();
   if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
   const loadedMessages = buildLoadedMessages(records);
+  tab.sessionFiles = collectSessionFiles(records);
   if (loadedMessages.length === 0) {
     let sizeBytes = 0;
     try {
@@ -1370,6 +1548,15 @@ function loadSessionIntoTab(
       name,
       busy: Boolean(tab.aborter),
       messages: loadedMessages,
+      snapshot: {
+        sessionId: tab.sessionId,
+        bindingId: tab.bindingId,
+        requestId,
+        reason: "load",
+        payloadBytes: transcriptPayloadBytes(loadedMessages),
+        truncated: loadedMessages.some((message) => message.displayTruncated !== undefined),
+      },
+      sessionFiles: tab.sessionFiles,
       carryover: {
         totalCostUsd: meta.totalCostUsd ?? 0,
         cacheHitTokens: meta.cacheHitTokens ?? 0,
@@ -1388,19 +1575,27 @@ function loadSessionIntoTab(
 function currentSessionSnapshot(
   tab: Tab,
   type: "$session_loaded" | "$session_reconciled",
+  reason: SessionSnapshotReason,
+  requestId?: string,
 ): SessionLoadedEvent | SessionReconciledEvent {
-  const meta = loadSessionMeta(tab.currentSession);
+  const records = loadSessionMessages(tab.currentSession);
+  const messages = buildLoadedMessages(records);
+  tab.sessionFiles = collectSessionFiles(records);
   return {
     type,
     name: tab.currentSession,
     busy: Boolean(tab.aborter),
-    messages: buildLoadedMessages(loadSessionMessages(tab.currentSession)),
-    carryover: {
-      totalCostUsd: meta.totalCostUsd ?? 0,
-      cacheHitTokens: meta.cacheHitTokens ?? 0,
-      cacheMissTokens: meta.cacheMissTokens ?? 0,
-      totalCompletionTokens: meta.totalCompletionTokens ?? 0,
+    messages,
+    snapshot: {
+      sessionId: tab.sessionId,
+      bindingId: tab.bindingId,
+      requestId,
+      reason,
+      payloadBytes: transcriptPayloadBytes(messages),
+      truncated: messages.some((message) => message.displayTruncated !== undefined),
     },
+    sessionFiles: tab.sessionFiles,
+    carryover: sessionCarryover(tab.currentSession),
   };
 }
 
@@ -1416,22 +1611,59 @@ function emitPendingGateEvents(tab: Tab): void {
   }
 }
 
-function emitCurrentSessionLoaded(tab: Tab): void {
-  emit(currentSessionSnapshot(tab, "$session_loaded"), tab.id);
+function emitCurrentSessionLoaded(
+  tab: Tab,
+  reason: SessionSnapshotReason = "resync",
+  requestId?: string,
+): void {
+  emit(currentSessionSnapshot(tab, "$session_loaded", reason, requestId), tab.id);
   emitPendingGateEvents(tab);
 }
 
-function emitCurrentSessionReconciled(tab: Tab): void {
-  emit(currentSessionSnapshot(tab, "$session_reconciled"), tab.id);
-  emitPendingGateEvents(tab);
+function emitTurnCommitted(tab: Tab, turn: number, clientId?: string): void {
+  emit(
+    {
+      type: "$turn_committed",
+      name: tab.currentSession,
+      sessionId: tab.sessionId,
+      bindingId: tab.bindingId,
+      turn,
+      clientId,
+      sessionFiles: tab.sessionFiles,
+      carryover: sessionCarryover(tab.currentSession),
+    },
+    tab.id,
+  );
 }
 
-function emptySessionLoadedEvent(name: string): SessionLoadedEvent {
+function emitSessionRenamed(tab: Tab, previousName: string): void {
+  if (previousName === tab.currentSession) return;
+  emit(
+    {
+      type: "$session_renamed",
+      previousName,
+      name: tab.currentSession,
+      sessionId: tab.sessionId,
+      bindingId: tab.bindingId,
+    },
+    tab.id,
+  );
+}
+
+function emptySessionLoadedEvent(tab: Tab): SessionLoadedEvent {
   return {
     type: "$session_loaded",
-    name,
+    name: tab.currentSession,
     busy: false,
     messages: [],
+    snapshot: {
+      sessionId: tab.sessionId,
+      bindingId: tab.bindingId,
+      reason: "new",
+      payloadBytes: 2,
+      truncated: false,
+    },
+    sessionFiles: [],
     carryover: {
       totalCostUsd: 0,
       cacheHitTokens: 0,
@@ -1784,7 +2016,7 @@ function desktopRewindLatestConversation(tab: Tab): boolean {
   if (!tab.runtime) return false;
   const ok = tab.runtime.loop.rollbackLatestTurn();
   if (!ok) return false;
-  emitCurrentSessionLoaded(tab);
+  emitCurrentSessionLoaded(tab, "rollback");
   emitCtxBreakdown(tab);
   return true;
 }
@@ -1892,6 +2124,9 @@ interface Tab {
   readonly id: string;
   rootDir: string;
   currentSession: string;
+  sessionId: string;
+  bindingId: number;
+  sessionFiles: LoadedSessionFile[];
   currentModel: string;
   budgetUsd: number | undefined;
   /** null while the tab is bootstrapping — see `initTabToolset`. UI gates input on `$ready`, which only fires once this is set. */
@@ -1971,7 +2206,7 @@ export function mintSessionFor(rootDir: string): string {
   desktopSessionCounter++;
   const name = `desktop-${desktopSessionTimestampSuffix()}-${tabCounter}-${desktopSessionCounter}`;
   try {
-    patchSessionMeta(name, { workspace: rootDir });
+    patchSessionMeta(name, { workspace: rootDir, sessionId: randomUUID() });
   } catch {
     // session meta is for filtering only — failure shouldn't block chat
   }
@@ -2050,7 +2285,6 @@ function buildRuntimeFor(tab: Tab): RuntimeState {
     budgetUsd: tab.budgetUsd,
     session: tab.currentSession,
     reasoningEffort,
-    maxIterPerTurn: loadMaxIterPerTurn(),
     hooks: tab.hooks,
     hookCwd: tab.rootDir,
   });
@@ -2481,12 +2715,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.switching = false;
     cancelPendingGates(tab);
     tab.currentSession = mintSessionFor(tab.rootDir);
+    tab.sessionId = ensureSessionId(tab.currentSession);
+    tab.bindingId += 1;
+    tab.sessionFiles = [];
     tab.editHistory = [];
     tab.nextEditHistoryId = 1;
     tab.currentTurnEditEntry = null;
     persistOpenTabs();
     if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
-    emit(emptySessionLoadedEvent(tab.currentSession), tab.id);
+    emit(emptySessionLoadedEvent(tab), tab.id);
     emitCtxBreakdown(tab);
     emitSessions(tab);
   }
@@ -2567,6 +2804,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
 
   function runLightAskOnTab(tab: Tab, text: string, clientId?: string): void {
     if (!tab.runtime) return;
+    const askText = text.trim();
+    if (!askText) return;
+    const duplicateTurn = acceptedClientTurn(tab.currentSession, clientId);
+    if (duplicateTurn !== undefined) {
+      const accepted = tab.runtime.eventizer.emitUserMessage(duplicateTurn, askText);
+      emit(clientId ? { ...accepted, clientId } : accepted, tab.id);
+      if (!tab.aborter) emit({ type: "$turn_complete" }, tab.id);
+      return;
+    }
     const generation = tab.turnAdmission.begin();
     if (generation === null) {
       emit({ type: "$error", message: "This tab already has a turn in progress." }, tab.id);
@@ -2574,7 +2820,21 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     const rt = tab.runtime;
     tab.aborter = new AbortController();
-    const turn = rt.loop.currentTurn + 1;
+    const started = rt.loop.beginLightAsk(askText);
+    const turn = started.turn;
+    if (started.persisted) {
+      if (clientId) rememberAcceptedClientMessage(tab.currentSession, clientId, turn);
+      const accepted = rt.eventizer.emitUserMessage(turn, askText);
+      emit(clientId ? { ...accepted, clientId } : accepted, tab.id);
+    } else {
+      emit(
+        {
+          type: "$error",
+          message: "The message is running but could not be saved to the session log.",
+        },
+        tab.id,
+      );
+    }
     void tabContext.run(tab.id, async () => {
       try {
         const result = await runDesktopLightAsk({
@@ -2582,12 +2842,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           model: tab.currentModel,
           reasoningEffort: rt.loop.reasoningEffort,
           prefixHash: rt.ctx.prefixHash,
-          text,
+          text: askText,
           turn,
           clientId,
+          emitUserMessage: false,
           signal: tab.aborter?.signal,
           recordExchange: (exchange) => {
-            const stats = rt.loop.recordLightAskExchange(exchange);
+            const stats = rt.loop.recordLightAskResponse(exchange);
             appendDesktopAssistantFinalUsage(
               { role: "assistant_final", stats },
               tab.currentSession,
@@ -2633,7 +2894,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
                       rt.loop.log.setSessionPath(sessionPath(nextName));
                     },
                   });
-                  emitCurrentSessionReconciled(tab);
+                  emitSessionRenamed(tab, sessionName);
                   emitSessions(tab);
                 } catch {
                   /* title generation is best-effort */
@@ -2644,7 +2905,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           }
         }
         emitCtxBreakdown(tab);
-        emitCurrentSessionReconciled(tab);
+        emitTurnCommitted(tab, turn, clientId);
         emitSessions(tab);
         void emitBalance(tab);
       } catch (err) {
@@ -2946,7 +3207,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         void tab.runtime.loop
           .manualCompactHistory()
           .then((result) => {
-            if (result.folded) emitCurrentSessionLoaded(tab);
+            if (result.folded) emitCurrentSessionLoaded(tab, "compact");
             emitCompactResult(tab, result);
             emitCtxBreakdown(tab);
             sendQQInfo("Compacted the current desktop conversation history.", tab);
@@ -3568,7 +3829,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         void tab.runtime.loop
           .manualCompactHistory()
           .then((result) => {
-            if (result.folded) emitCurrentSessionLoaded(tab);
+            if (result.folded) emitCurrentSessionLoaded(tab, "compact");
             emitCompactResult(tab, result);
             emitCtxBreakdown(tab);
             sendDingTalkInfo("Compacted the current desktop conversation history.", tab);
@@ -3941,6 +4202,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       id: nextTabId(),
       rootDir: dir,
       currentSession: "",
+      sessionId: "",
+      bindingId: 1,
+      sessionFiles: [],
       currentModel: model,
       budgetUsd: opts.budgetUsd,
       toolset: null,
@@ -3973,6 +4237,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     };
     tab.subagentSink.current = (ev) => emitDesktopSubagentEvent(tab, ev);
     tab.currentSession = mintSessionFor(dir);
+    tab.sessionId = ensureSessionId(tab.currentSession);
     tabs.set(tab.id, tab);
     return tab;
   }
@@ -4122,6 +4387,16 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     } = {},
   ): Promise<void> {
     if (!tab.runtime) return;
+    const duplicateTurn = acceptedClientTurn(tab.currentSession, clientId);
+    if (duplicateTurn !== undefined) {
+      const accepted = tab.runtime.eventizer.emitUserMessage(
+        duplicateTurn,
+        opts.displayText ?? text,
+      );
+      emit(clientId ? { ...accepted, clientId } : accepted, tab.id);
+      if (!tab.aborter) finishDesktopCommand(tab);
+      return;
+    }
     const generation = tab.turnAdmission.begin();
     if (generation === null) {
       emit({ type: "$error", message: "This tab already has a turn in progress." }, tab.id);
@@ -4129,6 +4404,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     const fromFeishu = opts.fromFeishu === true;
     const fromDingTalk = opts.fromDingTalk === true;
+    let acceptedTurn = 0;
     try {
       const rt = tab.runtime;
       const modelText = opts.planOneShot ? buildOneShotPlanPrompt(text) : text;
@@ -4198,7 +4474,23 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       await tabContext.run(tab.id, async () => {
         try {
           let emittedTurnContext = false;
-          for await (const ev of rt.loop.step(modelText)) {
+          for await (const ev of rt.loop.step(modelText, {
+            onUserPersisted: (turn) => {
+              acceptedTurn = turn;
+              if (clientId) rememberAcceptedClientMessage(sessionAtTurnStart, clientId, turn);
+              const accepted = rt.eventizer.emitUserMessage(turn, opts.displayText ?? text);
+              emit(clientId ? { ...accepted, clientId } : accepted, tab.id);
+            },
+            onUserPersistFailed: () => {
+              emit(
+                {
+                  type: "$error",
+                  message: "The message is running but could not be saved to the session log.",
+                },
+                tab.id,
+              );
+            },
+          })) {
             if (!emittedTurnContext) {
               emittedTurnContext = true;
               emitCtxBreakdown(tab);
@@ -4215,6 +4507,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               emitUsageHistory(tab);
             }
             for (const kev of rt.eventizer.consume(ev, rt.ctx)) {
+              if (kev.type === "tool.intent") {
+                tab.sessionFiles = mergeLoadedSessionFiles(
+                  tab.sessionFiles,
+                  sessionFilesFromTool(kev.name, kev.args),
+                );
+              }
               emit(
                 kev.type === "user.message" && clientId
                   ? { ...kev, text: opts.displayText ?? text, clientId }
@@ -4319,7 +4617,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
                           rt.loop.log.setSessionPath(sessionPath(nextName));
                         },
                       });
-                      emitCurrentSessionReconciled(tab);
+                      emitSessionRenamed(tab, sessionName);
                       emitSessions(tab);
                     } catch {
                       // Title generation is best-effort display metadata.
@@ -4329,7 +4627,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
                 );
               }
             }
-            emitCurrentSessionReconciled(tab);
+            if (acceptedTurn > 0) emitTurnCommitted(tab, acceptedTurn, clientId);
             if (tab.planTotalSteps > 0 && tab.completedStepIds.size >= tab.planTotalSteps) {
               tab.completedStepIds.clear();
               tab.planTotalSteps = 0;
@@ -4405,6 +4703,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.currentTurnEditEntry = null;
     tab.hooks = loadHooks({ projectRoot: target });
     tab.currentSession = mintSessionFor(target);
+    tab.sessionId = ensureSessionId(tab.currentSession);
+    tab.bindingId += 1;
+    tab.sessionFiles = [];
     tab.toolset = await buildCodeToolset({
       rootDir: target,
       onSkillInstalled: () => emitSkills(tab),
@@ -4421,6 +4722,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
     emitSessions(tab);
     emitSettings(tab);
+    emit(emptySessionLoadedEvent(tab), tab.id);
     emitSkills(tab);
     persistOpenTabs();
   }
@@ -4818,7 +5120,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   // exists. emitBalance was already fire-and-forget.
   function bootstrapTab(
     initialDir?: string,
-    restore?: { session?: string; active?: boolean },
+    restore?: { session?: string; active?: boolean; requestId?: string },
   ): Tab {
     const tab = createTabSkeleton(initialDir);
     // Reopen the conversation the tab had, if its jsonl is still readable.
@@ -4829,6 +5131,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           const msgs = buildLoadedMessages(loadSessionMessages(restore.session));
           if (msgs.length > 0) {
             tab.currentSession = restore.session;
+            tab.sessionId = ensureSessionId(restore.session);
+            tab.bindingId += 1;
+            tab.sessionFiles = collectSessionFiles(loadSessionMessages(restore.session));
             restoredMessages = msgs;
           }
         }
@@ -4855,19 +5160,22 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     emitQQSettings(tab);
     emitUsageHistory(tab);
     if (restoredMessages) {
-      const meta = loadSessionMeta(tab.currentSession);
       emit(
         {
           type: "$session_loaded",
           name: tab.currentSession,
           busy: Boolean(tab.aborter),
           messages: restoredMessages,
-          carryover: {
-            totalCostUsd: meta.totalCostUsd ?? 0,
-            cacheHitTokens: meta.cacheHitTokens ?? 0,
-            cacheMissTokens: meta.cacheMissTokens ?? 0,
-            totalCompletionTokens: meta.totalCompletionTokens ?? 0,
+          snapshot: {
+            sessionId: tab.sessionId,
+            bindingId: tab.bindingId,
+            requestId: restore?.requestId,
+            reason: "restore",
+            payloadBytes: transcriptPayloadBytes(restoredMessages),
+            truncated: restoredMessages.some((message) => message.displayTruncated !== undefined),
           },
+          sessionFiles: tab.sessionFiles,
+          carryover: sessionCarryover(tab.currentSession),
         },
         tab.id,
       );
@@ -4915,14 +5223,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     return true;
   }
 
-  function openSessionInFocusedTab(workspaceDir: string, session: string): Tab {
+  function openSessionInFocusedTab(workspaceDir: string, session: string, requestId?: string): Tab {
     const targetDir = resolveDesktopRoot(workspaceDir);
     const existing = findOpenSessionTab(session, targetDir);
     if (existing) {
       focusTab(existing);
       return existing;
     }
-    const opened = bootstrapTab(targetDir, { session, active: true });
+    const opened = bootstrapTab(targetDir, { session, active: true, requestId });
     lastActiveTabId = opened.id;
     persistOpenTabs();
     return opened;
@@ -5139,23 +5447,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         // usage stats (cost, tokens, cache%) are restored on the frontend.
         if (t.currentSession) {
           try {
-            const msgs = buildLoadedMessages(loadSessionMessages(t.currentSession));
-            const meta = loadSessionMeta(t.currentSession);
-            emit(
-              {
-                type: "$session_loaded",
-                name: t.currentSession,
-                busy: Boolean(t.aborter),
-                messages: msgs,
-                carryover: {
-                  totalCostUsd: meta.totalCostUsd ?? 0,
-                  cacheHitTokens: meta.cacheHitTokens ?? 0,
-                  cacheMissTokens: meta.cacheMissTokens ?? 0,
-                  totalCompletionTokens: meta.totalCompletionTokens ?? 0,
-                },
-              },
-              t.id,
-            );
+            emit(currentSessionSnapshot(t, "$session_loaded", "resync"), t.id);
             emitPendingGateEvents(t);
           } catch {
             // unreadable jsonl — skip re-emit
@@ -5605,30 +5897,94 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           typeof workspace === "string" ? resolveDesktopRoot(workspace) : tab.rootDir;
         if (focusExistingSessionTab(msg.name, targetWorkspace)) return;
         if (msg.openInNewTab || tab.aborter) {
-          openSessionInFocusedTab(targetWorkspace, msg.name);
+          openSessionInFocusedTab(targetWorkspace, msg.name, msg.requestId);
           return;
         }
         if (resolve(targetWorkspace) !== resolve(tab.rootDir)) {
           void switchWorkspace(tab, targetWorkspace).then(() =>
-            loadSessionIntoTab(tab, msg.name, {
-              abortTurn,
-              cancelPendingGates,
-              persistOpenTabs,
-            }),
+            loadSessionIntoTab(
+              tab,
+              msg.name,
+              {
+                abortTurn,
+                cancelPendingGates,
+                persistOpenTabs,
+              },
+              msg.requestId,
+            ),
           );
           return;
         }
-        loadSessionIntoTab(tab, msg.name, {
-          abortTurn,
-          cancelPendingGates,
-          persistOpenTabs,
-        });
+        loadSessionIntoTab(
+          tab,
+          msg.name,
+          {
+            abortTurn,
+            cancelPendingGates,
+            persistOpenTabs,
+          },
+          msg.requestId,
+        );
       } catch (err) {
         process.stderr.write(`session_load: "${msg.name}" threw — ${(err as Error).message}\n`);
         emit(
           {
             type: "$error",
             message: `session_load failed: ${(err as Error).message}`,
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
+    if (msg.cmd === "session_turn_load") {
+      if (msg.name !== tab.currentSession || !Number.isInteger(msg.turn) || msg.turn < 1) {
+        emit({ type: "$error", message: "session_turn_load rejected stale request" }, tab.id);
+        return;
+      }
+      const messages = buildLoadedMessages(loadSessionMessages(msg.name), { budget: false }).filter(
+        (message) => message.turn === msg.turn,
+      );
+      emit(
+        {
+          type: "$session_turn_loaded",
+          name: msg.name,
+          sessionId: tab.sessionId,
+          bindingId: tab.bindingId,
+          requestId: msg.requestId,
+          turn: msg.turn,
+          messages,
+        },
+        tab.id,
+      );
+      return;
+    }
+    if (msg.cmd === "session_copy" || msg.cmd === "session_export") {
+      const action = msg.cmd === "session_copy" ? "copy" : "export";
+      try {
+        if (msg.name !== tab.currentSession) {
+          throw new Error("session changed before the action completed");
+        }
+        const messages = buildLoadedMessages(loadSessionMessages(msg.name), { budget: false });
+        const content =
+          msg.cmd === "session_copy" && msg.turn !== undefined
+            ? assistantTextForTurn(messages, msg.turn)
+            : formatSessionMarkdown(messages, msg.labels);
+        if (!content.trim()) throw new Error("session has no exportable content");
+        if (msg.cmd === "session_copy") await writeClipboardText(content);
+        else await writeFile(msg.path, content, "utf8");
+        emit(
+          { type: "$session_action_result", requestId: msg.requestId, action, ok: true },
+          tab.id,
+        );
+      } catch (err) {
+        emit(
+          {
+            type: "$session_action_result",
+            requestId: msg.requestId,
+            action,
+            ok: false,
+            error: (err as Error).message,
           },
           tab.id,
         );
@@ -6488,7 +6844,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       void tab.runtime.loop
         .manualCompactHistory()
         .then((result) => {
-          if (result.folded) emitCurrentSessionLoaded(tab);
+          if (result.folded) emitCurrentSessionLoaded(tab, "compact");
           emitCompactResult(tab, result);
           emitCtxBreakdown(tab);
         })
@@ -6515,7 +6871,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emit({ type: "$error", message: "无法回滚到当前" }, tab.id);
         return;
       }
-      emitCurrentSessionLoaded(tab);
+      emitCurrentSessionLoaded(tab, "rollback");
       emitCtxBreakdown(tab);
       return;
     }
@@ -6582,12 +6938,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           text: msg.text,
         });
         if (intent.command === "compact_history") {
-          emitCurrentSessionLoaded(tab);
           emitStatus(tab, t("handlers.observability.compactStarting"));
           void tab.runtime.loop
             .manualCompactHistory()
             .then((result) => {
-              if (result.folded) emitCurrentSessionLoaded(tab);
+              if (result.folded) emitCurrentSessionLoaded(tab, "compact");
               emitCompactResult(tab, result);
               emitCtxBreakdown(tab);
             })

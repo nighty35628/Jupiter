@@ -4,7 +4,7 @@ import {
   stripCompactionMarker,
 } from "@jupiter/core-utils/compaction";
 import { derivePrefix } from "@jupiter/core-utils/derive-prefix";
-import { Copy, Undo2 } from "lucide-react";
+import { Copy, Download, LoaderCircle, Undo2 } from "lucide-react";
 import { type ReactNode, memo, useEffect, useRef, useState } from "react";
 import type {
   ActivePlan,
@@ -242,6 +242,9 @@ export const AssistantMsg = memo(function AssistantMsg({
   onAlwaysAllowConfirm,
   pendingConfirms,
   processCardsDefaultOpen = false,
+  onLoadFullTurn,
+  loadingFullTurn = false,
+  onCopyFull,
 }: {
   segments: AssistantSegment[];
   pending: boolean;
@@ -254,6 +257,9 @@ export const AssistantMsg = memo(function AssistantMsg({
   onAlwaysAllowConfirm: (id: number, prefix: string) => void;
   pendingConfirms: PendingConfirm[];
   processCardsDefaultOpen?: boolean;
+  onLoadFullTurn?: () => void;
+  loadingFullTurn?: boolean;
+  onCopyFull?: () => Promise<void> | void;
 }) {
   const [copied, setCopied] = useState(false);
   const content = segments
@@ -262,7 +268,8 @@ export const AssistantMsg = memo(function AssistantMsg({
     .join("\n\n");
   const onCopy = async () => {
     try {
-      await navigator.clipboard.writeText(content);
+      if (onCopyFull) await onCopyFull();
+      else await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
@@ -430,7 +437,16 @@ export const AssistantMsg = memo(function AssistantMsg({
           />,
         );
       } else {
-        rendered.push(<AssistantText key={`t-${i}`} text={s.text} />);
+        const isGrowingText = pending && i === segments.length - 1;
+        rendered.push(
+          isGrowingText ? (
+            <div className="assistant-stream-text" key={`t-${i}`}>
+              {s.text}
+            </div>
+          ) : (
+            <AssistantText key={`t-${i}`} text={s.text} />
+          ),
+        );
       }
       continue;
     }
@@ -448,6 +464,30 @@ export const AssistantMsg = memo(function AssistantMsg({
         );
       }
       // Subsequent reasoning segments are intermediate tool-calling thought — hidden
+      continue;
+    }
+    if (s.kind === "elision") {
+      flushToolGroup();
+      rendered.push(
+        <div className="transcript-elision-notice" key={`e-${i}`}>
+          <span>{t("thread.historyFolded")}</span>
+          {onLoadFullTurn ? (
+            <button
+              type="button"
+              onClick={onLoadFullTurn}
+              disabled={loadingFullTurn}
+              title={loadingFullTurn ? t("thread.loadingFullTurn") : t("thread.loadFullTurn")}
+            >
+              {loadingFullTurn ? (
+                <LoaderCircle size={13} className="spin" />
+              ) : (
+                <Download size={13} />
+              )}
+              {loadingFullTurn ? t("thread.loadingFullTurn") : t("thread.loadFullTurn")}
+            </button>
+          ) : null}
+        </div>,
+      );
       continue;
     }
     // Tool segment — accumulate into group
@@ -471,7 +511,7 @@ export const AssistantMsg = memo(function AssistantMsg({
         </div>
         {rendered}
         <UsedSourcesStrip sources={usedSources} />
-        {content ? (
+        {content || segments.some((segment) => segment.kind === "elision") ? (
           <div className="msg-actions">
             <RollbackButton
               available={rollbackAvailable}

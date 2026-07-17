@@ -59,6 +59,10 @@ export interface SessionInfo {
 }
 
 export interface SessionMeta {
+  /** Stable desktop identity; unlike the filename, this survives automatic title renames. */
+  sessionId?: string;
+  /** Recent idempotency keys for renderer-submitted user messages. */
+  recentClientMessages?: Array<{ clientId: string; turn: number }>;
   branch?: string;
   summary?: string;
   /** Desktop/UI archive marker. This hides the session without renaming or rotating the transcript. */

@@ -15,6 +15,8 @@ import {
 } from "../feishu-settings";
 import { getLangLabel, getSupportedLangs, setLang, t, useLang } from "../i18n";
 import { I } from "../icons";
+import { PagePets } from "../pets/settings-page";
+import type { DesktopPetUi } from "../pets/types";
 import { DESKTOP_SHORTCUTS } from "../shortcuts";
 import type {
   McpSpecInfo,
@@ -66,6 +68,7 @@ export type PageId =
   | "archives"
   | "storage"
   | "appearance"
+  | "pets"
   | "billing"
   | "shortcuts";
 
@@ -80,9 +83,32 @@ const PAGE_META: ReadonlyArray<{ id: PageId; icon: keyof typeof I }> = [
   { id: "archives", icon: "archive" },
   { id: "storage", icon: "database" },
   { id: "appearance", icon: "sun" },
+  { id: "pets", icon: "paw" },
   { id: "billing", icon: "coin" },
   { id: "shortcuts", icon: "cpu" },
 ];
+
+function dialogTabbables(dialog: HTMLElement): HTMLElement[] {
+  const visible = Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.offsetParent !== null);
+
+  return visible.filter((element) => {
+    if (!(element instanceof HTMLInputElement) || element.type !== "radio" || !element.name) {
+      return true;
+    }
+    const group = visible.filter(
+      (candidate): candidate is HTMLInputElement =>
+        candidate instanceof HTMLInputElement &&
+        candidate.type === "radio" &&
+        candidate.name === element.name &&
+        candidate.form === element.form,
+    );
+    return (group.find((radio) => radio.checked) ?? group[0]) === element;
+  });
+}
 
 export function SettingsModal({
   settings,
@@ -99,6 +125,8 @@ export function SettingsModal({
   onSetFontFamily,
   customFontFamily,
   onSetCustomFontFamily,
+  petUi,
+  active = true,
   initialPage,
   mcpSpecs,
   mcpBridged,
@@ -168,6 +196,8 @@ export function SettingsModal({
   onSetFontFamily: (family: FontFamily) => void;
   customFontFamily: string;
   onSetCustomFontFamily: (family: string) => void;
+  petUi: DesktopPetUi;
+  active?: boolean;
   initialPage?: PageId;
   mcpSpecs: McpSpecInfo[];
   mcpBridged: boolean;
@@ -239,6 +269,10 @@ export function SettingsModal({
   const [feishuConfigureOpen, setFeishuConfigureOpen] = useState(false);
   const [dingtalkConfigureOpen, setDingTalkConfigureOpen] = useState(false);
   const [settingsBodyScrolling, setSettingsBodyScrolling] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const settingsBodyScrollTimerRef = useRef<number | null>(null);
   const markSettingsBodyScrolling = () => {
     setSettingsBodyScrolling(true);
@@ -263,15 +297,40 @@ export function SettingsModal({
     if (page === "components") onRefreshOptionalComponents();
   }, [onRefreshOptionalComponents, page]);
   useEffect(() => {
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = window.requestAnimationFrame(() => {
+      dialogRef.current
+        ?.querySelector<HTMLElement>('.settings-side .row[data-active="true"]')
+        ?.focus();
+    });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = dialogTabbables(dialog);
+      if (focusable.length === 0) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", onKey);
+      restoreFocusRef.current?.focus();
+    };
+  }, []);
   useEffect(() => {
     return () => {
       if (settingsBodyScrollTimerRef.current !== null) {
@@ -282,11 +341,19 @@ export function SettingsModal({
   const currentMeta = PAGE_META.find((p) => p.id === page) ?? PAGE_META[0]!;
   return (
     <div className="settings-mask" onClick={onClose}>
-      <div className="settings" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="settings"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
+        onClick={(e) => e.stopPropagation()}
+      >
         <nav className="settings-side">
           <div className="sg">{t("settings.title")}</div>
           {PAGE_META.map((p) => (
-            <div
+            <button
+              type="button"
               key={p.id}
               className="row"
               data-active={page === p.id}
@@ -294,13 +361,13 @@ export function SettingsModal({
             >
               <span className="ico">{I[p.icon]({ size: 13 })}</span>
               <span>{t(`settings.page${p.id[0]!.toUpperCase()}${p.id.slice(1)}Label` as any)}</span>
-            </div>
+            </button>
           ))}
         </nav>
         <div className="settings-main">
           <div className="settings-head">
             <div>
-              <h2>
+              <h2 id="settings-dialog-title">
                 {t(
                   `settings.page${currentMeta.id[0]!.toUpperCase()}${currentMeta.id.slice(1)}Label` as any,
                 )}
@@ -312,7 +379,12 @@ export function SettingsModal({
               </div>
             </div>
             <span className="grow" />
-            <button type="button" className="close-btn" onClick={onClose}>
+            <button
+              type="button"
+              className="close-btn"
+              aria-label={t("settings.close")}
+              onClick={onClose}
+            >
               <I.x size={14} />
             </button>
           </div>
@@ -464,6 +536,7 @@ export function SettingsModal({
                 onSetCustomFontFamily={onSetCustomFontFamily}
               />
             )}
+            {page === "pets" && <PagePets petUi={petUi} active={active} />}
             {page === "billing" && (
               <PageBilling balance={balance} usageHistory={usageHistory} currency={currency} />
             )}

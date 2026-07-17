@@ -1,3 +1,7 @@
+import type {
+  TranscriptDisplayTruncation,
+  TranscriptElisionSegment,
+} from "../../src/desktop/transcript-budget";
 import type { WorkflowEvent, WorkflowRun } from "../../src/workflows/types";
 
 export type { WorkflowRun };
@@ -491,6 +495,7 @@ export type JobsEvent = {
 export type LoadedSegment =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
+  | TranscriptElisionSegment
   | {
       kind: "tool";
       callId: string;
@@ -501,13 +506,32 @@ export type LoadedSegment =
     };
 
 export type LoadedMessage =
-  | { kind: "user"; text: string }
+  | {
+      kind: "user";
+      text: string;
+      turn: number;
+      messageId: string;
+      displayTruncated?: TranscriptDisplayTruncation;
+    }
   | {
       kind: "assistant";
       turn: number;
+      messageId: string;
       segments: LoadedSegment[];
       pending: false;
+      displayTruncated?: boolean;
     };
+
+export type LoadedSessionFile = { path: string; status: "c" | "m" };
+
+export type SessionSnapshotMeta = {
+  sessionId: string;
+  bindingId: number;
+  requestId?: string;
+  reason: "load" | "restore" | "resync" | "compact" | "rollback" | "new";
+  payloadBytes: number;
+  truncated: boolean;
+};
 
 export type SessionLoadedEvent = {
   type: "$session_loaded";
@@ -515,6 +539,8 @@ export type SessionLoadedEvent = {
   /** True when this snapshot is rehydrating a session whose turn is still running. */
   busy?: boolean;
   messages: LoadedMessage[];
+  snapshot: SessionSnapshotMeta;
+  sessionFiles: LoadedSessionFile[];
   carryover: {
     totalCostUsd: number;
     cacheHitTokens: number;
@@ -525,6 +551,50 @@ export type SessionLoadedEvent = {
 
 export type SessionReconciledEvent = Omit<SessionLoadedEvent, "type"> & {
   type: "$session_reconciled";
+};
+
+export type SessionTurnLoadedEvent = {
+  type: "$session_turn_loaded";
+  name: string;
+  sessionId: string;
+  bindingId: number;
+  requestId: string;
+  turn: number;
+  messages: LoadedMessage[];
+};
+
+export type SessionActionLabels = {
+  user: string;
+  assistant: string;
+  reasoning: string;
+  tool: string;
+};
+
+export type SessionActionResultEvent = {
+  type: "$session_action_result";
+  requestId: string;
+  action: "copy" | "export";
+  ok: boolean;
+  error?: string;
+};
+
+export type TurnCommittedEvent = {
+  type: "$turn_committed";
+  name: string;
+  sessionId: string;
+  bindingId: number;
+  turn: number;
+  clientId?: string;
+  sessionFiles: LoadedSessionFile[];
+  carryover: SessionLoadedEvent["carryover"];
+};
+
+export type SessionRenamedEvent = {
+  type: "$session_renamed";
+  previousName: string;
+  name: string;
+  sessionId: string;
+  bindingId: number;
 };
 
 export type SessionEmptyEvent = {
@@ -822,6 +892,7 @@ export type ModelDeltaEvent = {
   turn: number;
   channel: "content" | "reasoning" | "tool_args";
   text: string;
+  batchCount?: number;
 };
 
 export type Usage = {
@@ -941,6 +1012,10 @@ export type IncomingEvent = { tabId?: string } & (
   | SessionImportResultEvent
   | SessionLoadedEvent
   | SessionReconciledEvent
+  | SessionTurnLoadedEvent
+  | SessionActionResultEvent
+  | TurnCommittedEvent
+  | SessionRenamedEvent
   | SessionEmptyEvent
   | NeedsSetupEvent
   | SettingsEvent
@@ -988,7 +1063,13 @@ export type IncomingEvent = { tabId?: string } & (
 );
 
 export type OutgoingCommand = { tabId?: string } & (
-  | { cmd: "user_input"; text: string; clientId?: string; displayText?: string; planOneShot?: boolean }
+  | {
+      cmd: "user_input";
+      text: string;
+      clientId?: string;
+      displayText?: string;
+      planOneShot?: boolean;
+    }
   | { cmd: "ask_light"; text: string; clientId?: string }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
@@ -1004,7 +1085,22 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "session_restore_archived"; name: string }
   | { cmd: "session_delete_archived"; name: string }
   | { cmd: "session_clear_archived" }
-  | { cmd: "session_load"; name: string; openInNewTab?: boolean }
+  | { cmd: "session_load"; name: string; openInNewTab?: boolean; requestId?: string }
+  | { cmd: "session_turn_load"; name: string; turn: number; requestId: string }
+  | {
+      cmd: "session_copy";
+      name: string;
+      requestId: string;
+      turn?: number;
+      labels: SessionActionLabels;
+    }
+  | {
+      cmd: "session_export";
+      name: string;
+      path: string;
+      requestId: string;
+      labels: SessionActionLabels;
+    }
   | { cmd: "session_rename"; name: string; title: string }
   | {
       cmd: "session_patch_meta";
@@ -1026,7 +1122,11 @@ export type OutgoingCommand = { tabId?: string } & (
       name?: string;
     }
   | { cmd: "session_import_scan" }
-  | { cmd: "session_import_bulk"; sources?: ExternalSessionSource[]; items?: ExternalSessionSelection[] }
+  | {
+      cmd: "session_import_bulk";
+      sources?: ExternalSessionSource[];
+      items?: ExternalSessionSelection[];
+    }
   | { cmd: "memory_read"; path: string }
   | { cmd: "memory_refresh" }
   | { cmd: "memory_delete"; path: string }

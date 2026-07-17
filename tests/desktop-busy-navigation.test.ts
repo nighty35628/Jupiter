@@ -7,7 +7,9 @@ const desktop = readFileSync("src/cli/commands/desktop.ts", "utf8");
 
 describe("desktop busy navigation", () => {
   it("marks sidebar session/new-chat navigation as open-in-new-tab while current tab is busy", () => {
-    expect(protocol).toContain('{ cmd: "session_load"; name: string; openInNewTab?: boolean }');
+    expect(protocol).toContain(
+      '{ cmd: "session_load"; name: string; openInNewTab?: boolean; requestId?: string }',
+    );
     expect(protocol).toContain(
       '{ cmd: "new_chat"; workspaceDir?: string; openInNewTab?: boolean }',
     );
@@ -25,7 +27,9 @@ describe("desktop busy navigation", () => {
   });
 
   it("routes busy session/new-chat requests to focused tabs instead of loading into the running tab", () => {
-    expect(desktop).toContain('| { cmd: "session_load"; name: string; openInNewTab?: boolean }');
+    expect(desktop).toContain(
+      '| { cmd: "session_load"; name: string; openInNewTab?: boolean; requestId?: string }',
+    );
     expect(desktop).toContain(
       '| { cmd: "new_chat"; workspaceDir?: string; openInNewTab?: boolean }',
     );
@@ -38,8 +42,7 @@ describe("desktop busy navigation", () => {
       "function findOpenSessionTab(session: string, workspaceDir?: string)",
     );
     expect(desktop).toContain("if (focusExistingSessionTab(msg.name, targetWorkspace)) return");
-    expect(
-      desktop.indexOf("if (focusExistingSessionTab(msg.name, targetWorkspace)) return"),
-    ).toBeLessThan(desktop.indexOf("loadSessionIntoTab(tab, msg.name"));
+    const focus = desktop.indexOf("if (focusExistingSessionTab(msg.name, targetWorkspace)) return");
+    expect(focus).toBeLessThan(desktop.indexOf("loadSessionIntoTab(", focus));
   });
 });

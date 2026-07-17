@@ -23,6 +23,14 @@ function Ic({ size = 14, children, ...rest }: IconProps & { children: React.Reac
 }
 
 export const I = {
+  paw: (p: IconProps) => (
+    <Ic {...p}>
+      <circle cx="11" cy="4" r="2" />
+      <circle cx="18" cy="8" r="2" />
+      <circle cx="4" cy="8" r="2" />
+      <path d="M7 16c0-3 2.2-5 5-5s5 2 5 5c0 2.2-1.8 4-4 4h-2c-2.2 0-4-1.8-4-4Z" />
+    </Ic>
+  ),
   plus: (p: IconProps) => (
     <Ic {...p}>
       <path d="M12 5v14M5 12h14" />

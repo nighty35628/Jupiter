@@ -17,6 +17,8 @@ export const listen = vi.fn((event: string, handler: Handler) => {
   });
 });
 
+export const emitTo = vi.fn(() => Promise.resolve());
+
 export function emitMockEvent(event: string, payload: unknown): void {
   for (const handler of handlers.get(event) ?? []) {
     handler({ payload });
@@ -26,4 +28,5 @@ export function emitMockEvent(event: string, payload: unknown): void {
 export function resetMockEvents(): void {
   handlers.clear();
   listen.mockClear();
+  emitTo.mockClear();
 }

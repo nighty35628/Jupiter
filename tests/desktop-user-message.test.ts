@@ -109,6 +109,7 @@ describe("desktop incoming QQ/user message rendering", () => {
       kind: "user",
       text: "hello from qq",
       clientId: "remote-42",
+      messageId: "remote-42",
       turn: 2,
     });
   });
@@ -192,20 +193,22 @@ describe("desktop incoming QQ/user message rendering", () => {
     const oldest = next.messages[0];
     expect(oldest?.kind).toBe("assistant");
     if (oldest?.kind !== "assistant") return;
-    expect(oldest.segments[0]?.kind).toBe("reasoning");
-    expect(oldest.segments[1]?.kind).toBe("text");
-    expect(oldest.segments[2]?.kind).toBe("tool");
-    expect(oldest.segments[0]?.text).toMatch(/^\[elided/);
-    expect(oldest.segments[1]?.text).toMatch(/^\[elided/);
-    if (oldest.segments[2]?.kind === "tool") {
-      expect(oldest.segments[2].args).toMatch(/^\[elided/);
-      expect(oldest.segments[2].result).toMatch(/^\[elided/);
-    }
+    expect(oldest.displayTruncated).toBe(true);
+    expect(oldest.segments[0]).toMatchObject({
+      kind: "elision",
+      segmentCount: 3,
+      charCount: expect.any(Number),
+    });
+    expect(Buffer.byteLength(JSON.stringify(next.messages), "utf8")).toBeLessThanOrEqual(
+      256 * 1024,
+    );
 
-    const recent = next.messages[240];
+    const recent = next.messages.find(
+      (message) => message.kind === "assistant" && message.turn === 250,
+    );
     expect(recent?.kind).toBe("assistant");
     if (recent?.kind !== "assistant") return;
     expect(recent.segments[1]?.kind).toBe("text");
-    expect(recent.segments[1]?.text).toContain("text-240");
+    expect(recent.segments[1]?.text).toContain("text-249");
   });
 });
