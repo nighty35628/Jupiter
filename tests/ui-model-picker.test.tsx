@@ -2,14 +2,14 @@ import { render } from "ink";
 import React from "react";
 import { describe, expect, it } from "vitest";
 import { ModelPicker } from "../src/cli/ui/ModelPicker.js";
-import type { ReasoningEffort } from "../src/config.js";
+import type { ReasoningSelection } from "../src/provider-capabilities.js";
 import { makeFakeStdin, makeFakeStdout } from "./helpers/ink-stdio.js";
 
 function renderPicker(props: {
   models: ReadonlyArray<string> | null;
   current: string;
-  currentEffort?: ReasoningEffort;
-  effortChoices?: ReadonlyArray<ReasoningEffort>;
+  currentEffort?: ReasoningSelection;
+  effortChoices?: ReadonlyArray<ReasoningSelection>;
 }): string {
   const stdout = makeFakeStdout();
   const { unmount } = render(
@@ -17,7 +17,7 @@ function renderPicker(props: {
       models: props.models,
       current: props.current,
       currentEffort: props.currentEffort ?? "high",
-      effortChoices: props.effortChoices ?? ["low", "medium", "high", "max"],
+      effortChoices: props.effortChoices ?? ["off", "low", "high", "max"],
       onChoose: () => {},
     }),
     { stdout: stdout as never, stdin: makeFakeStdin() as never },
@@ -37,16 +37,17 @@ describe("ModelPicker (#371)", () => {
     expect(text).toContain("deepseek-reasoner");
   });
 
-  it("lists every reasoning_effort option in the EFFORT section", () => {
+  it("lists the user-facing official DeepSeek effort choices", () => {
     const text = renderPicker({
       models: ["deepseek-v4-flash"],
       current: "deepseek-v4-flash",
     });
     expect(text).toContain("EFFORT");
-    expect(text).toContain("low");
+    expect(text).toContain("off");
     expect(text).toContain("medium");
     expect(text).toContain("high");
     expect(text).toContain("max");
+    expect(text.match(/\bmedium\b/g)).toHaveLength(1);
   });
 
   it("hides `max` when the active endpoint is non-DeepSeek (#1794)", () => {

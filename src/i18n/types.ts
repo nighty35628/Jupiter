@@ -295,6 +295,13 @@ export interface TranslationSchema {
     turnStartFolded: string;
     harvestStatus: string;
     repeatToolCallWarning: string;
+    finishLengthWarning: string;
+    finishLengthAfterContinuationWarning: string;
+    finishContentFilterWarning: string;
+    finishResourceWarning: string;
+    finishUnknownWarning: string;
+    prefixContinuationStatus: string;
+    prefixContinuationFailed: string;
     stormStuck: string;
     stormSuppressed: string;
     compactingHistoryStatus: string;

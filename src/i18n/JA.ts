@@ -738,6 +738,15 @@ export const JA: TranslationSchema = {
     harvestStatus: "推論からプラン状態を抽出中…",
     repeatToolCallWarning:
       "繰り返しツール呼び出しを検出 — モデルに問題を認識させ、別のアプローチで再試行させます。",
+    finishLengthWarning: "出力またはコンテキスト上限に達したため、回答が不完全な可能性があります。",
+    finishLengthAfterContinuationWarning: "続きの回答も上限に達したため、まだ不完全です。",
+    finishContentFilterWarning: "コンテンツフィルタにより応答が停止されました。",
+    finishResourceWarning:
+      "システムリソース不足により応答が停止されました。途中までの内容は保持されています。",
+    finishUnknownWarning:
+      "不明な終了理由で応答が停止されました。途中までの内容は保持されています。",
+    prefixContinuationStatus: "出力上限に到達 · 1回だけ続きを生成中…",
+    prefixContinuationFailed: "自動継続に失敗しました。生成済みの内容は保持されています。",
     stormStuck:
       "スタックしたリトライループを停止 — モデルが自己修正の促し後も同じツールを同一引数で呼び続けました。/retry を試すか、言い換えるか、根本的なブロッカーを解決してください。",
     stormSuppressed:
@@ -1284,6 +1293,8 @@ export const JA: TranslationSchema = {
         "  /search-engine ollama              OllamaクラウドWeb検索を使用 — OLLAMA_API_KEY または configのollamaApiKeyを設定; https://ollama.com/settings/keys で取得",
       usageBrave:
         "  /search-engine brave               Brave Search APIを使用（独立インデックス、月2000回無料 — BRAVE_SEARCH_API_KEY または braveApiKey を設定; https://brave.com/search/api/ で取得）",
+      usageDeepSeekNative:
+        "  /search-engine deepseek-native     DeepSeekネイティブ検索を使用（実験的・モデル呼び出し全体が課金対象）",
       alias: "エイリアス: /se",
       searxngInfo:
         "SearXNG はセルフホストのメタサーチエンジンです（https://github.com/searxng/searxng）。",
@@ -1304,7 +1315,9 @@ export const JA: TranslationSchema = {
       switchedBraveNote:
         " BRAVE_SEARCH_API_KEY (または BRAVE_API_KEY) または `braveApiKey` をconfigに設定; https://brave.com/search/api/ で月2000回無料。",
       keyNeeded:
-        '"{engine}" のAPIキーが設定されていません。\n\n  1. {envVar} 環境変数を設定\n  2. またはインラインで提供:  /search-engine {engine} <your-key>\n  3. または "{engine}ApiKey" を ~/.jupiter/config.json に追加\n\nその後 /search-engine {engine} を再試行してください。',
+        '"{engine}" のAPIキーが設定されていません。\n\n  1. {envVar} 環境変数を設定\n  2. または "{configKey}" を ~/.jupiter/config.json に追加\n\nその後 /search-engine {engine} を再試行してください。',
+      keyInlineRejected:
+        "コマンド履歴が保存されるため、スラッシュコマンドではAPIキーを受け付けません。{envVar} を設定するか、設定画面を使用してください。",
       keySaved: " APIキーを設定に保存しました。",
       confirmed:
         'Web検索エンジンを "{engine}"{detail} に設定しました。次のアシスタントターンで反映されます。',
@@ -1526,6 +1539,7 @@ export const JA: TranslationSchema = {
     effortHeader: "    EFFORT  \u00b7  reasoning_effort 上限",
     modelsHeader: "    MODELS  \u00b7  DeepSeek互換ID",
     effortDesc: {
+      off: "DeepSeek の思考を無効化",
       low: "最速 \u2014 最小限の推論",
       medium: "バランス",
       high: "デフォルト \u2014 vLLM / Azure で安全",

@@ -2,9 +2,9 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Toast } from "../CommandPalette";
@@ -197,7 +197,8 @@ describe("desktop permission mode copy", () => {
     expect(document.body.textContent).not.toContain("插入图片");
 
     const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
-    const plusMenuRule = css.match(/\.composer-plus-menu,\n\.composer-mode-menu \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const plusMenuRule =
+      css.match(/\.composer-plus-menu,\n\.composer-mode-menu \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(plusMenuRule).toContain("width: 200px");
   });
 
@@ -321,8 +322,7 @@ describe("desktop permission mode copy", () => {
     fireEvent.paste(textarea, {
       clipboardData: {
         files: { length: 1 },
-        getData: (type: string) =>
-          type === "text/uri-list" ? "file:///repo/docs/paper.pdf" : "",
+        getData: (type: string) => (type === "text/uri-list" ? "file:///repo/docs/paper.pdf" : ""),
         items: [],
       },
     });
@@ -616,6 +616,34 @@ describe("desktop permission mode copy", () => {
   });
 });
 
+describe("DeepSeek reasoning selection", () => {
+  beforeEach(() => {
+    setLang("zh-CN");
+  });
+
+  it("shows DeepSeek's first tier as medium while preserving its low wire value", () => {
+    const onEffortChange = vi.fn();
+    renderComposer({
+      reasoningEffort: "off",
+      effortChoices: ["off", "low", "high", "max"],
+      onEffortChange,
+    });
+
+    fireEvent.click(screen.getByTitle("切换模型"));
+    const options = [...document.querySelectorAll<HTMLButtonElement>(".composer-effort-option")];
+    expect(options.map((option) => option.textContent)).toEqual(["off", "medium", "high", "max"]);
+    expect(options[0]?.dataset.active).toBe("true");
+    fireEvent.click(options[1]!);
+    expect(onEffortChange).toHaveBeenCalledWith("low");
+    fireEvent.click(screen.getByTitle("切换模型"));
+    const reopenedOptions = [
+      ...document.querySelectorAll<HTMLButtonElement>(".composer-effort-option"),
+    ];
+    fireEvent.click(reopenedOptions[2]!);
+    expect(onEffortChange).toHaveBeenCalledWith("high");
+  });
+});
+
 describe("desktop Composer queued sends", () => {
   beforeEach(() => {
     setLang("zh-CN");
@@ -657,9 +685,8 @@ describe("desktop Composer source search", () => {
       css.match(/\.empty-state \.composer-wrap--hero \.composer textarea \{[\s\S]*?\n\}/)?.[0] ??
       "";
     const heroBackdropRule =
-      css.match(
-        /\.empty-state \.composer-wrap--hero \.composer-backdrop \{[\s\S]*?\n\}/,
-      )?.[0] ?? "";
+      css.match(/\.empty-state \.composer-wrap--hero \.composer-backdrop \{[\s\S]*?\n\}/)?.[0] ??
+      "";
     const heroTextareaWrapRule =
       css.match(
         /\.empty-state \.composer-wrap--hero \.composer-textarea-wrap \{[\s\S]*?\n\}/,
@@ -742,9 +769,7 @@ describe("desktop Composer clipboard files", () => {
       {
         files: { length: 0 },
         getData: (type: string) =>
-          type === "text/plain"
-            ? "/repo/docs/paper.pdf\nfile:///repo/docs/hello%20world.md"
-            : "",
+          type === "text/plain" ? "/repo/docs/paper.pdf\nfile:///repo/docs/hello%20world.md" : "",
       } as unknown as DataTransfer,
       "/repo",
     );

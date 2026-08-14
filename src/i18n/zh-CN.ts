@@ -699,6 +699,13 @@ export const zhCN: TranslationSchema = {
       "回合开始：请求约 {estimate}/{ctxMax} tokens（{pct}%）— 已压缩 {beforeMessages} 条消息 → {afterMessages}。发送中。",
     harvestStatus: "正在从推理过程提取计划状态…",
     repeatToolCallWarning: "拦截到重复工具调用 — 让模型察觉问题并换种方式重试。",
+    finishLengthWarning: "回答已达到输出或上下文上限，内容可能不完整。",
+    finishLengthAfterContinuationWarning: "续写后的回答再次达到上限，内容仍不完整。",
+    finishContentFilterWarning: "服务方因内容过滤停止了本次回答。",
+    finishResourceWarning: "服务方因系统资源不足停止了本次回答，已保留现有内容。",
+    finishUnknownWarning: "服务方以未知原因结束了本次回答，已保留现有内容。",
+    prefixContinuationStatus: "已达到输出上限 · 正在续写一次…",
+    prefixContinuationFailed: "自动续写失败，已保留当前生成的内容。",
     stormStuck:
       "已停止卡死的重试循环 — 模型在自纠提示后仍以相同参数重复调用同一工具。请尝试 /retry、换种说法，或排查底层阻塞。",
     stormSuppressed: "已抑制 {count} 次重复工具调用 — 同一名称 + 参数触发 3 次以上。",
@@ -1282,6 +1289,8 @@ export const zhCN: TranslationSchema = {
         "  /search-engine ollama              使用 Ollama 云端网页搜索 — 设置 OLLAMA_API_KEY 或 config 的 ollamaApiKey；在 https://ollama.com/settings/keys 获取密钥",
       usageBrave:
         "  /search-engine brave               使用 Brave Search API（独立索引，每月 2000 次免费 — 设置 BRAVE_SEARCH_API_KEY 或 config 的 braveApiKey；在 https://brave.com/search/api/ 获取密钥）",
+      usageDeepSeekNative:
+        "  /search-engine deepseek-native     使用 DeepSeek 原生搜索（实验；按完整模型调用计费）",
       alias: "别名：/se",
       searxngInfo: "SearXNG 是一个自托管的元搜索引擎（https://github.com/searxng/searxng）。",
       searxngInstall: "安装命令：  docker run -d -p 8080:8080 searxng/searxng",
@@ -1301,7 +1310,9 @@ export const zhCN: TranslationSchema = {
       switchedBraveNote:
         " 请设置环境变量 BRAVE_SEARCH_API_KEY 或 config 中的 `braveApiKey`；https://brave.com/search/api/ 每月 2000 次免费。",
       keyNeeded:
-        '未配置 "{engine}" 的 API 密钥。\n\n  1. 设置环境变量 {envVar}\n  2. 或内联提供：/search-engine {engine} <your-key>\n  3. 或在 ~/.jupiter/config.json 中添加 "{engine}ApiKey"\n\n完成后重新执行 /search-engine {engine}。',
+        '未配置 "{engine}" 的 API 密钥。\n\n  1. 设置环境变量 {envVar}\n  2. 或在 ~/.jupiter/config.json 中添加 "{configKey}"\n\n完成后重新执行 /search-engine {engine}。',
+      keyInlineRejected:
+        "斜杠命令会进入历史记录，因此不再接受内联 API 密钥。请配置 {envVar}，或在设置页中填写。",
       keySaved: " API 密钥已保存到配置。",
       confirmed: '网页搜索引擎已设为 "{engine}"{detail}。下一轮模型调用将生效。',
       confirmedDetail: "（{endpoint}）",
@@ -1516,6 +1527,7 @@ export const zhCN: TranslationSchema = {
     effortHeader: "    强度  ·  reasoning_effort 上限",
     modelsHeader: "    模型  ·  DeepSeek 兼容 ID",
     effortDesc: {
+      off: "关闭 DeepSeek 思考",
       low: "最快 — 极少推理",
       medium: "平衡",
       high: "默认 — vLLM / Azure 安全",

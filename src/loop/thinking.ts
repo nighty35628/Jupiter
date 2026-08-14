@@ -6,10 +6,15 @@ export function isThinkingModeModel(model: string): boolean {
 }
 
 /** Pins extra_body.thinking.type; `undefined` lets third-party endpoints skip the field. */
-export function thinkingModeForModel(model: string): "enabled" | "disabled" | undefined {
+export function thinkingModeForModel(
+  model: string,
+  thinkingEnabled = true,
+): "enabled" | "disabled" | undefined {
   if (model === "deepseek-chat") return "disabled";
   if (model.includes("reasoner")) return "enabled";
-  if (model === "deepseek-v4-flash" || model === "deepseek-v4-pro") return "enabled";
+  if (model === "deepseek-v4-flash" || model === "deepseek-v4-pro") {
+    return thinkingEnabled ? "enabled" : "disabled";
+  }
   return undefined;
 }
 

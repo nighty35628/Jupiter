@@ -15,6 +15,7 @@ export default defineConfig({
       "lucide-react": resolve(here, "tests/mocks/lucide-react.ts"),
       "@tauri-apps/api/core": resolve(here, "tests/mocks/tauri-api-core.ts"),
       "@tauri-apps/api/event": resolve(here, "tests/mocks/tauri-api-event.ts"),
+      "@tauri-apps/api/menu": resolve(here, "tests/mocks/tauri-api-menu.ts"),
       "@tauri-apps/api/window": resolve(here, "tests/mocks/tauri-api-window.ts"),
       "@tauri-apps/api/webview": resolve(here, "tests/mocks/tauri-api-webview.ts"),
       "@tauri-apps/plugin-dialog": resolve(here, "tests/mocks/tauri-plugin-dialog.ts"),

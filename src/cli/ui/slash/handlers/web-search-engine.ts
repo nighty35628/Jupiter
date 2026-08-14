@@ -7,6 +7,7 @@ import {
   loadPerplexityApiKey,
   loadTavilyApiKey,
   readConfig,
+  resolveDeepSeekSearchCredential,
   webSearchEndpoint,
   webSearchEngine,
   writeConfig,
@@ -28,7 +29,8 @@ export const handlers: Record<string, SlashHandler> = {
         engine !== "perplexity" &&
         engine !== "exa" &&
         engine !== "brave" &&
-        engine !== "ollama")
+        engine !== "ollama" &&
+        engine !== "deepseek-native")
     ) {
       return {
         info: [
@@ -47,6 +49,7 @@ export const handlers: Record<string, SlashHandler> = {
           t("handlers.webSearchEngine.usageExa"),
           t("handlers.webSearchEngine.usageOllama"),
           t("handlers.webSearchEngine.usageBrave"),
+          t("handlers.webSearchEngine.usageDeepSeekNative"),
           "",
           t("handlers.webSearchEngine.alias"),
           "",
@@ -66,6 +69,7 @@ export const handlers: Record<string, SlashHandler> = {
       "baidu",
       "ollama",
       "brave",
+      "deepseek-native",
     ]);
     if (apiKeyEngines.has(engine)) {
       const KEY_LOADERS: Record<string, () => string | undefined> = {
@@ -76,6 +80,7 @@ export const handlers: Record<string, SlashHandler> = {
         brave: loadBraveApiKey,
         metaso: loadMetasoApiKey,
         baidu: loadBaiduApiKey,
+        "deepseek-native": () => resolveDeepSeekSearchCredential().apiKey,
       };
       const ENV_VARS: Record<string, string> = {
         tavily: "TAVILY_API_KEY",
@@ -85,16 +90,23 @@ export const handlers: Record<string, SlashHandler> = {
         brave: "BRAVE_SEARCH_API_KEY or BRAVE_API_KEY",
         metaso: "METASO_API_KEY",
         baidu: "BAIDU_API_KEY or QIANFAN_API_KEY",
+        "deepseek-native": "DEEPSEEK_SEARCH_API_KEY",
+      };
+      const CONFIG_KEYS: Record<string, string> = {
+        tavily: "tavilyApiKey",
+        perplexity: "perplexityApiKey",
+        exa: "exaApiKey",
+        ollama: "ollamaApiKey",
+        brave: "braveApiKey",
+        metaso: "metasoApiKey",
+        baidu: "baiduApiKey",
+        "deepseek-native": "deepseekSearchApiKey",
       };
       const loadKey = KEY_LOADERS[engine] ?? loadMetasoApiKey;
 
       if (args[1]) {
-        cfg.webSearchEngine = engine;
-        (cfg as Record<string, unknown>)[`${engine}ApiKey`] = args[1];
-        writeConfig(cfg);
-        return {
-          info: `${t("handlers.webSearchEngine.confirmed", { engine, detail: "" })} ${t("handlers.webSearchEngine.keySaved")}`,
-        };
+        const envVar = ENV_VARS[engine] ?? `${engine.toUpperCase()}_API_KEY`;
+        return { info: t("handlers.webSearchEngine.keyInlineRejected", { envVar }) };
       }
 
       const existingKey = loadKey();
@@ -105,7 +117,13 @@ export const handlers: Record<string, SlashHandler> = {
       }
 
       const envVar = ENV_VARS[engine] ?? `${engine.toUpperCase()}_API_KEY`;
-      return { info: t("handlers.webSearchEngine.keyNeeded", { engine, envVar }) };
+      return {
+        info: t("handlers.webSearchEngine.keyNeeded", {
+          engine,
+          envVar,
+          configKey: CONFIG_KEYS[engine] ?? `${engine}ApiKey`,
+        }),
+      };
     }
 
     cfg.webSearchEngine = engine;

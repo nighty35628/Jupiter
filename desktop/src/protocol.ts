@@ -611,6 +611,21 @@ export type NeedsSetupEvent = {
 export type EditMode = "review" | "auto" | "yolo" | "plan";
 
 export type ReasoningEffort = "low" | "medium" | "high" | "max";
+export type ReasoningSelection = "off" | ReasoningEffort;
+
+export function displayReasoningSelection(
+  selection: ReasoningSelection,
+  choices: readonly ReasoningSelection[],
+): ReasoningSelection {
+  return choices.includes("max") && selection === "low" ? "medium" : selection;
+}
+
+export function parseReasoningSelection(
+  selection: ReasoningSelection,
+  choices: readonly ReasoningSelection[],
+): ReasoningSelection {
+  return choices.includes("max") && selection === "medium" ? "low" : selection;
+}
 
 export type WebSearchEngineName =
   | "bing"
@@ -622,7 +637,23 @@ export type WebSearchEngineName =
   | "perplexity"
   | "exa"
   | "brave"
-  | "ollama";
+  | "ollama"
+  | "deepseek-native";
+
+export type DeepSeekNativeCredentialStatus =
+  | {
+      state:
+        | "ready_reusing_main_key"
+        | "needs_dedicated_key"
+        | "ready_with_dedicated_key"
+        | "unavailable";
+      keySource?: "dedicated" | "main";
+    }
+  | {
+      state: "last_request_failed";
+      keySource: "dedicated" | "main";
+      message: string;
+    };
 
 export type BrowserAutomationStatus =
   | {
@@ -672,7 +703,11 @@ export type SkillPackSourceInfo = {
 
 export type SettingsEvent = {
   type: "$settings";
+  settingsRevision?: number;
+  requestId?: string;
   reasoningEffort: ReasoningEffort;
+  thinkingEnabled: boolean;
+  reasoningChoices: ReasoningSelection[];
   editMode: EditMode;
   budgetUsd: number | null;
   baseUrl?: string;
@@ -695,7 +730,9 @@ export type SettingsEvent = {
     exa?: string;
     ollama?: string;
     brave?: string;
+    deepseekNative?: string;
   };
+  deepseekNativeCredentialStatus?: DeepSeekNativeCredentialStatus;
   subagentModels?: Record<string, "flash" | "pro">;
   contextTokens?: Record<string, number>;
   libraryRetrievalMode?: "off" | "on_demand" | "always";
@@ -817,6 +854,7 @@ export type BalanceEvent = {
 
 export type SettingsPatch = {
   reasoningEffort?: ReasoningEffort;
+  thinkingEnabled?: boolean;
   editMode?: EditMode;
   budgetUsd?: number | null;
   baseUrl?: string;
@@ -834,6 +872,7 @@ export type SettingsPatch = {
   exaApiKey?: string | null;
   ollamaApiKey?: string | null;
   braveApiKey?: string | null;
+  deepseekSearchApiKey?: string | null;
   subagentModels?: Record<string, "flash" | "pro">;
   skillPackSources?: SkillPackSourceInfo[];
   /** Per-model context-window override (tokens). Keys are model ids; values are the prompt-side token cap. */
@@ -1136,7 +1175,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "settings_sign_out" }
   | { cmd: "settings_get" }
   | { cmd: "context_diagnostics_get" }
-  | ({ cmd: "settings_save" } & SettingsPatch)
+  | ({ cmd: "settings_save"; requestId?: string } & SettingsPatch)
   | { cmd: "qq_status_get" }
   | { cmd: "qq_connect" }
   | { cmd: "qq_disconnect" }

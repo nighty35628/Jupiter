@@ -729,6 +729,18 @@ export const de: TranslationSchema = {
     harvestStatus: "Planstatus wird aus dem Reasoning extrahiert...",
     repeatToolCallWarning:
       "Wiederholten Tool-Aufruf erkannt — lasse das Modell das Problem sehen und es mit einem anderen Ansatz erneut versuchen.",
+    finishLengthWarning:
+      "Die Antwort hat das Ausgabe- oder Kontextlimit erreicht und kann unvollständig sein.",
+    finishLengthAfterContinuationWarning:
+      "Auch die fortgesetzte Antwort hat das Limit erreicht und bleibt unvollständig.",
+    finishContentFilterWarning: "Der Anbieter hat die Antwort wegen eines Inhaltsfilters beendet.",
+    finishResourceWarning:
+      "Der Anbieter hat die Antwort wegen fehlender Systemressourcen beendet. Die Teilausgabe wurde beibehalten.",
+    finishUnknownWarning:
+      "Der Anbieter hat die Antwort mit unbekanntem Grund beendet. Die Teilausgabe wurde beibehalten.",
+    prefixContinuationStatus: "Ausgabelimit erreicht · wird einmal fortgesetzt…",
+    prefixContinuationFailed:
+      "Die automatische Fortsetzung ist fehlgeschlagen. Die bisherige Antwort wurde beibehalten.",
     stormStuck:
       "Festgefahrene Wiederholungsschleife gestoppt — das Modell rief dasselbe Tool mit identischen Argumenten auf, selbst nach einem Selbstkorrektur-Hinweis. Versuche /retry, umformulieren oder schließe den zugrunde liegenden Blocker aus.",
     stormSuppressed:
@@ -1311,6 +1323,8 @@ export const de: TranslationSchema = {
         "  /search-engine ollama                Ollama Cloud-Web-Suche verwenden — setze OLLAMA_API_KEY oder ollamaApiKey in der Konfiguration; Schlüssel unter https://ollama.com/settings/keys",
       usageBrave:
         "  /search-engine brave               Brave Search API nutzen (unabhängiger Index, kostenlos 2000/Monat — setze BRAVE_SEARCH_API_KEY oder braveApiKey in der Konfiguration; Schlüssel unter https://brave.com/search/api/)",
+      usageDeepSeekNative:
+        "  /search-engine deepseek-native     native DeepSeek-Suche nutzen (experimentell; voller Modellaufruf wird berechnet)",
       alias: "Alias: /se",
       searxngInfo:
         "SearXNG ist eine selbst gehostete Metasuchmaschine (https://github.com/searxng/searxng).",
@@ -1330,7 +1344,9 @@ export const de: TranslationSchema = {
       switchedBraveNote:
         " Setze BRAVE_SEARCH_API_KEY (oder BRAVE_API_KEY) oder `braveApiKey` in der Konfiguration; 2000 kostenlose Zugriffe pro Monat unter https://brave.com/search/api/.",
       keyNeeded:
-        'Kein API-Schlüssel für "{engine}" konfiguriert.\n\n  1. Setze die {envVar}-Umgebungsvariable\n  2. Oder gib ihn inline an:  /search-engine {engine} <dein-schlüssel>\n  3. Oder füge "{engine}ApiKey" zu ~/.jupiter/config.json hinzu\n\nWiederhole dann /search-engine {engine}.',
+        'Kein API-Schlüssel für "{engine}" konfiguriert.\n\n  1. Setze die {envVar}-Umgebungsvariable\n  2. Oder füge "{configKey}" zu ~/.jupiter/config.json hinzu\n\nWiederhole dann /search-engine {engine}.',
+      keyInlineRejected:
+        "API-Schlüssel werden in Slash-Befehlen nicht akzeptiert, da der Befehlsverlauf gespeichert wird. Konfiguriere {envVar} oder nutze die Einstellungen.",
       keySaved: " API-Schlüssel in der Konfiguration gespeichert.",
       confirmed:
         'Websuchmaschine auf "{engine}" gesetzt{detail}. Der nächste Assistenten-Turn übernimmt die Änderung.',

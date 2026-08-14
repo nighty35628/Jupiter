@@ -96,10 +96,10 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   {
     cmd: "effort",
     group: "setup",
-    argsHint: "<low|medium|high|max>",
+    argsHint: "<off|low|medium|high|max>",
     summary:
       "reasoning_effort cap — high is the safe default (vLLM/Azure compatible); max is a DeepSeek extension.",
-    argCompleter: ["low", "medium", "high", "max"],
+    argCompleter: ["off", "low", "medium", "high", "max"],
   },
   {
     cmd: "language",

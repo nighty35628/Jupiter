@@ -1,6 +1,7 @@
 import { type ChildProcess, type SpawnOptions, spawn, spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import * as pathMod from "node:path";
+import { sanitizedChildProcessEnv } from "../../security/child-process-env.js";
 import { parseCommandChain, runChain } from "../shell-chain.js";
 import { tokenizeCommand } from "./parse.js";
 
@@ -65,7 +66,7 @@ export async function runCommand(
     });
   }
   const timeoutMs = timeoutSec * 1000;
-  const normalizedEnv = normalizeWindowsEnvVars(process.env);
+  const normalizedEnv = normalizeWindowsEnvVars(sanitizedChildProcessEnv());
 
   const spawnOpts: SpawnOptions = {
     cwd: opts.cwd,

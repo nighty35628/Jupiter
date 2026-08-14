@@ -1,5 +1,10 @@
 import { type EventSourceMessage, createParser } from "eventsource-parser";
 import { loadRateLimit, resolveBaseUrlEnv } from "./config.js";
+import {
+  isStrictOfficialDeepSeekEndpoint,
+  normalizeOfficialDeepSeekEffort,
+  resolveModelCapability,
+} from "./provider-capabilities.js";
 import { providerHttpErrorFromResponse } from "./provider-http-error.js";
 import { type RetryOptions, fetchWithRetry } from "./retry.js";
 import type { ChatMessage, ChatRequestOptions, RawUsage, ToolCall, ToolSpec } from "./types.js";
@@ -54,15 +59,53 @@ export interface ChatResponse {
   reasoningContent: string | null;
   toolCalls: ToolCall[];
   usage: Usage;
+  usageComplete: boolean;
+  finishReason: ChatFinishReason;
   raw: unknown;
+}
+
+export type ChatFinishReason =
+  | "stop"
+  | "length"
+  | "content_filter"
+  | "tool_calls"
+  | "insufficient_system_resource"
+  | "unknown";
+
+export function normalizeChatFinishReason(value: unknown): ChatFinishReason {
+  if (
+    value === "stop" ||
+    value === "length" ||
+    value === "content_filter" ||
+    value === "tool_calls" ||
+    value === "insufficient_system_resource"
+  ) {
+    return value;
+  }
+  return "unknown";
+}
+
+export function chatCompletionsUrl(baseUrl: string, betaPrefix = false): string {
+  if (!betaPrefix) return `${baseUrl}/chat/completions`;
+  const url = new URL(baseUrl);
+  let path = url.pathname;
+  while (path.endsWith("/")) path = path.slice(0, -1);
+  if (path === "/v1" || path.endsWith("/v1")) path = path.slice(0, -3);
+  url.pathname = `${path}/beta/chat/completions`.replace(/\/+/g, "/");
+  return url.toString();
 }
 
 export interface StreamChunk {
   contentDelta?: string;
   reasoningDelta?: string;
-  toolCallDelta?: { index: number; id?: string; name?: string; argumentsDelta?: string };
+  toolCallDeltas?: Array<{
+    index: number;
+    id?: string;
+    name?: string;
+    argumentsDelta?: string;
+  }>;
   usage?: Usage;
-  finishReason?: string;
+  finishReason?: ChatFinishReason;
   raw: any;
 }
 
@@ -225,31 +268,27 @@ export class DeepSeekClient {
     if (opts.temperature !== undefined) payload.temperature = opts.temperature;
     if (opts.maxTokens !== undefined) payload.max_tokens = opts.maxTokens;
     if (opts.responseFormat) payload.response_format = opts.responseFormat;
-    // V4 thinking-mode toggle: lives under `extra_body.thinking.type` per
-    // DeepSeek's docs. Docs also note that in thinking mode `temperature`,
-    // `top_p`, `presence_penalty`, `frequency_penalty` are silently
-    // ignored — we don't strip them here because the server's explicit
-    // "setting won't report an error" contract means leaving them in is
-    // safe and keeps the request payload diffable against OpenAI tooling.
-    if (opts.thinking && !this._isAzureEndpoint()) {
-      payload.extra_body = { thinking: { type: opts.thinking } };
+    const capability = resolveModelCapability(this.baseUrl, opts.model);
+    if (opts.thinking) {
+      if (capability.dialect === "deepseek") {
+        // This client sends raw HTTP. `extra_body` is only an OpenAI SDK
+        // escape hatch; DeepSeek's wire contract requires a top-level field.
+        payload.thinking = { type: opts.thinking };
+      } else if (capability.dialect === "openai-compatible") {
+        // Preserve the legacy custom-gateway request shape. A future explicit
+        // dialect setting can opt compatible gateways into DeepSeek's wire form.
+        payload.extra_body = { thinking: { type: opts.thinking } };
+      }
     }
-    if (opts.reasoningEffort) {
-      payload.reasoning_effort = opts.reasoningEffort;
+    if (
+      opts.reasoningEffort &&
+      !(capability.dialect === "deepseek" && opts.thinking === "disabled")
+    ) {
+      payload.reasoning_effort = capability.officialDeepSeekV4
+        ? normalizeOfficialDeepSeekEffort(opts.reasoningEffort)
+        : opts.reasoningEffort;
     }
     return payload;
-  }
-
-  /** Azure OpenAI-compatible endpoints do not accept DeepSeek's proprietary
-   *  `extra_body.thinking` field (they reject the request with 400).  We still
-   *  send `reasoning_effort`, which Azure *does* support. */
-  private _isAzureEndpoint(): boolean {
-    try {
-      const host = new URL(this.baseUrl).hostname;
-      return host === "azure.com" || host.endsWith(".azure.com");
-    } catch {
-      return false;
-    }
   }
 
   /** Returns null on failure so callers can degrade — session must keep working without balance UI. */
@@ -259,6 +298,7 @@ export class DeepSeekClient {
         method: "GET",
         headers: { Authorization: `Bearer ${this.apiKey}` },
         signal: opts.signal,
+        redirect: "error",
       });
       if (!resp.ok) return null;
       const data = (await resp.json()) as UserBalance;
@@ -276,6 +316,7 @@ export class DeepSeekClient {
         method: "GET",
         headers: { Authorization: `Bearer ${this.apiKey}` },
         signal: opts.signal,
+        redirect: "error",
       });
       if (!resp.ok) return null;
       const data = (await resp.json()) as ModelList;
@@ -300,7 +341,7 @@ export class DeepSeekClient {
       await this.waitForChatRateLimit(signal);
       const resp = await fetchWithRetry(
         this._fetch,
-        `${this.baseUrl}/chat/completions`,
+        chatCompletionsUrl(this.baseUrl, opts.betaPrefix),
         {
           method: "POST",
           headers: {
@@ -309,8 +350,9 @@ export class DeepSeekClient {
           },
           body: stringifyJsonTransport(this.buildPayload(opts, false)),
           signal,
+          redirect: "error",
         },
-        { ...this.retry, signal },
+        { ...this.retry, ...(opts.disableRetry ? { maxAttempts: 1 } : {}), signal },
       );
       if (!resp.ok) {
         throw await providerHttpErrorFromResponse(resp, {
@@ -319,12 +361,16 @@ export class DeepSeekClient {
         });
       }
       const data: any = await resp.json();
-      const choice = data.choices?.[0]?.message ?? {};
+      const responseChoice = data.choices?.[0] ?? {};
+      const choice = responseChoice.message ?? {};
+      const rawUsage = data.usage ?? (Usage.hasApiUsage(data) ? data : undefined);
       return {
         content: choice.content ?? "",
         reasoningContent: choice.reasoning_content ?? null,
         toolCalls: choice.tool_calls ?? [],
-        usage: Usage.fromApi(data.usage ?? data),
+        usage: Usage.fromApi(rawUsage),
+        usageComplete: Usage.hasApiUsage(rawUsage),
+        finishReason: normalizeChatFinishReason(responseChoice.finish_reason),
         raw: data,
       };
     } finally {
@@ -351,7 +397,7 @@ export class DeepSeekClient {
       // desync the session context.
       resp = await fetchWithRetry(
         this._fetch,
-        `${this.baseUrl}/chat/completions`,
+        chatCompletionsUrl(this.baseUrl, opts.betaPrefix),
         {
           method: "POST",
           headers: {
@@ -361,8 +407,9 @@ export class DeepSeekClient {
           },
           body: stringifyJsonTransport(this.buildPayload(opts, true)),
           signal,
+          redirect: "error",
         },
-        { ...this.retry, signal },
+        { ...this.retry, ...(opts.disableRetry ? { maxAttempts: 1 } : {}), signal },
       );
     } catch (err) {
       clearTimeout(timer);
@@ -381,17 +428,29 @@ export class DeepSeekClient {
     }
 
     const queue: StreamChunk[] = [];
+    const requireDoneMarker = isStrictOfficialDeepSeekEndpoint(this.baseUrl);
     let done = false;
+    let sawDoneMarker = false;
+    let sawTerminalFinishReason = false;
+    let parseError: Error | null = null;
     const parser = createParser({
       onEvent: (ev: EventSourceMessage) => {
-        if (!ev.data || ev.data === "[DONE]") {
+        if (done) return;
+        if (ev.data === "") return;
+        if (ev.data === "[DONE]") {
+          sawDoneMarker = true;
           done = true;
           return;
         }
         try {
           const json = JSON.parse(ev.data);
           const delta = json.choices?.[0]?.delta ?? {};
-          const finishReason = json.choices?.[0]?.finish_reason ?? undefined;
+          const rawFinishReason = json.choices?.[0]?.finish_reason;
+          const finishReason =
+            rawFinishReason === null || rawFinishReason === undefined
+              ? undefined
+              : normalizeChatFinishReason(rawFinishReason);
+          if (finishReason && finishReason !== "unknown") sawTerminalFinishReason = true;
           const chunk: StreamChunk = { raw: json, finishReason };
           if (typeof delta.content === "string" && delta.content.length > 0) {
             chunk.contentDelta = delta.content;
@@ -400,21 +459,23 @@ export class DeepSeekClient {
             chunk.reasoningDelta = delta.reasoning_content;
           }
           if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
-            const tc = delta.tool_calls[0];
-            chunk.toolCallDelta = {
-              index: tc.index ?? 0,
-              id: tc.id,
-              name: tc.function?.name,
-              argumentsDelta: tc.function?.arguments,
-            };
+            chunk.toolCallDeltas = delta.tool_calls.map((tc: any, position: number) => ({
+              index: Number.isInteger(tc?.index) ? tc.index : position,
+              id: tc?.id,
+              name: tc?.function?.name,
+              argumentsDelta: tc?.function?.arguments,
+            }));
           }
           const rawUsage = json.usage ?? (Usage.hasApiUsage(json) ? json : undefined);
           if (rawUsage) {
             chunk.usage = Usage.fromApi(rawUsage);
           }
           queue.push(chunk);
-        } catch {
-          /* skip malformed sse frame */
+        } catch (err) {
+          parseError = new Error(
+            `DeepSeek stream contained malformed JSON: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          done = true;
         }
       },
     });
@@ -442,6 +503,7 @@ export class DeepSeekClient {
     };
     try {
       while (true) {
+        if (parseError) throw parseError;
         if (queue.length > 0) {
           yield queue.shift()!;
           continue;
@@ -460,8 +522,22 @@ export class DeepSeekClient {
             code,
           });
         }
-        if (streamDone) break;
+        if (streamDone) {
+          const tail = decoder.decode();
+          if (tail) parser.feed(tail);
+          parser.reset({ consume: true });
+          if (parseError) throw parseError;
+          if (!sawDoneMarker && (requireDoneMarker || !sawTerminalFinishReason)) {
+            throw new Error(
+              requireDoneMarker
+                ? "DeepSeek stream ended before the required [DONE] marker"
+                : "Model stream ended without [DONE] or a terminal finish_reason",
+            );
+          }
+          break;
+        }
         parser.feed(decoder.decode(value, { stream: true }));
+        if (parseError) throw parseError;
       }
       while (queue.length > 0) yield queue.shift()!;
     } finally {

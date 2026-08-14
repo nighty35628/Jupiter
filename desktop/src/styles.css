@@ -8730,7 +8730,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 .pet-toggle:focus-visible,
 .pet-overlay-actor:focus-visible,
 .pet-status-bubble:focus-visible,
-.pet-activity-row:focus-visible {
+.pet-activity-row:focus-visible,
+.pet-context-menu button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -8766,6 +8767,86 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   cursor: grabbing;
 }
 
+.pet-context-menu {
+  position: absolute;
+  z-index: 12;
+  width: 188px;
+  min-height: 180px;
+  display: grid;
+  align-content: start;
+  padding: 5px;
+  border: 1px solid color-mix(in oklch, var(--border-strong) 76%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 94%, transparent);
+  box-shadow: 0 14px 32px -14px oklch(0% 0 0 / 0.56);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--fg);
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.pet-context-menu button {
+  min-width: 0;
+  min-height: 30px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  font: 500 12px / 1.2 var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pet-context-menu button:hover,
+.pet-context-menu button[data-highlighted="true"] {
+  background: color-mix(in oklch, var(--accent) 22%, var(--card));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 36%, transparent);
+}
+
+.pet-context-menu button:focus-visible {
+  outline: none;
+}
+
+.pet-context-menu button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-context-menu button > svg {
+  color: var(--muted);
+}
+
+.pet-context-menu button.danger,
+.pet-context-menu button.danger > svg {
+  color: var(--danger);
+}
+
+.pet-context-menu button.danger:hover,
+.pet-context-menu button.danger[data-highlighted="true"] {
+  background: color-mix(in oklch, var(--danger) 20%, var(--card));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--danger) 34%, transparent);
+}
+
+.pet-context-separator {
+  height: 1px;
+  margin: 4px 5px;
+  border: 0;
+  background: color-mix(in oklch, var(--border) 76%, transparent);
+}
+
+.pet-overlay-root[data-context-menu-open="true"] .pet-status-bubble,
+.pet-overlay-root[data-context-menu-open="true"] .pet-activity-tray {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .pet-overlay-sprite {
   --pet-width: 96px;
   filter: saturate(0.98) drop-shadow(0 5px 5px oklch(0% 0 0 / 0.18));
@@ -8781,11 +8862,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 .pet-overlay-root[data-pet="companion-cube"][data-activity="dragging-right"] .pet-overlay-sprite {
   animation: none;
   transform: rotate(var(--companion-roll-angle, 0deg));
-  filter:
-    brightness(1.06)
-    saturate(1.09)
-    contrast(0.97)
-    var(--companion-cube-shadow);
+  filter: brightness(1.06) saturate(1.09) contrast(0.97) var(--companion-cube-shadow);
 }
 
 .pet-overlay-root[data-pet="companion-cube"][data-activity="waving"] .pet-overlay-sprite {
@@ -8813,41 +8890,92 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 }
 
 @keyframes companion-cube-hello {
-  0%, 100% { transform: rotate(0deg) translateY(0); }
-  28% { transform: rotate(-7deg) translateY(-2px); }
-  56% { transform: rotate(5deg) translateY(-1px); }
-  78% { transform: rotate(-2deg) translateY(0); }
+  0%,
+  100% {
+    transform: rotate(0deg) translateY(0);
+  }
+  28% {
+    transform: rotate(-7deg) translateY(-2px);
+  }
+  56% {
+    transform: rotate(5deg) translateY(-1px);
+  }
+  78% {
+    transform: rotate(-2deg) translateY(0);
+  }
 }
 
 @keyframes companion-cube-hop {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  40% { transform: translateY(-12px) rotate(3deg); }
-  72% { transform: translateY(1px) rotate(-1deg); }
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  40% {
+    transform: translateY(-12px) rotate(3deg);
+  }
+  72% {
+    transform: translateY(1px) rotate(-1deg);
+  }
 }
 
 @keyframes companion-cube-oops {
-  0% { transform: translateX(0) rotate(0deg); filter: brightness(1.06) saturate(1.09) contrast(0.97) var(--companion-cube-shadow); }
-  18% { transform: translateX(-4px) rotate(-3deg); }
-  36% { transform: translateX(4px) rotate(3deg); }
-  54% { transform: translateX(-2px) rotate(-2deg); }
-  72% { transform: translateX(2px) rotate(1deg); }
-  100% { transform: translateX(0) rotate(-2deg); filter: brightness(0.97) saturate(0.82) contrast(0.96) var(--companion-cube-shadow); }
+  0% {
+    transform: translateX(0) rotate(0deg);
+    filter: brightness(1.06) saturate(1.09) contrast(0.97) var(--companion-cube-shadow);
+  }
+  18% {
+    transform: translateX(-4px) rotate(-3deg);
+  }
+  36% {
+    transform: translateX(4px) rotate(3deg);
+  }
+  54% {
+    transform: translateX(-2px) rotate(-2deg);
+  }
+  72% {
+    transform: translateX(2px) rotate(1deg);
+  }
+  100% {
+    transform: translateX(0) rotate(-2deg);
+    filter: brightness(0.97) saturate(0.82) contrast(0.96) var(--companion-cube-shadow);
+  }
 }
 
 @keyframes companion-cube-wait {
-  0%, 100% { transform: translateY(0) rotate(-2deg); }
-  50% { transform: translateY(-3px) rotate(2deg); }
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+  50% {
+    transform: translateY(-3px) rotate(2deg);
+  }
 }
 
 @keyframes companion-cube-busy {
-  0%, 100% { transform: translateY(0) rotate(-1.5deg); filter: brightness(1.05) saturate(1.07) contrast(0.97) var(--companion-cube-shadow); }
-  50% { transform: translateY(-2px) rotate(1.5deg); filter: brightness(1.1) saturate(1.14) contrast(0.97) var(--companion-cube-shadow); }
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1.5deg);
+    filter: brightness(1.05) saturate(1.07) contrast(0.97) var(--companion-cube-shadow);
+  }
+  50% {
+    transform: translateY(-2px) rotate(1.5deg);
+    filter: brightness(1.1) saturate(1.14) contrast(0.97) var(--companion-cube-shadow);
+  }
 }
 
 @keyframes companion-cube-proud {
-  0%, 100% { transform: translateY(0) rotate(0deg); filter: brightness(1.06) saturate(1.09) contrast(0.97) var(--companion-cube-shadow); }
-  45% { transform: translateY(-5px) rotate(2deg); filter: brightness(1.13) saturate(1.2) contrast(0.96) var(--companion-cube-shadow); }
-  70% { transform: translateY(-1px) rotate(-1deg); }
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+    filter: brightness(1.06) saturate(1.09) contrast(0.97) var(--companion-cube-shadow);
+  }
+  45% {
+    transform: translateY(-5px) rotate(2deg);
+    filter: brightness(1.13) saturate(1.2) contrast(0.96) var(--companion-cube-shadow);
+  }
+  70% {
+    transform: translateY(-1px) rotate(-1deg);
+  }
 }
 
 .pet-status-bubble,
@@ -8928,7 +9056,7 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   border: 1px solid color-mix(in oklch, var(--pet-status-color) 34%, var(--border));
   border-radius: 6px;
   color: var(--pet-status-color);
-  font: 600 11px/1 var(--font-mono);
+  font: 600 11px / 1 var(--font-mono);
 }
 
 .pet-status-bubble[data-status="waiting"],
@@ -9024,14 +9152,9 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
 
 .pet-sprite[data-pet="companion-cube"],
 .pet-choice[data-pet="companion-cube"] .pet-choice-thumb img {
-  --companion-cube-shadow:
-    drop-shadow(0 5px 5px oklch(28% 0.025 330 / 0.16))
+  --companion-cube-shadow: drop-shadow(0 5px 5px oklch(28% 0.025 330 / 0.16))
     drop-shadow(0 0 4px oklch(78% 0.08 350 / 0.12));
-  filter:
-    brightness(1.06)
-    saturate(1.09)
-    contrast(0.97)
-    var(--companion-cube-shadow);
+  filter: brightness(1.06) saturate(1.09) contrast(0.97) var(--companion-cube-shadow);
 }
 
 .pet-sprite[data-loading="true"] {

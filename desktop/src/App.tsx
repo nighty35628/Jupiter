@@ -23,13 +23,13 @@ import { CommandPalette, Toast, buildCommands, useCommandPalette } from "./Comma
 import { WorkspaceProvider } from "./Markdown";
 import { type AbortDraftSource, nextAbortDraftCandidate, restoreAbortedDraft } from "./abort-draft";
 import { DESKTOP_CLI_SLASH_COMMANDS, isKnownDesktopCliSlash, parseDesktopSlash } from "./cli-slash";
-import type { DingTalkDesktopSettingsState } from "./dingtalk-settings";
 import {
   installRendererDiagnostics,
   recordIncomingDiagnostic,
   recordUserSend,
   reportDesktopDiagnostic,
 } from "./diagnostics";
+import type { DingTalkDesktopSettingsState } from "./dingtalk-settings";
 import {
   type FilePreview,
   type FilePreviewTarget,
@@ -39,10 +39,10 @@ import {
   revealFileInFolder,
 } from "./file-preview";
 export { pathToFileUrl } from "./file-preview";
+import { BUILT_IN_WORKFLOWS } from "../../src/workflows/catalog";
 import type { FeishuDesktopSettingsState } from "./feishu-settings";
 import { getLang, getLangLabel, getSupportedLangs, setLang, t, useLang } from "./i18n";
 import { I } from "./icons";
-import { openExternalUrl } from "./open-external";
 import {
   type ApprovalSnapshot,
   deriveDesktopNotifications,
@@ -50,6 +50,7 @@ import {
   shouldShowCompletionToast,
 } from "./notifications";
 import { parseOneShotPlanCommand } from "./one-shot-plan";
+import { openExternalUrl } from "./open-external";
 import {
   petIncomingAffectsActivity,
   petOutgoingWaitsForDelivery,
@@ -61,13 +62,13 @@ import { usePetOverlayBridge } from "./pets/overlay-bridge";
 import type { PetOverlaySnapshot } from "./pets/overlay-protocol";
 import { compactPetTaskTitle, derivePetTaskActivities } from "./pets/overlay-state";
 import type { DesktopPetUi, PetTabActivity } from "./pets/types";
-import { RpcSendFailure, coerceRpcSendFailure, isDefinitelyUnsent } from "./rpc-send";
 import type {
   BrowserAutomationStatus,
   CheckpointVerdict,
   ChoiceVerdict,
   ConfirmationChoice,
   ContextDiagnosticsInfo,
+  DeepSeekNativeCredentialStatus,
   ExternalSessionApp,
   ExternalSessionCandidate,
   ExternalSessionSelection,
@@ -78,13 +79,13 @@ import type {
   McpSpecInfo,
   MemoryDetail,
   MemoryEntryInfo,
-  OutgoingCommand,
   OptionalComponentStatus,
+  OutgoingCommand,
   PlanVerdict,
   RevisionVerdict,
   SettingsPatch,
-  SkillPackSourceInfo,
   SkillInfo,
+  SkillPackSourceInfo,
   SkillRootInfo,
   SourceIngestResultEvent,
   SourceSearchResultsEvent,
@@ -96,7 +97,9 @@ import type {
   UsageHistoryEvent,
   WorkflowRun,
 } from "./protocol";
+import { displayReasoningSelection, parseReasoningSelection } from "./protocol";
 import type { QQDesktopSettingsState } from "./qq-settings";
+import { RpcSendFailure, coerceRpcSendFailure, isDefinitelyUnsent } from "./rpc-send";
 import {
   PANEL_SHORTCUT_MODES,
   matchDesktopShortcut,
@@ -186,7 +189,6 @@ import {
 } from "./ui/virtuoso-scroll";
 import { WorkdirPop } from "./ui/workdir-pop";
 import { displayWorkspaceBasename, displayWorkspacePath } from "./workspace-display";
-import { BUILT_IN_WORKFLOWS } from "../../src/workflows/catalog";
 
 const RIGHT_SIDEBAR_COLLAPSE_WIDTH = 1120;
 const LEFT_SIDEBAR_COLLAPSE_WIDTH = 760;
@@ -374,7 +376,10 @@ export type SessionInfo = {
 };
 
 export type Settings = {
+  settingsRevision?: number;
   reasoningEffort: "low" | "medium" | "high" | "max";
+  thinkingEnabled?: boolean;
+  reasoningChoices?: Array<"off" | "low" | "medium" | "high" | "max">;
   editMode: "review" | "auto" | "yolo" | "plan";
   budgetUsd: number | null;
   baseUrl?: string;
@@ -394,7 +399,8 @@ export type Settings = {
     | "perplexity"
     | "exa"
     | "brave"
-    | "ollama";
+    | "ollama"
+    | "deepseek-native";
   webSearchEndpoint?: string;
   browserAutomation?: BrowserAutomationStatus;
   optionalComponents?: OptionalComponentStatus[];
@@ -407,7 +413,9 @@ export type Settings = {
     exa?: string;
     ollama?: string;
     brave?: string;
+    deepseekNative?: string;
   };
+  deepseekNativeCredentialStatus?: DeepSeekNativeCredentialStatus;
   subagentModels?: Record<string, "flash" | "pro">;
   /** Per-model context-window override (tokens). */
   contextTokens?: Record<string, number>;
@@ -1982,6 +1990,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         },
       };
     case "$settings": {
+      const incomingRevision = ev.settingsRevision ?? 0;
+      if (incomingRevision < (state.settings?.settingsRevision ?? -1)) return state;
       const prevWs = state.settings?.workspaceDir;
       const wsChanged = prevWs !== undefined && prevWs !== ev.workspaceDir;
       return {
@@ -2001,7 +2011,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         subagents: wsChanged ? [] : state.subagents,
         retryNonce: wsChanged ? 0 : state.retryNonce,
         settings: {
+          settingsRevision: incomingRevision,
           reasoningEffort: ev.reasoningEffort,
+          thinkingEnabled: ev.thinkingEnabled,
+          reasoningChoices: ev.reasoningChoices,
           editMode: ev.editMode,
           budgetUsd: ev.budgetUsd,
           baseUrl: ev.baseUrl,
@@ -2017,6 +2030,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           optionalComponents: ev.optionalComponents,
           skillPackSources: ev.skillPackSources,
           webSearchApiKeys: ev.webSearchApiKeys,
+          deepseekNativeCredentialStatus: ev.deepseekNativeCredentialStatus,
           subagentModels: ev.subagentModels,
           contextTokens: ev.contextTokens,
           libraryRetrievalMode: ev.libraryRetrievalMode,
@@ -3142,7 +3156,8 @@ function TabRuntimeInner({
     onToggleBottom();
   }, [bottomCollapsed, ctxCollapsed, onToggleBottom, onToggleCtx]);
   const saveSettings = useCallback(
-    (patch: SettingsPatch) => sendRpc({ cmd: "settings_save", ...patch }),
+    (patch: SettingsPatch) =>
+      sendRpc({ cmd: "settings_save", requestId: crypto.randomUUID(), ...patch }),
     [sendRpc],
   );
   const applySettingsPatch = useCallback(
@@ -3153,7 +3168,10 @@ function TabRuntimeInner({
     [saveSettings],
   );
   useEffect(() => {
-    if (settingsOpen) sendRpc({ cmd: "context_diagnostics_get" });
+    if (settingsOpen) {
+      sendRpc({ cmd: "settings_get" });
+      sendRpc({ cmd: "context_diagnostics_get" });
+    }
   }, [settingsOpen, sendRpc]);
   const loadQQSettings = useCallback(() => sendRpc({ cmd: "qq_status_get" }), [sendRpc]);
   const connectQQ = useCallback(() => sendRpc({ cmd: "qq_connect" }), [sendRpc]);
@@ -3187,6 +3205,14 @@ function TabRuntimeInner({
     [sendRpc],
   );
   const signOutApiKey = useCallback(() => sendRpc({ cmd: "settings_sign_out" }), [sendRpc]);
+  const refreshOptionalComponents = useCallback(
+    () => sendRpc({ cmd: "optional_components_get" }),
+    [sendRpc],
+  );
+  const refreshArchivedSessions = useCallback(
+    () => sendRpc({ cmd: "session_list_archived" }),
+    [sendRpc],
+  );
   const scanStorage = useCallback(() => sendRpc({ cmd: "storage_scan" }), [sendRpc]);
   const cleanStorage = useCallback(
     (itemIds: string[]) => sendRpc({ cmd: "storage_cleanup", itemIds }),
@@ -3272,13 +3298,23 @@ function TabRuntimeInner({
   }, [flashToast, state.sessionActionResult]);
 
   const applyReasoningEffort = useCallback(
-    (reasoningEffort: Settings["reasoningEffort"]) => {
-      applySettingsPatch({ reasoningEffort });
+    (selection: "off" | Settings["reasoningEffort"]) => {
+      const choices = state.settings?.reasoningChoices ?? [];
+      const resolved = parseReasoningSelection(selection, choices);
+      if (resolved === "off") {
+        applySettingsPatch({ thinkingEnabled: false });
+      } else {
+        applySettingsPatch({ thinkingEnabled: true, reasoningEffort: resolved });
+      }
       if (shouldShowSettingsChangeToast("reasoningEffort")) {
-        flashToast(t("app.toast.effortSwitched", { effort: reasoningEffort }));
+        flashToast(
+          t("app.toast.effortSwitched", {
+            effort: displayReasoningSelection(resolved, choices),
+          }),
+        );
       }
     },
-    [applySettingsPatch, flashToast],
+    [applySettingsPatch, flashToast, state.settings?.reasoningChoices],
   );
 
   const applyEditMode = useCallback(
@@ -4459,6 +4495,15 @@ function TabRuntimeInner({
     send(text);
   };
 
+  const composerEffortChoices = state.settings?.reasoningChoices ?? ["low", "medium", "high"];
+  const configuredEffort = state.settings?.reasoningEffort ?? "high";
+  const composerReasoningSelection =
+    state.settings?.thinkingEnabled === false
+      ? "off"
+      : composerEffortChoices.includes(configuredEffort)
+        ? configuredEffort
+        : "high";
+
   const renderComposer = (variant: "default" | "hero" = "default") => (
     <Composer
       draft={draft}
@@ -4471,7 +4516,8 @@ function TabRuntimeInner({
       busyElapsedMs={elapsed}
       textareaRef={composerRef}
       modelLabel={state.settings?.model ?? "deepseek-v4-flash"}
-      reasoningEffort={state.settings?.reasoningEffort ?? "high"}
+      reasoningEffort={composerReasoningSelection}
+      effortChoices={composerEffortChoices}
       onModelChange={(model) => {
         applySettingsPatch({ model });
         if (shouldShowSettingsChangeToast("model")) {
@@ -5226,7 +5272,7 @@ function TabRuntimeInner({
                 onEnableMcpSpec={enableMcpSpec}
                 onDisableMcpSpec={disableMcpSpec}
                 onReconnectMcpSpecs={reconnectMcpSpecs}
-                onRefreshOptionalComponents={() => sendRpc({ cmd: "optional_components_get" })}
+                onRefreshOptionalComponents={refreshOptionalComponents}
                 onAddSkillPath={addSkillPath}
                 onRemoveSkillPath={removeSkillPath}
                 onCreateSkill={createSkill}
@@ -5235,7 +5281,7 @@ function TabRuntimeInner({
                 onRefreshMemory={() => sendRpc({ cmd: "memory_refresh" })}
                 onDeleteMemory={(path) => sendRpc({ cmd: "memory_delete", path })}
                 onSaveMemory={(input) => sendRpc({ cmd: "memory_save", ...input })}
-                onRefreshArchivedSessions={() => sendRpc({ cmd: "session_list_archived" })}
+                onRefreshArchivedSessions={refreshArchivedSessions}
                 onRestoreArchivedSession={(name) =>
                   sendRpc({ cmd: "session_restore_archived", name })
                 }
@@ -6807,7 +6853,8 @@ export function App() {
             : undefined;
           const workspaceDir = snapshot?.workspaceDir ?? tab.workspaceDir;
           const workspaceName = workspaceDir?.split(/[\\/]/).filter(Boolean).pop();
-          const rawTitle = session?.summary || session?.name || workspaceName || t("pets.currentTask");
+          const rawTitle =
+            session?.summary || session?.name || workspaceName || t("pets.currentTask");
           const modifiedAt = session ? Date.parse(session.mtime) : Number.NaN;
           return {
             tabId: tab.id,
@@ -6858,7 +6905,16 @@ export function App() {
       }
     })();
   }, []);
-  usePetOverlayBridge(petOverlaySnapshot, openPetTask);
+  const openPetSettings = useCallback(() => {
+    runtimeControlsRef.current.get(activeTabId)?.openSettingsPage("pets");
+    openPetTask(activeTabId);
+  }, [activeTabId, openPetTask]);
+  const hidePet = useCallback(() => petUi.setEnabled(false), [petUi.setEnabled]);
+  usePetOverlayBridge(petOverlaySnapshot, {
+    onOpenTask: openPetTask,
+    onOpenSettings: openPetSettings,
+    onHide: hidePet,
+  });
   const shellThreadMaxWidth = getThreadMaxWidth({
     viewportWidth,
     visibleSide: sideCollapsed ? 0 : sideWidth,

@@ -231,7 +231,7 @@ describe("handleSlash", () => {
     }
   });
 
-  it("/search-engine accepts baidu and saves an inline API key", () => {
+  it("/search-engine rejects inline API keys without persisting them", () => {
     const tempHome = mkdtempSync(join(tmpdir(), "jupiter-slash-search-engine-"));
     const originalHome = process.env.HOME;
     const originalUserProfile = process.env.USERPROFILE;
@@ -239,12 +239,11 @@ describe("handleSlash", () => {
       process.env.HOME = tempHome;
       process.env.USERPROFILE = tempHome;
       const result = handleSlash("search-engine", ["baidu", "test-baidu-key"], makeLoop());
-      expect(result.info).toContain("baidu");
+      expect(result.info).toContain("API keys are not accepted");
+      expect(result.info).toContain("BAIDU_API_KEY");
       const configPath = join(tempHome, ".jupiter", "config.json");
-      expect(readConfig(configPath)).toMatchObject({
-        webSearchEngine: "baidu",
-        baiduApiKey: "test-baidu-key",
-      });
+      expect(readConfig(configPath)).not.toMatchObject({ baiduApiKey: "test-baidu-key" });
+      expect(existsSync(configPath)).toBe(false);
     } finally {
       if (originalHome === undefined) {
         // biome-ignore lint/performance/noDelete: env var must be absent, not "undefined"
@@ -317,7 +316,7 @@ describe("handleSlash", () => {
   it("/effort with no arg returns the current value", () => {
     const r = handleSlash("effort", [], makeLoop());
     expect(r.info).toMatch(/effort/);
-    expect(r.info).toMatch(/low.*medium.*high.*max/);
+    expect(r.info).toMatch(/off.*medium.*high.*max/);
   });
 
   it("unknown commands return an unknown flag with hint", () => {
@@ -368,12 +367,21 @@ describe("handleSlash", () => {
     expect(posted).toMatch(/nothing to fold|folded/);
   });
 
-  it("/effort accepts each enum value", () => {
-    for (const e of ["low", "medium", "high", "max"] as const) {
+  it("/effort accepts each official DeepSeek V4 selection", () => {
+    for (const e of ["high", "max"] as const) {
       const loop = makeLoop();
       handleSlash("effort", [e], loop);
       expect(loop.reasoningEffort).toBe(e);
+      expect(loop.thinkingEnabled).toBe(true);
     }
+    const mediumLoop = makeLoop();
+    handleSlash("effort", ["medium"], mediumLoop);
+    expect(mediumLoop.reasoningEffort).toBe("low");
+    expect(mediumLoop.thinkingEnabled).toBe(true);
+
+    const loop = makeLoop();
+    handleSlash("effort", ["off"], loop);
+    expect(loop.thinkingEnabled).toBe(false);
   });
 
   it("/effort with bad name returns usage", () => {
@@ -570,7 +578,7 @@ describe("handleSlash", () => {
       const ctx = detectSlashArgContext("/effort hi");
       expect(ctx).not.toBeNull();
       expect(ctx!.kind).toBe("picker");
-      expect(ctx!.spec.argCompleter).toEqual(["low", "medium", "high", "max"]);
+      expect(ctx!.spec.argCompleter).toEqual(["off", "low", "medium", "high", "max"]);
       expect(ctx!.partial).toBe("hi");
       expect(ctx!.partialOffset).toBe("/effort ".length);
     });

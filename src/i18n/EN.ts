@@ -727,6 +727,17 @@ export const EN: TranslationSchema = {
     harvestStatus: "extracting plan state from reasoning…",
     repeatToolCallWarning:
       "Caught a repeated tool call — let the model see the issue and retry with a different approach.",
+    finishLengthWarning: "The response reached its output or context limit and may be incomplete.",
+    finishLengthAfterContinuationWarning:
+      "The continued response reached the limit again and remains incomplete.",
+    finishContentFilterWarning: "The provider stopped this response because of content filtering.",
+    finishResourceWarning:
+      "The provider stopped this response because system resources were unavailable. Partial output was preserved.",
+    finishUnknownWarning:
+      "The provider ended this response without a recognized finish reason. Partial output was preserved.",
+    prefixContinuationStatus: "output limit reached · continuing once…",
+    prefixContinuationFailed:
+      "Automatic continuation failed. The response generated so far was preserved.",
     stormStuck:
       "Stopped a stuck retry loop — the model kept calling the same tool with identical args after a self-correction nudge. Try /retry, rephrase, or rule out the underlying blocker.",
     stormSuppressed: "Suppressed {count} repeated tool call(s) — same name + args fired 3+ times.",
@@ -1358,6 +1369,8 @@ export const EN: TranslationSchema = {
         "  /search-engine ollama              use Ollama cloud web search — set OLLAMA_API_KEY or ollamaApiKey in config; get one at https://ollama.com/settings/keys",
       usageBrave:
         "  /search-engine brave               use Brave Search API (independent index, free 2000/mo — set BRAVE_SEARCH_API_KEY or braveApiKey in config; get one at https://brave.com/search/api/)",
+      usageDeepSeekNative:
+        "  /search-engine deepseek-native     use DeepSeek native search (experimental; full model-call cost)",
       alias: "Alias: /se",
       searxngInfo:
         "SearXNG is a self-hosted metasearch engine (https://github.com/searxng/searxng).",
@@ -1378,7 +1391,9 @@ export const EN: TranslationSchema = {
       switchedBraveNote:
         " Set BRAVE_SEARCH_API_KEY (or BRAVE_API_KEY) or `braveApiKey` in config; free 2000/mo at https://brave.com/search/api/.",
       keyNeeded:
-        'No API key configured for "{engine}".\n\n  1. Set the {envVar} environment variable\n  2. Or provide one inline:  /search-engine {engine} <your-key>\n  3. Or add "{engine}ApiKey" to ~/.jupiter/config.json\n\nThen retry /search-engine {engine}.',
+        'No API key configured for "{engine}".\n\n  1. Set the {envVar} environment variable\n  2. Or add "{configKey}" to ~/.jupiter/config.json\n\nThen retry /search-engine {engine}.',
+      keyInlineRejected:
+        "API keys are not accepted in slash commands because command history is persisted. Configure {envVar} or use Settings instead.",
       keySaved: " API key saved to config.",
       confirmed:
         'Web search engine set to "{engine}"{detail}. Next assistant turn will pick up the change.',
@@ -1604,6 +1619,7 @@ export const EN: TranslationSchema = {
     effortHeader: "    EFFORT  \u00b7  reasoning_effort cap",
     modelsHeader: "    MODELS  \u00b7  DeepSeek-compatible ids",
     effortDesc: {
+      off: "disable DeepSeek thinking",
       low: "fastest \u2014 minimal reasoning",
       medium: "balanced",
       high: "default \u2014 safe for vLLM / Azure",

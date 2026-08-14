@@ -4,6 +4,7 @@ import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process"
 import { constants, closeSync, lstatSync, openSync, realpathSync } from "node:fs";
 import { devNull } from "node:os";
 import * as pathMod from "node:path";
+import { sanitizedChildProcessEnv } from "../security/child-process-env.js";
 import { isDqEscape, killProcessTree, prepareSpawn, smartDecodeOutput } from "./shell.js";
 
 export type ChainOp = "|" | "||" | "&&" | ";";
@@ -444,7 +445,11 @@ async function runPipeGroup(
   segments: ChainSegment[],
   opts: PipeGroupOptions,
 ): Promise<PipeGroupResult> {
-  const env = { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" };
+  const env = {
+    ...sanitizedChildProcessEnv(),
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+  };
   const children: ChildProcess[] = [];
   const allFds: number[] = [];
   let timedOut = false;

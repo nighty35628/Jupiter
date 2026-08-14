@@ -220,3 +220,55 @@ describe("desktop $turn_complete reducer (#1456)", () => {
     expect(next.pendingRevisions).toEqual([]);
   });
 });
+
+describe("desktop settings revisions", () => {
+  const settingsEvent = (
+    settingsRevision: number,
+    webSearchEngine: "tavily" | "deepseek-native",
+  ) => ({
+    type: "$settings" as const,
+    settingsRevision,
+    requestId: `request-${settingsRevision}`,
+    reasoningEffort: "high" as const,
+    thinkingEnabled: true,
+    reasoningChoices: ["off", "low", "high", "max"] as const,
+    editMode: "review" as const,
+    budgetUsd: null,
+    workspaceDir: "/tmp/Jupiter",
+    recentWorkspaces: [],
+    model: "deepseek-v4-flash",
+    webSearchEngine,
+    version: "0.0.0-test",
+  });
+
+  it("keeps the newest authoritative settings when replies arrive out of order", () => {
+    const newest = reduce(makeState(), {
+      t: "incoming",
+      event: settingsEvent(4, "deepseek-native"),
+    });
+    const afterStaleReply = reduce(newest, {
+      t: "incoming",
+      event: settingsEvent(3, "tavily"),
+    });
+
+    expect(afterStaleReply).toBe(newest);
+    expect(afterStaleReply.settings?.webSearchEngine).toBe("deepseek-native");
+    expect(afterStaleReply.settings?.settingsRevision).toBe(4);
+  });
+
+  it("accepts an equal-revision reply so a rejected optimistic patch is corrected", () => {
+    const optimistic = {
+      ...makeState(),
+      settings: {
+        ...settingsEvent(7, "deepseek-native"),
+        version: "0.0.0-test",
+      },
+    } as AppState;
+    const authoritative = reduce(optimistic, {
+      t: "incoming",
+      event: settingsEvent(7, "tavily"),
+    });
+
+    expect(authoritative.settings?.webSearchEngine).toBe("tavily");
+  });
+});

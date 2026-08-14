@@ -1,4 +1,4 @@
-import { type DeepSeekClient, Usage } from "./client.js";
+import { type ChatFinishReason, type DeepSeekClient, Usage } from "./client.js";
 import type { ReasoningEffort } from "./config.js";
 import type { PauseGate } from "./core/pause-gate.js";
 import { pauseGate as defaultPauseGate } from "./core/pause-gate.js";
@@ -18,6 +18,7 @@ import {
 } from "./context-manager.js";
 import { InflightSet } from "./core/inflight.js";
 import { t } from "./i18n/index.js";
+import { addUsage, planPrefixContinuation } from "./loop/continuation.js";
 import { dispatchToolCallsChunked } from "./loop/dispatch.js";
 import {
   errorMeta,
@@ -60,10 +61,16 @@ import {
   rewriteSession,
   sessionPath,
 } from "./memory/session.js";
+import {
+  type ToolExecutionJournal,
+  openToolExecutionJournal,
+  toolExecutionJournalPath,
+} from "./memory/tool-execution-journal.js";
 import { sanitizeProviderErrorText } from "./provider-http-error.js";
 import { type RepairReport, ToolCallRepair } from "./repair/index.js";
-import { SessionStats, type TurnStats } from "./telemetry/stats.js";
-import { ToolRegistry } from "./tools.js";
+import { SessionStats, type TurnStats, costUsd } from "./telemetry/stats.js";
+import { appendUsage } from "./telemetry/usage.js";
+import { type AuxiliaryUsageReport, ToolRegistry } from "./tools.js";
 import { ReadTracker } from "./tools/read-tracker.js";
 import type { ChatMessage, ToolCall } from "./types.js";
 
@@ -102,12 +109,29 @@ function countUserTurns(messages: readonly ChatMessage[]): number {
   return messages.reduce((count, message) => (message.role === "user" ? count + 1 : count), 0);
 }
 
+function toolJournalFailureResult(
+  stage: "open" | "intent" | "result",
+  detail: string | null,
+  outcomeUnknown: boolean,
+): string {
+  return JSON.stringify({
+    error: outcomeUnknown
+      ? "The tool may have executed, but Jupiter could not durably record its result. The outcome is unknown; do not retry automatically."
+      : "Jupiter could not durably record this tool execution, so the tool was not run.",
+    journalStage: stage,
+    outcome: outcomeUnknown ? "unknown" : "not_started",
+    ...(detail ? { detail } : {}),
+  });
+}
+
 export interface CacheFirstLoopOptions {
   client: DeepSeekClient;
   prefix: ImmutablePrefix;
   tools?: ToolRegistry;
   model?: string;
   stream?: boolean;
+  thinkingEnabled?: boolean;
+  autoContinueDeepSeek?: boolean;
   reasoningEffort?: ReasoningEffort;
   /** Soft USD cap — warns at 80%, refuses next turn at 100%. Opt-in (default no cap). */
   budgetUsd?: number;
@@ -125,6 +149,7 @@ export interface CacheFirstLoopOptions {
 export interface ReconfigurableOptions {
   model?: string;
   stream?: boolean;
+  thinkingEnabled?: boolean;
   /** V4 thinking mode only; deepseek-chat ignores. */
   reasoningEffort?: ReasoningEffort;
 }
@@ -156,11 +181,16 @@ export class CacheFirstLoop {
   // these mid-session so users don't have to restart.
   model: string;
   stream: boolean;
+  thinkingEnabled: boolean;
+  autoContinueDeepSeek: boolean;
   reasoningEffort: ReasoningEffort;
   budgetUsd: number | null;
   /** One-shot 80% warning latch — cleared by setBudget so a bump re-arms at the new boundary. */
   private _budgetWarned = false;
-  sessionName: string | null;
+  private _sessionName: string | null;
+  private _sessionEpoch = 0;
+  private _toolJournal: ToolExecutionJournal | null = null;
+  private _toolJournalError: string | null = null;
 
   hooks: ResolvedHook[];
   hookCwd: string;
@@ -220,11 +250,14 @@ export class CacheFirstLoop {
     this.client = opts.client;
     this.prefix = opts.prefix;
     this.tools = opts.tools ?? new ToolRegistry();
-    this.sessionName = opts.session ?? null;
+    this._sessionName = opts.session ?? null;
+    this.bindToolJournal(this._sessionName);
     this.log = new AppendOnlyLog({
       sessionPath: this.sessionName ? sessionPath(this.sessionName) : undefined,
     });
     this.model = opts.model ?? "deepseek-v4-flash";
+    this.thinkingEnabled = opts.thinkingEnabled ?? true;
+    this.autoContinueDeepSeek = opts.autoContinueDeepSeek ?? false;
     this.reasoningEffort = opts.reasoningEffort ?? "high";
     this.budgetUsd =
       typeof opts.budgetUsd === "number" && opts.budgetUsd > 0 ? opts.budgetUsd : null;
@@ -255,7 +288,20 @@ export class CacheFirstLoop {
 
     // Heal-on-load: oversized tool results would 400 the next call before the user types.
     if (this.sessionName) {
-      const prior = loadSessionMessages(this.sessionName);
+      const loadedPrior = loadSessionMessages(this.sessionName);
+      let prior = loadedPrior;
+      let recoveredToolResults = 0;
+      if (this._toolJournal) {
+        try {
+          this._toolJournal.recoverIncompleteExecutions();
+          const repaired = this._toolJournal.repairDanglingToolCalls(prior);
+          prior = repaired.messages;
+          recoveredToolResults = repaired.repairedCount;
+        } catch (err) {
+          this._toolJournal = null;
+          this._toolJournalError = (err as Error).message;
+        }
+      }
       const shrunk = healLoadedMessagesByTokens(prior, DEFAULT_MAX_RESULT_TOKENS);
       // Thinking-mode sessions still need tool-call reasoning_content, while stale
       // plain-turn reasoning can be dropped before it bloats long-session requests.
@@ -280,7 +326,10 @@ export class CacheFirstLoop {
           lastPromptTokens: meta.lastPromptTokens,
         });
       }
-      if ((healedCount > 0 || pruned.prunedCount > 0) && !chatMessagesEqual(prior, messages)) {
+      if (
+        (healedCount > 0 || pruned.prunedCount > 0 || recoveredToolResults > 0) &&
+        !chatMessagesEqual(loadedPrior, messages)
+      ) {
         // Persist healed log so the same break isn't re-noticed every restart.
         try {
           rewriteSession(this.sessionName, messages);
@@ -292,6 +341,11 @@ export class CacheFirstLoop {
             `▸ session "${this.sessionName}": healed ${healedCount} entr${healedCount === 1 ? "y" : "ies"}${tokensSaved > 0 ? ` (shrunk ${tokensSaved.toLocaleString()} tokens of oversized tool output/arguments)` : " (dropped dangling tool_calls tail)"}. Rewrote session file.\n`,
           );
         }
+        if (recoveredToolResults > 0) {
+          process.stderr.write(
+            `▸ session "${this.sessionName}": recovered ${recoveredToolResults} interrupted tool result${recoveredToolResults === 1 ? "" : "s"} without retrying side effects.\n`,
+          );
+        }
       }
     } else {
       this.resumedMessageCount = 0;
@@ -301,7 +355,10 @@ export class CacheFirstLoop {
       client: this.client,
       log: this.log,
       stats: this.stats,
-      sessionName: this.sessionName,
+      getSessionBinding: () => ({
+        sessionName: this._sessionName,
+        epoch: this._sessionEpoch,
+      }),
       getAbortSignal: () => this._turnAbort.signal,
       getCurrentTurn: () => this._turn,
       getSystemPrompt: () => this.prefix.system,
@@ -309,6 +366,34 @@ export class CacheFirstLoop {
       getFewShots: () => this.prefix.fewShots,
       onLogRewrite: () => this.readTracker.reset(),
     });
+  }
+
+  get sessionName(): string | null {
+    return this._sessionName;
+  }
+
+  /** Repoint all session-bound persistence. Renames keep the logical epoch; real session switches advance it. */
+  rebindSession(sessionName: string | null, opts: { logicalSessionChanged?: boolean } = {}): void {
+    if (opts.logicalSessionChanged) this._sessionEpoch++;
+    this._sessionName = sessionName;
+    this.log.setSessionPath(sessionName ? sessionPath(sessionName) : null);
+    if (sessionName && this._toolJournal && !opts.logicalSessionChanged) {
+      this._toolJournal.rebindPath(toolExecutionJournalPath(sessionName));
+      this._toolJournalError = null;
+    } else {
+      this.bindToolJournal(sessionName);
+    }
+  }
+
+  private bindToolJournal(sessionName: string | null): void {
+    this._toolJournal = null;
+    this._toolJournalError = null;
+    if (!sessionName) return;
+    try {
+      this._toolJournal = openToolExecutionJournal(sessionName);
+    } catch (err) {
+      this._toolJournalError = err instanceof Error ? err.message : String(err);
+    }
   }
 
   /** Replace older turns with one summary message; keep tail within keepRecentTokens budget. */
@@ -436,12 +521,17 @@ export class CacheFirstLoop {
     const dropped = this.log.length;
     this.log.compactInPlace([]);
     let archived: string | null = null;
+    const priorToolJournal = this._toolJournal;
     if (this.sessionName) {
       try {
         archived = archiveSession(this.sessionName);
         if (archived === null) rewriteSession(this.sessionName, []);
       } catch {
         /* disk issue shouldn't block the in-memory clear */
+      }
+      if (archived !== null) {
+        priorToolJournal?.rebindPath(toolExecutionJournalPath(archived));
+        this.bindToolJournal(this.sessionName);
       }
     }
     this.scratch.reset();
@@ -468,6 +558,7 @@ export class CacheFirstLoop {
   switchWorkspace(opts: { sessionName: string }): { dropped: number; archived: string | null } {
     const dropped = this.log.length;
     let archived: string | null = null;
+    const priorToolJournal = this._toolJournal;
     if (this.sessionName) {
       try {
         archived = archiveSession(this.sessionName);
@@ -475,13 +566,16 @@ export class CacheFirstLoop {
       } catch {
         /* disk issue shouldn't block the in-memory swap */
       }
+      if (archived !== null) {
+        priorToolJournal?.rebindPath(toolExecutionJournalPath(archived));
+      }
     }
     this.log.compactInPlace([]);
     this.scratch.reset();
     this._inflight.clear();
     this._steerQueue.length = 0;
     this._steerConsumed = false;
-    this.sessionName = opts.sessionName;
+    this.rebindSession(opts.sessionName, { logicalSessionChanged: true });
     if (this._rebuildSystem) {
       try {
         this.prefix.replaceSystem(this._rebuildSystem());
@@ -498,6 +592,7 @@ export class CacheFirstLoop {
       this._streamPreference = opts.stream;
       this.stream = opts.stream;
     }
+    if (opts.thinkingEnabled !== undefined) this.thinkingEnabled = opts.thinkingEnabled;
     if (opts.reasoningEffort !== undefined) this.reasoningEffort = opts.reasoningEffort;
   }
 
@@ -544,6 +639,31 @@ export class CacheFirstLoop {
     const name = call.function?.name ?? "";
     const args = call.function?.arguments ?? "{}";
     const parsedArgs = safeParseToolArgs(args);
+    const journal = this._toolJournal;
+    if (this.sessionName && !journal) {
+      return {
+        preWarnings: [],
+        postWarnings: [],
+        result: toolJournalFailureResult("open", this._toolJournalError, false),
+      };
+    }
+    let executionId: string | null = null;
+    if (journal) {
+      try {
+        executionId = journal.recordIntent({
+          turn: this._turn,
+          callId: this.inflightIdFor(call),
+          toolName: name,
+          args,
+        });
+      } catch (err) {
+        return {
+          preWarnings: [],
+          postWarnings: [],
+          result: toolJournalFailureResult("intent", (err as Error).message, false),
+        };
+      }
+    }
     this._inflight.add(this.inflightIdFor(call));
     try {
       const preReport = await runHooks({
@@ -564,20 +684,57 @@ export class CacheFirstLoop {
           blocking?.stdout ||
           "blocked by PreToolUse hook"
         ).trim();
+        const result = `[hook block] ${blocking?.hook.command ?? "<unknown>"}\n${reason}`;
+        if (journal && executionId) {
+          try {
+            journal.recordResult(executionId, "blocked_before_execution", result);
+          } catch (err) {
+            return {
+              preWarnings,
+              postWarnings: [],
+              result: toolJournalFailureResult("result", (err as Error).message, false),
+            };
+          }
+        }
         return {
           preWarnings,
           postWarnings: [],
-          result: `[hook block] ${blocking?.hook.command ?? "<unknown>"}\n${reason}`,
+          result,
         };
       }
 
+      let executionStarted = false;
       const result = await this.tools.dispatch(name, args, {
         signal,
         maxResultTokens: DEFAULT_MAX_RESULT_TOKENS,
         confirmationGate: this.confirmationGate,
         readTracker: this.readTracker,
         rootDir: this.hookCwd,
+        reportAuxiliaryUsage: (report) => this.recordAuxiliaryUsage(report),
+        onExecutionStarted:
+          journal && executionId
+            ? () => {
+                journal.recordExecutionStarted(executionId!);
+                executionStarted = true;
+              }
+            : undefined,
       });
+
+      if (journal && executionId) {
+        try {
+          journal.recordResult(
+            executionId,
+            executionStarted ? "returned" : "rejected_before_execution",
+            result,
+          );
+        } catch (err) {
+          return {
+            preWarnings,
+            postWarnings: [],
+            result: toolJournalFailureResult("result", (err as Error).message, executionStarted),
+          };
+        }
+      }
 
       const postReport = await runHooks({
         hooks: this.hooks,
@@ -595,6 +752,28 @@ export class CacheFirstLoop {
     } finally {
       this._inflight.delete(this.inflightIdFor(call));
     }
+  }
+
+  private recordAuxiliaryUsage(report: AuxiliaryUsageReport): void {
+    const usage = new Usage(
+      report.promptTokens,
+      report.completionTokens,
+      report.promptTokens + report.completionTokens,
+      report.cacheHitTokens,
+      report.cacheMissTokens,
+    );
+    this.stats.recordExternal(report.model, usage);
+    appendUsage({
+      session: this.sessionName ?? null,
+      model: report.model,
+      usage,
+      kind: "auxiliary",
+      auxiliary: {
+        provider: report.provider,
+        operation: report.operation,
+        requestId: report.requestId,
+      },
+    });
   }
 
   /** Stable per-call id used as the inflight key AND threaded into tool_start / tool events so the UI matches them up. */
@@ -833,6 +1012,8 @@ export class CacheFirstLoop {
       }
     }
     this._turn++;
+    const turnSessionEpoch = this._sessionEpoch;
+    const turnNumber = this._turn;
     this.scratch.reset();
     // A fresh user turn is a new intent — don't let StormBreaker's
     // old sliding window of (name, args) signatures keep blocking
@@ -981,6 +1162,8 @@ export class CacheFirstLoop {
       let reasoningContent = "";
       let toolCalls: ToolCall[] = [];
       let usage: TurnStats["usage"] | null = null;
+      let usageComplete = false;
+      let finishReason: ChatFinishReason = "unknown";
 
       try {
         if (this.stream) {
@@ -990,6 +1173,7 @@ export class CacheFirstLoop {
             messages,
             toolSpecs,
             signal,
+            thinkingEnabled: this.thinkingEnabled,
             reasoningEffort: this.reasoningEffort,
             turn: this._turn,
           });
@@ -997,6 +1181,8 @@ export class CacheFirstLoop {
           reasoningContent = result.reasoningContent;
           toolCalls = result.toolCalls;
           usage = result.usage;
+          usageComplete = result.usageComplete;
+          finishReason = result.finishReason;
         } else {
           const callModel = this.model;
           const resp = await this.client.chat({
@@ -1004,13 +1190,15 @@ export class CacheFirstLoop {
             messages,
             tools: toolSpecs.length ? toolSpecs : undefined,
             signal,
-            thinking: thinkingModeForModel(callModel),
-            reasoningEffort: this.reasoningEffort,
+            thinking: thinkingModeForModel(callModel, this.thinkingEnabled),
+            reasoningEffort: this.thinkingEnabled ? this.reasoningEffort : undefined,
           });
           assistantContent = resp.content;
           reasoningContent = resp.reasoningContent ?? "";
           toolCalls = resp.toolCalls;
           usage = resp.usage;
+          usageComplete = resp.usageComplete;
+          finishReason = resp.finishReason;
         }
       } catch (err) {
         // An aborted signal here is almost always our own doing —
@@ -1063,9 +1251,107 @@ export class CacheFirstLoop {
         return;
       }
 
+      let billableUsage = usage;
+      let contextUsage = usage;
+      let billableUsageComplete = usageComplete;
+      let continuationAttempted = false;
+      const continuationPlan = planPrefixContinuation({
+        enabled:
+          this.autoContinueDeepSeek &&
+          this._sessionEpoch === turnSessionEpoch &&
+          this._turn === turnNumber &&
+          !signal.aborted,
+        baseUrl: this.client.baseUrl,
+        model: this.model,
+        finishReason,
+        messages,
+        assistantContent,
+        reasoningContent,
+        toolCalls,
+        usage,
+      });
+      const firstCallCost = costUsd(this.model, usage ?? new Usage());
+      const continuationWithinBudget =
+        this.budgetUsd === null || this.stats.totalCost + firstCallCost < this.budgetUsd;
+
+      if (continuationPlan && continuationWithinBudget) {
+        continuationAttempted = true;
+        yield {
+          turn: this._turn,
+          role: "status",
+          content: t("loop.prefixContinuationStatus"),
+        };
+        try {
+          if (this.stream) {
+            const continued = yield* streamModelResponse({
+              client: this.client,
+              model: this.model,
+              messages: continuationPlan.messages,
+              toolSpecs: [],
+              signal,
+              thinkingEnabled: this.thinkingEnabled,
+              reasoningEffort: this.reasoningEffort,
+              maxTokens: continuationPlan.maxTokens,
+              betaPrefix: true,
+              disableRetry: true,
+              turn: this._turn,
+            });
+            assistantContent += continued.assistantContent;
+            reasoningContent += continued.reasoningContent;
+            finishReason = continued.finishReason;
+            billableUsage = addUsage(billableUsage, continued.usage);
+            contextUsage = continued.usage ?? contextUsage;
+            billableUsageComplete = billableUsageComplete && continued.usageComplete;
+          } else {
+            const continued = await this.client.chat({
+              model: this.model,
+              messages: continuationPlan.messages,
+              signal,
+              thinking: thinkingModeForModel(this.model, this.thinkingEnabled),
+              reasoningEffort: this.thinkingEnabled ? this.reasoningEffort : undefined,
+              maxTokens: continuationPlan.maxTokens,
+              betaPrefix: true,
+              disableRetry: true,
+            });
+            assistantContent += continued.content;
+            reasoningContent += continued.reasoningContent ?? "";
+            finishReason = continued.finishReason;
+            billableUsage = addUsage(billableUsage, continued.usage);
+            contextUsage = continued.usage;
+            billableUsageComplete = billableUsageComplete && continued.usageComplete;
+          }
+        } catch (err) {
+          if (signal.aborted) {
+            if (this._discardAbortRequested) this.discardLogFrom(turnStartLogIndex);
+            try {
+              yield { turn: this._turn, role: "done", content: "" };
+            } finally {
+              this.resetAbortState();
+            }
+            this._steerQueue.length = 0;
+            return;
+          }
+          billableUsageComplete = false;
+          yield {
+            turn: this._turn,
+            role: "warning",
+            severity: "high",
+            content: t("loop.prefixContinuationFailed"),
+          };
+        }
+      }
+
+      if (this._sessionEpoch !== turnSessionEpoch || this._turn !== turnNumber) {
+        this._steerQueue.length = 0;
+        return;
+      }
+
       // Attribute under the actual model used (escalated → pro, else
       // this.model) so cost/usage logs reflect reality.
-      const turnStats = this.stats.record(this._turn, this.model, usage ?? new Usage());
+      const turnStats = this.stats.record(this._turn, this.model, billableUsage ?? new Usage(), {
+        usageComplete: billableUsageComplete,
+        contextPromptTokens: contextUsage?.promptTokens ?? 0,
+      });
 
       // Carry cumulative stats across app restarts.
       if (this.sessionName) {
@@ -1077,7 +1363,7 @@ export class CacheFirstLoop {
             cacheHitTokens: this.stats.cumulativeCacheHitTokens,
             cacheMissTokens: this.stats.cumulativeCacheMissTokens,
             totalCompletionTokens: this.stats.cumulativeCompletionTokens,
-            lastPromptTokens: last?.usage.promptTokens,
+            lastPromptTokens: contextUsage?.promptTokens ?? last?.usage.promptTokens,
           });
         } catch {
           // Best-effort; don't crash the turn loop on a write failure.
@@ -1149,6 +1435,15 @@ export class CacheFirstLoop {
       }
 
       if (repairedCalls.length === 0) {
+        const finishWarning = finishReasonWarning(finishReason, continuationAttempted);
+        if (finishWarning) {
+          yield {
+            turn: this._turn,
+            role: "warning",
+            severity: "high",
+            content: finishWarning,
+          };
+        }
         if (this._steerQueue.length > 0) {
           continue;
         }
@@ -1157,7 +1452,7 @@ export class CacheFirstLoop {
           this._steerQueue.length = 0;
           return;
         }
-        if (yield* this.handlePostUsageContextDecision(usage)) {
+        if (yield* this.handlePostUsageContextDecision(contextUsage)) {
           this._steerQueue.length = 0;
           return;
         }
@@ -1166,7 +1461,7 @@ export class CacheFirstLoop {
         return;
       }
 
-      if (yield* this.handlePostUsageContextDecision(usage)) {
+      if (yield* this.handlePostUsageContextDecision(contextUsage)) {
         this._steerQueue.length = 0;
         return;
       }
@@ -1262,6 +1557,23 @@ export class CacheFirstLoop {
     }
     return final;
   }
+}
+
+function finishReasonWarning(
+  reason: ChatFinishReason,
+  continuationAttempted: boolean,
+): string | null {
+  if (reason === "length") {
+    return t(
+      continuationAttempted
+        ? "loop.finishLengthAfterContinuationWarning"
+        : "loop.finishLengthWarning",
+    );
+  }
+  if (reason === "content_filter") return t("loop.finishContentFilterWarning");
+  if (reason === "insufficient_system_resource") return t("loop.finishResourceWarning");
+  if (reason === "unknown") return t("loop.finishUnknownWarning");
+  return null;
 }
 
 function parsePositiveIntEnv(raw: string | undefined): number | undefined {

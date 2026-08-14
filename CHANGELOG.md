@@ -3,6 +3,89 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] — 2026-08-14
+
+### 中文
+
+**DeepSeek V4 推理能力。** Jupiter 现在只为官方 `api.deepseek.com` 上的 `deepseek-v4-flash` 和
+`deepseek-v4-pro` 启用 V4 专属能力，并按官方协议把 `thinking` 作为顶层请求字段发送。CLI、TUI、桌面 Composer
+和 QQ/钉钉远程命令统一支持关闭推理，以及 medium、high、max 三档显示，Azure 和自定义兼容端点继续使用原有协议。
+
+**Beta Prefix 自动续写。** 新增可选的 DeepSeek Beta Prefix 续写：当 V4 回答因长度上限结束且没有工具调用时，
+Jupiter 可以携带已生成的回答和 reasoning 发起一次受控续写。续写会检查上下文余量、预算、会话绑定和中止状态，
+禁止自动重试，并合并两次请求的内容与 usage；仍被截断、内容过滤、资源不足或未知结束原因会给出明确警告。
+
+**会话切换与压缩一致性。** Loop 新增统一的会话重绑定和逻辑会话 epoch。后台压缩在提交前会检查会话是否切换、
+日志是否被追加，异步生成的会话标题也会校验 tab、session 和 binding，避免旧任务覆盖新会话、复活旧文件或丢失并发消息。
+桌面恢复事件只有在历史消息确实载入后才标记 restoring session。
+
+**工具执行恢复日志。** 每个会话新增 durable tool execution journal，在工具调用前、开始执行时和返回结果后分别落盘，
+记录参数与结果哈希而不是原文。应用重启后会区分“尚未执行”和“结果未知”，修复缺失的 tool result，并明确阻止模型
+自动重试可能已经产生副作用的操作。
+
+**DeepSeek 原生联网搜索。** Web Search 新增 `deepseek-native` 引擎，通过 DeepSeek Anthropic 兼容端点调用原生
+`web_search` 工具，解析引用和搜索结果，并把辅助模型调用的 token/成本计入会话。官方主端点可复用主 API key，
+自定义端点需要独立 `DEEPSEEK_SEARCH_API_KEY`，桌面设置页会显示凭据可用或失败状态。
+
+**宠物右键菜单与桌面交互。** 宠物浮窗新增原生右键菜单，可直接打开当前任务、与宠物互动、重置位置、打开宠物设置
+或隐藏宠物；原生菜单不可用时会回退到带键盘导航的内置菜单。浮窗改为不可聚焦，避免显示宠物时抢走当前应用的键盘焦点；
+设置页和 Composer 的推理选项也会跟随当前 provider/model 能力动态更新。
+
+**凭据隔离与流式协议。** 模型发起的 shell、后台任务、Hook 和 MCP 子进程默认使用清理过的环境变量，诊断 JSONL
+会在持久化前脱敏结构化 secret 字段，Provider 请求拒绝跨域重定向。官方 DeepSeek SSE 现在要求合法的终止信号，
+保留同一 chunk 内的多个工具调用 delta，并让设置更新通过 revision/requestId 抵御乱序回包。
+
+**用量与结束状态。** 客户端统一解析 `finish_reason`，区分完整与不完整 usage，并分别记录账单累计 token 与最后一次
+请求的上下文 token，提升续写后的成本、缓存命中和上下文压缩判断准确性。
+
+**版本同步。** 桌面端、根包、Tauri、Cargo、CHANGELOG、README 和 release notes 版本统一为 `1.0.8`。
+
+### English
+
+**DeepSeek V4 reasoning capabilities.** Jupiter now enables V4-specific behavior only for `deepseek-v4-flash` and
+`deepseek-v4-pro` on the official `api.deepseek.com` endpoint, sending `thinking` as the documented top-level request
+field. CLI, TUI, the desktop Composer, and QQ/DingTalk remote commands consistently support reasoning off plus medium,
+high, and max display tiers, while Azure and custom compatible endpoints retain their existing protocol behavior.
+
+**Beta Prefix auto-continuation.** An optional DeepSeek Beta Prefix continuation can now make one guarded follow-up when
+a V4 response ends at the output limit without tool calls. It carries forward generated answer and reasoning content,
+checks remaining context, budget, session binding, and abort state, disables automatic retries, and merges content and
+usage across both requests. Continued truncation, content filtering, resource exhaustion, and unknown finish reasons
+produce explicit warnings.
+
+**Session-switch and compaction integrity.** The loop now has a single session-rebinding path and a logical-session
+epoch. Background compaction verifies that neither the session nor log changed before committing, while asynchronous
+session-title generation validates the tab, session, and binding before renaming. This prevents stale work from
+overwriting a new session, resurrecting old files, or dropping concurrently appended messages. Desktop restore events
+only mark a restoring session when history was actually loaded.
+
+**Durable tool-execution recovery.** Each session now has a durable tool execution journal that records intent,
+execution start, and terminal result while storing argument/result hashes instead of their raw contents. After a
+restart, Jupiter distinguishes work that never started from work with an unknown outcome, repairs missing tool results,
+and explicitly prevents automatic retries of actions that may already have produced side effects.
+
+**DeepSeek native web search.** Web Search adds a `deepseek-native` engine that invokes DeepSeek's native `web_search`
+tool through its Anthropic-compatible endpoint, parses cited results, and accounts for the auxiliary model call's token
+usage and cost. Official main endpoints can reuse the primary API key; custom endpoints require a dedicated
+`DEEPSEEK_SEARCH_API_KEY`, with credential readiness and failure state shown in desktop settings.
+
+**Pet context menu and desktop interaction.** The pet overlay now has a native context menu for opening the current
+task, interacting, resetting its position, opening pet settings, or hiding the pet. A keyboard-navigable in-app menu is
+used if the native menu is unavailable. The overlay is non-focusable so showing it does not steal keyboard focus from
+the current app, and Settings/Composer reasoning choices update from active provider/model capabilities.
+
+**Credential isolation and streaming contracts.** Model-initiated shell commands, background jobs, hooks, and MCP
+children now receive a credential-sanitized environment; diagnostic JSONL redacts structured secret fields before
+persistence, and provider requests reject cross-origin redirects. Official DeepSeek SSE now requires a valid terminal
+marker, preserves multiple tool-call deltas from one chunk, and settings updates use revision/request IDs to reject
+out-of-order responses.
+
+**Usage and finish-state accuracy.** The client now normalizes `finish_reason`, distinguishes complete from incomplete
+usage, and records aggregate billable tokens separately from the final request's context tokens, improving cost, cache,
+and post-continuation compaction decisions.
+
+**Version alignment.** Desktop, root package, Tauri, Cargo, CHANGELOG, README, and release notes are aligned on `1.0.8`.
+
 ## [1.0.7] — 2026-07-17
 
 ### 中文

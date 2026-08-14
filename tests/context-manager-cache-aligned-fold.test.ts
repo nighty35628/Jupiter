@@ -18,12 +18,12 @@ function fakeFetch(captured: CapturedRequest[], stubContent: string): typeof fet
     const body = init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : {};
     const messages = (body.messages ?? []) as ChatMessage[];
     const tools = body.tools as ToolSpec[] | undefined;
-    const extra = body.extra_body as { thinking?: { type?: string } } | undefined;
+    const thinking = body.thinking as { type?: string } | undefined;
     captured.push({
       model: body.model as string,
       messages,
       tools,
-      thinking: extra?.thinking?.type,
+      thinking: thinking?.type,
       body,
     });
     return new Response(

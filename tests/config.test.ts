@@ -17,6 +17,7 @@ import {
   loadBaseUrl,
   loadBraveApiKey,
   loadContextTokens,
+  loadDeepSeekAutoContinue,
   loadDesktopOpenTabs,
   loadEditMode,
   loadEndpoint,
@@ -39,6 +40,7 @@ import {
   loadSkillPackSources,
   loadSubagentModels,
   loadTheme,
+  loadThinkingEnabled,
   loadToolRateLimit,
   markEditModeHintShown,
   readConfig,
@@ -61,6 +63,7 @@ import {
   saveSkillPackSources,
   saveSubagentModels,
   saveTheme,
+  saveThinkingEnabled,
   searchEnabled,
   webSearchEngine,
   writeConfig,
@@ -73,6 +76,7 @@ describe("config", () => {
   const originalSearch = process.env.JUPITER_SEARCH;
   const originalBaseUrl = process.env.DEEPSEEK_BASE_URL;
   const originalApiBaseUrl = process.env.DEEPSEEK_API_BASE_URL;
+  const originalAutoContinue = process.env.JUPITER_DEEPSEEK_AUTO_CONTINUE;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "jupiter-test-"));
@@ -85,6 +89,8 @@ describe("config", () => {
     delete process.env.DEEPSEEK_BASE_URL;
     // biome-ignore lint/performance/noDelete: same reason
     delete process.env.DEEPSEEK_API_BASE_URL;
+    // biome-ignore lint/performance/noDelete: same reason
+    delete process.env.JUPITER_DEEPSEEK_AUTO_CONTINUE;
   });
 
   afterEach(() => {
@@ -112,6 +118,12 @@ describe("config", () => {
       delete process.env.DEEPSEEK_API_BASE_URL;
     } else {
       process.env.DEEPSEEK_API_BASE_URL = originalApiBaseUrl;
+    }
+    if (originalAutoContinue === undefined) {
+      // biome-ignore lint/performance/noDelete: same reason
+      delete process.env.JUPITER_DEEPSEEK_AUTO_CONTINUE;
+    } else {
+      process.env.JUPITER_DEEPSEEK_AUTO_CONTINUE = originalAutoContinue;
     }
   });
 
@@ -723,6 +735,25 @@ describe("config", () => {
     saveReasoningEffort("high", path);
     expect(loadEditMode(path)).toBe("auto");
     expect(loadReasoningEffort(path)).toBe("high");
+  });
+
+  it("keeps thinking enabled and Beta continuation disabled by default", () => {
+    expect(loadThinkingEnabled(path)).toBe(true);
+    expect(loadDeepSeekAutoContinue(path)).toBe(false);
+  });
+
+  it("persists the thinking toggle without changing the saved effort", () => {
+    saveReasoningEffort("max", path);
+    saveThinkingEnabled(false, path);
+    expect(loadThinkingEnabled(path)).toBe(false);
+    expect(loadReasoningEffort(path)).toBe("max");
+  });
+
+  it("allows the experimental continuation gate through config or env", () => {
+    writeConfig({ deepSeekAutoContinue: true }, path);
+    expect(loadDeepSeekAutoContinue(path)).toBe(true);
+    process.env.JUPITER_DEEPSEEK_AUTO_CONTINUE = "0";
+    expect(loadDeepSeekAutoContinue(path)).toBe(false);
   });
 
   it("saveTheme + loadTheme round-trip a registered theme", () => {

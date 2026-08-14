@@ -1,8 +1,10 @@
 import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import { emitTo, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import {
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
@@ -11,11 +13,15 @@ import {
   useState,
 } from "react";
 import { setLang, t, useLang } from "../i18n";
+import { I } from "../icons";
+import { PetNativeContextMenu } from "./native-context-menu";
 import { PET_DRAG_THRESHOLD, petDragActivity, petDragDistance, petRollAngle } from "./overlay-drag";
 import {
+  PET_OVERLAY_ACTION_EVENT,
   PET_OVERLAY_OPEN_TASK_EVENT,
   PET_OVERLAY_READY_EVENT,
   PET_OVERLAY_SNAPSHOT_EVENT,
+  type PetOverlayAction,
   type PetOverlayOpenTask,
   type PetOverlaySnapshot,
   type PetTaskActivity,
@@ -38,6 +44,32 @@ type DragSession = {
 type PetOverlayStyle = CSSProperties & {
   "--companion-roll-angle"?: string;
 };
+
+type PetContextMenuPosition = { x: number; y: number };
+
+const PET_OVERLAY_WIDTH = 248;
+const PET_OVERLAY_HEIGHT = 220;
+const PET_CONTEXT_MENU_WIDTH = 188;
+const PET_CONTEXT_MENU_HEIGHT = 180;
+const PET_CONTEXT_MENU_MARGIN = 8;
+
+export function clampPetContextMenuPosition(
+  x: number,
+  y: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): PetContextMenuPosition {
+  return {
+    x: Math.max(
+      PET_CONTEXT_MENU_MARGIN,
+      Math.min(x, viewportWidth - PET_CONTEXT_MENU_WIDTH - PET_CONTEXT_MENU_MARGIN),
+    ),
+    y: Math.max(
+      PET_CONTEXT_MENU_MARGIN,
+      Math.min(y, viewportHeight - PET_CONTEXT_MENU_HEIGHT - PET_CONTEXT_MENU_MARGIN),
+    ),
+  };
+}
 
 function statusLabel(status: PetTaskStatus): string {
   switch (status) {
@@ -77,10 +109,14 @@ export function PetOverlayApp() {
   const overlayWindow = useMemo(() => getCurrentWindow(), []);
   const [snapshot, setSnapshot] = useState<PetOverlaySnapshot | null>(null);
   const [trayOpen, setTrayOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<PetContextMenuPosition | null>(null);
+  const [nativeContextMenuFailed, setNativeContextMenuFailed] = useState(false);
+  const [contextMenuHighlightedIndex, setContextMenuHighlightedIndex] = useState(-1);
   const [dragActivity, setDragActivity] = useState<PetVisualActivity | null>(null);
   const [dragAngle, setDragAngle] = useState(0);
   const [transientActivity, setTransientActivity] = useState<PetVisualActivity | null>(null);
   const dragRef = useRef<DragSession | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const positionRef = useRef<{ x: number; y: number } | null>(null);
   const scaleFactorRef = useRef(1);
   const pendingPositionRef = useRef<{ x: number; y: number } | null>(null);
@@ -107,6 +143,22 @@ export function PetOverlayApp() {
   );
 
   useEffect(() => clearTransient, [clearTransient]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    contextMenuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    const dismiss = (event: PointerEvent) => {
+      if (contextMenuRef.current?.contains(event.target as Node)) return;
+      setContextMenu(null);
+    };
+    const dismissOnBlur = () => setContextMenu(null);
+    window.addEventListener("pointerdown", dismiss, true);
+    window.addEventListener("blur", dismissOnBlur);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss, true);
+      window.removeEventListener("blur", dismissOnBlur);
+    };
+  }, [contextMenu]);
 
   useEffect(() => {
     document.documentElement.dataset.window = "pet-overlay";
@@ -158,11 +210,12 @@ export function PetOverlayApp() {
       .catch(() => undefined);
   }, [overlayWindow]);
 
+  const overlayEnabled = snapshot?.enabled;
   useEffect(() => {
-    if (!snapshot) return;
-    const action = snapshot.enabled ? overlayWindow.show() : overlayWindow.hide();
+    if (overlayEnabled === undefined) return;
+    const action = overlayEnabled ? overlayWindow.show() : overlayWindow.hide();
     void action.catch(() => undefined);
-  }, [overlayWindow, snapshot]);
+  }, [overlayEnabled, overlayWindow]);
 
   const activities = snapshot?.activities ?? [];
   const activeActivities = activities.filter((activity) => activity.status !== "idle");
@@ -179,6 +232,7 @@ export function PetOverlayApp() {
       completionSequence: 0,
       completionOutcome: null,
     } satisfies PetTaskActivity);
+  const activeTabId = snapshot?.activeTabId || primary.tabId;
 
   useEffect(() => {
     const seen = completionSequenceRef.current.get(primary.tabId);
@@ -219,11 +273,135 @@ export function PetOverlayApp() {
     [flushWindowPosition],
   );
 
+  const resetPetPosition = useCallback(async () => {
+    try {
+      const monitor = await currentMonitor();
+      const scale = monitor?.scaleFactor && monitor.scaleFactor > 0 ? monitor.scaleFactor : 1;
+      const workArea = monitor?.workArea;
+      const next = workArea
+        ? {
+            x: Math.round(
+              workArea.position.x + workArea.size.width - (PET_OVERLAY_WIDTH + 20) * scale,
+            ),
+            y: Math.round(
+              workArea.position.y + workArea.size.height - (PET_OVERLAY_HEIGHT + 18) * scale,
+            ),
+          }
+        : { x: 32, y: 96 };
+      scaleFactorRef.current = scale;
+      queueWindowPosition(next);
+      playTransient("jumping", 620);
+    } catch {
+      // Keep the current position when monitor information is unavailable.
+    }
+  }, [playTransient, queueWindowPosition]);
+
   const openTask = useCallback((tabId: string) => {
     const payload: PetOverlayOpenTask = { tabId };
     void emitTo("main", PET_OVERLAY_OPEN_TASK_EVENT, payload).catch(() => undefined);
     setTrayOpen(false);
+    setContextMenu(null);
   }, []);
+
+  const requestOverlayAction = useCallback((action: PetOverlayAction["action"]) => {
+    const payload: PetOverlayAction = { action };
+    void emitTo("main", PET_OVERLAY_ACTION_EVENT, payload).catch(() => undefined);
+    setContextMenu(null);
+  }, []);
+
+  const nativeContextMenuRef = useRef<PetNativeContextMenu | null>(null);
+  useEffect(() => {
+    const menu = new PetNativeContextMenu(overlayWindow, {
+      openTask,
+      interact: () => playTransient("waving", 820),
+      resetPosition: () => void resetPetPosition(),
+      openSettings: () => requestOverlayAction("open-settings"),
+      hide: () => requestOverlayAction("hide"),
+    });
+    nativeContextMenuRef.current = menu;
+    return () => {
+      nativeContextMenuRef.current = null;
+      void menu.dispose();
+    };
+  }, [openTask, overlayWindow, playTransient, requestOverlayAction, resetPetPosition]);
+
+  const openContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if ((event.target as Element).closest(".pet-context-menu")) return;
+    clearTransient();
+    setTrayOpen(false);
+    const nativeMenu = nativeContextMenuRef.current;
+    if (nativeMenu && !nativeContextMenuFailed) {
+      void nativeMenu
+        .show({
+          activeTabId,
+          labels: {
+            openTask: t("pets.contextOpenTask"),
+            interact: t("pets.contextInteract"),
+            resetPosition: t("pets.contextResetPosition"),
+            settings: t("pets.contextSettings"),
+            hide: t("pets.contextHide"),
+          },
+        })
+        .catch(() => {
+          setNativeContextMenuFailed(true);
+          setContextMenuHighlightedIndex(-1);
+          setContextMenu(
+            clampPetContextMenuPosition(
+              event.clientX,
+              event.clientY,
+              window.innerWidth || PET_OVERLAY_WIDTH,
+              window.innerHeight || PET_OVERLAY_HEIGHT,
+            ),
+          );
+        });
+      return;
+    }
+    setContextMenuHighlightedIndex(-1);
+    setContextMenu(
+      clampPetContextMenuPosition(
+        event.clientX,
+        event.clientY,
+        window.innerWidth || PET_OVERLAY_WIDTH,
+        window.innerHeight || PET_OVERLAY_HEIGHT,
+      ),
+    );
+  };
+
+  const handleContextMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setContextMenu(null);
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const items = [
+      ...(contextMenuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+    ];
+    if (items.length === 0) return;
+    const delta = event.key === "ArrowDown" ? 1 : -1;
+    const next =
+      contextMenuHighlightedIndex < 0
+        ? delta > 0
+          ? 0
+          : items.length - 1
+        : (contextMenuHighlightedIndex + delta + items.length) % items.length;
+    setContextMenuHighlightedIndex(next);
+    items[next]?.focus({ preventScroll: true });
+  };
+
+  const handleContextMenuMouseMove = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const item = (event.target as Element).closest<HTMLButtonElement>("button[role='menuitem']");
+    if (!item || !event.currentTarget.contains(item)) return;
+    const items = [
+      ...event.currentTarget.querySelectorAll<HTMLButtonElement>("button[role='menuitem']"),
+    ];
+    const next = items.indexOf(item);
+    if (next < 0 || next === contextMenuHighlightedIndex) return;
+    setContextMenuHighlightedIndex(next);
+    item.focus({ preventScroll: true });
+  };
 
   const beginDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || !positionRef.current) return;
@@ -231,6 +409,7 @@ export function PetOverlayApp() {
     event.currentTarget.setPointerCapture?.(event.pointerId);
     clearTransient();
     setTrayOpen(false);
+    setContextMenu(null);
     dragRef.current = {
       pointerId: event.pointerId,
       startScreenX: event.screenX,
@@ -292,7 +471,9 @@ export function PetOverlayApp() {
         data-status={primary.status}
         data-pet={snapshot.pet.packageId}
         data-tray-open={trayOpen}
+        data-context-menu-open={contextMenu !== null}
         style={overlayStyle}
+        onContextMenu={openContextMenu}
       >
         {hasStatus ? (
           <button
@@ -335,6 +516,75 @@ export function PetOverlayApp() {
               </li>
             ))}
           </ul>
+        ) : null}
+
+        {contextMenu ? (
+          <div
+            ref={contextMenuRef}
+            className="pet-context-menu"
+            role="menu"
+            aria-label={t("pets.contextMenu")}
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onKeyDown={handleContextMenuKeyDown}
+            onMouseMove={handleContextMenuMouseMove}
+            onPointerLeave={() => setContextMenuHighlightedIndex(-1)}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              data-highlighted={contextMenuHighlightedIndex === 0 || undefined}
+              disabled={!activeTabId}
+              onClick={() => openTask(activeTabId)}
+            >
+              <I.play size={14} />
+              <span>{t("pets.contextOpenTask")}</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              data-highlighted={contextMenuHighlightedIndex === 1 || undefined}
+              onClick={() => {
+                setContextMenu(null);
+                playTransient("waving", 820);
+              }}
+            >
+              <I.paw size={14} />
+              <span>{t("pets.contextInteract")}</span>
+            </button>
+            <hr className="pet-context-separator" />
+            <button
+              type="button"
+              role="menuitem"
+              data-highlighted={contextMenuHighlightedIndex === 2 || undefined}
+              onClick={() => {
+                setContextMenu(null);
+                void resetPetPosition();
+              }}
+            >
+              <I.rotate size={14} />
+              <span>{t("pets.contextResetPosition")}</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              data-highlighted={contextMenuHighlightedIndex === 3 || undefined}
+              onClick={() => requestOverlayAction("open-settings")}
+            >
+              <I.cog size={14} />
+              <span>{t("pets.contextSettings")}</span>
+            </button>
+            <hr className="pet-context-separator" />
+            <button
+              type="button"
+              role="menuitem"
+              className="danger"
+              data-highlighted={contextMenuHighlightedIndex === 4 || undefined}
+              onClick={() => requestOverlayAction("hide")}
+            >
+              <I.x size={14} />
+              <span>{t("pets.contextHide")}</span>
+            </button>
+          </div>
         ) : null}
 
         <button

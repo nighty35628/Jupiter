@@ -1,5 +1,6 @@
 /** web_search uses Bing (cn.bing.com — works from CN without proxy); web_fetch sniffs HTML to text. */
 
+import { createHash, randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { parse as parseHtml } from "node-html-parser";
@@ -13,9 +14,10 @@ import {
   loadTavilyApiKey,
   webSearchEndpoint as loadWebSearchEndpoint,
   webSearchEngine as loadWebSearchEngine,
+  resolveDeepSeekSearchCredential,
 } from "../config.js";
 import { t } from "../i18n/index.js";
-import type { ToolRegistry } from "../tools.js";
+import type { AuxiliaryUsageReport, ToolRegistry } from "../tools.js";
 
 export interface SearchResult {
   title: string;
@@ -59,9 +61,12 @@ export interface WebSearchOptions {
     | "perplexity"
     | "exa"
     | "brave"
-    | "ollama";
+    | "ollama"
+    | "deepseek-native";
   /** Base URL for SearXNG. Default http://localhost:8080. */
   endpoint?: string;
+  /** Receives billable usage from search engines that issue an auxiliary model call. */
+  onAuxiliaryUsage?: (report: AuxiliaryUsageReport) => void;
 }
 
 const DEFAULT_FETCH_MAX_CHARS = 32_000;
@@ -86,6 +91,11 @@ const EXA_ENDPOINT = "https://api.exa.ai/answer";
 const BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const OLLAMA_WEB_SEARCH_ENDPOINT = "https://ollama.com/api/web_search";
 const OLLAMA_WEB_FETCH_ENDPOINT = "https://ollama.com/api/web_fetch";
+export const DEEPSEEK_NATIVE_SEARCH_ENDPOINT = "https://api.deepseek.com/anthropic/v1/messages";
+export const DEEPSEEK_NATIVE_SEARCH_MODEL = "deepseek-v4-flash";
+export const DEEPSEEK_NATIVE_SEARCH_MAX_TOKENS = 2048;
+export const DEEPSEEK_NATIVE_SEARCH_MAX_USES = 3;
+const DEEPSEEK_NATIVE_SEARCH_TIMEOUT_MS = 120_000;
 const FETCH_MAX_REDIRECTS = 5;
 
 /** Pick a status-specific webErrors key so the model gets an actionable hint, not a bare status. */
@@ -172,38 +182,6 @@ function isInternalAddress(address: string): boolean {
   return false;
 }
 
-/** DoH fallback for when system DNS returns Fake-IP (TUN proxies). */
-interface DohAnswer {
-  type: number;
-  data: string;
-}
-
-interface DohResponse {
-  Status: number;
-  Answer?: DohAnswer[];
-}
-
-async function dohResolve(host: string): Promise<string[]> {
-  const url = new URL("https://1.1.1.1/dns-query");
-  url.searchParams.set("name", host);
-  url.searchParams.set("type", "A");
-
-  const resp = await fetch(url.toString(), {
-    headers: { Accept: "application/dns-json" },
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!resp.ok) throw new Error(`DoH resolve failed: HTTP ${resp.status} for ${host}`);
-
-  const data = (await resp.json()) as DohResponse;
-  if (data.Status !== 0)
-    throw new Error(`DoH resolve failed: DNS status ${data.Status} for ${host}`);
-
-  const addresses = (data.Answer ?? []).filter((a) => a.type === 1).map((a) => a.data);
-
-  if (addresses.length === 0) throw new Error(`DoH resolve returned no A records for ${host}`);
-  return addresses;
-}
-
 async function assertPublicHttpUrl(rawUrl: string): Promise<URL> {
   const url = new URL(rawUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -227,13 +205,7 @@ async function assertPublicHttpUrl(rawUrl: string): Promise<URL> {
   }
 
   if (sysAddrs.some(isInternalAddress)) {
-    // System DNS returned fake/internal addresses (e.g. TUN Fake-IP) —
-    // fall back to DoH to get the real public IPs
-    const dohAddrs = await dohResolve(host).catch(() => null);
-    if (!dohAddrs || dohAddrs.some(isInternalAddress)) {
-      throw new Error(`web_fetch refuses internal or reserved host: ${host}`);
-    }
-    // DoH resolved to public IPs → host is legitimate
+    throw new Error(`web_fetch refuses internal or reserved host: ${host}`);
   }
 
   return url;
@@ -251,6 +223,9 @@ export async function webSearch(
   query: string,
   opts: WebSearchOptions = {},
 ): Promise<SearchResult[]> {
+  if (opts.engine === "deepseek-native") {
+    return searchDeepSeekNative(query, opts);
+  }
   if (opts.engine === "metaso") {
     return searchMetaso(query, opts);
   }
@@ -279,6 +254,271 @@ export async function webSearch(
     return searchBing(query, opts, BING_INTL_ENDPOINT);
   }
   return searchBing(query, opts);
+}
+
+interface DeepSeekCitation {
+  url?: unknown;
+  cited_text?: unknown;
+}
+
+interface DeepSeekNativeContentBlock {
+  type?: unknown;
+  content?: unknown;
+  citations?: unknown;
+}
+
+interface DeepSeekNativeResponse {
+  content?: unknown;
+  usage?: {
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+    cache_read_input_tokens?: unknown;
+    cache_creation_input_tokens?: unknown;
+  };
+}
+
+export type DeepSeekNativeRuntimeCredentialStatus =
+  | {
+      state:
+        | "ready_reusing_main_key"
+        | "needs_dedicated_key"
+        | "ready_with_dedicated_key"
+        | "unavailable";
+      keySource?: "dedicated" | "main";
+    }
+  | {
+      state: "last_request_failed";
+      keySource: "dedicated" | "main";
+      message: string;
+    };
+
+interface DeepSeekNativeFailure {
+  keySource: "dedicated" | "main";
+  keyFingerprint: string;
+  message: string;
+}
+
+const deepSeekNativeFailures = new Map<string, DeepSeekNativeFailure>();
+
+function deepSeekNativeScope(configPath?: string): string {
+  return configPath ?? "<default>";
+}
+
+function keyFingerprint(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex").slice(0, 16);
+}
+
+function recordDeepSeekNativeFailure(
+  configPath: string | undefined,
+  keySource: "dedicated" | "main",
+  apiKey: string,
+  message: string,
+): void {
+  deepSeekNativeFailures.set(deepSeekNativeScope(configPath), {
+    keySource,
+    keyFingerprint: keyFingerprint(apiKey),
+    message,
+  });
+}
+
+export function deepSeekNativeCredentialStatus(
+  configPath?: string,
+): DeepSeekNativeRuntimeCredentialStatus {
+  const credential = resolveDeepSeekSearchCredential(configPath);
+  const failure = deepSeekNativeFailures.get(deepSeekNativeScope(configPath));
+  if (
+    failure &&
+    credential.apiKey &&
+    credential.source === failure.keySource &&
+    keyFingerprint(credential.apiKey) === failure.keyFingerprint
+  ) {
+    return {
+      state: "last_request_failed",
+      keySource: failure.keySource,
+      message: failure.message,
+    };
+  }
+  return { state: credential.state, keySource: credential.source };
+}
+
+function numericUsage(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function parseDeepSeekNativeResults(payload: DeepSeekNativeResponse, topK: number): SearchResult[] {
+  if (!Array.isArray(payload.content)) {
+    throw new Error("DeepSeek native search returned an invalid content payload");
+  }
+  const blocks = payload.content as DeepSeekNativeContentBlock[];
+  const resultBlocks = blocks.filter((block) => block?.type === "web_search_tool_result");
+  if (resultBlocks.length === 0) {
+    throw new Error(
+      "DeepSeek native search returned no web_search_tool_result blocks; native search may not have run",
+    );
+  }
+
+  const snippets = new Map<string, string>();
+  for (const block of blocks) {
+    if (block?.type !== "text" || !Array.isArray(block.citations)) continue;
+    for (const citation of block.citations as DeepSeekCitation[]) {
+      if (
+        typeof citation?.url === "string" &&
+        typeof citation.cited_text === "string" &&
+        citation.url.length > 0 &&
+        citation.cited_text.length > 0 &&
+        !snippets.has(citation.url)
+      ) {
+        snippets.set(citation.url, citation.cited_text);
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const results: SearchResult[] = [];
+  for (const block of resultBlocks) {
+    if (!Array.isArray(block.content)) {
+      throw new Error("DeepSeek native search returned a malformed web_search_tool_result block");
+    }
+    for (const item of block.content as Array<Record<string, unknown>>) {
+      if (item?.type !== "web_search_result") {
+        if (typeof item?.type === "string" && item.type.includes("error")) {
+          throw new Error("DeepSeek native search returned a tool result error");
+        }
+        continue;
+      }
+      if (typeof item.url !== "string" || seen.has(item.url)) continue;
+      let parsed: URL;
+      try {
+        parsed = new URL(item.url);
+      } catch {
+        continue;
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
+      seen.add(item.url);
+      results.push({
+        title: typeof item.title === "string" && item.title ? item.title : item.url,
+        url: item.url,
+        snippet: snippets.get(item.url) ?? "",
+      });
+      if (results.length >= topK) return results;
+    }
+  }
+  return results;
+}
+
+async function searchDeepSeekNative(
+  query: string,
+  opts: WebSearchOptions = {},
+): Promise<SearchResult[]> {
+  const topK = Math.max(1, Math.min(10, opts.topK ?? DEFAULT_TOPK));
+  const credential = resolveDeepSeekSearchCredential(opts.configPath);
+  if (!credential.apiKey || !credential.source) {
+    if (credential.state === "needs_dedicated_key") {
+      throw new Error(
+        "DeepSeek native search needs a dedicated DEEPSEEK_SEARCH_API_KEY because the main model endpoint is not the strict official DeepSeek endpoint",
+      );
+    }
+    throw new Error(
+      "DeepSeek native search needs DEEPSEEK_SEARCH_API_KEY or an official DeepSeek main API key",
+    );
+  }
+  if (opts.signal?.aborted) {
+    recordDeepSeekNativeFailure(
+      opts.configPath,
+      credential.source,
+      credential.apiKey,
+      "DeepSeek native search was cancelled",
+    );
+    throw new Error("DeepSeek native search was cancelled");
+  }
+
+  const requestId = randomUUID();
+  const body = {
+    model: DEEPSEEK_NATIVE_SEARCH_MODEL,
+    max_tokens: DEEPSEEK_NATIVE_SEARCH_MAX_TOKENS,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: `Perform a web search for the query: ${query}` }],
+      },
+    ],
+    tools: [
+      {
+        type: "web_search_20250305",
+        name: "web_search",
+        max_uses: DEEPSEEK_NATIVE_SEARCH_MAX_USES,
+      },
+    ],
+  } as const;
+  const timeoutSignal = AbortSignal.timeout(DEEPSEEK_NATIVE_SEARCH_TIMEOUT_MS);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeoutSignal]) : timeoutSignal;
+
+  try {
+    const response = await fetch(DEEPSEEK_NATIVE_SEARCH_ENDPOINT, {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        "x-api-key": credential.apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error("DeepSeek native search rejected the API key");
+      }
+      if (response.status === 429) {
+        throw new Error("DeepSeek native search rate limit exceeded");
+      }
+      if (response.status >= 500) {
+        throw new Error(`DeepSeek native search service error (${response.status})`);
+      }
+      throw new Error(`DeepSeek native search failed (${response.status})`);
+    }
+
+    let payload: DeepSeekNativeResponse;
+    try {
+      payload = (await response.json()) as DeepSeekNativeResponse;
+    } catch (err) {
+      throw new Error(
+        `DeepSeek native search returned malformed JSON: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (payload.usage && opts.onAuxiliaryUsage) {
+      const input = numericUsage(payload.usage.input_tokens);
+      const output = numericUsage(payload.usage.output_tokens);
+      const cacheHit = numericUsage(payload.usage.cache_read_input_tokens);
+      const cacheCreation = numericUsage(payload.usage.cache_creation_input_tokens);
+      opts.onAuxiliaryUsage({
+        provider: "deepseek-native",
+        operation: "web_search",
+        requestId,
+        model: DEEPSEEK_NATIVE_SEARCH_MODEL,
+        promptTokens: input + cacheHit + cacheCreation,
+        completionTokens: output,
+        cacheHitTokens: cacheHit,
+        cacheMissTokens: input + cacheCreation,
+      });
+    }
+
+    const results = parseDeepSeekNativeResults(payload, topK);
+    deepSeekNativeFailures.delete(deepSeekNativeScope(opts.configPath));
+    return results;
+  } catch (err) {
+    const message = signal.aborted
+      ? opts.signal?.aborted
+        ? "DeepSeek native search was cancelled"
+        : "DeepSeek native search timed out"
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    recordDeepSeekNativeFailure(opts.configPath, credential.source, credential.apiKey, message);
+    throw new Error(message);
+  }
 }
 
 async function searchBing(
@@ -399,6 +639,7 @@ async function searchMetaso(query: string, opts: WebSearchOptions = {}): Promise
         size: topK,
       }),
       signal: opts.signal,
+      redirect: "error",
     });
   } catch (err) {
     if (err instanceof TypeError && (err as Error).message.includes("fetch")) {
@@ -478,6 +719,7 @@ async function searchBaidu(query: string, opts: WebSearchOptions = {}): Promise<
         messages: [{ role: "user", content: query }],
       }),
       signal: opts.signal,
+      redirect: "error",
     });
   } catch (err) {
     if (err instanceof TypeError && (err as Error).message.includes("fetch")) {
@@ -548,6 +790,7 @@ async function searchTavily(query: string, opts: WebSearchOptions = {}): Promise
         include_images: false,
       }),
       signal: opts.signal,
+      redirect: "error",
     });
   } catch (err) {
     if (err instanceof TypeError && (err as Error).message.includes("fetch")) {
@@ -611,6 +854,7 @@ async function searchPerplexity(
         return_related_questions: false,
       }),
       signal: opts.signal,
+      redirect: "error",
     });
   } catch (err) {
     if (err instanceof TypeError && (err as Error).message.includes("fetch")) {
@@ -694,6 +938,7 @@ async function searchExa(query: string, opts: WebSearchOptions = {}): Promise<Se
       },
       body: JSON.stringify({ query, text: true }),
       signal: opts.signal,
+      redirect: "error",
     });
   } catch (err) {
     if (err instanceof TypeError && (err as Error).message.includes("fetch")) {
@@ -770,6 +1015,7 @@ async function searchOllama(query: string, opts: WebSearchOptions = {}): Promise
       },
       body: JSON.stringify({ query, max_results: topK }),
       signal: opts.signal,
+      redirect: "error",
     });
   } catch (err) {
     if (err instanceof TypeError && (err as Error).message.includes("fetch")) {
@@ -834,6 +1080,7 @@ async function searchBrave(query: string, opts: WebSearchOptions = {}): Promise<
         "X-Subscription-Token": apiKey,
       },
       signal: opts.signal,
+      redirect: "error",
     });
   } catch (err) {
     if (err instanceof TypeError && (err as Error).message.includes("fetch")) {
@@ -906,6 +1153,7 @@ async function webFetchOllama(
       },
       body: JSON.stringify({ url }),
       signal,
+      redirect: "error",
     });
   } finally {
     clearTimeout(timeout);
@@ -1252,6 +1500,7 @@ export function registerWebTools(registry: ToolRegistry, opts: WebToolsOptions =
         engine,
         endpoint,
         configPath: opts.configPath,
+        onAuxiliaryUsage: ctx?.reportAuxiliaryUsage,
       });
       return formatSearchResults(args.query, results);
     },
@@ -1332,6 +1581,7 @@ export function registerWebTools(registry: ToolRegistry, opts: WebToolsOptions =
           engine,
           endpoint,
           configPath: opts.configPath,
+          onAuxiliaryUsage: ctx?.reportAuxiliaryUsage,
         }),
       );
       const fetchable = results.filter((r) => /^https?:\/\//i.test(r.url)).slice(0, maxFetches);

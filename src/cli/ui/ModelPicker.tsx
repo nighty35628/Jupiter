@@ -1,14 +1,14 @@
 import { Box, Text, useStdout } from "ink";
 import React, { useState } from "react";
-import type { ReasoningEffort } from "../../config.js";
 import { t } from "../../i18n/index.js";
+import { type ReasoningSelection, displayReasoningSelection } from "../../provider-capabilities.js";
 import { useKeystroke } from "./keystroke-context.js";
 import { PILL_MODEL, Pill, modelBadgeFor } from "./primitives/Pill.js";
 import { FG, TONE } from "./theme/tokens.js";
 
 export type ModelPickerOutcome =
   | { kind: "select"; id: string }
-  | { kind: "effort"; effort: ReasoningEffort }
+  | { kind: "effort"; effort: ReasoningSelection }
   | { kind: "quit" };
 
 export interface ModelPickerProps {
@@ -16,9 +16,9 @@ export interface ModelPickerProps {
   models: ReadonlyArray<string> | null;
   /** Model id currently active in the loop — marked with the cursor on open. */
   current: string;
-  currentEffort: ReasoningEffort;
+  currentEffort: ReasoningSelection;
   /** Effort enum filtered for the active endpoint — drops "max" on non-DeepSeek hosts (#1794). */
-  effortChoices: ReadonlyArray<ReasoningEffort>;
+  effortChoices: ReadonlyArray<ReasoningSelection>;
   onChoose: (outcome: ModelPickerOutcome) => void;
   /** Triggers a refetch when the catalog is null/empty and the user presses [r]. */
   onRefresh?: () => void;
@@ -26,7 +26,7 @@ export interface ModelPickerProps {
 
 const PAGE_MARGIN = 8;
 
-type Row = { kind: "effort"; effort: ReasoningEffort } | { kind: "model"; id: string };
+type Row = { kind: "effort"; effort: ReasoningSelection } | { kind: "model"; id: string };
 
 export function ModelPicker({
   models,
@@ -119,6 +119,7 @@ export function ModelPicker({
             <EffortRow
               key={`e-${row.effort}`}
               effort={row.effort}
+              displayEffort={displayReasoningSelection(row.effort, effortChoices)}
               focused={focused}
               active={row.effort === currentEffort}
             />
@@ -151,10 +152,12 @@ export function ModelPicker({
 
 function EffortRow({
   effort,
+  displayEffort,
   focused,
   active,
 }: {
-  effort: ReasoningEffort;
+  effort: ReasoningSelection;
+  displayEffort: ReasoningSelection;
   focused: boolean;
   active: boolean;
 }): React.ReactElement {
@@ -162,7 +165,7 @@ function EffortRow({
     <Box>
       <Text color={focused ? TONE.brand : FG.faint}>{focused ? "  ▸ " : "    "}</Text>
       <Text bold={focused} color={focused ? FG.strong : FG.sub}>
-        {effort.padEnd(8)}
+        {displayEffort.padEnd(8)}
       </Text>
       <Text color={FG.meta}>{t(`modelPicker.effortDesc.${effort}` as const)}</Text>
       {active ? <Text color={TONE.brand}>{t("modelPicker.currentLabel")}</Text> : null}

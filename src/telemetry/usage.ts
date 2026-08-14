@@ -42,7 +42,7 @@ export interface UsageRecord {
   /** What the same turn would have cost at Claude Sonnet 4.6 rates. */
   claudeEquivUsd: number;
   /** Absent on legacy records — treat as "turn" when missing. */
-  kind?: "turn" | "subagent";
+  kind?: "turn" | "subagent" | "auxiliary";
   /** Present when `kind === "subagent"`. Attribution metadata for the /stats roll-up. */
   subagent?: {
     /** Skill that spawned it, when the spawn came from a `runAs: subagent` skill. */
@@ -53,6 +53,12 @@ export interface UsageRecord {
     toolIters: number;
     /** Wall-clock ms. */
     durationMs: number;
+  };
+  /** Present when `kind === "auxiliary"`. */
+  auxiliary?: {
+    provider: string;
+    operation: string;
+    requestId: string;
   };
 }
 
@@ -70,8 +76,9 @@ export interface AppendUsageInput {
   /** Override the log path (tests). */
   path?: string;
   /** When appending a subagent summary row, set `kind: "subagent"` and populate `subagent`. */
-  kind?: "turn" | "subagent";
+  kind?: "turn" | "subagent" | "auxiliary";
   subagent?: UsageRecord["subagent"];
+  auxiliary?: UsageRecord["auxiliary"];
 }
 
 const USAGE_COMPACTION_THRESHOLD_BYTES = 5 * 1024 * 1024;
@@ -146,8 +153,9 @@ export function appendUsage(input: AppendUsageInput): UsageRecord {
     costUsd: costUsd(input.model, input.usage),
     claudeEquivUsd: claudeEquivalentCost(input.usage),
   };
-  if (input.kind === "subagent") record.kind = "subagent";
+  if (input.kind === "subagent" || input.kind === "auxiliary") record.kind = input.kind;
   if (input.subagent) record.subagent = input.subagent;
+  if (input.auxiliary) record.auxiliary = input.auxiliary;
 
   const path = input.path ?? defaultUsageLogPath();
   try {

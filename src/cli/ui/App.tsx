@@ -37,6 +37,7 @@ import {
   defaultConfigPath,
   editModeHintShown,
   isReasoningEffort,
+  loadDeepSeekAutoContinue,
   loadEndpoint,
   loadEngineeringLifecycleMode,
   loadHistoryScrollMode,
@@ -44,6 +45,7 @@ import {
   loadReasoningEffort,
   loadSkillPackSources,
   loadTheme,
+  loadThinkingEnabled,
   markEditModeHintShown,
   markMouseClipboardHintShown,
   mouseClipboardHintShown,
@@ -53,6 +55,7 @@ import {
   saveModel,
   saveReasoningEffort,
   saveTheme,
+  saveThinkingEnabled,
 } from "../../config.js";
 import { Eventizer } from "../../core/eventize.js";
 import { pauseGate } from "../../core/pause-gate.js";
@@ -133,6 +136,7 @@ import { SessionPicker } from "./SessionPicker.js";
 import { ShellConfirm, type ShellConfirmChoice } from "./ShellConfirm.js";
 import { useRenderTrace } from "./render-trace.js";
 
+import { displayReasoningSelection } from "../../provider-capabilities.js";
 import { SlashArgPicker } from "./SlashArgPicker.js";
 import { SlashSuggestions } from "./SlashSuggestions.js";
 import { type ThemeChoice, ThemePicker } from "./ThemePicker.js";
@@ -1057,6 +1061,8 @@ function AppInner({
       session,
       hooks: hookList,
       hookCwd: currentRootDir,
+      thinkingEnabled: loadThinkingEnabled(),
+      autoContinueDeepSeek: loadDeepSeekAutoContinue(),
       reasoningEffort: initialReasoningEffort ?? loadReasoningEffort(),
       rebuildSystem,
     });
@@ -1504,7 +1510,7 @@ function AppInner({
 
   // `max` is a DeepSeek-only reasoning extension — drop it from /effort
   // suggestions + picker when the active endpoint is third-party (#1794).
-  const effortChoices = React.useMemo(() => effortChoicesForBaseUrl(loop.client.baseUrl), [loop]);
+  const effortChoices = effortChoicesForBaseUrl(loop.client.baseUrl, sessionModel ?? loop.model);
 
   // Three mutually-exclusive input-prefix pickers (slash name, @ file
   // mention, slash argument) —state + memos + commit callbacks live
@@ -2714,11 +2720,19 @@ function AppInner({
 
   const handleQQModelPick = useCallback(
     (target: string): string => {
+      if (target === "off") {
+        loop.configure({ thinkingEnabled: false });
+        try {
+          saveThinkingEnabled(false);
+        } catch {}
+        return "effort: off";
+      }
       if (isReasoningEffort(target)) {
         const effort: ReasoningEffort = target;
-        loop.configure({ reasoningEffort: effort });
+        loop.configure({ thinkingEnabled: true, reasoningEffort: effort });
         agentStore.dispatch({ type: "session.effort.change", reasoningEffort: effort });
         try {
+          saveThinkingEnabled(true);
           saveReasoningEffort(effort);
         } catch {}
         return `effort: ${effort}`;
@@ -4692,7 +4706,7 @@ function AppInner({
                 <ModelPicker
                   models={models}
                   current={loop.model}
-                  currentEffort={loop.reasoningEffort}
+                  currentEffort={loop.thinkingEnabled ? loop.reasoningEffort : "off"}
                   effortChoices={effortChoices}
                   onRefresh={refreshModels}
                   onChoose={(outcome) => {
@@ -4709,12 +4723,23 @@ function AppInner({
                       return;
                     }
                     if (outcome.kind === "effort") {
-                      loop.configure({ reasoningEffort: outcome.effort });
+                      if (outcome.effort === "off") {
+                        loop.configure({ thinkingEnabled: false });
+                        try {
+                          saveThinkingEnabled(false);
+                        } catch {
+                          /* disk full / perms — runtime change still took effect */
+                        }
+                        log.pushInfo("effort: off");
+                        return;
+                      }
+                      loop.configure({ thinkingEnabled: true, reasoningEffort: outcome.effort });
                       agentStore.dispatch({
                         type: "session.effort.change",
                         reasoningEffort: outcome.effort,
                       });
                       try {
+                        saveThinkingEnabled(true);
                         saveReasoningEffort(outcome.effort);
                       } catch {
                         /* disk full / perms — runtime change still took effect */
@@ -4842,7 +4867,10 @@ function AppInner({
                           ? t("statsPanel.modeReview")
                           : editMode
                   }
-                  model={`${sessionModel} \u00b7 ${sessionEffort ?? loop.reasoningEffort}`}
+                  model={`${sessionModel} \u00b7 ${displayReasoningSelection(
+                    sessionEffort ?? loop.reasoningEffort,
+                    effortChoices,
+                  )}`}
                   input={input}
                   setInput={setInput}
                   busy={busy}

@@ -14,8 +14,14 @@ const SLASH_MODE_DESCRIPTORS = [
   { cmd: "/mode full", editMode: "yolo" },
 ] as const satisfies readonly { cmd: string; editMode: EditMode }[];
 
-export const SLASH_REASONING_EFFORTS = [
+const ACCEPTED_SLASH_REASONING_EFFORTS = [
   "low",
+  "medium",
+  "high",
+  "max",
+] as const satisfies readonly ReasoningEffort[];
+
+export const SLASH_REASONING_EFFORTS = [
   "medium",
   "high",
   "max",
@@ -35,7 +41,7 @@ function parseEditMode(value: string): EditMode | null {
 }
 
 function isReasoningEffort(value: string): value is ReasoningEffort {
-  return (SLASH_REASONING_EFFORTS as readonly string[]).includes(value);
+  return (ACCEPTED_SLASH_REASONING_EFFORTS as readonly string[]).includes(value);
 }
 
 export function parseSlashSettingsCommand(input: string): SlashSettingsCommand | null {

@@ -10,9 +10,10 @@ import {
   rankPickerCandidates,
   walkFilesStream,
 } from "../../at-mentions.js";
-import { type ReasoningEffort, loadResolvedSkillPaths } from "../../config.js";
+import { loadResolvedSkillPaths } from "../../config.js";
+import type { ReasoningSelection } from "../../provider-capabilities.js";
 import { SkillStore } from "../../skills.js";
-import { effortArgsHintFor } from "./effort-choices.js";
+import { effortArgsHintFor, effortArgumentChoicesFor } from "./effort-choices.js";
 import {
   type McpServerSummary,
   type SlashArgContext,
@@ -33,7 +34,7 @@ export interface UseCompletionPickersParams {
   /** Cross-session slash invocation counts — used to sort suggestions by frequency. */
   slashUsage?: Readonly<Record<string, number>>;
   /** Filtered effort enum for the active endpoint — drops "max" on non-DeepSeek hosts (#1794). */
-  effortChoices: readonly ReasoningEffort[];
+  effortChoices: readonly ReasoningSelection[];
 }
 
 export interface AtPickerEntry {
@@ -576,18 +577,15 @@ function rankSearchHits(
   });
 }
 
-/** Drops `max` from the /effort spec's argsHint + argCompleter when the
- *  active endpoint is non-DeepSeek so vLLM/Azure users don't see an option
- *  that would 400 their next call (#1794). No-op for any other command. */
+/** Rewrites /effort choices from the active endpoint + model capability. */
 function rewriteEffortSpec(
   spec: SlashCommandSpec,
-  effortChoices: readonly ReasoningEffort[],
+  effortChoices: readonly ReasoningSelection[],
 ): SlashCommandSpec {
   if (spec.cmd !== "effort") return spec;
-  if (effortChoices.length === 4) return spec;
   return {
     ...spec,
     argsHint: effortArgsHintFor(effortChoices),
-    argCompleter: [...effortChoices],
+    argCompleter: effortArgumentChoicesFor(effortChoices),
   };
 }

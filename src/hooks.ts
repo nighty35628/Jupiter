@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { projectHooksTrusted } from "./config.js";
 import { t } from "./i18n/index.js";
+import { sanitizedChildProcessEnv } from "./security/child-process-env.js";
 
 export type HookEvent = "PreToolUse" | "PostToolUse" | "UserPromptSubmit" | "Stop";
 
@@ -41,6 +42,8 @@ export interface HookConfig {
   timeout?: number;
   /** Defaults: project scope → project root; global scope → process.cwd(). */
   cwd?: string;
+  /** Explicit environment made available to this hook. */
+  env?: Record<string, string>;
 }
 
 /** Shape of `<scope>/.jupiter/settings.json` — only `hooks` for now. */
@@ -184,6 +187,7 @@ export interface HookSpawnInput {
   cwd: string;
   stdin: string;
   timeoutMs: number;
+  env?: Record<string, string>;
 }
 
 export interface HookSpawnResult {
@@ -207,6 +211,7 @@ function defaultSpawner(input: HookSpawnInput): Promise<HookSpawnResult> {
   return new Promise<HookSpawnResult>((resolve) => {
     const child = spawn(input.command, {
       cwd: input.cwd,
+      env: { ...sanitizedChildProcessEnv(), ...(input.env ?? {}) },
       shell: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -338,7 +343,7 @@ export async function runHooks(opts: RunHooksOptions): Promise<HookReport> {
     const start = Date.now();
     const timeoutMs = hook.timeout ?? DEFAULT_TIMEOUTS_MS[event];
     const cwd = hook.cwd ?? opts.payload.cwd;
-    const raw = await spawner({ command: hook.command, cwd, stdin, timeoutMs });
+    const raw = await spawner({ command: hook.command, cwd, stdin, timeoutMs, env: hook.env });
     const decision = decideOutcome(event, raw);
     outcomes.push({
       hook,

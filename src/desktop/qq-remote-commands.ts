@@ -11,7 +11,7 @@ export type QQRemoteDesktopCommand =
   | { kind: "workspace_list" }
   | { kind: "workspace_switch"; target: string }
   | { kind: "model"; value?: string }
-  | { kind: "effort"; value?: "low" | "medium" | "high" | "max" }
+  | { kind: "effort"; value?: "off" | "low" | "medium" | "high" | "max" }
   | { kind: "plan"; value?: "review" | "auto" | "yolo" }
   | { kind: "btw"; text: string }
   | { kind: "skill"; name: string; args?: string };
@@ -55,9 +55,10 @@ export function parseQQRemoteDesktopCommand(
     return { kind: "model", value: value || undefined };
   }
 
-  const effortMatch = /^\/effort(?:\s+(low|medium|high|max))?$/i.exec(trimmed);
+  const effortMatch = /^\/effort(?:\s+(off|low|medium|high|max))?$/i.exec(trimmed);
   if (effortMatch) {
     const value = effortMatch[1]?.trim().toLowerCase() as
+      | "off"
       | "low"
       | "medium"
       | "high"
@@ -121,7 +122,7 @@ export function qqRemoteDesktopHelpText(skillNames: Iterable<string>): string {
     "- /workspace list",
     "- /workspace switch <number|path>",
     "- /model <flash|pro|deepseek-v4-flash|deepseek-v4-pro>",
-    "- /effort <low|medium|high|max>",
+    "- /effort <off|medium|high|max>",
     "- /plan <review|auto|yolo>",
     "- /btw <question>",
     `${skillHint}`.trimEnd(),

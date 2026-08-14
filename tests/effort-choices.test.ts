@@ -1,19 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { effortArgsHintFor, effortChoicesForBaseUrl } from "../src/cli/ui/effort-choices.js";
+import {
+  effortArgsHintFor,
+  effortArgumentChoicesFor,
+  effortChoicesForBaseUrl,
+} from "../src/cli/ui/effort-choices.js";
+import {
+  displayReasoningSelection,
+  parseReasoningSelection,
+} from "../src/provider-capabilities.js";
 
 describe("effortChoicesForBaseUrl", () => {
   it("returns the full set for api.deepseek.com", () => {
     expect(effortChoicesForBaseUrl("https://api.deepseek.com")).toEqual([
+      "off",
       "low",
-      "medium",
       "high",
       "max",
     ]);
     expect(effortChoicesForBaseUrl("https://api.deepseek.com/v1")).toEqual([
+      "off",
+      "low",
+      "high",
+      "max",
+    ]);
+    expect(effortChoicesForBaseUrl("https://api.deepseek.com", "glm-5")).toEqual([
       "low",
       "medium",
       "high",
-      "max",
     ]);
   });
 
@@ -43,7 +56,18 @@ describe("effortChoicesForBaseUrl", () => {
   });
 
   it("formats argsHint with the supplied choices", () => {
-    expect(effortArgsHintFor(["low", "medium", "high", "max"])).toBe("<low|medium|high|max>");
+    expect(effortArgsHintFor(["off", "low", "high", "max"])).toBe("<off|medium|high|max>");
     expect(effortArgsHintFor(["low", "medium", "high"])).toBe("<low|medium|high>");
+  });
+
+  it("renames only the first official DeepSeek tier without changing its stored value", () => {
+    const deepSeekChoices = ["off", "low", "high", "max"] as const;
+    const standardChoices = ["low", "medium", "high"] as const;
+
+    expect(effortArgumentChoicesFor(deepSeekChoices)).toEqual(["off", "medium", "high", "max"]);
+    expect(displayReasoningSelection("low", deepSeekChoices)).toBe("medium");
+    expect(parseReasoningSelection("medium", deepSeekChoices)).toBe("low");
+    expect(displayReasoningSelection("low", standardChoices)).toBe("low");
+    expect(parseReasoningSelection("medium", standardChoices)).toBe("medium");
   });
 });

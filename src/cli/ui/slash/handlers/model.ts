@@ -3,9 +3,11 @@ import {
   isReasoningEffort,
   saveModel,
   saveReasoningEffort,
+  saveThinkingEnabled,
 } from "@/config.js";
 import { t } from "@/i18n/index.js";
-import { effortChoicesForBaseUrl } from "../../effort-choices.js";
+import { displayReasoningSelection, parseReasoningSelection } from "@/provider-capabilities.js";
+import { effortArgumentChoicesFor, effortChoicesForBaseUrl } from "../../effort-choices.js";
 import type { SlashHandler } from "../dispatch.js";
 
 const model: SlashHandler = (args, loop, ctx) => {
@@ -30,27 +32,48 @@ const model: SlashHandler = (args, loop, ctx) => {
 };
 
 const effort: SlashHandler = (args, loop, ctx) => {
-  const choices = effortChoicesForBaseUrl(loop.client.baseUrl);
-  const list = choices.join(" | ");
+  const choices = effortChoicesForBaseUrl(loop.client.baseUrl, loop.model);
+  const list = effortArgumentChoicesFor(choices).join(" | ");
   const usageKey =
     choices.length === 4 ? "handlers.model.effortUsage" : "handlers.model.effortUsageNoMax";
   const raw = (args[0] ?? "").toLowerCase();
   if (raw === "") {
     return {
-      info: t("handlers.model.effortStatus", { current: loop.reasoningEffort, list }),
+      info: t("handlers.model.effortStatus", {
+        current: loop.thinkingEnabled
+          ? displayReasoningSelection(loop.reasoningEffort, choices)
+          : "off",
+        list,
+      }),
     };
   }
-  if (!isReasoningEffort(raw) || !choices.includes(raw as ReasoningEffort)) {
+  const selection = parseReasoningSelection(raw, choices);
+  if (!selection) {
     return { info: t(usageKey, { list }) };
   }
-  const next: ReasoningEffort = raw;
-  loop.configure({ reasoningEffort: next });
+  if (selection === "off") {
+    loop.configure({ thinkingEnabled: false });
+    try {
+      saveThinkingEnabled(false, ctx.configPath);
+    } catch {
+      /* disk full / perms — runtime change still took effect */
+    }
+    return { info: t("handlers.model.effortSet", { effort: selection }) };
+  }
+  if (!isReasoningEffort(selection)) return { info: t(usageKey, { list }) };
+  const next: ReasoningEffort = selection;
+  loop.configure({ thinkingEnabled: true, reasoningEffort: next });
   try {
+    saveThinkingEnabled(true, ctx.configPath);
     saveReasoningEffort(next, ctx.configPath);
   } catch {
     /* disk full / perms — runtime change still took effect */
   }
-  return { info: t("handlers.model.effortSet", { effort: next }) };
+  return {
+    info: t("handlers.model.effortSet", {
+      effort: displayReasoningSelection(next, choices),
+    }),
+  };
 };
 
 const budget: SlashHandler = (args, loop) => {

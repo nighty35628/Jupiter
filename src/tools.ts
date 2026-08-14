@@ -17,6 +17,19 @@ export interface ToolCallContext {
   confirmationGate?: PauseGate;
   /** Per-session tracker of files the model has read. Filesystem tools mark on read/write, edit_file/multi_edit consult before mutating. */
   readTracker?: ReadTracker;
+  /** Reports billable model calls made inside a tool (for example native web search). */
+  reportAuxiliaryUsage?: (report: AuxiliaryUsageReport) => void;
+}
+
+export interface AuxiliaryUsageReport {
+  provider: string;
+  operation: string;
+  requestId: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
 }
 
 export interface ToolDefinition<A = any, R = any> {
@@ -196,6 +209,9 @@ export class ToolRegistry {
       confirmationGate?: PauseGate;
       /** Session-scoped read tracker; filesystem tools mark on read/write, edit_file/multi_edit gate on it. */
       readTracker?: ReadTracker;
+      reportAuxiliaryUsage?: (report: AuxiliaryUsageReport) => void;
+      /** Called at the last host-side boundary before control enters the tool implementation. */
+      onExecutionStarted?: () => void | Promise<void>;
       /** Project root directory for saving truncated results. Defaults to process.cwd(). */
       rootDir?: string;
     } = {},
@@ -293,6 +309,7 @@ export class ToolRegistry {
 
     let finalResult: string;
     try {
+      await opts.onExecutionStarted?.();
       try {
         this._auditListener?.({ name, args });
       } catch {
@@ -302,6 +319,7 @@ export class ToolRegistry {
         signal: opts.signal,
         confirmationGate: opts.confirmationGate,
         readTracker: opts.readTracker,
+        reportAuxiliaryUsage: opts.reportAuxiliaryUsage,
       });
       const str = typeof result === "string" ? result : JSON.stringify(result);
       // Pre-clip at dispatch so a single fat result can't balloon the

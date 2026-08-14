@@ -26,6 +26,7 @@ import type { ChatMessage } from "../types.js";
 
 const SESSION_SIDECAR_EXTS = [
   ".events.jsonl",
+  ".tool-executions.v2.journal",
   ".meta.json",
   ".pending.json",
   ".plan.json",

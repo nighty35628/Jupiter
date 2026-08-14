@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import type { Event } from "../core/events.js";
 import { sanitizeName, sessionsDir } from "../memory/session.js";
 import type { EventSink } from "../ports/event-sink.js";
+import { redactSecretsForPersistence } from "../security/redact.js";
 
 export function eventLogPath(sessionName: string): string {
   return join(sessionsDir(), `${sanitizeName(sessionName)}.events.jsonl`);
@@ -16,7 +17,7 @@ export class JsonlEventSink implements EventSink {
   append(ev: Event): void {
     // Skip model.delta — recoverable from model.final.text, would balloon sidecar.
     if (ev.type === "model.delta") return;
-    this.stream.write(`${JSON.stringify(ev)}\n`);
+    this.stream.write(`${JSON.stringify(redactSecretsForPersistence(ev))}\n`);
     this.buffered++;
   }
 

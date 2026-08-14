@@ -38,6 +38,8 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   /** Must round-trip in tool-loop continuations — thinking mode 400s without it. */
   reasoning_content?: string | null;
+  /** DeepSeek Beta prefix continuation marker. Request-only; never persist it in session history. */
+  prefix?: boolean;
 }
 
 export interface RawUsage {
@@ -64,4 +66,8 @@ export interface ChatRequestOptions {
   responseFormat?: { type: "json_object" | "text" };
   thinking?: "enabled" | "disabled";
   reasoningEffort?: import("./config.js").ReasoningEffort;
+  /** Use DeepSeek's Beta chat-completions route for request-only prefix continuation. */
+  betaPrefix?: boolean;
+  /** Prefix continuation is deliberately single-attempt to avoid duplicate billing. */
+  disableRetry?: boolean;
 }

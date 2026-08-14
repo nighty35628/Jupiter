@@ -17,7 +17,6 @@ import { getLangLabel, getSupportedLangs, setLang, t, useLang } from "../i18n";
 import { I } from "../icons";
 import { PagePets } from "../pets/settings-page";
 import type { DesktopPetUi } from "../pets/types";
-import { DESKTOP_SHORTCUTS } from "../shortcuts";
 import type {
   McpSpecInfo,
   MemoryDetail,
@@ -25,8 +24,8 @@ import type {
   MemoryWriteInput,
   OptionalComponentStatus,
   SettingsPatch,
-  SkillPackSourceInfo,
   SkillInfo,
+  SkillPackSourceInfo,
   SkillRootInfo,
   StorageItem,
   StorageScanEvent,
@@ -34,12 +33,14 @@ import type {
   UsageHistoryEvent,
   UsageHistoryMonth,
 } from "../protocol";
+import { displayReasoningSelection } from "../protocol";
 import {
   type QQDesktopSettingsState,
   describeQQRowSummary,
   getQQConnectIntent,
   getQQStatusLabel,
 } from "../qq-settings";
+import { DESKTOP_SHORTCUTS } from "../shortcuts";
 import {
   FONT_FAMILY,
   FONT_SCALE,
@@ -297,7 +298,8 @@ export function SettingsModal({
     if (page === "components") onRefreshOptionalComponents();
   }, [onRefreshOptionalComponents, page]);
   useEffect(() => {
-    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    restoreFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const frame = window.requestAnimationFrame(() => {
       dialogRef.current
         ?.querySelector<HTMLElement>('.settings-side .row[data-active="true"]')
@@ -475,10 +477,7 @@ export function SettingsModal({
               </>
             )}
             {page === "components" && (
-              <PageComponents
-                settings={settings}
-                onRefresh={onRefreshOptionalComponents}
-              />
+              <PageComponents settings={settings} onRefresh={onRefreshOptionalComponents} />
             )}
             {page === "skills" && (
               <PageSkills
@@ -515,11 +514,7 @@ export function SettingsModal({
               />
             )}
             {page === "storage" && (
-              <PageStorage
-                scan={storageScan}
-                onRefresh={onScanStorage}
-                onClean={onCleanStorage}
-              />
+              <PageStorage scan={storageScan} onRefresh={onScanStorage} onClean={onCleanStorage} />
             )}
             {page === "rules" && <PageRules settings={settings} onSave={onSave} />}
             {page === "appearance" && (
@@ -1333,7 +1328,8 @@ function WebSearchSection({
                 | "perplexity"
                 | "exa"
                 | "brave"
-                | "ollama",
+                | "ollama"
+                | "deepseek-native",
             })
           }
         >
@@ -1347,6 +1343,7 @@ function WebSearchSection({
           <option value="exa">{t("settings.webSearchEngineExa")}</option>
           <option value="brave">{t("settings.webSearchEngineBrave")}</option>
           <option value="ollama">{t("settings.webSearchEngineOllama")}</option>
+          <option value="deepseek-native">{t("settings.webSearchEngineDeepSeekNative")}</option>
         </select>
       </div>
       <WebSearchEngineCredentials settings={settings} onSave={onSave} />
@@ -1699,7 +1696,15 @@ function PageAppearance({
 }
 
 const SEARCH_ENGINE_API_KEY_FIELDS: ReadonlyArray<{
-  engine: "metaso" | "baidu" | "tavily" | "perplexity" | "exa" | "brave" | "ollama";
+  engine:
+    | "metaso"
+    | "baidu"
+    | "tavily"
+    | "perplexity"
+    | "exa"
+    | "brave"
+    | "ollama"
+    | "deepseek-native";
   patchKey:
     | "metasoApiKey"
     | "baiduApiKey"
@@ -1707,7 +1712,8 @@ const SEARCH_ENGINE_API_KEY_FIELDS: ReadonlyArray<{
     | "perplexityApiKey"
     | "exaApiKey"
     | "braveApiKey"
-    | "ollamaApiKey";
+    | "ollamaApiKey"
+    | "deepseekSearchApiKey";
   signupUrl: string;
 }> = [
   {
@@ -1745,6 +1751,11 @@ const SEARCH_ENGINE_API_KEY_FIELDS: ReadonlyArray<{
     patchKey: "ollamaApiKey",
     signupUrl: "https://ollama.com/settings/keys",
   },
+  {
+    engine: "deepseek-native",
+    patchKey: "deepseekSearchApiKey",
+    signupUrl: "https://platform.deepseek.com/api_keys",
+  },
 ];
 
 function WebSearchEngineCredentials({
@@ -1761,16 +1772,46 @@ function WebSearchEngineCredentials({
   }
   const field = SEARCH_ENGINE_API_KEY_FIELDS.find((f) => f.engine === engine);
   if (!field) return null;
-  const prefix = settings.webSearchApiKeys?.[engine];
+  const prefix =
+    engine === "deepseek-native"
+      ? settings.webSearchApiKeys?.deepseekNative
+      : settings.webSearchApiKeys?.[engine];
+  const statusHint =
+    engine === "deepseek-native"
+      ? deepSeekNativeCredentialHint(settings.deepseekNativeCredentialStatus, prefix)
+      : undefined;
   return (
     <WebSearchApiKeyRow
       engine={engine}
       patchKey={field.patchKey}
       signupUrl={field.signupUrl}
       prefix={prefix}
+      statusHint={statusHint}
       onSave={onSave}
     />
   );
+}
+
+function deepSeekNativeCredentialHint(
+  status: SettingsType["deepseekNativeCredentialStatus"],
+  prefix?: string,
+): string | undefined {
+  if (!status) return undefined;
+  if (status.state === "ready_reusing_main_key") {
+    return t("settings.deepSeekNativeCredentialReusingMain");
+  }
+  if (status.state === "ready_with_dedicated_key") {
+    return prefix
+      ? t("settings.apiKeySet", { prefix })
+      : t("settings.deepSeekNativeCredentialDedicated");
+  }
+  if (status.state === "needs_dedicated_key") {
+    return t("settings.deepSeekNativeCredentialNeeded");
+  }
+  if (status.state === "last_request_failed") {
+    return t("settings.deepSeekNativeCredentialFailed", { message: status.message });
+  }
+  return t("settings.deepSeekNativeCredentialUnavailable");
 }
 
 function SearxngEndpointRow({
@@ -1810,9 +1851,18 @@ function WebSearchApiKeyRow({
   patchKey,
   signupUrl,
   prefix,
+  statusHint,
   onSave,
 }: {
-  engine: "metaso" | "baidu" | "tavily" | "perplexity" | "exa" | "brave" | "ollama";
+  engine:
+    | "metaso"
+    | "baidu"
+    | "tavily"
+    | "perplexity"
+    | "exa"
+    | "brave"
+    | "ollama"
+    | "deepseek-native";
   patchKey:
     | "metasoApiKey"
     | "baiduApiKey"
@@ -1820,9 +1870,11 @@ function WebSearchApiKeyRow({
     | "perplexityApiKey"
     | "exaApiKey"
     | "braveApiKey"
-    | "ollamaApiKey";
+    | "ollamaApiKey"
+    | "deepseekSearchApiKey";
   signupUrl: string;
   prefix?: string;
+  statusHint?: string;
   onSave: (patch: SettingsPatch) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -1832,7 +1884,7 @@ function WebSearchApiKeyRow({
       <div className="l">
         <div className="n">{label}</div>
         <div className="h">
-          {prefix ? t("settings.apiKeySet", { prefix }) : t("settings.apiKeyNotSet")}{" "}
+          {statusHint ?? (prefix ? t("settings.apiKeySet", { prefix }) : t("settings.apiKeyNotSet"))}{" "}
           <a
             href={signupUrl}
             target="_blank"
@@ -1850,6 +1902,7 @@ function WebSearchApiKeyRow({
         <input
           className="field mono"
           type="password"
+          aria-label={label}
           value={draft}
           placeholder={prefix ?? ""}
           onChange={(e) => setDraft(e.target.value)}
@@ -1960,9 +2013,6 @@ function ApiKeySection({
 
 const KNOWN_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
 
-const EFFORT_VALUES = ["low", "medium", "high", "max"] as const;
-type EffortValue = (typeof EFFORT_VALUES)[number];
-
 function PageModels({
   settings,
   onSave,
@@ -2053,14 +2103,22 @@ function PageModels({
             <div className="h">{t("settings.reasoningEffortHint")}</div>
           </div>
           <div className="seg-ctrl">
-            {EFFORT_VALUES.map((e) => (
+            {(settings.reasoningChoices ?? ["low", "medium", "high"]).map((e) => (
               <button
                 type="button"
                 key={e}
-                data-on={settings.reasoningEffort === e}
-                onClick={() => onSave({ reasoningEffort: e as EffortValue })}
+                data-on={
+                  e === "off"
+                    ? !settings.thinkingEnabled
+                    : settings.thinkingEnabled && settings.reasoningEffort === e
+                }
+                onClick={() =>
+                  e === "off"
+                    ? onSave({ thinkingEnabled: false })
+                    : onSave({ thinkingEnabled: true, reasoningEffort: e })
+                }
               >
-                {e}
+                {displayReasoningSelection(e, settings.reasoningChoices ?? [])}
               </button>
             ))}
           </div>
@@ -3154,9 +3212,7 @@ function PageBilling({
         </div>
         <div className="bill-card">
           <div className="l">{t("settings.usageHistoryTotalTokens")}</div>
-          <div className="v">
-            {selectedTokens.toLocaleString()}
-          </div>
+          <div className="v">{selectedTokens.toLocaleString()}</div>
           <div className="sub">{selected?.label ?? t("settings.usageHistoryNoMonth")}</div>
         </div>
         <div className="bill-card">

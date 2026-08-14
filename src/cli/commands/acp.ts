@@ -27,12 +27,14 @@ import {
   DEFAULT_MODEL,
   bridgeEndpointEnv,
   loadApiKey,
+  loadDeepSeekAutoContinue,
   loadEditMode,
   loadEndpoint,
   loadEngineeringLifecycleMode,
   loadLibraryRetrievalMode,
   loadModel,
   loadReasoningEffort,
+  loadThinkingEnabled,
   normalizeMcpConfig,
   readConfig,
 } from "../../config.js";
@@ -189,6 +191,9 @@ async function buildSession(opts: {
     model,
     budgetUsd: opts.budgetUsd,
     session: `acp-${timestampSuffix()}`,
+    thinkingEnabled: loadThinkingEnabled(),
+    autoContinueDeepSeek: loadDeepSeekAutoContinue(),
+    reasoningEffort: loadReasoningEffort(),
   });
   return {
     id: `sess_${timestampSuffix()}-${Math.random().toString(36).slice(2, 8)}`,

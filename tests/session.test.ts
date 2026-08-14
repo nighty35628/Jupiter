@@ -272,6 +272,21 @@ describe("session persistence", () => {
     expect(existsSync(sessionPath("renamed").replace(/\.jsonl$/, ".events.jsonl"))).toBe(true);
   });
 
+  it("renameSession also moves the V2 tool execution journal", () => {
+    appendSessionMessage("journal-orig", { role: "user", content: "x" });
+    const oldJournal = sessionPath("journal-orig").replace(
+      /\.jsonl$/,
+      ".tool-executions.v2.journal",
+    );
+    writeFileSync(oldJournal, '{"version":2}\n');
+
+    expect(renameSession("journal-orig", "journal-renamed")).toBe(true);
+    expect(existsSync(oldJournal)).toBe(false);
+    expect(
+      existsSync(sessionPath("journal-renamed").replace(/\.jsonl$/, ".tool-executions.v2.journal")),
+    ).toBe(true);
+  });
+
   it("renameSession also moves the .jsonl.bak recovery sidecar", () => {
     appendSessionMessage("bak-orig", { role: "user", content: "x" });
     const oldBackup = `${sessionPath("bak-orig")}.bak`;
@@ -289,6 +304,15 @@ describe("session persistence", () => {
     writeFileSync(events, '{"id":1}\n');
     deleteSession("trash");
     expect(existsSync(events)).toBe(false);
+  });
+
+  it("deleteSession removes the V2 tool execution journal too", () => {
+    appendSessionMessage("journal-trash", { role: "user", content: "x" });
+    const journal = sessionPath("journal-trash").replace(/\.jsonl$/, ".tool-executions.v2.journal");
+    writeFileSync(journal, '{"version":2}\n');
+
+    deleteSession("journal-trash");
+    expect(existsSync(journal)).toBe(false);
   });
 
   it("deleteSession removes the .jsonl.bak recovery sidecar too", () => {
@@ -443,9 +467,11 @@ describe("session persistence", () => {
     it("renames jsonl + sidecars to a timestamped archive name", () => {
       appendSessionMessage("live", { role: "user", content: "hi" });
       const events = sessionPath("live").replace(/\.jsonl$/, ".events.jsonl");
+      const journal = sessionPath("live").replace(/\.jsonl$/, ".tool-executions.v2.journal");
       const meta = sessionPath("live").replace(/\.jsonl$/, ".meta.json");
       const backup = `${sessionPath("live")}.bak`;
       writeFileSync(events, '{"id":1}\n');
+      writeFileSync(journal, '{"version":2}\n');
       writeFileSync(meta, "{}");
       writeFileSync(backup, `${JSON.stringify({ role: "user", content: "backup" })}\n`);
 
@@ -454,9 +480,13 @@ describe("session persistence", () => {
       expect(existsSync(sessionPath("live"))).toBe(false);
       expect(existsSync(sessionPath(archived!))).toBe(true);
       expect(existsSync(events)).toBe(false);
+      expect(existsSync(journal)).toBe(false);
       expect(existsSync(meta)).toBe(false);
       expect(existsSync(backup)).toBe(false);
       expect(existsSync(sessionPath(archived!).replace(/\.jsonl$/, ".events.jsonl"))).toBe(true);
+      expect(
+        existsSync(sessionPath(archived!).replace(/\.jsonl$/, ".tool-executions.v2.journal")),
+      ).toBe(true);
       expect(existsSync(sessionPath(archived!).replace(/\.jsonl$/, ".meta.json"))).toBe(true);
       expect(existsSync(`${sessionPath(archived!)}.bak`)).toBe(true);
       expect(loadSessionMessages(archived!)).toEqual([{ role: "user", content: "hi" }]);

@@ -6,6 +6,7 @@ export const PET_OVERLAY_WINDOW_LABEL = "pet-overlay";
 export const PET_OVERLAY_SNAPSHOT_EVENT = "jupiter://pet-overlay/snapshot";
 export const PET_OVERLAY_READY_EVENT = "jupiter://pet-overlay/ready";
 export const PET_OVERLAY_OPEN_TASK_EVENT = "jupiter://pet-overlay/open-task";
+export const PET_OVERLAY_ACTION_EVENT = "jupiter://pet-overlay/action";
 
 export type PetTaskStatus = "waiting" | "blocked" | "ready" | "working" | "thinking" | "idle";
 
@@ -32,4 +33,8 @@ export type PetOverlaySnapshot = {
 
 export type PetOverlayOpenTask = {
   tabId: string;
+};
+
+export type PetOverlayAction = {
+  action: "open-settings" | "hide";
 };

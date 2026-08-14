@@ -37,9 +37,12 @@ import {
   disableDesktopUpdatePrompts,
   isPlausibleKey,
   isReasoningEffort,
+  isWebSearchEngine,
   loadApiKey,
   loadBaiduApiKey,
   loadBraveApiKey,
+  loadDeepSeekAutoContinue,
+  loadDeepSeekSearchApiKey,
   loadDesktopCloseBehavior,
   loadDesktopOpenTabs,
   loadDingTalkConfig,
@@ -67,6 +70,7 @@ import {
   loadSkillPackSources,
   loadSubagentModels,
   loadTavilyApiKey,
+  loadThinkingEnabled,
   loadWorkspaceDir,
   normalizeMcpConfig,
   pushRecentWorkspace,
@@ -92,6 +96,7 @@ import {
   saveShowSystemEvents,
   saveSkillPackSources,
   saveSubagentModels,
+  saveThinkingEnabled,
   saveWorkspaceDir,
   skipDesktopUpdateVersion,
   writeConfig,
@@ -232,6 +237,11 @@ import {
   sessionIsUnread,
   sessionPath,
 } from "../../memory/session.js";
+import {
+  displayReasoningSelection,
+  normalizeOfficialDeepSeekEffort,
+  resolveModelCapability,
+} from "../../provider-capabilities.js";
 import { QQChannel } from "../../qq/channel.js";
 import {
   type ExternalSessionSource,
@@ -258,7 +268,12 @@ import {
 import { countTokensBounded } from "../../tokenizer.js";
 import type { ChoiceOption } from "../../tools/choice.js";
 import type { SubagentEvent, SubagentSink } from "../../tools/subagent.js";
-import { webFetch, webSearch } from "../../tools/web.js";
+import {
+  type DeepSeekNativeRuntimeCredentialStatus,
+  deepSeekNativeCredentialStatus,
+  webFetch,
+  webSearch,
+} from "../../tools/web.js";
 import type { ChatMessage } from "../../types.js";
 import { VERSION } from "../../version.js";
 import { classifyWorkflowIntent, getWorkflowTemplate } from "../../workflows/index.js";
@@ -378,7 +393,9 @@ type InMessage = { tabId?: string } & (
   | { cmd: "context_diagnostics_get" }
   | {
       cmd: "settings_save";
+      requestId?: string;
       reasoningEffort?: import("../../config.js").ReasoningEffort;
+      thinkingEnabled?: boolean;
       editMode?: EditMode;
       budgetUsd?: number | null;
       baseUrl?: string;
@@ -397,7 +414,8 @@ type InMessage = { tabId?: string } & (
         | "perplexity"
         | "exa"
         | "brave"
-        | "ollama";
+        | "ollama"
+        | "deepseek-native";
       webSearchEndpoint?: string | null;
       metasoApiKey?: string | null;
       baiduApiKey?: string | null;
@@ -406,6 +424,7 @@ type InMessage = { tabId?: string } & (
       exaApiKey?: string | null;
       ollamaApiKey?: string | null;
       braveApiKey?: string | null;
+      deepseekSearchApiKey?: string | null;
       subagentModels?: Record<string, "flash" | "pro">;
       skillPackSources?: ReturnType<typeof loadSkillPackSources>;
       contextTokens?: Record<string, number>;
@@ -484,7 +503,11 @@ interface NeedsSetupEvent {
 
 interface SettingsEvent {
   type: "$settings";
+  settingsRevision: number;
+  requestId?: string;
   reasoningEffort: import("../../config.js").ReasoningEffort;
+  thinkingEnabled: boolean;
+  reasoningChoices: import("../../provider-capabilities.js").ReasoningSelection[];
   editMode: EditMode;
   budgetUsd: number | null;
   baseUrl?: string;
@@ -504,7 +527,8 @@ interface SettingsEvent {
     | "perplexity"
     | "exa"
     | "brave"
-    | "ollama";
+    | "ollama"
+    | "deepseek-native";
   webSearchEndpoint?: string;
   browserAutomation?:
     | {
@@ -525,7 +549,9 @@ interface SettingsEvent {
     exa?: string;
     ollama?: string;
     brave?: string;
+    deepseekNative?: string;
   };
+  deepseekNativeCredentialStatus?: DeepSeekNativeRuntimeCredentialStatus;
   subagentModels?: Record<string, "flash" | "pro">;
   contextTokens?: Record<string, number>;
   libraryRetrievalMode?: LibraryRetrievalMode;
@@ -1342,6 +1368,7 @@ function collectWebSearchApiKeyPrefixes(): {
   exa?: string;
   ollama?: string;
   brave?: string;
+  deepseekNative?: string;
 } {
   return {
     metaso: maskApiKey(loadMetasoApiKey()),
@@ -1351,11 +1378,19 @@ function collectWebSearchApiKeyPrefixes(): {
     exa: maskApiKey(loadExaApiKey()),
     ollama: maskApiKey(loadOllamaApiKey()),
     brave: maskApiKey(loadBraveApiKey()),
+    deepseekNative: maskApiKey(loadDeepSeekSearchApiKey()),
   };
 }
 
-function emitSettings(tab: Tab): void {
+let settingsRevision = 0;
+
+function emitSettings(tab: Tab, requestId?: string): void {
   const ep = loadEndpoint();
+  const capability = resolveModelCapability(ep.baseUrl, tab.currentModel);
+  const storedReasoningEffort = loadReasoningEffort();
+  const displayedReasoningEffort = capability.officialDeepSeekV4
+    ? normalizeOfficialDeepSeekEffort(storedReasoningEffort)
+    : storedReasoningEffort;
   const editMode = loadDesktopEditMode();
   if (tab.toolset) applyPlanMode(tab.toolset.tools, editMode);
   const recent = loadRecentWorkspaces().filter((p) => p !== tab.rootDir);
@@ -1369,7 +1404,11 @@ function emitSettings(tab: Tab): void {
   emit(
     {
       type: "$settings",
-      reasoningEffort: loadReasoningEffort(),
+      settingsRevision,
+      requestId,
+      reasoningEffort: displayedReasoningEffort,
+      thinkingEnabled: loadThinkingEnabled(),
+      reasoningChoices: [...capability.thinkingLevels],
       editMode,
       budgetUsd: tab.runtime?.loop.budgetUsd ?? null,
       baseUrl: ep.baseUrl,
@@ -1393,6 +1432,7 @@ function emitSettings(tab: Tab): void {
       optionalComponents,
       skillPackSources: loadSkillPackSources(),
       webSearchApiKeys: collectWebSearchApiKeyPrefixes(),
+      deepseekNativeCredentialStatus: deepSeekNativeCredentialStatus(),
       subagentModels: loadSubagentModels(),
       contextTokens: readConfig().contextTokens,
       libraryRetrievalMode: loadLibraryRetrievalMode(),
@@ -1406,6 +1446,10 @@ function emitSettings(tab: Tab): void {
     },
     tab.id,
   );
+}
+
+function emitSettingsToAll(tabs: ReadonlyMap<string, Tab>, requestId?: string): void {
+  for (const tab of tabs.values()) emitSettings(tab, requestId);
 }
 
 function loadDesktopEditMode(): Exclude<EditMode, "plan"> {
@@ -2233,6 +2277,27 @@ export function applyGeneratedDesktopSessionTitle(opts: {
   return targetSession;
 }
 
+export function commitGeneratedDesktopSessionTitle(opts: {
+  sessionName: string;
+  title: string;
+  workspace: string;
+  isCurrent: () => boolean;
+  onRenamed: (nextName: string) => void;
+  persist: () => void;
+}): string | null {
+  if (!opts.isCurrent()) return null;
+  const nextName = applyGeneratedDesktopSessionTitle({
+    sessionName: opts.sessionName,
+    title: opts.title,
+    workspace: opts.workspace,
+  });
+  if (nextName !== opts.sessionName) {
+    opts.onRenamed(nextName);
+    opts.persist();
+  }
+  return nextName;
+}
+
 function emitDesktopSubagentEvent(tab: Tab, ev: SubagentEvent): void {
   if (ev.kind === "inner") return;
   const parentSession =
@@ -2284,6 +2349,8 @@ function buildRuntimeFor(tab: Tab): RuntimeState {
     model: tab.currentModel,
     budgetUsd: tab.budgetUsd,
     session: tab.currentSession,
+    thinkingEnabled: loadThinkingEnabled(),
+    autoContinueDeepSeek: loadDeepSeekAutoContinue(),
     reasoningEffort,
     hooks: tab.hooks,
     hookCwd: tab.rootDir,
@@ -2875,33 +2942,16 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             result.content.trim() &&
             shouldAutoNameSession(sessionName, metaBeforeStats, nextTurnCount)
           ) {
-            void generateSessionTitle(rt.loop.client, rt.loop.model, {
-              workspace: tab.rootDir,
+            scheduleGeneratedSessionTitle({
+              tab,
+              sessionName,
+              sessionId: tab.sessionId,
+              bindingId: tab.bindingId,
+              client: rt.loop.client,
+              model: rt.loop.model,
               userText: text,
               assistantText: result.content,
-            }).then(
-              (title) => {
-                if (!title) return;
-                try {
-                  applyGeneratedDesktopSessionTitle({
-                    sessionName,
-                    title,
-                    workspace: tab.rootDir,
-                    onRenamed: (nextName) => {
-                      if (tab.currentSession !== sessionName) return;
-                      tab.currentSession = nextName;
-                      rt.loop.sessionName = nextName;
-                      rt.loop.log.setSessionPath(sessionPath(nextName));
-                    },
-                  });
-                  emitSessionRenamed(tab, sessionName);
-                  emitSessions(tab);
-                } catch {
-                  /* title generation is best-effort */
-                }
-              },
-              () => undefined,
-            );
+            });
           }
         }
         emitCtxBreakdown(tab);
@@ -3255,19 +3305,40 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         sendQQInfo(`Switched desktop model to ${next}.`, tab);
         return true;
       }
-      case "effort":
+      case "effort": {
+        const choices = resolveModelCapability(
+          tab.runtime?.loop.client.baseUrl ?? loadEndpoint().baseUrl,
+          tab.runtime?.loop.model ?? loadModel(),
+        ).thinkingLevels;
         if (!cmd.value) {
           sendQQInfo(
-            `Current reasoning effort: ${loadReasoningEffort()}. Use /effort low, /effort medium, /effort high, or /effort max.`,
+            `Current reasoning effort: ${
+              loadThinkingEnabled()
+                ? displayReasoningSelection(loadReasoningEffort(), choices)
+                : "off"
+            }. Use /effort off, /effort medium, /effort high, or /effort max.`,
             tab,
           );
           return true;
         }
-        saveReasoningEffort(cmd.value);
-        tab.runtime?.loop.configure({ reasoningEffort: cmd.value });
+        if (cmd.value === "off") {
+          saveThinkingEnabled(false);
+          tab.runtime?.loop.configure({ thinkingEnabled: false });
+          emitSettings(tab);
+          sendQQInfo("Disabled desktop DeepSeek thinking.", tab);
+          return true;
+        }
+        const selection = choices.includes("max") && cmd.value === "medium" ? "low" : cmd.value;
+        saveThinkingEnabled(true);
+        saveReasoningEffort(selection);
+        tab.runtime?.loop.configure({ thinkingEnabled: true, reasoningEffort: selection });
         emitSettings(tab);
-        sendQQInfo(`Switched desktop reasoning effort to ${cmd.value}.`, tab);
+        sendQQInfo(
+          `Switched desktop reasoning effort to ${displayReasoningSelection(selection, choices)}.`,
+          tab,
+        );
         return true;
+      }
       case "plan":
         if (!cmd.value) {
           sendQQInfo(
@@ -3877,19 +3948,40 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         sendDingTalkInfo(`Switched desktop model to ${next}.`, tab);
         return true;
       }
-      case "effort":
+      case "effort": {
+        const choices = resolveModelCapability(
+          tab.runtime?.loop.client.baseUrl ?? loadEndpoint().baseUrl,
+          tab.runtime?.loop.model ?? loadModel(),
+        ).thinkingLevels;
         if (!cmd.value) {
           sendDingTalkInfo(
-            `Current reasoning effort: ${loadReasoningEffort()}. Use /effort low, /effort medium, /effort high, or /effort max.`,
+            `Current reasoning effort: ${
+              loadThinkingEnabled()
+                ? displayReasoningSelection(loadReasoningEffort(), choices)
+                : "off"
+            }. Use /effort off, /effort medium, /effort high, or /effort max.`,
             tab,
           );
           return true;
         }
-        saveReasoningEffort(cmd.value);
-        tab.runtime?.loop.configure({ reasoningEffort: cmd.value });
+        if (cmd.value === "off") {
+          saveThinkingEnabled(false);
+          tab.runtime?.loop.configure({ thinkingEnabled: false });
+          emitSettings(tab);
+          sendDingTalkInfo("Disabled desktop DeepSeek thinking.", tab);
+          return true;
+        }
+        const selection = choices.includes("max") && cmd.value === "medium" ? "low" : cmd.value;
+        saveThinkingEnabled(true);
+        saveReasoningEffort(selection);
+        tab.runtime?.loop.configure({ thinkingEnabled: true, reasoningEffort: selection });
         emitSettings(tab);
-        sendDingTalkInfo(`Switched desktop reasoning effort to ${cmd.value}.`, tab);
+        sendDingTalkInfo(
+          `Switched desktop reasoning effort to ${displayReasoningSelection(selection, choices)}.`,
+          tab,
+        );
         return true;
+      }
       case "plan":
         if (!cmd.value) {
           sendDingTalkInfo(
@@ -4350,6 +4442,52 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
   }
 
+  function scheduleGeneratedSessionTitle(opts: {
+    tab: Tab;
+    sessionName: string;
+    sessionId: string;
+    bindingId: number;
+    client: DeepSeekClient;
+    model: string;
+    userText: string;
+    assistantText: string;
+  }): void {
+    const workspace = opts.tab.rootDir;
+    void generateSessionTitle(opts.client, opts.model, {
+      workspace,
+      userText: opts.userText,
+      assistantText: opts.assistantText,
+    }).then(
+      (title) => {
+        if (!title) return;
+        try {
+          const committed = commitGeneratedDesktopSessionTitle({
+            sessionName: opts.sessionName,
+            title,
+            workspace,
+            isCurrent: () =>
+              opts.tab.currentSession === opts.sessionName &&
+              opts.tab.sessionId === opts.sessionId &&
+              opts.tab.bindingId === opts.bindingId &&
+              opts.tab.rootDir === workspace,
+            onRenamed: (nextName) => {
+              opts.tab.currentSession = nextName;
+              opts.tab.runtime?.loop.rebindSession(nextName);
+            },
+            persist: persistOpenTabs,
+          });
+          if (committed) {
+            if (committed !== opts.sessionName) emitSessionRenamed(opts.tab, opts.sessionName);
+            emitSessions(opts.tab);
+          }
+        } catch {
+          // Title generation is best-effort display metadata.
+        }
+      },
+      () => undefined,
+    );
+  }
+
   async function closeTab(tab: Tab): Promise<void> {
     abortTurn(tab);
     tab.turnAdmission.invalidate();
@@ -4598,33 +4736,16 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
                 lastAssistantText.trim() &&
                 shouldAutoNameSession(sessionName, sessionMetaBeforeTurn, nextTurnCount)
               ) {
-                void generateSessionTitle(rt.loop.client, rt.loop.model, {
-                  workspace: tab.rootDir,
+                scheduleGeneratedSessionTitle({
+                  tab,
+                  sessionName,
+                  sessionId: tab.sessionId,
+                  bindingId: tab.bindingId,
+                  client: rt.loop.client,
+                  model: rt.loop.model,
                   userText: text,
                   assistantText: lastAssistantText,
-                }).then(
-                  (title) => {
-                    if (!title) return;
-                    try {
-                      applyGeneratedDesktopSessionTitle({
-                        sessionName,
-                        title,
-                        workspace: tab.rootDir,
-                        onRenamed: (nextName) => {
-                          if (tab.currentSession !== sessionName) return;
-                          tab.currentSession = nextName;
-                          rt.loop.sessionName = nextName;
-                          rt.loop.log.setSessionPath(sessionPath(nextName));
-                        },
-                      });
-                      emitSessionRenamed(tab, sessionName);
-                      emitSessions(tab);
-                    } catch {
-                      // Title generation is best-effort display metadata.
-                    }
-                  },
-                  () => undefined,
-                );
+                });
               }
             }
             if (acceptedTurn > 0) emitTurnCommitted(tab, acceptedTurn, clientId);
@@ -5147,7 +5268,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         workspaceDir: tab.rootDir,
         active: restore?.active,
         busy: Boolean(tab.aborter),
-        restoringSession: restore?.session,
+        restoringSession: restoredMessages ? restore?.session : undefined,
       },
       tab.id,
     );
@@ -6315,6 +6436,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           saveReasoningEffort(msg.reasoningEffort);
           tab.runtime?.loop.configure({ reasoningEffort: msg.reasoningEffort });
         }
+        if (msg.thinkingEnabled !== undefined) {
+          saveThinkingEnabled(msg.thinkingEnabled);
+          tab.runtime?.loop.configure({ thinkingEnabled: msg.thinkingEnabled });
+        }
         if (msg.editMode !== undefined) {
           const desktopMode = msg.editMode === "plan" ? "review" : msg.editMode;
           saveEditMode(desktopMode);
@@ -6363,10 +6488,16 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           msg.perplexityApiKey !== undefined ||
           msg.exaApiKey !== undefined ||
           msg.ollamaApiKey !== undefined ||
-          msg.braveApiKey !== undefined
+          msg.braveApiKey !== undefined ||
+          msg.deepseekSearchApiKey !== undefined
         ) {
           const cfg = readConfig();
-          if (msg.webSearchEngine !== undefined) cfg.webSearchEngine = msg.webSearchEngine;
+          if (msg.webSearchEngine !== undefined) {
+            if (!isWebSearchEngine(msg.webSearchEngine)) {
+              throw new Error(`unsupported web search engine: ${String(msg.webSearchEngine)}`);
+            }
+            cfg.webSearchEngine = msg.webSearchEngine;
+          }
           if (msg.webSearchEndpoint !== undefined) {
             cfg.webSearchEndpoint = msg.webSearchEndpoint?.trim() || undefined;
           }
@@ -6390,6 +6521,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           }
           if (msg.braveApiKey !== undefined) {
             cfg.braveApiKey = msg.braveApiKey?.trim() || undefined;
+          }
+          if (msg.deepseekSearchApiKey !== undefined) {
+            cfg.deepseekSearchApiKey = msg.deepseekSearchApiKey?.trim() || undefined;
           }
           writeConfig(cfg);
         }
@@ -6432,7 +6566,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             applyDesktopModel(tab, next);
           }
         }
-        emitSettings(tab);
+        settingsRevision++;
+        emitSettingsToAll(tabs, msg.requestId);
       } catch (err) {
         emit(
           {
@@ -6441,6 +6576,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           },
           tab.id,
         );
+        emitSettingsToAll(tabs, msg.requestId);
       }
       return;
     }

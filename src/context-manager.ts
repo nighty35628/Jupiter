@@ -64,7 +64,7 @@ export interface ContextManagerDeps {
   client: DeepSeekClient;
   log: AppendOnlyLog;
   stats: SessionStats;
-  sessionName: string | null;
+  getSessionBinding: () => { sessionName: string | null; epoch: number };
   getAbortSignal: () => AbortSignal;
   getCurrentTurn: () => number;
   getSystemPrompt: () => string;
@@ -98,7 +98,9 @@ export interface FoldResult {
     | "already-small"
     | "tail-boundary-missing"
     | "insufficient-savings"
-    | "summary-empty";
+    | "summary-empty"
+    | "session-changed"
+    | "log-changed";
   totalTokens?: number;
   headTokens?: number;
   tailTokens?: number;
@@ -273,6 +275,8 @@ export class ContextManager {
   ): Promise<FoldResult> {
     const ctxMax = resolveContextTokens(model);
     const tailBudget = opts?.keepRecentTokens ?? Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION);
+    const bindingAtStart = this.deps.getSessionBinding();
+    const logRevisionAtStart = this.deps.log.revision;
     const all = this.deps.log.toFullHistory();
     const noop: FoldResult = {
       folded: false,
@@ -352,6 +356,28 @@ export class ContextManager {
       };
     }
 
+    const currentBinding = this.deps.getSessionBinding();
+    if (currentBinding.epoch !== bindingAtStart.epoch) {
+      return {
+        ...noop,
+        reason: "session-changed",
+        totalTokens,
+        headTokens,
+        tailTokens: cumTokens,
+        tailBudget,
+      };
+    }
+    if (this.deps.log.revision !== logRevisionAtStart) {
+      return {
+        ...noop,
+        reason: "log-changed",
+        totalTokens,
+        headTokens,
+        tailTokens: cumTokens,
+        tailBudget,
+      };
+    }
+
     const memoTail =
       pinnedBodies.length > 0 ? `\n\n${SKILL_PIN_MEMO_HEADER}\n\n${pinnedBodies.join("\n\n")}` : "";
     const userTurnsTail = buildPreservedUserTurns(head);
@@ -372,7 +398,7 @@ export class ContextManager {
     );
     const replacement = [summaryMsg, ...tail];
     this.deps.log.compactInPlace(replacement);
-    this.persistRewrite(replacement);
+    this.persistRewrite(currentBinding.sessionName, replacement);
     this.deps.onLogRewrite?.();
     return {
       folded: true,
@@ -399,7 +425,7 @@ export class ContextManager {
     }
     const kept = this.deps.log.entries.slice(0, -1);
     this.deps.log.compactInPlace([...kept]);
-    this.persistRewrite([...kept]);
+    this.persistRewrite(this.deps.getSessionBinding().sessionName, [...kept]);
     return true;
   }
 
@@ -467,10 +493,10 @@ export class ContextManager {
     }
   }
 
-  private persistRewrite(messages: ChatMessage[]): void {
-    if (!this.deps.sessionName) return;
+  private persistRewrite(sessionName: string | null, messages: ChatMessage[]): void {
+    if (!sessionName) return;
     try {
-      rewriteSession(this.deps.sessionName, messages);
+      rewriteSession(sessionName, messages);
     } catch {
       /* disk full / perms — in-memory mutation still applies */
     }

@@ -1,6 +1,7 @@
 /** MCP stdio = newline-delimited JSON-RPC; transport iface lets tests fake it without spawning. */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import { sanitizedChildProcessEnv } from "../security/child-process-env.js";
 import type { JsonRpcMessage } from "./types.js";
 
 export interface McpTransport {
@@ -16,7 +17,7 @@ export interface StdioTransportOptions {
   /** Argv to spawn. First element is the command. */
   command: string;
   args?: string[];
-  /** Env overlay — merged over process.env unless replaceEnv=true. */
+  /** Env overlay — merged over a credential-sanitized base unless replaceEnv=true. */
   env?: Record<string, string>;
   /** When true, only the env above is visible to the child. Default false. */
   replaceEnv?: boolean;
@@ -34,7 +35,9 @@ export class StdioTransport implements McpTransport {
   private stdoutBuffer = "";
 
   constructor(opts: StdioTransportOptions) {
-    const env = opts.replaceEnv ? { ...(opts.env ?? {}) } : { ...process.env, ...(opts.env ?? {}) };
+    const env = opts.replaceEnv
+      ? { ...(opts.env ?? {}) }
+      : { ...sanitizedChildProcessEnv(), ...(opts.env ?? {}) };
     // Windows wraps binaries as .cmd/.bat shims (npx.cmd, pnpm.cmd, …).
     // child_process.spawn without shell:true can't resolve them, which
     // breaks `--mcp "npx -y some-server"` — the most common MCP setup.

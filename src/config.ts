@@ -1,4 +1,4 @@
-/** Library reads only DEEPSEEK_API_KEY from env; the CLI bridges config.json → env var. */
+/** Runtime configuration and credential resolution. */
 
 import { randomBytes } from "node:crypto";
 import { closeSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
@@ -14,6 +14,7 @@ import {
   resolveIndexConfig,
 } from "./index/config.js";
 import { type McpServerSpec, parseMcpSpec } from "./mcp/spec.js";
+import { isStrictOfficialDeepSeekEndpoint } from "./provider-capabilities.js";
 import { normalizeQQAllowlist, normalizeQQOpenId } from "./qq/access.js";
 import type { SkillPackSource } from "./skill-packs.js";
 import { normalizeTelegramAllowlist, normalizeTelegramUserId } from "./telegram/access.js";
@@ -26,6 +27,50 @@ import {
 /** Single trust dial: review queues edits + gates shell; auto applies + gates shell; yolo skips both gates; plan blocks every non-readonly tool (write_file / edit_file / multi_edit / run_command) at dispatch. */
 export type EditMode = "review" | "auto" | "yolo" | "plan";
 export type DesktopCloseBehavior = "closeToTray" | "closeToQuit";
+
+export type WebSearchEngine =
+  | "bing"
+  | "bing-intl"
+  | "searxng"
+  | "metaso"
+  | "baidu"
+  | "tavily"
+  | "perplexity"
+  | "exa"
+  | "brave"
+  | "ollama"
+  | "deepseek-native";
+
+export const WEB_SEARCH_ENGINES: readonly WebSearchEngine[] = [
+  "bing",
+  "bing-intl",
+  "searxng",
+  "metaso",
+  "baidu",
+  "tavily",
+  "perplexity",
+  "exa",
+  "brave",
+  "ollama",
+  "deepseek-native",
+];
+
+export function isWebSearchEngine(value: unknown): value is WebSearchEngine {
+  return typeof value === "string" && WEB_SEARCH_ENGINES.includes(value as WebSearchEngine);
+}
+
+export function saveWebSearchEngine(
+  engine: unknown,
+  path: string = defaultConfigPath(),
+): WebSearchEngine {
+  if (!isWebSearchEngine(engine)) {
+    throw new Error(`unsupported web search engine: ${String(engine)}`);
+  }
+  const cfg = readConfig(path);
+  cfg.webSearchEngine = engine;
+  writeConfig(cfg, path);
+  return engine;
+}
 
 export const DEFAULT_MODEL = "deepseek-v4-flash";
 
@@ -194,6 +239,10 @@ export interface JupiterConfig {
   mouseClipboardHintShown?: boolean;
   /** When false, skip the boot splash animation and show the main UI immediately. Default true. */
   banner?: boolean;
+  /** DeepSeek V4 thinking toggle. Missing keeps the historical enabled default. */
+  thinkingEnabled?: boolean;
+  /** Experimental one-shot DeepSeek Beta prefix continuation. Default false. */
+  deepSeekAutoContinue?: boolean;
   reasoningEffort?: ReasoningEffort;
   /** Default workspace root for the desktop client. CLI uses cwd. */
   workspaceDir?: string;
@@ -220,17 +269,7 @@ export interface JupiterConfig {
   setupCompleted?: boolean;
   search?: boolean;
   /** Web search engine backend: "bing" (default, scrapes cn.bing.com), "bing-intl" (www.bing.com, indexes international sites), "searxng" (self-hosted SearXNG), "metaso" (Metaso API), "baidu" (Baidu AI Search API), "tavily" (LLM-friendly API, free tier), "perplexity" (Perplexity AI), "exa" (Exa API), "brave" (Brave Search API), or "ollama" (Ollama cloud web search). */
-  webSearchEngine?:
-    | "bing"
-    | "bing-intl"
-    | "searxng"
-    | "metaso"
-    | "baidu"
-    | "tavily"
-    | "perplexity"
-    | "exa"
-    | "brave"
-    | "ollama";
+  webSearchEngine?: WebSearchEngine;
   /** Base URL for SearXNG instance (default http://localhost:8080). */
   webSearchEndpoint?: string;
   /** Metaso API key. Falls back to METASO_API_KEY env var. */
@@ -247,6 +286,8 @@ export interface JupiterConfig {
   ollamaApiKey?: string;
   /** Brave Search API key. Falls back to BRAVE_SEARCH_API_KEY env var. Free 2000/mo signup at https://brave.com/search/api/ */
   braveApiKey?: string;
+  /** Dedicated key for DeepSeek native search. Falls back to DEEPSEEK_SEARCH_API_KEY. */
+  deepseekSearchApiKey?: string;
 
   /** TUI mouse-wheel scrolling via SGR mouse tracking. Default true. Set false to fall back to native terminal drag-select for copy (then wheel is terminal-dependent — most terminals translate wheel→arrow in alt-screen, some don't). */
   mouseTracking?: boolean;
@@ -466,6 +507,43 @@ export function loadBraveApiKey(path: string = defaultConfigPath()): string | un
   const cfg = readConfig(path).braveApiKey;
   if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
   return undefined;
+}
+
+export function loadDeepSeekSearchApiKey(path: string = defaultConfigPath()): string | undefined {
+  if (process.env.DEEPSEEK_SEARCH_API_KEY) return process.env.DEEPSEEK_SEARCH_API_KEY.trim();
+  const cfg = readConfig(path).deepseekSearchApiKey;
+  if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
+  return undefined;
+}
+
+export type DeepSeekSearchCredentialState =
+  | "ready_reusing_main_key"
+  | "needs_dedicated_key"
+  | "ready_with_dedicated_key"
+  | "unavailable";
+
+export interface ResolvedDeepSeekSearchCredential {
+  state: DeepSeekSearchCredentialState;
+  apiKey?: string;
+  source?: "dedicated" | "main";
+}
+
+export function resolveDeepSeekSearchCredential(
+  path: string = defaultConfigPath(),
+): ResolvedDeepSeekSearchCredential {
+  const dedicated = loadDeepSeekSearchApiKey(path);
+  if (dedicated) {
+    return { state: "ready_with_dedicated_key", apiKey: dedicated, source: "dedicated" };
+  }
+
+  const endpoint = loadEndpoint(path);
+  if (!isStrictOfficialDeepSeekEndpoint(endpoint.baseUrl)) {
+    return { state: "needs_dedicated_key" };
+  }
+  if (endpoint.apiKey) {
+    return { state: "ready_reusing_main_key", apiKey: endpoint.apiKey, source: "main" };
+  }
+  return { state: "unavailable" };
 }
 
 const DEFAULT_OLLAMA_URL = "http://localhost:11434";
@@ -918,11 +996,9 @@ export function loadBaseUrl(path: string = defaultConfigPath()): string | undefi
   return loadEndpoint(path).baseUrl;
 }
 
-// Mirrors the resolved tuple into env so subprocess constructions see the same pair.
+/** Compatibility no-op: runtime clients receive endpoints explicitly and config secrets never enter process.env. */
 export function bridgeEndpointEnv(path: string = defaultConfigPath()): void {
-  const ep = loadEndpoint(path);
-  if (ep.apiKey) process.env.DEEPSEEK_API_KEY = ep.apiKey;
-  if (ep.baseUrl) process.env.DEEPSEEK_BASE_URL = ep.baseUrl;
+  void path;
 }
 
 function isNonNegativeNumber(value: unknown): value is number {
@@ -1244,19 +1320,7 @@ export function loadJavaSourceEnabled(path: string = defaultConfigPath()): boole
   return cfg === true;
 }
 
-export function webSearchEngine(
-  path: string = defaultConfigPath(),
-):
-  | "bing"
-  | "bing-intl"
-  | "searxng"
-  | "metaso"
-  | "baidu"
-  | "tavily"
-  | "perplexity"
-  | "exa"
-  | "brave"
-  | "ollama" {
+export function webSearchEngine(path: string = defaultConfigPath()): WebSearchEngine {
   const cfg = readConfig(path).webSearchEngine;
   if (cfg === "bing-intl") return "bing-intl";
   if (cfg === "searxng") return "searxng";
@@ -1267,6 +1331,7 @@ export function webSearchEngine(
   if (cfg === "exa") return "exa";
   if (cfg === "brave") return "brave";
   if (cfg === "ollama") return "ollama";
+  if (cfg === "deepseek-native") return "deepseek-native";
   // Any other value (including legacy "mojeek" from configs predating the
   // engine swap) falls through to bing. Read-only — we never rewrite the
   // user's config, so `/search-engine mojeek` later still rejects loudly.
@@ -1504,6 +1569,17 @@ export function loadReasoningEffort(path: string = defaultConfigPath()): Reasoni
   return isReasoningEffort(v) ? v : "high";
 }
 
+export function loadThinkingEnabled(path: string = defaultConfigPath()): boolean {
+  return readConfig(path).thinkingEnabled !== false;
+}
+
+export function loadDeepSeekAutoContinue(path: string = defaultConfigPath()): boolean {
+  const env = process.env.JUPITER_DEEPSEEK_AUTO_CONTINUE?.trim().toLowerCase();
+  if (env === "1" || env === "true" || env === "yes") return true;
+  if (env === "0" || env === "false" || env === "no") return false;
+  return readConfig(path).deepSeekAutoContinue === true;
+}
+
 export function loadTheme(path: string = defaultConfigPath()): ThemeName | "auto" | undefined {
   const value = readConfig(path).theme;
   if (value === "auto") return "auto";
@@ -1532,6 +1608,12 @@ export function saveReasoningEffort(
 ): void {
   const cfg = readConfig(path);
   cfg.reasoningEffort = effort;
+  writeConfig(cfg, path);
+}
+
+export function saveThinkingEnabled(enabled: boolean, path: string = defaultConfigPath()): void {
+  const cfg = readConfig(path);
+  cfg.thinkingEnabled = enabled;
   writeConfig(cfg, path);
 }
 

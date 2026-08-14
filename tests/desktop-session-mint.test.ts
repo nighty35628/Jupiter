@@ -2,7 +2,11 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyGeneratedDesktopSessionTitle, mintSessionFor } from "../src/cli/commands/desktop.js";
+import {
+  applyGeneratedDesktopSessionTitle,
+  commitGeneratedDesktopSessionTitle,
+  mintSessionFor,
+} from "../src/cli/commands/desktop.js";
 import { loadSessionMeta, sessionPath } from "../src/memory/session.js";
 
 describe("desktop session minting", () => {
@@ -55,5 +59,50 @@ describe("desktop session minting", () => {
       autoTitleGenerated: true,
       workspace,
     });
+  });
+
+  it("ignores a generated title when the tab binding changed before completion", () => {
+    const workspace = "/tmp/jupiter-workspace";
+    const session = mintSessionFor(workspace);
+    writeFileSync(sessionPath(session), `${JSON.stringify({ role: "user", content: "hi" })}\n`);
+    const persist = vi.fn();
+    const onRenamed = vi.fn();
+
+    const next = commitGeneratedDesktopSessionTitle({
+      sessionName: session,
+      title: "stale-title",
+      workspace,
+      isCurrent: () => false,
+      onRenamed,
+      persist,
+    });
+
+    expect(next).toBeNull();
+    expect(existsSync(sessionPath(session))).toBe(true);
+    expect(existsSync(sessionPath("stale-title"))).toBe(false);
+    expect(onRenamed).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("persists the renamed tab binding in the same title commit", () => {
+    const workspace = "/tmp/jupiter-workspace";
+    const session = mintSessionFor(workspace);
+    writeFileSync(sessionPath(session), `${JSON.stringify({ role: "user", content: "hi" })}\n`);
+    const persist = vi.fn();
+    const onRenamed = vi.fn();
+
+    const next = commitGeneratedDesktopSessionTitle({
+      sessionName: session,
+      title: "current-title",
+      workspace,
+      isCurrent: () => true,
+      onRenamed,
+      persist,
+    });
+
+    expect(next).toBe("current-title");
+    expect(onRenamed).toHaveBeenCalledOnce();
+    expect(onRenamed).toHaveBeenCalledWith("current-title");
+    expect(persist).toHaveBeenCalledOnce();
   });
 });

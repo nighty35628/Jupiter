@@ -90,6 +90,40 @@ describe("JsonlEventSink", () => {
     expect(lines.every((l) => !l.includes('"model.delta"'))).toBe(true);
   });
 
+  it("redacts structured credentials before writing", async () => {
+    const path = join(dir, "redacted.events.jsonl");
+    const sink = openEventSink(path);
+    sink.append({
+      id: 1,
+      ts: "2026-04-29T12:00:00Z",
+      turn: 1,
+      type: "tool.call",
+      name: "request",
+      args: {
+        apiKey: "sk-secret",
+        headers: { Authorization: "Bearer secret" },
+        query: "public",
+      },
+    });
+    sink.append({
+      id: 2,
+      ts: "2026-04-29T12:00:00Z",
+      turn: 1,
+      type: "tool.intent",
+      callId: "call-1",
+      name: "request",
+      args: JSON.stringify({ access_token: "token", query: "public" }),
+    });
+    await sink.close();
+
+    const raw = readFileSync(path, "utf8");
+    expect(raw).not.toContain("sk-secret");
+    expect(raw).not.toContain("Bearer secret");
+    expect(raw).not.toContain('"access_token":"token"');
+    expect(raw).toContain("[REDACTED]");
+    expect(raw).toContain("public");
+  });
+
   it("instance type matches the EventSink port shape", async () => {
     const path = join(dir, "shape.events.jsonl");
     const sink = openEventSink(path);

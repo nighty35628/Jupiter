@@ -1,4 +1,4 @@
-import type { DeepSeekClient, Usage } from "../client.js";
+import type { ChatFinishReason, DeepSeekClient, Usage } from "../client.js";
 import type { ReasoningEffort } from "../config.js";
 import type { ChatMessage, ToolCall, ToolSpec } from "../types.js";
 import { looksLikeCompleteJson } from "./shrink.js";
@@ -11,7 +11,11 @@ export interface StreamModelOptions {
   messages: ChatMessage[];
   toolSpecs: readonly ToolSpec[];
   signal: AbortSignal;
+  thinkingEnabled: boolean;
   reasoningEffort: ReasoningEffort;
+  maxTokens?: number;
+  betaPrefix?: boolean;
+  disableRetry?: boolean;
   turn: number;
 }
 
@@ -20,15 +24,30 @@ export interface StreamModelResult {
   reasoningContent: string;
   toolCalls: ToolCall[];
   usage: Usage | null;
+  usageComplete: boolean;
+  finishReason: ChatFinishReason;
 }
 
 export async function* streamModelResponse(
   opts: StreamModelOptions,
 ): AsyncGenerator<LoopEvent, StreamModelResult, void> {
-  const { client, model, messages, toolSpecs, signal, reasoningEffort, turn } = opts;
+  const {
+    client,
+    model,
+    messages,
+    toolSpecs,
+    signal,
+    thinkingEnabled,
+    reasoningEffort,
+    maxTokens,
+    betaPrefix,
+    disableRetry,
+    turn,
+  } = opts;
   let assistantContent = "";
   let reasoningContent = "";
   let usage: Usage | null = null;
+  let finishReason: ChatFinishReason = "unknown";
   const callBuf: Map<number, ToolCall> = new Map();
   const readyIndices = new Set<number>();
 
@@ -37,8 +56,11 @@ export async function* streamModelResponse(
     messages,
     tools: toolSpecs.length ? toolSpecs : undefined,
     signal,
-    thinking: thinkingModeForModel(model),
-    reasoningEffort,
+    thinking: thinkingModeForModel(model, thinkingEnabled),
+    reasoningEffort: thinkingEnabled ? reasoningEffort : undefined,
+    maxTokens,
+    betaPrefix,
+    disableRetry,
   })) {
     if (chunk.reasoningDelta) {
       reasoningContent += chunk.reasoningDelta;
@@ -57,8 +79,7 @@ export async function* streamModelResponse(
         content: chunk.contentDelta,
       };
     }
-    if (chunk.toolCallDelta) {
-      const d = chunk.toolCallDelta;
+    for (const d of chunk.toolCallDeltas ?? []) {
       const cur = callBuf.get(d.index) ?? {
         id: d.id,
         type: "function" as const,
@@ -91,12 +112,15 @@ export async function* streamModelResponse(
       }
     }
     if (chunk.usage) usage = chunk.usage;
+    if (chunk.finishReason) finishReason = chunk.finishReason;
   }
 
   return {
     assistantContent,
     reasoningContent,
-    toolCalls: [...callBuf.values()],
+    toolCalls: [...callBuf.entries()].sort(([a], [b]) => a - b).map(([, call]) => call),
     usage,
+    usageComplete: usage !== null,
+    finishReason,
   };
 }

@@ -6,7 +6,10 @@ import {
   defaultConfigPath,
   isPlausibleKey,
   loadApiKey,
+  loadDeepSeekAutoContinue,
   loadEndpoint,
+  loadReasoningEffort,
+  loadThinkingEnabled,
   loadToolRateLimit,
   normalizeMcpConfig,
   readConfig,
@@ -401,6 +404,9 @@ export async function runCommand(opts: RunOptions): Promise<void> {
     tools,
     model: opts.model,
     budgetUsd: opts.budgetUsd,
+    thinkingEnabled: loadThinkingEnabled(),
+    autoContinueDeepSeek: loadDeepSeekAutoContinue(),
+    reasoningEffort: loadReasoningEffort(),
   });
   const prefixHash = prefix.fingerprint;
   if (format === "json") {

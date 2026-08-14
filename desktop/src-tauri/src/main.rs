@@ -241,6 +241,7 @@ fn create_pet_overlay(app: &mut tauri::App) -> tauri::Result<()> {
     .visible_on_all_workspaces(true)
     .skip_taskbar(true)
     .accept_first_mouse(true)
+    .focusable(false)
     .focused(false)
     .visible(false)
     .build()?;

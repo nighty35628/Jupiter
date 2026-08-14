@@ -131,12 +131,19 @@ export const ja = {
     refresh: "ペットを更新",
     scanning: "カスタムペットをスキャン中...",
     noCustomPets: "有効なカスタムペットがありません。",
-    selectedUnavailable: "選択したカスタムペットを利用できないため、Companion Cube を一時表示します。",
+    selectedUnavailable:
+      "選択したカスタムペットを利用できないため、Companion Cube を一時表示します。",
     interact: "デスクトップペットに手を振る",
     currentTask: "現在の会話",
     openTask: "ペットに関連する会話を開く",
     dragHint: "ドラッグで移動・選択して会話を開く",
     activityTray: "会話のアクティビティ",
+    contextMenu: "ペットメニュー",
+    contextOpenTask: "現在の会話を開く",
+    contextInteract: "あいさつする",
+    contextResetPosition: "位置をリセット",
+    contextSettings: "ペット設定",
+    contextHide: "ペットを隠す",
     statusWaiting: "入力を待っています",
     statusBlocked: "確認が必要です",
     statusReady: "レビューできます",
@@ -228,8 +235,7 @@ export const ja = {
     expanded: "展開",
     collapsed: "折りたたみ",
     libraryRetrievalMode: "ワークスペース資料検索",
-    libraryRetrievalModeHint:
-      "Jupiter が保存済み資料をいつ参照するかを制御します。",
+    libraryRetrievalModeHint: "Jupiter が保存済み資料をいつ参照するかを制御します。",
     libraryRetrievalOff: "オフ",
     libraryRetrievalOnDemand: "必要時",
     libraryRetrievalAlways: "常に",
@@ -258,6 +264,8 @@ export const ja = {
     webSearchEngineExa: "exa — AIネイティブ 1000回/月無料 (EXA_API_KEY を設定)",
     webSearchEngineBrave: "brave — 独立インデックス、2000回/月無料 (BRAVE_SEARCH_API_KEY を設定)",
     webSearchEngineOllama: "ollama — Ollama クラウド web 検索 (OLLAMA_API_KEY を設定)",
+    webSearchEngineDeepSeekNative:
+      "DeepSeekネイティブ検索（実験的）— モデル呼び出し全体の遅延とトークン料金が発生",
     webSearchEngineNote: "次の web_search 呼び出しに適用されます",
     webSearchEndpoint: "SearXNG エンドポイント",
     webSearchEndpointHint: "SearXNGインスタンスのベースURL。デフォルトは http://localhost:8080。",
@@ -271,7 +279,16 @@ export const ja = {
       exa: "Exa APIキー",
       brave: "Brave APIキー",
       ollama: "Ollama APIキー",
+      "deepseek-native": "DeepSeekネイティブ検索APIキー",
     },
+    deepSeekNativeCredentialReusingMain:
+      "準備完了 — 公式DeepSeekキーを安全に再利用しています。",
+    deepSeekNativeCredentialDedicated: "準備完了 — 専用検索キーが設定されています。",
+    deepSeekNativeCredentialNeeded:
+      "メインモデルがカスタム、Azure、またはGLMエンドポイントを使用しているため、専用キーが必要です。",
+    deepSeekNativeCredentialUnavailable:
+      "このプロバイダーを使う前にDeepSeek検索キーを設定してください。",
+    deepSeekNativeCredentialFailed: "前回のネイティブ検索に失敗しました: {message}",
     baseUrl: "DeepSeek ベースURL",
     baseUrlHint: "プロキシ使用時のみ上書き。空欄 = 公式エンドポイント。再起動が必要です。",
     workspace: "ワークスペース",
@@ -329,7 +346,8 @@ export const ja = {
     archivesRestore: "復元",
     archivesDelete: "削除",
     storageTitle: "Jupiter ストレージ",
-    storageHint: "ここには Jupiter が所有するデータだけを表示します。ワークスペースのファイルは確認のみです。",
+    storageHint:
+      "ここには Jupiter が所有するデータだけを表示します。ワークスペースのファイルは確認のみです。",
     storageRefresh: "再スキャン",
     storageCleanSelected: "選択項目を削除",
     storageEmpty: "まだストレージをスキャンしていません。",
@@ -352,7 +370,8 @@ export const ja = {
     contextDiagnosticsLastCall: "直近 prompt {prompt}t · hit {hit} / miss {miss}",
     contextDiagnosticsTokenMix:
       "system {system} · tools {tools} · log {log} · memory {memory} · summary {summary}",
-    contextDiagnosticsTools: "{count} ツール · {messages} ログメッセージ · セッションキャッシュ {cache}%",
+    contextDiagnosticsTools:
+      "{count} ツール · {messages} ログメッセージ · セッションキャッシュ {cache}%",
     contextDiagnosticsTopTools: "ツールホットスポット: {tools}",
     contextDiagnosticsNoTopTools: "ツール結果のホットスポットはまだありません。",
     usageHistoryTitle: "使用履歴",
@@ -686,6 +705,7 @@ export const ja = {
     copyLink: "リンクをコピー",
   },
   effort: {
+    offDesc: "DeepSeek の思考を無効化",
     lowDesc: "最速 — 最小限の推論",
     mediumDesc: "バランス",
     highDesc: "デフォルト — vLLM / Azure で安全",
@@ -1158,7 +1178,8 @@ export const ja = {
     aiVisibleWorkspace: "ワークスペース",
     aiVisibleWorkspaceValue: "選択済み",
     aiVisibleWorkspaceEmpty: "未選択",
-    aiVisibleWorkspaceHint: "ワークスペースパスとプロジェクトルールがコンテキストに影響する場合があります。",
+    aiVisibleWorkspaceHint:
+      "ワークスペースパスとプロジェクトルールがコンテキストに影響する場合があります。",
     projectFilesTitle: "プロジェクトファイル",
     fileSearchPlaceholder: "プロジェクトファイルを検索…",
     clearSearch: "検索をクリア",

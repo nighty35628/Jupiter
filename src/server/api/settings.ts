@@ -7,6 +7,7 @@ import {
   isPlausibleKey,
   isReasoningEffort,
   loadBaiduApiKey,
+  loadDeepSeekSearchApiKey,
   loadModel,
   normalizeSkillPathEntries,
   normalizeSkillPaths,
@@ -30,6 +31,7 @@ interface SettingsBody {
   search?: unknown;
   webSearchEngine?: unknown;
   baiduApiKey?: unknown;
+  deepseekSearchApiKey?: unknown;
   model?: unknown;
   budgetUsd?: unknown;
   skillPaths?: unknown;
@@ -57,6 +59,7 @@ const VALID_WEB_SEARCH_ENGINES = new Set([
   "exa",
   "brave",
   "ollama",
+  "deepseek-native",
 ]);
 
 const VALID_EDIT_MODES = new Set(["review", "auto", "yolo", "plan"]);
@@ -77,6 +80,7 @@ export async function handleSettings(
     }
     const live = ctx.loop;
     const baiduApiKey = loadBaiduApiKey(ctx.configPath);
+    const deepseekSearchApiKey = loadDeepSeekSearchApiKey(ctx.configPath);
     return {
       status: 200,
       body: {
@@ -89,6 +93,7 @@ export async function handleSettings(
         webSearchEngine: readWebSearchEngine(ctx.configPath),
         webSearchApiKeys: {
           baidu: baiduApiKey ? redactKey(baiduApiKey) : undefined,
+          deepseekNative: deepseekSearchApiKey ? redactKey(deepseekSearchApiKey) : undefined,
         },
         editMode: ctx.getEditMode?.() ?? cfg.editMode ?? "review",
         session: cfg.session ?? null,
@@ -190,7 +195,7 @@ export async function handleSettings(
           status: 400,
           body: {
             error:
-              "webSearchEngine must be bing | bing-intl | searxng | metaso | baidu | tavily | perplexity | exa | brave | ollama",
+              "webSearchEngine must be bing | bing-intl | searxng | metaso | baidu | tavily | perplexity | exa | brave | ollama | deepseek-native",
           },
         };
       }
@@ -204,7 +209,8 @@ export async function handleSettings(
         | "perplexity"
         | "exa"
         | "brave"
-        | "ollama";
+        | "ollama"
+        | "deepseek-native";
       changed.push("webSearchEngine");
     }
     if (fields.baiduApiKey !== undefined) {
@@ -214,6 +220,18 @@ export async function handleSettings(
       const trimmed = typeof fields.baiduApiKey === "string" ? fields.baiduApiKey.trim() : "";
       cfg.baiduApiKey = trimmed.length > 0 ? trimmed : undefined;
       changed.push("baiduApiKey");
+    }
+    if (fields.deepseekSearchApiKey !== undefined) {
+      if (fields.deepseekSearchApiKey !== null && typeof fields.deepseekSearchApiKey !== "string") {
+        return {
+          status: 400,
+          body: { error: "deepseekSearchApiKey must be a string or null" },
+        };
+      }
+      const trimmed =
+        typeof fields.deepseekSearchApiKey === "string" ? fields.deepseekSearchApiKey.trim() : "";
+      cfg.deepseekSearchApiKey = trimmed.length > 0 ? trimmed : undefined;
+      changed.push("deepseekSearchApiKey");
     }
     let modelPendingLive: string | null = null;
     let budgetPending: number | null | undefined;

@@ -135,6 +135,12 @@ export const de: typeof en = {
     openFolder: "Tierordner öffnen",
     refresh: "Tiere aktualisieren",
     interact: "Dem Desktop-Tier zuwinken",
+    contextMenu: "Tiermenü",
+    contextOpenTask: "Aktuelle Unterhaltung öffnen",
+    contextInteract: "Hallo sagen",
+    contextResetPosition: "Position zurücksetzen",
+    contextSettings: "Tier-Einstellungen",
+    contextHide: "Tier ausblenden",
   },
   settings: {
     ...en.settings,
@@ -239,6 +245,8 @@ export const de: typeof en = {
     webSearchEngineBrave:
       "brave — unabhängiger Index, 2000/Monat kostenlos (BRAVE_SEARCH_API_KEY setzen)",
     webSearchEngineOllama: "ollama — Ollama Cloud-Websuche (OLLAMA_API_KEY setzen)",
+    webSearchEngineDeepSeekNative:
+      "Native DeepSeek-Suche (experimentell) — voller Modellaufruf mit Latenz und Tokenkosten",
     webSearchEngineNote: "gilt für den nächsten web_search-Aufruf",
     webSearchEndpoint: "SearXNG-Endpunkt",
     webSearchEndpointHint: "Basis-URL der SearXNG-Instanz. Leer = http://localhost:8080.",
@@ -252,7 +260,16 @@ export const de: typeof en = {
       exa: "Exa API-Key",
       brave: "Brave API-Key",
       ollama: "Ollama API-Key",
+      "deepseek-native": "API-Schlüssel für native DeepSeek-Suche",
     },
+    deepSeekNativeCredentialReusingMain:
+      "Bereit — der offizielle DeepSeek-Schlüssel wird sicher wiederverwendet.",
+    deepSeekNativeCredentialDedicated: "Bereit — separater Suchschlüssel ist konfiguriert.",
+    deepSeekNativeCredentialNeeded:
+      "Ein separater Schlüssel ist nötig, da das Hauptmodell einen benutzerdefinierten, Azure- oder GLM-Endpunkt nutzt.",
+    deepSeekNativeCredentialUnavailable:
+      "Lege vor der Nutzung dieses Anbieters einen DeepSeek-Suchschlüssel fest.",
+    deepSeekNativeCredentialFailed: "Letzte native Suche fehlgeschlagen: {message}",
     baseUrl: "DeepSeek-Basis-URL",
     baseUrlHint:
       "Nur bei Verwendung eines Proxys überschreiben. Leer = offizieller Endpunkt. Neustart erforderlich.",
@@ -286,7 +303,8 @@ export const de: typeof en = {
     pageMcpLabel: "Integrationen",
     pageMcpDesc: "DeepSeek API, Websuche, QQ/Feishu-Kanäle und MCP-Tool-Server",
     pageComponentsLabel: "Komponenten",
-    pageComponentsDesc: "Abhängigkeiten für Browser-Automation, Dokumentvorschau und Medienverarbeitung",
+    pageComponentsDesc:
+      "Abhängigkeiten für Browser-Automation, Dokumentvorschau und Medienverarbeitung",
     pageSkillsLabel: "Skills",
     pageSkillsDesc: "Wiederverwendbare Prompt-Sets für /-Befehle",
     pageMemoryLabel: "Regeln und Memory",
@@ -679,6 +697,7 @@ export const de: typeof en = {
   },
   effort: {
     ...en.effort,
+    offDesc: "DeepSeek-Reasoning deaktivieren",
     lowDesc: "am schnellsten — minimales Reasoning",
     mediumDesc: "ausgewogen",
     highDesc: "Standard — sicher für vLLM / Azure",

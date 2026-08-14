@@ -10,7 +10,7 @@ function makeManager(log: AppendOnlyLog): ContextManager {
     client,
     log,
     stats: new SessionStats(),
-    sessionName: null,
+    getSessionBinding: () => ({ sessionName: null, epoch: 0 }),
     getAbortSignal: () => new AbortController().signal,
     getCurrentTurn: () => 1,
   });

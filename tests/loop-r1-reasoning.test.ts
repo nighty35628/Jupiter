@@ -57,12 +57,14 @@ function capturingFetch(responses: FakeResponseShape[]): {
   fetch: typeof fetch;
   bodies: Array<{
     messages: ChatMessage[];
+    thinking?: { type?: string };
     extra_body?: { thinking?: { type?: string } };
     reasoning_effort?: string;
   }>;
 } {
   const bodies: Array<{
     messages: ChatMessage[];
+    thinking?: { type?: string };
     extra_body?: { thinking?: { type?: string } };
     reasoning_effort?: string;
   }> = [];
@@ -71,6 +73,7 @@ function capturingFetch(responses: FakeResponseShape[]): {
     const body = init?.body ? JSON.parse(init.body) : {};
     bodies.push({
       messages: body.messages,
+      thinking: body.thinking,
       extra_body: body.extra_body,
       reasoning_effort: body.reasoning_effort,
     });
@@ -368,8 +371,28 @@ describe("R1 reasoning_content round-trip", () => {
     for await (const _ev of loop.step("hello")) {
       /* drain */
     }
-    expect(bodies[0]!.extra_body?.thinking?.type).toBe("enabled");
+    expect(bodies[0]!.thinking?.type).toBe("enabled");
+    expect(bodies[0]!.extra_body).toBeUndefined();
     expect(bodies[0]!.reasoning_effort).toBe("max");
+  });
+
+  it("disables V4 thinking at the top level and omits reasoning_effort", async () => {
+    const { fetch: fakeFetch, bodies } = capturingFetch([{ content: "done" }]);
+    const client = new DeepSeekClient({ apiKey: "sk-test", fetch: fakeFetch });
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      model: "deepseek-v4-flash",
+      stream: false,
+      thinkingEnabled: false,
+      reasoningEffort: "max",
+    });
+    for await (const _ev of loop.step("hello")) {
+      /* drain */
+    }
+    expect(bodies[0]!.thinking?.type).toBe("disabled");
+    expect(bodies[0]!.extra_body).toBeUndefined();
+    expect(bodies[0]!.reasoning_effort).toBeUndefined();
   });
 
   it("pins thinking=disabled for deepseek-chat (non-thinking compat alias)", async () => {
@@ -384,8 +407,9 @@ describe("R1 reasoning_content round-trip", () => {
     for await (const _ev of loop.step("hello")) {
       /* drain */
     }
-    expect(bodies[0]!.extra_body?.thinking?.type).toBe("disabled");
-    expect(bodies[0]!.reasoning_effort).toBe("high");
+    expect(bodies[0]!.thinking?.type).toBe("disabled");
+    expect(bodies[0]!.extra_body).toBeUndefined();
+    expect(bodies[0]!.reasoning_effort).toBeUndefined();
   });
 
   it("omits thinking entirely for unknown models (let the server decide)", async () => {
@@ -401,6 +425,7 @@ describe("R1 reasoning_content round-trip", () => {
       /* drain */
     }
     expect(bodies[0]!.extra_body).toBeUndefined();
+    expect(bodies[0]!.thinking).toBeUndefined();
     expect(bodies[0]!.reasoning_effort).toBe("high");
   });
 
@@ -421,6 +446,43 @@ describe("R1 reasoning_content round-trip", () => {
       /* drain */
     }
     expect(bodies[0]!.extra_body).toBeUndefined();
+    expect(bodies[0]!.thinking).toBeUndefined();
     expect(bodies[0]!.reasoning_effort).toBe("high");
+  });
+
+  it("normalizes medium to high only for official DeepSeek V4", async () => {
+    const official = capturingFetch([{ content: "done" }]);
+    const officialClient = new DeepSeekClient({ apiKey: "sk-test", fetch: official.fetch });
+    const officialLoop = new CacheFirstLoop({
+      client: officialClient,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      model: "deepseek-v4-flash",
+      stream: false,
+      reasoningEffort: "medium",
+    });
+    for await (const _ev of officialLoop.step("hello")) {
+      /* drain */
+    }
+    expect(official.bodies[0]!.reasoning_effort).toBe("high");
+
+    const custom = capturingFetch([{ content: "done" }]);
+    const customClient = new DeepSeekClient({
+      apiKey: "sk-test",
+      baseUrl: "https://gateway.example/v1",
+      fetch: custom.fetch,
+    });
+    const customLoop = new CacheFirstLoop({
+      client: customClient,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      model: "deepseek-v4-flash",
+      stream: false,
+      reasoningEffort: "medium",
+    });
+    for await (const _ev of customLoop.step("hello")) {
+      /* drain */
+    }
+    expect(custom.bodies[0]!.extra_body?.thinking?.type).toBe("enabled");
+    expect(custom.bodies[0]!.thinking).toBeUndefined();
+    expect(custom.bodies[0]!.reasoning_effort).toBe("medium");
   });
 });

@@ -1,13 +1,21 @@
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
 import {
+  PET_OVERLAY_ACTION_EVENT,
   PET_OVERLAY_OPEN_TASK_EVENT,
   PET_OVERLAY_READY_EVENT,
   PET_OVERLAY_SNAPSHOT_EVENT,
   PET_OVERLAY_WINDOW_LABEL,
+  type PetOverlayAction,
   type PetOverlayOpenTask,
   type PetOverlaySnapshot,
 } from "./overlay-protocol";
+
+export type PetOverlayBridgeHandlers = {
+  onOpenTask: (tabId: string) => void;
+  onOpenSettings: () => void;
+  onHide: () => void;
+};
 
 async function publishSnapshot(snapshot: PetOverlaySnapshot): Promise<void> {
   try {
@@ -19,12 +27,12 @@ async function publishSnapshot(snapshot: PetOverlaySnapshot): Promise<void> {
 
 export function usePetOverlayBridge(
   snapshot: PetOverlaySnapshot,
-  onOpenTask: (tabId: string) => void,
+  handlers: PetOverlayBridgeHandlers,
 ): void {
   const snapshotRef = useRef(snapshot);
-  const onOpenTaskRef = useRef(onOpenTask);
+  const handlersRef = useRef(handlers);
   snapshotRef.current = snapshot;
-  onOpenTaskRef.current = onOpenTask;
+  handlersRef.current = handlers;
 
   useEffect(() => {
     void publishSnapshot(snapshot);
@@ -38,7 +46,11 @@ export function usePetOverlayBridge(
         void publishSnapshot(snapshotRef.current);
       }),
       listen<PetOverlayOpenTask>(PET_OVERLAY_OPEN_TASK_EVENT, (event) => {
-        onOpenTaskRef.current(event.payload.tabId);
+        handlersRef.current.onOpenTask(event.payload.tabId);
+      }),
+      listen<PetOverlayAction>(PET_OVERLAY_ACTION_EVENT, (event) => {
+        if (event.payload.action === "open-settings") handlersRef.current.onOpenSettings();
+        else if (event.payload.action === "hide") handlersRef.current.onHide();
       }),
     ];
     void Promise.all(subscriptions).then((items) => {

@@ -108,6 +108,7 @@ export class AppendOnlyLog {
   private _entries: ChatMessage[] = [];
   private _windowSize: number;
   private _sessionPath: string | null;
+  private _revision = 0;
   // Tracks total across window + disk so callers see the correct length.
   private _totalLength: number;
   /** Cached full-history result — avoids redundant sync disk I/O when
@@ -129,6 +130,7 @@ export class AppendOnlyLog {
         : [...messages];
     this._totalLength = messages.length;
     this._fullHistoryCache = null;
+    this._revision++;
   }
 
   append(message: ChatMessage): void {
@@ -141,6 +143,7 @@ export class AppendOnlyLog {
       this._entries.shift();
     }
     this._fullHistoryCache = null;
+    this._revision++;
   }
 
   extend(messages: ChatMessage[]): void {
@@ -152,6 +155,7 @@ export class AppendOnlyLog {
     this._entries = [...replacement];
     this._totalLength = replacement.length;
     this._fullHistoryCache = null;
+    this._revision++;
   }
 
   // Checks memory window first; falls back to disk for older messages.
@@ -206,6 +210,11 @@ export class AppendOnlyLog {
 
   get sessionPath(): string | null {
     return this._sessionPath;
+  }
+
+  /** Changes whenever the logical message sequence changes. Session-path-only renames keep it stable. */
+  get revision(): number {
+    return this._revision;
   }
 
   setSessionPath(path: string | null): void {

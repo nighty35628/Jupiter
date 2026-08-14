@@ -108,7 +108,15 @@ function renderSettings({
   onRestoreArchivedSession?: (name: string) => void;
   onDeleteArchivedSession?: (name: string) => void;
   onClearArchivedSessions?: () => void;
-  initialPage?: "memory" | "archives" | "shortcuts" | "storage" | "billing" | "components" | "pets";
+  initialPage?:
+    | "mcp"
+    | "memory"
+    | "archives"
+    | "shortcuts"
+    | "storage"
+    | "billing"
+    | "components"
+    | "pets";
   storageScan?: any;
   onScanStorage?: () => void;
   onCleanStorage?: (itemIds: string[]) => void;
@@ -211,6 +219,33 @@ function renderSettings({
 }
 
 describe("SettingsModal", () => {
+  it("configures DeepSeek native search and explains the active credential", () => {
+    const onSave = vi.fn();
+    renderSettings({
+      initialPage: "mcp",
+      onSave,
+      settings: {
+        webSearchEngine: "deepseek-native",
+        deepseekNativeCredentialStatus: { state: "ready_reusing_main_key" },
+      },
+    });
+
+    const engineSelect = screen.getByDisplayValue(
+      "DeepSeek native search (experimental) — full model-call latency and token cost",
+    );
+    expect(engineSelect).toBeTruthy();
+    expect(screen.getByText("Ready — securely reusing the official DeepSeek key.")).toBeTruthy();
+
+    fireEvent.change(engineSelect, { target: { value: "tavily" } });
+    expect(onSave).toHaveBeenCalledWith({ webSearchEngine: "tavily" });
+
+    fireEvent.change(engineSelect, { target: { value: "deepseek-native" } });
+    const keyInput = screen.getByLabelText("DeepSeek native search API key");
+    fireEvent.change(keyInput, { target: { value: "  ds-search-key  " } });
+    fireEvent.click(within(keyInput.parentElement!).getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith({ deepseekSearchApiKey: "ds-search-key" });
+  });
+
   it("toggles the desktop pet and selects a preset from the pets page", () => {
     const setEnabled = vi.fn();
     const selectPet = vi.fn();

@@ -2,6 +2,7 @@
 
 import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process";
 import * as pathMod from "node:path";
+import { sanitizedChildProcessEnv } from "../security/child-process-env.js";
 import { detectShellOperator, prepareSpawn, tokenizeCommand } from "./shell.js";
 
 /** Kills the whole tree — `child.kill` only hits the direct child, leaving npm-spawned dev servers orphaned. */
@@ -131,7 +132,7 @@ export class JobRegistry {
       cwd: pathMod.resolve(opts.cwd),
       shell: false,
       windowsHide: true,
-      env: process.env,
+      env: sanitizedChildProcessEnv(),
       // POSIX: detach so the child becomes its own process-group leader.
       // Required for `process.kill(-pid, …)` later — without it a group
       // kill fails and we end up only signaling the wrapper, leaving

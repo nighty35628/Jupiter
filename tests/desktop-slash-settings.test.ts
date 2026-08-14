@@ -34,6 +34,9 @@ describe("desktop slash settings", () => {
     expect(commands).not.toContain("/plan auto");
     expect(commands).not.toContain("/plan");
     expect(commands).toContain("/mode auto");
-    expect(commands).toContain("/effort low");
+    expect(commands).not.toContain("/effort low");
+    expect(commands).toContain("/effort medium");
+    expect(commands).toContain("/effort high");
+    expect(commands).toContain("/effort max");
   });
 });

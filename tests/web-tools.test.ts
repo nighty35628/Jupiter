@@ -1583,11 +1583,9 @@ describe("webFetch", () => {
     }
   });
 
-  it("refuses DNS names that resolve to internal addresses (even after DoH fallback)", async () => {
+  it("refuses DNS names that resolve to internal addresses without a second lookup", async () => {
     mockedLookup.mockResolvedValueOnce([{ address: "10.0.0.5", family: 4 }]);
     const originalFetch = globalThis.fetch;
-    // Stub fetch so the DoH fallback also fails — correct rejection must happen
-    // without relying on a real Cloudflare round-trip.
     globalThis.fetch = vi.fn(async () => {
       throw new Error("network offline");
     }) as unknown as typeof fetch;
@@ -1595,11 +1593,7 @@ describe("webFetch", () => {
       await expect(webFetch("https://metadata.example/")).rejects.toThrow(
         /refuses internal or reserved host: metadata\.example/,
       );
-      // The DoH fallback attempted a fetch; verify it went to the right endpoint.
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        expect.stringMatching(/^https:\/\/1\.1\.1\.1\/dns-query\?name=metadata\.example&type=A$/),
-        expect.objectContaining({ headers: { Accept: "application/dns-json" } }),
-      );
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
     }

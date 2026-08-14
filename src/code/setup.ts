@@ -112,7 +112,7 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
   registerOpenUrlTool(tools);
   registerScaffoldTools(tools, { projectRoot: opts.rootDir });
   if (searchEnabled(opts.configPath)) {
-    registerWebTools(tools);
+    registerWebTools(tools, { configPath: opts.configPath });
   }
   if (loadJavaSourceEnabled(opts.configPath)) {
     registerJavaSourceTool(tools, { projectRoot: opts.rootDir });

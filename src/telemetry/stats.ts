@@ -105,6 +105,10 @@ export interface TurnStats {
   usage: Usage;
   cost: number;
   cacheHitRatio: number;
+  /** False means cost is only a known lower bound because a request ended without usage. */
+  usageComplete?: boolean;
+  /** Prompt tokens from the final request, distinct from aggregate billable prompt tokens. */
+  contextPromptTokens?: number;
 }
 
 export interface SessionSummary {
@@ -195,7 +199,12 @@ export class SessionStats {
     this._carryoverLastPromptTokens = 0;
   }
 
-  record(turn: number, model: string, usage: Usage): TurnStats {
+  record(
+    turn: number,
+    model: string,
+    usage: Usage,
+    meta: { usageComplete?: boolean; contextPromptTokens?: number } = {},
+  ): TurnStats {
     const cost = costUsd(model, usage);
     const stats: TurnStats = {
       turn,
@@ -203,6 +212,7 @@ export class SessionStats {
       usage,
       cost,
       cacheHitRatio: usage.cacheHitRatio,
+      ...meta,
     };
     this.turns.push(stats);
     this.trimOldTurns();
@@ -274,7 +284,8 @@ export class SessionStats {
       claudeEquivalentUsd: round(this.totalClaudeEquivalent, 6),
       savingsVsClaudePct: round(this.savingsVsClaude * 100, 2),
       cacheHitRatio: round(this.aggregateCacheHitRatio, 4),
-      lastPromptTokens: last?.usage.promptTokens ?? this._carryoverLastPromptTokens,
+      lastPromptTokens:
+        last?.contextPromptTokens ?? last?.usage.promptTokens ?? this._carryoverLastPromptTokens,
       lastTurnCostUsd: round(last?.cost ?? 0, 6),
     };
   }

@@ -15,6 +15,19 @@ export const currentWindow = {
 
 export const getCurrentWindow = vi.fn(() => currentWindow);
 
+export const currentMonitor = vi.fn(() =>
+  Promise.resolve({
+    name: "Test display",
+    position: { x: 0, y: 0 },
+    size: { width: 1920, height: 1080 },
+    workArea: {
+      position: { x: 0, y: 0 },
+      size: { width: 1920, height: 1040 },
+    },
+    scaleFactor: 1,
+  }),
+);
+
 export class Window {
   label: string;
   constructor(label: string) {
@@ -25,6 +38,7 @@ export class Window {
 export const WindowEvent = {};
 
 export default {
+  currentMonitor,
   getCurrentWindow,
   Window,
 };
