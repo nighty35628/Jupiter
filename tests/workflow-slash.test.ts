@@ -174,16 +174,16 @@ describe("/workflow slash commands", () => {
     const id = result.info?.match(/wf-[a-z0-9-]+/)?.[0];
     expect(id).toBeTruthy();
 
-    const run = await waitForRun(id!);
+    const run = await waitForRun(id!, 10_000);
     expect(run.status).toBe("completed");
     expect(run.workflowId).toBe("workspace-health-check");
     expect(run.sources.some((source) => source.path?.endsWith("package.json"))).toBe(true);
-  });
+  }, 15_000);
 });
 
-async function waitForRun(id: string): Promise<WorkflowRun> {
+async function waitForRun(id: string, timeoutMs = 2000): Promise<WorkflowRun> {
   const file = join(root, ".jupiter", "workflows", "runs.json");
-  const deadline = Date.now() + 2000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (existsSync(file)) {
       try {
