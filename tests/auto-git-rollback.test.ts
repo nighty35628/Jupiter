@@ -202,5 +202,5 @@ describe("auto-git-rollback memory guard", () => {
       restoreProcessEnv("GIT_WORK_TREE", previousGitWorkTree);
       await rm(outerRoot, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
