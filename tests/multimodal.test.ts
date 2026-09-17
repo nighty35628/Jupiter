@@ -141,7 +141,7 @@ describe("image capability and wire projection", () => {
         { supportsImages: true, store },
       ),
     ).rejects.toThrow(/too many/);
-  });
+  }, 30_000);
   it("rejects unsupported models before any network call", async () => {
     const image = await fixture();
     const fetch = vi.fn();

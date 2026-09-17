@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   SequencedPacketBuffer,
@@ -48,11 +49,11 @@ describe("SequencedPacketBuffer", () => {
   });
 
   it("resolves the packaged CLI entry from a split Web chunk", () => {
-    expect(cliEntryForModulePath("/opt/jupiter/dist/cli/web-ABC123.js")).toBe(
-      "/opt/jupiter/dist/cli/index.js",
+    expect(cliEntryForModulePath(resolve("/opt/jupiter/dist/cli/web-ABC123.js"))).toBe(
+      resolve("/opt/jupiter/dist/cli/index.js"),
     );
-    expect(cliEntryForModulePath("/opt/jupiter/dist/web/sidecar.js")).toBe(
-      "/opt/jupiter/dist/cli/index.js",
+    expect(cliEntryForModulePath(resolve("/opt/jupiter/dist/web/sidecar.js"))).toBe(
+      resolve("/opt/jupiter/dist/cli/index.js"),
     );
   });
 
