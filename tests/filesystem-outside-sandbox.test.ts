@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadProjectPathAllowed, writeConfig } from "../src/config.js";
 import { PauseGate } from "../src/core/pause-gate.js";
 import { ToolRegistry } from "../src/tools.js";
@@ -42,7 +42,7 @@ describe("filesystem outside-sandbox gate (#684)", () => {
   it("dispatches a path_access gate request when a system absolute path escapes the sandbox", async () => {
     const target = join(outside, "secret.txt");
     const call = tools.dispatch("read_file", { path: target }, { confirmationGate: gate });
-    await new Promise((r) => setTimeout(r, 5));
+    await vi.waitFor(() => expect(gate.current).not.toBeNull());
     expect(gateRequests).toHaveLength(1);
     expect(gateRequests[0]?.kind).toBe("path_access");
     const payload = gateRequests[0]?.payload as {
@@ -63,7 +63,7 @@ describe("filesystem outside-sandbox gate (#684)", () => {
   it("throws a user-denied error when the gate verdict is deny", async () => {
     const target = join(outside, "secret.txt");
     const call = tools.dispatch("read_file", { path: target }, { confirmationGate: gate });
-    await new Promise((r) => setTimeout(r, 5));
+    await vi.waitFor(() => expect(gate.current).not.toBeNull());
     const current = gate.current;
     expect(current).not.toBeNull();
     gate.resolve(current!.id, { type: "deny", denyContext: "not on the contract" });
@@ -79,7 +79,7 @@ describe("filesystem outside-sandbox gate (#684)", () => {
       { path: join(outside, "secret.txt") },
       { confirmationGate: gate },
     );
-    await new Promise((r) => setTimeout(r, 5));
+    await vi.waitFor(() => expect(gate.current).not.toBeNull());
     gate.resolve(gate.current!.id, { type: "run_once" });
     await first;
     const second = await tools.dispatch(
@@ -120,7 +120,7 @@ describe("filesystem outside-sandbox gate (#684)", () => {
       { path: target, content: "from-test" },
       { confirmationGate: gate },
     );
-    await new Promise((r) => setTimeout(r, 5));
+    await vi.waitFor(() => expect(gate.current).not.toBeNull());
     expect(gateRequests).toHaveLength(1);
     const payload = gateRequests[0]?.payload as { intent: string; toolName: string };
     expect(payload.intent).toBe("write");
@@ -146,7 +146,7 @@ describe("filesystem outside-sandbox gate (#684)", () => {
         { path: "~/Desktop/created.txt", content: "home-file" },
         { confirmationGate: gate },
       );
-      await new Promise((r) => setTimeout(r, 5));
+      await vi.waitFor(() => expect(gate.current).not.toBeNull());
 
       expect(gateRequests).toHaveLength(1);
       const payload = gateRequests[0]?.payload as { path: string; intent: string };
@@ -183,7 +183,7 @@ describe("filesystem outside-sandbox gate (#684)", () => {
       { path: "C:\\Windows\\System32\\drivers\\etc\\hosts" },
       { confirmationGate: gate },
     );
-    await new Promise((r) => setTimeout(r, 5));
+    await vi.waitFor(() => expect(gate.current).not.toBeNull());
     expect(gateRequests).toHaveLength(1);
     gate.resolve(gate.current!.id, { type: "deny" });
     const result = await call;
