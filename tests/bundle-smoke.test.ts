@@ -84,6 +84,79 @@ describe("bundled dist — tokenizer path resolution", () => {
     },
   );
 
+  (cliExists ? it : it.skip)("dist/cli/web chunk loads the native PTY dependency", async () => {
+    const { readdirSync } = await import("node:fs");
+    const distDir = resolve("dist/cli");
+    const webChunk = readdirSync(distDir).find((f) => /^web-.*\.js$/.test(f));
+    expect(webChunk).toBeTruthy();
+    const webUrl = pathToFileURL(resolve(distDir, webChunk ?? "")).href;
+    const result = spawnSync(
+      "node",
+      ["--input-type=module", "-e", `await import("${webUrl}"); console.log("web-ok");`],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("web-ok");
+  });
+
+  (cliExists ? it : it.skip)("dist/cli exposes all Web access modes in help", () => {
+    const result = spawnSync("node", [CLI_BUNDLE, "web", "--help"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("run Jupiter Web Beta");
+    expect(result.stdout).toContain("access mode: local, lan, or public");
+    expect(result.stdout).not.toContain("run the local Jupiter Web Beta");
+  });
+
+  (cliExists ? it : it.skip)(
+    "packaged image worker runs outside the checkout with only shipped WASM dependencies",
+    async () => {
+      const { cp, mkdtemp, rm } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { PhotonImage } = await import("@silvia-odwyer/photon-node");
+      const directory = await mkdtemp(join(tmpdir(), "jupiter-packaged-image-"));
+      const fixture = new PhotonImage(new Uint8Array([230, 56, 74, 255, 48, 172, 214, 255]), 2, 1);
+      try {
+        const bytes = Buffer.from(fixture.get_bytes()).toString("base64");
+        await cp(resolve("dist/image-worker.cjs"), join(directory, "image-worker.cjs"));
+        for (const dependency of ["@silvia-odwyer/photon-node", "image-size"]) {
+          await cp(
+            resolve("dist/node_modules", dependency),
+            join(directory, "node_modules", dependency),
+            { recursive: true },
+          );
+        }
+        const result = spawnSync(
+          "node",
+          [
+            "--input-type=module",
+            "-e",
+            `
+        import { Worker } from 'node:worker_threads';
+        const worker = new Worker(${JSON.stringify(join(directory, "image-worker.cjs"))}, {
+          workerData: { bytes: new Uint8Array(Buffer.from(${JSON.stringify(bytes)}, 'base64')), mode: 'canonical' }, execArgv: []
+        });
+        worker.once('error', (error) => { console.error(error); process.exitCode = 1; });
+        worker.once('message', (result) => {
+          if (!result.ok || result.value.image.width !== 2 || !result.value.thumbnail.data.length) process.exitCode = 1;
+          else console.log('packaged-image-ok');
+        });
+      `,
+          ],
+          { cwd: directory, encoding: "utf8", timeout: 30_000 },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("packaged-image-ok");
+      } finally {
+        fixture.free();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   (cliExists ? it : it.skip)("dist/cli/index.js loads tokenizer before the first API fetch", () => {
     // Spawn the CLI pointed at a bogus local address that fails fetch
     // fast. In step(), preflight's estimateRequestTokens runs BEFORE

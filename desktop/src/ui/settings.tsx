@@ -1,5 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { isolateOverlay, restoreVisibleFocus } from "./overlay-focus";
 import type { Balance, SessionInfo, Settings as SettingsType, UsageStats } from "../App";
 import {
   type DingTalkDesktopSettingsState,
@@ -23,6 +25,7 @@ import type {
   MemoryEntryInfo,
   MemoryWriteInput,
   OptionalComponentStatus,
+  ProviderTestResultEvent,
   SettingsPatch,
   SkillInfo,
   SkillPackSourceInfo,
@@ -112,6 +115,7 @@ function dialogTabbables(dialog: HTMLElement): HTMLElement[] {
 }
 
 export function SettingsModal({
+  returnFocus,
   settings,
   balance,
   usageHistory,
@@ -142,7 +146,8 @@ export function SettingsModal({
   dingtalk,
   onClose,
   onSave,
-  onSaveApiKey,
+  onTestProvider = () => undefined,
+  providerTestResult,
   onSignOutApiKey,
   onLoadQQ,
   onConnectQQ,
@@ -182,6 +187,7 @@ export function SettingsModal({
   onCleanStorage,
   onOpenAbout,
 }: {
+  returnFocus?: import("react").RefObject<HTMLElement | null>;
   settings: SettingsType;
   balance: Balance | null;
   usage: UsageStats;
@@ -213,7 +219,15 @@ export function SettingsModal({
   dingtalk: DingTalkDesktopSettingsState | null;
   onClose: () => void;
   onSave: (patch: SettingsPatch) => void;
-  onSaveApiKey: (key: string) => void;
+  /** @deprecated Provider credentials are now saved atomically from the Models page. */
+  onSaveApiKey?: (key: string) => void;
+  onTestProvider?: (input: {
+    baseUrl: string;
+    apiKey?: string;
+    model: string;
+    providerDialect: "auto" | "deepseek" | "openai-compatible";
+  }) => void;
+  providerTestResult?: ProviderTestResultEvent | null;
   onSignOutApiKey: () => void;
   onLoadQQ: () => void;
   onConnectQQ: () => void;
@@ -265,6 +279,19 @@ export function SettingsModal({
   onCleanStorage: (itemIds: string[]) => void;
   onOpenAbout: () => void;
 }) {
+  const webSurface = document.documentElement.dataset.runtime === "web";
+  const webHostConfigurationAllowed =
+    !webSurface ||
+    (document.documentElement.dataset.webMcpWrite === "true" &&
+      document.documentElement.dataset.webSecretWrite === "true");
+  const pageMeta = webSurface
+    ? PAGE_META.filter(
+        (item) =>
+          item.id !== "pets" &&
+          item.id !== "shortcuts" &&
+          (webHostConfigurationAllowed || item.id !== "mcp"),
+      )
+    : PAGE_META;
   const [page, setPage] = useState<PageId>(initialPage ?? "general");
   const [qqConfigureOpen, setQQConfigureOpen] = useState(false);
   const [feishuConfigureOpen, setFeishuConfigureOpen] = useState(false);
@@ -289,6 +316,9 @@ export function SettingsModal({
     setPage(initialPage ?? "general");
   }, [initialPage]);
   useEffect(() => {
+    if (!pageMeta.some((item) => item.id === page)) setPage("general");
+  }, [page, webHostConfigurationAllowed, webSurface]);
+  useEffect(() => {
     if (page === "archives") onRefreshArchivedSessions();
   }, [onRefreshArchivedSessions, page]);
   useEffect(() => {
@@ -299,15 +329,18 @@ export function SettingsModal({
   }, [onRefreshOptionalComponents, page]);
   useEffect(() => {
     restoreFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      returnFocus?.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    const release = dialogRef.current ? isolateOverlay(dialogRef.current.parentElement ?? dialogRef.current) : () => {};
     const frame = window.requestAnimationFrame(() => {
       dialogRef.current
         ?.querySelector<HTMLElement>('.settings-side .row[data-active="true"]')
         ?.focus();
     });
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         onCloseRef.current();
         return;
       }
@@ -330,7 +363,8 @@ export function SettingsModal({
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("keydown", onKey);
-      restoreFocusRef.current?.focus();
+      release();
+      restoreVisibleFocus(restoreFocusRef.current);
     };
   }, []);
   useEffect(() => {
@@ -340,7 +374,7 @@ export function SettingsModal({
       }
     };
   }, []);
-  const currentMeta = PAGE_META.find((p) => p.id === page) ?? PAGE_META[0]!;
+  const currentMeta = pageMeta.find((p) => p.id === page) ?? pageMeta[0]!;
   return (
     <div className="settings-mask" onClick={onClose}>
       <div
@@ -353,7 +387,7 @@ export function SettingsModal({
       >
         <nav className="settings-side">
           <div className="sg">{t("settings.title")}</div>
-          {PAGE_META.map((p) => (
+          {pageMeta.map((p) => (
             <button
               type="button"
               key={p.id}
@@ -403,16 +437,17 @@ export function SettingsModal({
                 onOpenAbout={onOpenAbout}
               />
             )}
-            {page === "models" && <PageModels settings={settings} onSave={onSave} />}
+            {page === "models" && (
+              <PageModels
+                settings={settings}
+                onSave={onSave}
+                onTestProvider={onTestProvider}
+                providerTestResult={providerTestResult}
+                onSignOutApiKey={onSignOutApiKey}
+              />
+            )}
             {page === "mcp" && (
               <>
-                <ApiKeySection
-                  baseUrl={settings.baseUrl}
-                  apiKeyPrefix={settings.apiKeyPrefix}
-                  onSave={onSave}
-                  onSaveApiKey={onSaveApiKey}
-                  onSignOutApiKey={onSignOutApiKey}
-                />
                 <WebSearchSection settings={settings} onSave={onSave} />
                 <QQChannelSection
                   qq={qq}
@@ -1090,6 +1125,28 @@ function PageGeneral({
   onOpenAbout: () => void;
 }) {
   const [editorDraft, setEditorDraft] = useState(settings.editor ?? "");
+  const webSurface = document.documentElement.dataset.runtime === "web";
+  const [webNotificationState, setWebNotificationState] = useState(() => {
+    if (!webSurface || typeof Notification === "undefined") return "unavailable";
+    if (Notification.permission === "denied") return "denied";
+    return Notification.permission === "granted" &&
+      localStorage.getItem("jupiter.web.notifications") === "enabled"
+      ? "enabled"
+      : "disabled";
+  });
+  const [webAccess, setWebAccess] = useState<{
+    devices: Array<{ id: string; name: string; lastSeenAt: number }>;
+    currentDeviceId: string;
+    lease?: { deviceId: string } | null;
+  } | null>(null);
+  const [pairingUrl, setPairingUrl] = useState("");
+  const refreshWebAccess = () => {
+    if (!webSurface) return;
+    void invoke<typeof webAccess>("web_devices_get")
+      .then((value) => setWebAccess(value))
+      .catch(() => setWebAccess(null));
+  };
+  useEffect(refreshWebAccess, [webSurface]);
   const lang = useLang();
   return (
     <>
@@ -1119,7 +1176,114 @@ function PageGeneral({
             onBlur={() => onSave({ editor: editorDraft.trim() })}
           />
         </div>
+        {webSurface ? (
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.webNotifications")}</div>
+              <div className="h">{t("settings.webNotificationsHint")}</div>
+            </div>
+            <button
+              type="button"
+              className="btn"
+              disabled={webNotificationState === "denied" || webNotificationState === "unavailable"}
+              onClick={() => {
+                void Notification.requestPermission().then((permission) => {
+                  if (permission === "granted") {
+                    localStorage.setItem("jupiter.web.notifications", "enabled");
+                    setWebNotificationState("enabled");
+                  } else {
+                    localStorage.removeItem("jupiter.web.notifications");
+                    setWebNotificationState(permission === "denied" ? "denied" : "disabled");
+                  }
+                });
+              }}
+            >
+              {webNotificationState === "enabled"
+                ? t("settings.webNotificationsEnabled")
+                : webNotificationState === "denied"
+                  ? t("settings.webNotificationsBlocked")
+                  : t("settings.webNotificationsEnable")}
+            </button>
+          </div>
+        ) : null}
       </section>
+
+      {webSurface ? (
+        <section className="section">
+          <div className="stitle">{t("settings.webAccessSection")}</div>
+          <div className="setting-row">
+            <div className="l">
+              <div className="n">{t("settings.webPairDevice")}</div>
+              <div className="h">{t("settings.webPairDeviceHint")}</div>
+            </div>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                void invoke<{ url: string }>("web_pairing_create")
+                  .then(async ({ url }) => {
+                    setPairingUrl(url);
+                    await navigator.clipboard?.writeText?.(url).catch(() => undefined);
+                  })
+                  .catch(() => undefined);
+              }}
+            >
+              {t("settings.webPairDeviceCreate")}
+            </button>
+          </div>
+          {pairingUrl ? (
+            <div className="web-pairing-url mono" title={pairingUrl}>
+              {pairingUrl}
+            </div>
+          ) : null}
+          {webAccess?.lease && webAccess.lease.deviceId !== webAccess.currentDeviceId ? (
+            <div className="setting-row">
+              <div className="l">
+                <div className="n">{t("settings.webControl")}</div>
+                <div className="h">{t("settings.webControlHint")}</div>
+              </div>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  void invoke("web_take_control")
+                    .then(refreshWebAccess)
+                    .catch(() => undefined);
+                }}
+              >
+                {t("settings.webTakeControl")}
+              </button>
+            </div>
+          ) : null}
+          <div className="web-device-list">
+            {(webAccess?.devices ?? []).map((device) => (
+              <div className="web-device-row" key={device.id}>
+                <div>
+                  <strong>{device.name}</strong>
+                  <span>
+                    {device.id === webAccess?.currentDeviceId
+                      ? t("settings.webThisDevice")
+                      : new Date(device.lastSeenAt).toLocaleString()}
+                  </span>
+                </div>
+                {device.id !== webAccess?.currentDeviceId ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      void invoke("web_device_revoke", { deviceId: device.id })
+                        .then(refreshWebAccess)
+                        .catch(() => undefined);
+                    }}
+                  >
+                    {t("settings.webRevokeDevice")}
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="section">
         <div className="stitle">{t("settings.behaviorSection")}</div>
@@ -1315,6 +1479,7 @@ function WebSearchSection({
         </div>
         <select
           className="field"
+          aria-label={t("settings.webSearchEngine")}
           value={settings.webSearchEngine ?? "bing"}
           onChange={(e) =>
             onSave({
@@ -1884,7 +2049,8 @@ function WebSearchApiKeyRow({
       <div className="l">
         <div className="n">{label}</div>
         <div className="h">
-          {statusHint ?? (prefix ? t("settings.apiKeySet", { prefix }) : t("settings.apiKeyNotSet"))}{" "}
+          {statusHint ??
+            (prefix ? t("settings.apiKeySet", { prefix }) : t("settings.apiKeyNotSet"))}{" "}
           <a
             href={signupUrl}
             target="_blank"
@@ -1934,30 +2100,86 @@ function WebSearchApiKeyRow({
   );
 }
 
-function ApiKeySection({
-  baseUrl,
-  apiKeyPrefix,
+function ProviderSection({
+  settings,
   onSave,
-  onSaveApiKey,
+  onTestProvider,
+  providerTestResult,
   onSignOutApiKey,
 }: {
-  baseUrl?: string;
-  apiKeyPrefix?: string;
+  settings: SettingsType;
   onSave: (patch: SettingsPatch) => void;
-  onSaveApiKey: (key: string) => void;
+  onTestProvider: (input: {
+    baseUrl: string;
+    apiKey?: string;
+    model: string;
+    providerDialect: "auto" | "deepseek" | "openai-compatible";
+  }) => void;
+  providerTestResult?: ProviderTestResultEvent | null;
   onSignOutApiKey: () => void;
 }) {
   const [key, setKey] = useState("");
-  const [urlDraft, setUrlDraft] = useState(baseUrl ?? "");
+  const [urlDraft, setUrlDraft] = useState(settings.baseUrl ?? "https://api.deepseek.com");
+  const [modelDraft, setModelDraft] = useState(settings.model);
+  const [dialect, setDialect] = useState(settings.providerDialect ?? "auto");
+  const [vision, setVision] = useState(settings.vision ?? false);
+  const [imageTransport, setImageTransport] = useState<"auto" | "inline">(settings.imageTransport ?? "auto");
+  useEffect(() => {
+    setUrlDraft(settings.baseUrl ?? "https://api.deepseek.com");
+    setModelDraft(settings.model);
+    setDialect(settings.providerDialect ?? "auto");
+    setVision(settings.vision ?? false);
+    setImageTransport(settings.imageTransport ?? "auto");
+    setKey("");
+  }, [settings.baseUrl, settings.model, settings.providerDialect, settings.vision, settings.imageTransport]);
+  if (!settings.providerId) {
+    return (
+      <section className="section">
+        <div className="stitle">{t("settings.providerSection")}</div>
+        <div className="setting-row">
+          <div className="l">
+            <div className="n">{t("settings.providerLocalOnly")}</div>
+            <div className="h">{t("settings.providerLocalOnlyHint")}</div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+  const draft = {
+    baseUrl: urlDraft.trim(),
+    ...(key.trim() ? { apiKey: key.trim() } : {}),
+    model: modelDraft.trim(),
+    providerDialect: dialect,
+    vision,
+    imageTransport,
+  };
   return (
     <section className="section">
-      <div className="stitle">{t("settings.apiSection")}</div>
+      <div className="stitle">{t("settings.providerSection")}</div>
+      <div className="setting-row">
+        <div className="l">
+          <div className="n">{t("settings.providerProtocol")}</div>
+          <div className="h">{t("settings.providerProtocolHint")}</div>
+        </div>
+        <select
+          className="field"
+          aria-label={t("settings.providerProtocol")}
+          value={dialect}
+          onChange={(event) =>
+            setDialect(event.target.value as "auto" | "deepseek" | "openai-compatible")
+          }
+        >
+          <option value="auto">{t("settings.providerProtocolAuto")}</option>
+          <option value="deepseek">{t("settings.providerProtocolDeepSeek")}</option>
+          <option value="openai-compatible">{t("settings.providerProtocolOpenAi")}</option>
+        </select>
+      </div>
       <div className="setting-row">
         <div className="l">
           <div className="n">{t("settings.apiKey")}</div>
           <div className="h">
-            {apiKeyPrefix
-              ? t("settings.apiKeySet", { prefix: apiKeyPrefix })
+            {settings.apiKeyPrefix
+              ? t("settings.apiKeySet", { prefix: settings.apiKeyPrefix })
               : t("settings.apiKeyNotSet")}
           </div>
         </div>
@@ -1965,23 +2187,12 @@ function ApiKeySection({
           <input
             className="field mono"
             type="password"
+            aria-label={t("settings.apiKey")}
             value={key}
             onChange={(e) => setKey(e.target.value)}
             placeholder="sk-…"
           />
-          <button
-            type="button"
-            className="btn primary"
-            disabled={!key}
-            onClick={() => {
-              if (!key) return;
-              onSaveApiKey(key);
-              setKey("");
-            }}
-          >
-            {t("settings.apiKeySave")}
-          </button>
-          {apiKeyPrefix ? (
+          {settings.apiKeyPrefix ? (
             <button
               type="button"
               className="btn"
@@ -2002,70 +2213,109 @@ function ApiKeySection({
         </div>
         <input
           className="field mono"
+          aria-label={t("settings.baseUrl")}
           value={urlDraft}
-          onChange={(e) => setUrlDraft(e.target.value)}
-          onBlur={() => onSave({ baseUrl: urlDraft.trim() })}
+          onChange={(e) => { setUrlDraft(e.target.value); setVision(false); }}
         />
       </div>
+      <div className="setting-row">
+        <div className="l">
+          <div className="n">{t("settings.modelCustom")}</div>
+          <div className="h">{t("settings.modelCustomHint")}</div>
+        </div>
+        <input
+          className="field mono"
+          aria-label={t("settings.modelCustom")}
+          list="provider-model-options"
+          value={modelDraft}
+          onChange={(event) => { setModelDraft(event.target.value); setVision(false); }}
+          placeholder="deepseek-flash"
+        />
+        <datalist id="provider-model-options">
+          <option value="deepseek-flash" />
+          <option value="deepseek-v4-pro" />
+          {providerTestResult?.models?.map((model) => (
+            <option key={model} value={model} />
+          ))}
+        </datalist>
+      </div>
+      {!/^https:\/\/api\.deepseek\.com\/?(?:v1\/?)?$/.test(urlDraft.trim()) && <div className="setting-row">
+        <label htmlFor="provider-vision">{t("settings.modelVision")}</label>
+        <input id="provider-vision" type="checkbox" checked={vision} onChange={(event) => setVision(event.target.checked)} />
+      </div>}
+      <div className="setting-row">
+        <label htmlFor="image-transport">{t("settings.imageTransport")}</label>
+        <select id="image-transport" className="field" value={imageTransport} onChange={(event) => setImageTransport(event.target.value as "auto" | "inline")}>
+          <option value="auto">{t("settings.imageTransportAuto")}</option><option value="inline">{t("settings.imageTransportInline")}</option>
+        </select>
+      </div>
+      <div className="setting-row">
+        <div className="l">
+          <div className="n">
+            {t("settings.providerActive", {
+              provider: settings.providerLabel ?? settings.baseUrl ?? "DeepSeek Official",
+            })}
+          </div>
+          <div className="h">{t("settings.providerNewChatsHint")}</div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            type="button"
+            className="btn"
+            disabled={!draft.baseUrl || !draft.model}
+            onClick={() => onTestProvider(draft)}
+          >
+            {t("settings.providerTest")}
+          </button>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!draft.baseUrl || !draft.model}
+            onClick={() => {
+              onSave(draft);
+              setKey("");
+            }}
+          >
+            {t("settings.apiKeySave")}
+          </button>
+        </div>
+      </div>
+      {providerTestResult ? (
+        <div className={providerTestResult.ok ? "h" : "h warn"}>{providerTestResult.message}</div>
+      ) : null}
     </section>
   );
 }
 
-const KNOWN_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
-
 function PageModels({
   settings,
   onSave,
+  onTestProvider,
+  providerTestResult,
+  onSignOutApiKey,
 }: {
   settings: SettingsType;
   onSave: (patch: SettingsPatch) => void;
+  onTestProvider: (input: {
+    baseUrl: string;
+    apiKey?: string;
+    model: string;
+    providerDialect: "auto" | "deepseek" | "openai-compatible";
+  }) => void;
+  providerTestResult?: ProviderTestResultEvent | null;
+  onSignOutApiKey: () => void;
 }) {
-  const [draft, setDraft] = useState(settings.model);
-  useEffect(() => setDraft(settings.model), [settings.model]);
-  const isKnown = (KNOWN_MODELS as readonly string[]).includes(settings.model);
   return (
     <>
+      <ProviderSection
+        settings={settings}
+        onSave={onSave}
+        onTestProvider={onTestProvider}
+        providerTestResult={providerTestResult}
+        onSignOutApiKey={onSignOutApiKey}
+      />
       <section className="section">
         <div className="stitle">{t("settings.defaultModelCurrent", { model: settings.model })}</div>
-        <div className="model-grid">
-          {KNOWN_MODELS.map((id) => (
-            <div
-              key={id}
-              className="mcard"
-              data-on={settings.model === id}
-              onClick={() => onSave({ model: id })}
-            >
-              <div className="nm">{id}</div>
-            </div>
-          ))}
-        </div>
-        <div className="setting-row" style={{ marginTop: 12 }}>
-          <div className="l">
-            <div className="n">{t("settings.modelCustom")}</div>
-            <div className="h">{t("settings.modelCustomHint")}</div>
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input
-              className="field mono"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="deepseek-v4-flash"
-            />
-            <button
-              type="button"
-              className="btn primary"
-              disabled={!draft.trim() || draft.trim() === settings.model}
-              onClick={() => onSave({ model: draft.trim() })}
-            >
-              {t("settings.apiKeySave")}
-            </button>
-          </div>
-        </div>
-        {!isKnown ? (
-          <div className="h" style={{ marginTop: 6 }}>
-            {t("settings.modelCustomActive", { model: settings.model })}
-          </div>
-        ) : null}
         <div className="setting-row" style={{ marginTop: 12 }}>
           <div className="l">
             <div className="n">{t("settings.contextTokensLabel")}</div>

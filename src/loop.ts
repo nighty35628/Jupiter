@@ -52,7 +52,9 @@ import {
 } from "./loop/thinking.js";
 import type { LoopEvent } from "./loop/types.js";
 import { AppendOnlyLog, type ImmutablePrefix, VolatileScratch } from "./memory/runtime.js";
+import { SessionWriterLease } from "./memory/session-writer-lock.js";
 import {
+  type SessionProviderBinding,
   appendSessionMessage,
   archiveSession,
   loadSessionMessages,
@@ -136,6 +138,12 @@ export interface CacheFirstLoopOptions {
   /** Soft USD cap — warns at 80%, refuses next turn at 100%. Opt-in (default no cap). */
   budgetUsd?: number;
   session?: string;
+  /** Stable logical session identity used to prevent two desktop/web runtimes from writing it. */
+  sessionWriterKey?: string;
+  /** Stable owner within this process. Rebuilding one tab may re-enter its own lease. */
+  sessionWriterOwnerId?: string;
+  /** Immutable provider identity for this runtime/session. */
+  providerBinding?: SessionProviderBinding;
   /** PreToolUse + PostToolUse only — UserPromptSubmit / Stop live at the App boundary. */
   hooks?: ResolvedHook[];
   /** `cwd` reported to hooks; `jupiter code` sets this to the sandbox root, not shell home. */
@@ -159,6 +167,13 @@ export interface LoopAbortOptions {
   discardCurrentTurn?: boolean;
 }
 
+export interface LoopStepOptions {
+  attachments?: import("./attachments/types.js").ImageAttachment[];
+  clientId?: string;
+  onUserPersisted?: (turn: number) => void;
+  onUserPersistFailed?: (turn: number) => void;
+}
+
 function shrinkMessageForRetention(message: ChatMessage): ChatMessage {
   if (message.role !== "assistant" || !Array.isArray(message.tool_calls)) return message;
   return (
@@ -172,7 +187,7 @@ export class CacheFirstLoop {
   readonly tools: ToolRegistry;
   readonly log: AppendOnlyLog;
   readonly scratch = new VolatileScratch();
-  readonly stats = new SessionStats();
+  readonly stats: SessionStats;
   readonly repair: ToolCallRepair;
   /** Files the model has read this session; gates edit_file / multi_edit so SEARCH text matches on-disk bytes. Cleared on fold / mechanical truncate (the model's byte-level view of the elided history is gone). In-memory only — naturally empty on resume. */
   readonly readTracker = new ReadTracker();
@@ -188,9 +203,14 @@ export class CacheFirstLoop {
   /** One-shot 80% warning latch — cleared by setBudget so a bump re-arms at the new boundary. */
   private _budgetWarned = false;
   private _sessionName: string | null;
+  private _sessionWriterKey: string | null;
+  private readonly _sessionWriterOwnerId: string | null;
+  private _sessionWriterLease: SessionWriterLease | null = null;
   private _sessionEpoch = 0;
   private _toolJournal: ToolExecutionJournal | null = null;
   private _toolJournalError: string | null = null;
+  private _retryableModelFailure: { turn: number; sessionEpoch: number } | null = null;
+  private readonly _providerBinding: SessionProviderBinding | null;
 
   hooks: ResolvedHook[];
   hookCwd: string;
@@ -248,14 +268,25 @@ export class CacheFirstLoop {
 
   constructor(opts: CacheFirstLoopOptions) {
     this.client = opts.client;
+    this.stats = new SessionStats({ providerId: opts.client.providerId });
     this.prefix = opts.prefix;
     this.tools = opts.tools ?? new ToolRegistry();
     this._sessionName = opts.session ?? null;
+    this._sessionWriterKey = opts.sessionWriterKey ?? null;
+    this._sessionWriterOwnerId = opts.sessionWriterOwnerId ?? null;
+    this._providerBinding = opts.providerBinding ?? null;
+    if (this._sessionName && this._sessionWriterKey && this._sessionWriterOwnerId) {
+      this._sessionWriterLease = SessionWriterLease.acquire({
+        key: this._sessionWriterKey,
+        ownerId: this._sessionWriterOwnerId,
+        label: this._sessionName,
+      });
+    }
     this.bindToolJournal(this._sessionName);
     this.log = new AppendOnlyLog({
       sessionPath: this.sessionName ? sessionPath(this.sessionName) : undefined,
     });
-    this.model = opts.model ?? "deepseek-v4-flash";
+    this.model = opts.model ?? "deepseek-flash";
     this.thinkingEnabled = opts.thinkingEnabled ?? true;
     this.autoContinueDeepSeek = opts.autoContinueDeepSeek ?? false;
     this.reasoningEffort = opts.reasoningEffort ?? "high";
@@ -373,8 +404,31 @@ export class CacheFirstLoop {
   }
 
   /** Repoint all session-bound persistence. Renames keep the logical epoch; real session switches advance it. */
-  rebindSession(sessionName: string | null, opts: { logicalSessionChanged?: boolean } = {}): void {
-    if (opts.logicalSessionChanged) this._sessionEpoch++;
+  rebindSession(
+    sessionName: string | null,
+    opts: { logicalSessionChanged?: boolean; sessionWriterKey?: string } = {},
+  ): void {
+    const nextWriterKey = sessionName
+      ? (opts.sessionWriterKey ??
+        (opts.logicalSessionChanged ? `session:${sessionName}` : this._sessionWriterKey))
+      : null;
+    let nextLease = this._sessionWriterLease;
+    if (this._sessionWriterOwnerId && nextWriterKey && nextWriterKey !== this._sessionWriterKey) {
+      nextLease = SessionWriterLease.acquire({
+        key: nextWriterKey,
+        ownerId: this._sessionWriterOwnerId,
+        label: sessionName ?? "session",
+      });
+    } else if (!nextWriterKey) {
+      nextLease = null;
+    }
+    if (opts.logicalSessionChanged) {
+      this._sessionEpoch++;
+      this._retryableModelFailure = null;
+    }
+    if (nextLease !== this._sessionWriterLease) this._sessionWriterLease?.release();
+    this._sessionWriterLease = nextLease;
+    this._sessionWriterKey = nextWriterKey;
     this._sessionName = sessionName;
     this.log.setSessionPath(sessionName ? sessionPath(sessionName) : null);
     if (sessionName && this._toolJournal && !opts.logicalSessionChanged) {
@@ -383,6 +437,12 @@ export class CacheFirstLoop {
     } else {
       this.bindToolJournal(sessionName);
     }
+  }
+
+  dispose(): void {
+    this.abort();
+    this._sessionWriterLease?.release();
+    this._sessionWriterLease = null;
   }
 
   private bindToolJournal(sessionName: string | null): void {
@@ -441,6 +501,12 @@ export class CacheFirstLoop {
 
   appendAndPersist(message: ChatMessage): boolean {
     const retained = shrinkMessageForRetention(message);
+    if (retained.attachments?.length) {
+      if (!this.sessionName) throw new Error("Image messages require a saved session");
+      appendSessionMessage(this.sessionName, retained);
+      this.log.append(retained);
+      return true;
+    }
     this.log.append(retained);
     if (this.sessionName) {
       try {
@@ -453,11 +519,24 @@ export class CacheFirstLoop {
     return false;
   }
 
-  beginLightAsk(userInput: string): { turn: number; persisted: boolean } {
+  beginLightAsk(
+    userInput: string,
+    opts: LoopStepOptions = {},
+  ): { turn: number; persisted: boolean } {
+    this.ensureSessionProviderBinding();
+    if (opts.attachments?.length && !this.client.supportsImages(this.model))
+      throw new Error("This model does not support images. Select a vision model first.");
+    this._retryableModelFailure = null;
+    const persisted = this.appendAndPersist({
+      role: "user",
+      content: userInput,
+      ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+      ...(opts.clientId ? { clientId: opts.clientId } : {}),
+    });
     this._turn++;
     return {
       turn: this._turn,
-      persisted: this.appendAndPersist({ role: "user", content: userInput }),
+      persisted,
     };
   }
 
@@ -538,6 +617,7 @@ export class CacheFirstLoop {
     this._inflight.clear();
     this.stats.reset();
     this._turn = 0;
+    this._retryableModelFailure = null;
     this._budgetWarned = false;
     // Drain leftover steer text — otherwise the first step() after /new
     // injects it as a user message and the next turn leaks prior intent.
@@ -635,7 +715,12 @@ export class CacheFirstLoop {
   private async runOneToolCall(
     call: ToolCall,
     signal: AbortSignal,
-  ): Promise<{ preWarnings: LoopEvent[]; postWarnings: LoopEvent[]; result: string }> {
+  ): Promise<{
+    preWarnings: LoopEvent[];
+    postWarnings: LoopEvent[];
+    result: string;
+    attachments?: ChatMessage["attachments"];
+  }> {
     const name = call.function?.name ?? "";
     const args = call.function?.arguments ?? "{}";
     const parsedArgs = safeParseToolArgs(args);
@@ -704,7 +789,23 @@ export class CacheFirstLoop {
       }
 
       let executionStarted = false;
+      const toolImages: NonNullable<ChatMessage["attachments"]> = [];
       const result = await this.tools.dispatch(name, args, {
+        reportImage: this.client.supportsImages(this.model)
+          ? (image) => {
+              if (toolImages.length >= 12) throw new Error("Tool image limit exceeded");
+              toolImages.push(image);
+            }
+          : undefined,
+        allowedImageIds: new Set(
+          this.log
+            .toFullHistory()
+            .flatMap((message) => [
+              ...(message.attachments ?? []),
+              ...(message.sourceAttachments ?? []),
+            ])
+            .map((image) => image.id),
+        ),
         signal,
         maxResultTokens: DEFAULT_MAX_RESULT_TOKENS,
         confirmationGate: this.confirmationGate,
@@ -748,7 +849,12 @@ export class CacheFirstLoop {
       });
       const postWarnings = [...hookWarnings(postReport.outcomes, this._turn)];
 
-      return { preWarnings, postWarnings, result };
+      return {
+        preWarnings,
+        postWarnings,
+        result,
+        ...(toolImages.length ? { attachments: toolImages } : {}),
+      };
     } finally {
       this._inflight.delete(this.inflightIdFor(call));
     }
@@ -762,10 +868,12 @@ export class CacheFirstLoop {
       report.cacheHitTokens,
       report.cacheMissTokens,
     );
-    this.stats.recordExternal(report.model, usage);
+    const providerId = `auxiliary:${report.provider}`;
+    this.stats.recordExternal(report.model, usage, providerId);
     appendUsage({
       session: this.sessionName ?? null,
       model: report.model,
+      providerId,
       usage,
       kind: "auxiliary",
       auxiliary: {
@@ -825,6 +933,7 @@ export class CacheFirstLoop {
   }
 
   private discardLogFrom(index: number): void {
+    this._retryableModelFailure = null;
     const preserved = this.log
       .toFullHistory()
       .slice(0, index)
@@ -842,6 +951,11 @@ export class CacheFirstLoop {
 
   /** Drop the last user message + everything after; caller re-sends. Persists to session file. */
   retryLastUser(): string | null {
+    return this.retryLastDraft()?.text ?? null;
+  }
+
+  retryLastDraft(): import("./attachments/types.js").MessageDraft | null {
+    this._retryableModelFailure = null;
     const entries = this.log.toFullHistory();
     let lastUserIdx = -1;
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -863,11 +977,17 @@ export class CacheFirstLoop {
         /* disk-full / perms — in-memory compaction still applies */
       }
     }
-    return userText;
+    return {
+      text: userText,
+      ...(entries[lastUserIdx]!.attachments?.length
+        ? { attachments: entries[lastUserIdx]!.attachments }
+        : {}),
+    };
   }
 
   /** Drop the latest user prompt and everything after it. Persists to session file. */
   rollbackLatestTurn(): boolean {
+    this._retryableModelFailure = null;
     const entries = this.log.toFullHistory();
     let lastUserIdx = -1;
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -899,6 +1019,7 @@ export class CacheFirstLoop {
     turn: number;
     role: "user" | "assistant";
   }): boolean {
+    this._retryableModelFailure = null;
     if (!Number.isInteger(target.turn) || target.turn < 1) return false;
     const entries = this.log.toFullHistory();
     let turn = 0;
@@ -937,6 +1058,11 @@ export class CacheFirstLoop {
 
   /** Rewind to the N-th user turn (0-indexed). Drops that turn + everything after. */
   rewindToUserTurn(userTurnIndex: number): string | null {
+    return this.rewindToUserDraft(userTurnIndex)?.text ?? null;
+  }
+
+  rewindToUserDraft(userTurnIndex: number): import("./attachments/types.js").MessageDraft | null {
+    this._retryableModelFailure = null;
     const entries = this.log.toFullHistory();
     let count = 0;
     let targetIdx = -1;
@@ -953,6 +1079,7 @@ export class CacheFirstLoop {
     const userText = typeof raw === "string" ? raw : "";
     const preserved = entries.slice(0, targetIdx).map((m) => ({ ...m }));
     this.log.compactInPlace(preserved);
+    this._turn = countUserTurns(preserved);
     if (this.sessionName) {
       try {
         rewriteSession(this.sessionName, preserved);
@@ -960,16 +1087,55 @@ export class CacheFirstLoop {
         /* disk-full / perms — in-memory compaction still applies */
       }
     }
-    return userText;
+    return {
+      text: userText,
+      ...(entries[targetIdx]!.attachments?.length
+        ? { attachments: entries[targetIdx]!.attachments }
+        : {}),
+    };
   }
 
-  async *step(
+  lastUserText(): string | null {
+    const entries = this.log.toFullHistory();
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]!;
+      if (entry.role !== "user") continue;
+      return typeof entry.content === "string" ? entry.content : "";
+    }
+    return null;
+  }
+
+  canRetryFailedModelRequest(): boolean {
+    return (
+      this._retryableModelFailure?.turn === this._turn &&
+      this._retryableModelFailure.sessionEpoch === this._sessionEpoch
+    );
+  }
+
+  retryFailedModelRequest(): AsyncGenerator<LoopEvent> {
+    if (!this.canRetryFailedModelRequest()) {
+      throw new Error("There is no retryable failed model request in the current turn.");
+    }
+    this._retryableModelFailure = null;
+    return this.runStep("", {}, true);
+  }
+
+  step(userInput: string, opts: LoopStepOptions = {}): AsyncGenerator<LoopEvent> {
+    this._retryableModelFailure = null;
+    return this.runStep(userInput, opts, false);
+  }
+
+  private async *runStep(
     userInput: string,
-    opts: {
-      onUserPersisted?: (turn: number) => void;
-      onUserPersistFailed?: (turn: number) => void;
-    } = {},
+    opts: LoopStepOptions,
+    resumeFailedRequest: boolean,
   ): AsyncGenerator<LoopEvent> {
+    this.ensureSessionProviderBinding();
+    if (opts.attachments?.length) {
+      if (!this.client.supportsImages(this.model))
+        throw new Error("This model does not support images. Select a vision model first.");
+      for (const image of opts.attachments) await this.client.attachmentStore.get(image.id);
+    }
     // Reset per-turn flags.
     this._steerConsumed = false;
 
@@ -1011,7 +1177,8 @@ export class CacheFirstLoop {
         };
       }
     }
-    this._turn++;
+    if (!resumeFailedRequest) this._turn++;
+    if (this._turn < 1) throw new Error("Cannot retry a model request before the first user turn.");
     const turnSessionEpoch = this._sessionEpoch;
     const turnNumber = this._turn;
     this.scratch.reset();
@@ -1019,9 +1186,11 @@ export class CacheFirstLoop {
     // old sliding window of (name, args) signatures keep blocking
     // calls that are now legitimately on-task. The window repopulates
     // naturally as this turn's tool calls flow through.
-    this.repair.resetStorm();
-    this._turnSelfCorrected = false;
-    this._foldedThisTurn = false;
+    if (!resumeFailedRequest) {
+      this.repair.resetStorm();
+      this._turnSelfCorrected = false;
+      this._foldedThisTurn = false;
+    }
     // Fresh controller for this turn: the prior step's signal has
     // already fired (or stayed clean); either way we don't want its
     // state to bleed into the new turn.
@@ -1046,12 +1215,26 @@ export class CacheFirstLoop {
     // first round-trip still leaves the message in the log; the user can
     // /retry without re-typing.
     const turnStartLogIndex = this.log.length;
-    const userPersisted = this.appendAndPersist({ role: "user", content: userInput });
-    try {
-      if (userPersisted) opts.onUserPersisted?.(this._turn);
-      else opts.onUserPersistFailed?.(this._turn);
-    } catch {
-      // A UI acknowledgement failure must not cancel the turn.
+    if (!resumeFailedRequest) {
+      let userPersisted: boolean;
+      try {
+        userPersisted = this.appendAndPersist({
+          role: "user",
+          content: userInput,
+          ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+          ...(opts.clientId ? { clientId: opts.clientId } : {}),
+        });
+      } catch (error) {
+        this._turn--;
+        opts.onUserPersistFailed?.(this._turn + 1);
+        throw error;
+      }
+      try {
+        if (userPersisted) opts.onUserPersisted?.(this._turn);
+        else opts.onUserPersistFailed?.(this._turn);
+      } catch {
+        // A UI acknowledgement failure must not cancel the turn.
+      }
     }
     const toolSpecs = this.prefix.tools();
     const rateLimitState = { shown: false };
@@ -1071,6 +1254,8 @@ export class CacheFirstLoop {
           turn: this._turn,
           role: "status",
           content: t("loop.turnStartFoldStatus"),
+          activity: "compaction",
+          activityState: "running",
         };
         const result = await this.context.fold(this.model, {
           requireTailBoundary: true,
@@ -1087,6 +1272,16 @@ export class CacheFirstLoop {
               beforeMessages: result.beforeMessages,
               afterMessages: result.afterMessages,
             }),
+            activity: "compaction",
+            activityState: "complete",
+          };
+        } else {
+          yield {
+            turn: this._turn,
+            role: "status",
+            content: t("loop.compactionUnchanged"),
+            activity: "compaction",
+            activityState: "complete",
           };
         }
       }
@@ -1230,7 +1425,15 @@ export class CacheFirstLoop {
         const probe =
           is5xxError(err) && dsHost ? await probeDeepSeekReachable(this.client) : undefined;
         const cause = err instanceof Error ? err : new Error(String(err));
-        const retryable = !is4xxError(cause) && cause.name !== "AbortError";
+        const status = (cause as Error & { status?: number }).status;
+        const retryable =
+          (!is4xxError(cause) || status === 408 || status === 429) && cause.name !== "AbortError";
+        if (retryable && this._sessionEpoch === turnSessionEpoch && this._turn === turnNumber) {
+          this._retryableModelFailure = {
+            turn: turnNumber,
+            sessionEpoch: turnSessionEpoch,
+          };
+        }
         const { code, phase } = errorMeta(cause);
         const safeCauseMessage = sanitizeProviderErrorText(cause.message, { maxChars: 4096 });
         yield {
@@ -1262,6 +1465,7 @@ export class CacheFirstLoop {
           this._turn === turnNumber &&
           !signal.aborted,
         baseUrl: this.client.baseUrl,
+        dialect: this.client.dialect === "deepseek" ? "deepseek" : "openai-compatible",
         model: this.model,
         finishReason,
         messages,
@@ -1270,7 +1474,9 @@ export class CacheFirstLoop {
         toolCalls,
         usage,
       });
-      const firstCallCost = costUsd(this.model, usage ?? new Usage());
+      const firstCallCost = costUsd(this.model, usage ?? new Usage(), undefined, {
+        providerId: this.client.providerId,
+      });
       const continuationWithinBudget =
         this.budgetUsd === null || this.stats.totalCost + firstCallCost < this.budgetUsd;
 
@@ -1483,6 +1689,26 @@ export class CacheFirstLoop {
     // error escapes the inner try blocks.
   }
 
+  private ensureSessionProviderBinding(): void {
+    if (!this.sessionName || !this._providerBinding) return;
+    const meta = loadSessionMeta(this.sessionName);
+    const existing = meta.provider;
+    if (
+      existing &&
+      (existing.endpointIdentity !== this._providerBinding.endpointIdentity ||
+        existing.dialect !== this._providerBinding.dialect)
+    ) {
+      throw new Error(
+        `This session is bound to ${existing.label} and cannot be sent to ${this._providerBinding.label}. Start a new conversation to use the new provider.`,
+      );
+    }
+    if (!existing || existing.model !== this.model) {
+      patchSessionMeta(this.sessionName, {
+        provider: { ...this._providerBinding, model: this.model },
+      });
+    }
+  }
+
   private async *handlePostUsageContextDecision(
     usage: TurnStats["usage"] | null,
   ): AsyncGenerator<LoopEvent, boolean, unknown> {
@@ -1498,6 +1724,8 @@ export class CacheFirstLoop {
         turn: this._turn,
         role: "status",
         content: t("loop.compactingHistoryStatus", { aggressiveTag }),
+        activity: "compaction",
+        activityState: "running",
       };
       const result = await this.compactHistory({ keepRecentTokens: decision.tailBudget });
       if (result.folded) {
@@ -1515,6 +1743,16 @@ export class CacheFirstLoop {
               summaryChars: result.summaryChars,
             },
           ),
+          activity: "compaction",
+          activityState: "complete",
+        };
+      } else {
+        yield {
+          turn: this._turn,
+          role: "status",
+          content: t("loop.compactionUnchanged"),
+          activity: "compaction",
+          activityState: "complete",
         };
       }
     } else if (decision.kind === "exit-with-summary") {

@@ -193,10 +193,21 @@ program.action(async (opts: { continue?: boolean; mouse?: boolean }) => {
 program
   .command("setup")
   .description(t("cli.setup"))
-  .action(async () => {
-    const { setupCommand } = await import("./commands/setup.js");
-    await setupCommand({ forceKeyStep: true });
-  });
+  .option("--provider-url <url>", "Chat Completions base URL")
+  .option("--provider-protocol <preset>", "auto, deepseek, or openai-compatible")
+  .option("--provider-model <id>", "default model ID for new conversations")
+  .option("--provider-key <key>", "API key for the selected provider")
+  .action(
+    async (opts: {
+      providerUrl?: string;
+      providerProtocol?: string;
+      providerModel?: string;
+      providerKey?: string;
+    }) => {
+      const { setupCommand } = await import("./commands/setup.js");
+      await setupCommand({ forceKeyStep: true, ...opts });
+    },
+  );
 
 program
   .command("code [dir]")
@@ -439,6 +450,41 @@ program
       model: defaults.model,
       budgetUsd: parseBudgetFlag(opts.budget),
       dir: opts.dir,
+    });
+  });
+
+program
+  .command("web [dir]")
+  .description("run Jupiter Web Beta")
+  .option("-m, --model <id>", t("ui.modelIdHint"))
+  .option("--budget <usd>", t("ui.budgetHintShort"), (v) => Number.parseFloat(v))
+  .option("--port <port>", "local browser port (default: ephemeral)")
+  .option("--access <mode>", "access mode: local, lan, or public", "local")
+  .option("--host <host>", "listen host (public mode must remain loopback)")
+  .option("--origin <url>", "canonical browser origin; HTTPS is required for public mode")
+  .option("--proxy-secret-file <path>", "trusted HTTPS proxy secret file (public mode)")
+  .option("--approved-root <path...>", "additional host workspaces exposed to Web")
+  .option("--enable-high-risk", "allow LAN Git writes and host-control features")
+  .option("--no-open", "do not open the browser automatically")
+  .action(async (dir: string | undefined, opts) => {
+    const defaults = resolveDefaults({
+      model: opts.model,
+      mcp: [],
+      noConfig: false,
+    });
+    const { webCommand } = await import("./commands/web.js");
+    await webCommand({
+      dir,
+      model: defaults.model,
+      budgetUsd: parseBudgetFlag(opts.budget),
+      port: parseDashboardPortFlag(opts.port),
+      open: opts.open !== false,
+      access: opts.access,
+      host: opts.host,
+      origin: opts.origin,
+      proxySecretFile: opts.proxySecretFile,
+      approvedRoots: opts.approvedRoot,
+      highRiskEnabled: opts.enableHighRisk === true,
     });
   });
 

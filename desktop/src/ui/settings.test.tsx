@@ -31,6 +31,11 @@ const settings: SettingsType = {
   workspaceDir: "/tmp/Jupiter",
   recentWorkspaces: ["/tmp/Jupiter"],
   model: "deepseek-v4-flash",
+  baseUrl: "https://api.deepseek.com",
+  providerDialect: "auto",
+  providerLabel: "DeepSeek Official",
+  providerId: "deepseek-official",
+  officialDeepSeek: true,
   memoryConfirmWrites: false,
   memoryGlobalEnabled: true,
   version: "0.0.0-test",
@@ -72,6 +77,7 @@ function renderSettings({
   settings: settingsOverride,
   onOpenAbout = vi.fn(),
   onSave = vi.fn(),
+  onTestProvider = vi.fn(),
   onSignOutApiKey = vi.fn(),
   memory = [],
   onReadMemory = vi.fn(),
@@ -97,6 +103,7 @@ function renderSettings({
   settings?: Partial<SettingsType>;
   onOpenAbout?: () => void;
   onSave?: (...args: any[]) => void;
+  onTestProvider?: (...args: any[]) => void;
   onSignOutApiKey?: () => void;
   memory?: MemoryEntryInfo[];
   onReadMemory?: (path: string) => void;
@@ -172,6 +179,7 @@ function renderSettings({
         initialPage={initialPage}
         onClose={resolvedOnClose}
         onSave={onSave}
+        onTestProvider={onTestProvider}
         onSaveApiKey={vi.fn()}
         onSignOutApiKey={onSignOutApiKey}
         onLoadQQ={vi.fn()}
@@ -505,17 +513,50 @@ describe("SettingsModal", () => {
     ).toBeTruthy();
   });
 
-  it("signs out of the current API key from the integrations page", () => {
+  it("signs out of the current API key from the models page", () => {
     const onSignOutApiKey = vi.fn();
     renderSettings({
       settings: { apiKeyPrefix: "sk-abc…xyz" },
       onSignOutApiKey,
     });
 
-    fireEvent.click(screen.getByText("Integrations"));
+    fireEvent.click(screen.getByText("Models"));
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 
     expect(onSignOutApiKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("tests and saves a provider tuple from the models page", () => {
+    const onSave = vi.fn();
+    const onTestProvider = vi.fn();
+    renderSettings({ onSave, onTestProvider });
+
+    fireEvent.click(screen.getByText("Models"));
+    fireEvent.change(screen.getByLabelText("API protocol"), {
+      target: { value: "openai-compatible" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider base URL"), {
+      target: { value: "https://relay.example/v1" },
+    });
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "relay-key" },
+    });
+    fireEvent.change(screen.getByLabelText("Custom model id"), {
+      target: { value: "relay-model" },
+    });
+
+    const expected = {
+      baseUrl: "https://relay.example/v1",
+      apiKey: "relay-key",
+      model: "relay-model",
+      providerDialect: "openai-compatible",
+      vision: false,
+      imageTransport: "auto",
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(onTestProvider).toHaveBeenCalledWith(expected);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledWith(expected);
   });
 
   it("shows detected browser automation status in components", () => {

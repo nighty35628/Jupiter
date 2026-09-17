@@ -447,7 +447,7 @@ describe("R1 reasoning_content round-trip", () => {
     }
     expect(bodies[0]!.extra_body).toBeUndefined();
     expect(bodies[0]!.thinking).toBeUndefined();
-    expect(bodies[0]!.reasoning_effort).toBe("high");
+    expect(bodies[0]!.reasoning_effort).toBeUndefined();
   });
 
   it("normalizes medium to high only for official DeepSeek V4", async () => {
@@ -481,8 +481,8 @@ describe("R1 reasoning_content round-trip", () => {
     for await (const _ev of customLoop.step("hello")) {
       /* drain */
     }
-    expect(custom.bodies[0]!.extra_body?.thinking?.type).toBe("enabled");
+    expect(custom.bodies[0]!.extra_body).toBeUndefined();
     expect(custom.bodies[0]!.thinking).toBeUndefined();
-    expect(custom.bodies[0]!.reasoning_effort).toBe("medium");
+    expect(custom.bodies[0]!.reasoning_effort).toBeUndefined();
   });
 });

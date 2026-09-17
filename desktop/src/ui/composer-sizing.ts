@@ -48,3 +48,26 @@ export function applyComposerTextareaAutosize(textarea: HTMLTextAreaElement) {
   textarea.style.height = `${sizing.heightPx}px`;
   textarea.style.overflowY = sizing.overflowY;
 }
+
+export function observeComposerTextareaWidth(textarea: HTMLTextAreaElement): () => void {
+  if (typeof ResizeObserver === "undefined") return () => {};
+  let width = textarea.clientWidth;
+  let frame = 0;
+  const observer = new ResizeObserver(() => {
+    const nextWidth = textarea.clientWidth;
+    // Grid transitions continue after React renders. Ignore height-only updates
+    // so autosizing cannot schedule its own ResizeObserver loop.
+    if (nextWidth <= 0 || nextWidth === width) return;
+    width = nextWidth;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      applyComposerTextareaAutosize(textarea);
+    });
+  });
+  observer.observe(textarea);
+  return () => {
+    observer.disconnect();
+    cancelAnimationFrame(frame);
+  };
+}

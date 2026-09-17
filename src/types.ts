@@ -33,6 +33,11 @@ export type Role = "system" | "user" | "assistant" | "tool";
 export interface ChatMessage {
   role: Role;
   content?: string | null;
+  attachments?: import("./attachments/types.js").ImageAttachment[];
+  /** Images retained by a fold for explicit rereading, not automatically sent again. */
+  sourceAttachments?: import("./attachments/types.js").ImageAttachment[];
+  /** Durable submission identity; never transmitted to the model. */
+  clientId?: string;
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];

@@ -15,7 +15,7 @@ describe("desktop one-shot plan routing", () => {
   it("routes ordinary sends through plan-only only when the one-shot flag is armed", () => {
     const app = readFileSync("desktop/src/App.tsx", "utf8");
 
-    expect(app).toContain("const planFirst = oneShotPlanArmed;");
+    expect(app).toContain("const planFirst = payload?.plan ?? oneShotPlanArmed;");
     expect(app).not.toContain('state.settings?.editMode === "plan"');
     expect(app).toContain("planOneShot: planFirst");
   });

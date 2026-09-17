@@ -95,6 +95,16 @@ export interface SessionMeta {
   importedSource?: "claude" | "codex";
   /** Absolute path of the source transcript used for import. */
   importedPath?: string;
+  /** Provider identity used for this transcript. Prevents silent cross-provider history uploads. */
+  provider?: SessionProviderBinding;
+}
+
+export interface SessionProviderBinding {
+  providerId: string;
+  endpointIdentity: string;
+  label: string;
+  dialect: "deepseek" | "azure" | "openai-compatible";
+  model: string;
 }
 
 export function sessionsDir(): string {
@@ -282,7 +292,11 @@ function loadSessionMessagesFromPath(path: string): ChatMessage[] {
 export function appendSessionMessage(name: string, message: ChatMessage): void {
   const path = sessionPath(name);
   mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, `${JSON.stringify(message)}\n`, "utf8");
+  appendFileSync(path, `${JSON.stringify(message)}\n`, {
+    encoding: "utf8",
+    flush: !!message.clientId || !!message.attachments?.length,
+    mode: 0o600,
+  });
   try {
     chmodSync(path, 0o600);
   } catch {
@@ -388,10 +402,6 @@ export function patchSessionWorkspaceIfMissing(name: string, workspace: string):
   return true;
 }
 
-function metaPath(name: string): string {
-  return metaPathInDir(sessionsDir(), name);
-}
-
 function metaPathInDir(dir: string, name: string): string {
   return join(dir, `${sanitizeName(name)}.meta.json`);
 }
@@ -412,9 +422,21 @@ function loadSessionMetaFromDir(dir: string, name: string): SessionMeta {
 }
 
 export function patchSessionMeta(name: string, patch: Partial<SessionMeta>): SessionMeta {
-  const cur = loadSessionMeta(name);
+  return patchSessionMetaInDir(sessionsDir(), name, patch);
+}
+
+export function patchArchivedSessionMeta(name: string, patch: Partial<SessionMeta>): SessionMeta {
+  return patchSessionMetaInDir(archivedSessionsDir(), name, patch);
+}
+
+function patchSessionMetaInDir(
+  dir: string,
+  name: string,
+  patch: Partial<SessionMeta>,
+): SessionMeta {
+  const cur = loadSessionMetaFromDir(dir, name);
   const next: SessionMeta = { ...cur, ...patch };
-  const p = metaPath(name);
+  const p = metaPathInDir(dir, name);
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify(next), "utf8");
   try {

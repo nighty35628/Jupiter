@@ -76,10 +76,21 @@ export class Eventizer {
       case "tool": {
         const callId = this.inflightCallIds.shift() ?? `tc-orphan-${++this.nextToolSeq}`;
         const ok = !looksLikeToolError(ev.content, ev.toolName);
-        out.push(this.toolResultEvent(ev.turn, callId, ok, ev.content, 0));
+        out.push({
+          ...this.toolResultEvent(ev.turn, callId, ok, ev.content, 0),
+          ...(ev.attachments?.length ? { attachments: ev.attachments } : {}),
+        });
         break;
       }
       case "warning": {
+        if (ev.activity === "compaction") {
+          out.push({
+            ...this.statusEvent(ev.turn, ev.content),
+            activity: ev.activity,
+            activityState: ev.activityState,
+          });
+          break;
+        }
         const classified = this.classifyWarning(ev);
         if (classified) out.push(classified);
         break;
@@ -95,7 +106,10 @@ export class Eventizer {
         );
         break;
       case "status":
-        out.push(this.statusEvent(ev.turn, ev.content));
+        out.push({
+          ...this.statusEvent(ev.turn, ev.content),
+          ...(ev.activity ? { activity: ev.activity, activityState: ev.activityState } : {}),
+        });
         break;
       // `done` / `branch_*` intentionally drop — no kernel-level event.
       default:
@@ -104,9 +118,14 @@ export class Eventizer {
     return out;
   }
 
-  emitUserMessage(turn: number, text: string): UserMessageEvent {
+  emitUserMessage(
+    turn: number,
+    text: string,
+    attachments?: ChatMessage["attachments"],
+  ): UserMessageEvent {
     return {
       id: ++this.nextId,
+      ...(attachments?.length ? { attachments } : {}),
       ts: new Date().toISOString(),
       turn,
       type: "user.message",

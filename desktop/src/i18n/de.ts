@@ -2,6 +2,18 @@ import { en } from "./en";
 
 export const de: typeof en = {
   ...en,
+  webAuth: {
+    title: "Diesen Browser koppeln",
+    hint: "Verwenden Sie den vollständigen Link aus dem Startterminal oder erstellen Sie einen neuen unter Einstellungen > Allgemein > Web-Zugriff in einem verbundenen Browser. Links gelten fünf Minuten und nur einmal.",
+    linkLabel: "Kopplungslink",
+    connect: "Verbinden",
+    connecting: "Verbindung wird hergestellt...",
+    required: "Dieser Browser ist nicht gekoppelt oder die Sitzung ist abgelaufen.",
+    expired: "Dieser Link ist abgelaufen oder wurde bereits verwendet. Erstellen Sie einen neuen Link.",
+    invalidLink: "Geben Sie einen vollständigen Kopplungslink mit #bootstrap= ein.",
+    wrongServer: "Dieser Link gehört zu einer anderen Adresse. Öffnen Sie ihn in der Adressleiste.",
+    unavailable: "Jupiter ist nicht erreichbar. Prüfen Sie den Web-Dienst und versuchen Sie es erneut.",
+  },
   palette: {
     ...en.palette,
     searchPlaceholder: "Befehle suchen...",
@@ -223,6 +235,21 @@ export const de: typeof en = {
     desktopCloseBehavior: "Fenster schließen",
     desktopCloseBehaviorHint:
       "Standardmäßig beendet Schließen die App. In die Ablage ausblenden hält laufende Sitzungen aktiv.",
+    webNotifications: "Browser-Benachrichtigungen",
+    webNotificationsHint:
+      "Dieses Gerät bei Abschluss oder erforderlicher Freigabe benachrichtigen.",
+    webNotificationsEnable: "Auf diesem Gerät aktivieren",
+    webNotificationsEnabled: "Aktiviert",
+    webNotificationsBlocked: "Vom Browser blockiert",
+    webAccessSection: "Web-Zugriff",
+    webPairDevice: "Weiteres Gerät koppeln",
+    webPairDeviceHint: "Ein einmal nutzbarer Link, der nach fünf Minuten abläuft.",
+    webPairDeviceCreate: "Link erstellen und kopieren",
+    webControl: "Steuerung auf anderem Gerät",
+    webControlHint: "Alle Geräte können beobachten, aber nur eines kann Befehle senden.",
+    webTakeControl: "Steuerung übernehmen",
+    webThisDevice: "dieses Gerät",
+    webRevokeDevice: "Widerrufen",
     closeToQuit: "beenden",
     closeToTray: "in Ablage",
     editModeReviewDesc: "Vor Edits oder Befehlen fragen",
@@ -270,9 +297,9 @@ export const de: typeof en = {
     deepSeekNativeCredentialUnavailable:
       "Lege vor der Nutzung dieses Anbieters einen DeepSeek-Suchschlüssel fest.",
     deepSeekNativeCredentialFailed: "Letzte native Suche fehlgeschlagen: {message}",
-    baseUrl: "DeepSeek-Basis-URL",
+    baseUrl: "Anbieter-Basis-URL",
     baseUrlHint:
-      "Nur bei Verwendung eines Proxys überschreiben. Leer = offizieller Endpunkt. Neustart erforderlich.",
+      "HTTPS-Basis-URL für Chat Completions. Lokale und private HTTP-Endpunkte sind ebenfalls zulässig.",
     workspace: "Arbeitsbereich",
     workspaceHint:
       "Root-Verzeichnis, in dem Agent-Tools arbeiten. Wechseln speichert in der Konfiguration und lädt Tools neu.",
@@ -386,6 +413,19 @@ export const de: typeof en = {
     aboutOpen: "Über Jupiter",
     typographySection: "Typografie",
     apiSection: "DeepSeek API",
+    providerSection: "Modellanbieter",
+    providerProtocol: "API-Protokoll",
+    providerProtocolHint: "DeepSeek-Erweiterungen nur für unterstützte Endpunkte verwenden.",
+    providerProtocolAuto: "Automatisch erkennen",
+    providerProtocolDeepSeek: "DeepSeek Chat Completions",
+    providerProtocolOpenAi: "OpenAI-kompatible Chat Completions",
+    providerActive: "Aktueller Anbieter: {provider}",
+    providerNewChatsHint:
+      "Änderungen gelten für neue Unterhaltungen. Bestehende behalten ihren bisherigen Anbieter.",
+    providerTest: "Verbindung testen",
+    providerLocalOnly: "Auf dem Jupiter-Host verwaltet",
+    providerLocalOnlyHint:
+      "Anbieteradressen und Zugangsdaten bleiben vor entfernten Web-Clients verborgen. Konfiguration nur in Desktop oder lokalem Web.",
     webSearchSection: "Websuche",
     browserAutomationSection: "Browser-Automation",
     browserAutomation: "Browser-Automation",
@@ -500,6 +540,10 @@ export const de: typeof en = {
     apiKeySet: "Gesetzt · {prefix}…",
     defaultModelCurrent: "Standardmodell · aktuell {model}",
     modelCustom: "Benutzerdefinierte Modell-ID",
+    modelVision: "Dieses Modell unterstützt Bildeingaben",
+    imageTransport: "Bildübertragung",
+    imageTransportAuto: "Automatisch (offizielle Files / Inline)",
+    imageTransportInline: "Inline-Bilder",
     modelCustomHint:
       "Jede OpenAI-kompatible ID, die dein Endpunkt bereitstellt (vLLM, Ollama, Together, …).",
     modelCustomActive: "Läuft aktuell auf benutzerdefinierter ID: {model}",
@@ -807,6 +851,7 @@ export const de: typeof en = {
     warningLabel: "Warnung",
     dismissError: "Schließen",
     jumpToBottom: "Nach unten springen",
+    retryApiRequest: "Anfrage wiederholen",
     resizeContextSidebar: "Rechte Seitenleiste skalieren",
     resizeBottomBar: "Untere Leiste skalieren",
     splashSubtitle: "DeepSeek-Agenten",

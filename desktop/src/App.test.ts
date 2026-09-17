@@ -38,6 +38,7 @@ vi.mock("./theme", () => ({
 }));
 
 import {
+  canRetryErrorMessage,
   canRollbackMessage,
   chatMessageKey,
   pathToFileUrl,
@@ -211,6 +212,45 @@ describe("Desktop App error lifecycle", () => {
 });
 
 describe("Desktop App reducer — usage", () => {
+  it("replaces manual compaction progress in place instead of leaving a starting banner", () => {
+    const started = reduce(initialState(), { t: "push_status", text: "starting", activity: "compaction" });
+    const key = chatMessageKey(started.messages[0], 0);
+    const done = reduce(started, { t: "incoming", event: { type: "$compact_result", folded: true, beforeMessages: 20, afterMessages: 4, summaryChars: 100 } });
+    expect(done.messages).toHaveLength(1);
+    expect(done.messages[0]).toMatchObject({ kind: "status", pending: false });
+    expect(chatMessageKey(done.messages[0], 20)).toBe(key);
+    expect(done.messages[0]).not.toMatchObject({ text: "starting" });
+  });
+  it("updates inline compaction in place and puts subsequent output after it", () => {
+    let state = initialState();
+    state.messages = [{ kind: "assistant", turn: 1, messageId: "a", pending: true, segments: [{ kind: "text", text: "before" }] }];
+    for (const event of [
+      { type: "status", id: 1, ts: "", turn: 1, text: "Compacting", activity: "compaction", activityState: "running" },
+      { type: "status", id: 2, ts: "", turn: 1, text: "Compacted", activity: "compaction", activityState: "complete" },
+      { type: "model.delta", id: 3, ts: "", turn: 1, text: "after", channel: "content" },
+    ] as const) state = reduce(state, { t: "incoming", event });
+    expect(state.messages).toHaveLength(1);
+    const message = state.messages[0];
+    if (message.kind !== "assistant") throw new Error("Expected assistant");
+    expect(message.segments).toEqual([
+      { kind: "text", text: "before" },
+      { kind: "compaction", id: "compact-1", text: "Compacted", pending: false },
+      { kind: "text", text: "after" },
+    ]);
+    expect(state.transientStatus).toBeNull();
+  });
+  it("keeps canonical long text across unrelated updates and turn completion", () => {
+    const state = initialState();
+    const text = "paragraph\n".repeat(40_000);
+    state.messages = [{ kind: "assistant", turn: 1, messageId: "long", pending: true, segments: [{ kind: "text", text }] }];
+    let next = reduce(state, { t: "set_busy", busy: false });
+    for (let i = 0; i < 5; i++) next = reduce(next, { t: "push_status", text: "event" });
+    expect(next.messages[0]).toEqual(state.messages[0]);
+  });
+  it("keeps fallback keys stable when surrounding rows change", () => {
+    const message = { kind: "status" as const, text: "compressed" };
+    expect(chatMessageKey(message, 1)).toBe(chatMessageKey(message, 42));
+  });
   it("uses stable transcript keys for virtualized message rendering", () => {
     expect(
       chatMessageKey(
@@ -223,13 +263,13 @@ describe("Desktop App reducer — usage", () => {
         { kind: "assistant", turn: 7, segments: [], pending: false },
         1,
       ),
-    ).toBe("assistant-7-1");
+    ).toMatch(/^assistant-local-/);
     expect(
       chatMessageKey(
         { kind: "assistant", turn: 7, segments: [], pending: true },
         2,
       ),
-    ).toBe("assistant-7-2");
+    ).toMatch(/^assistant-local-/);
     expect(
       chatMessageKey(
         {
@@ -1401,6 +1441,35 @@ describe("desktop message rollback availability", () => {
         true,
       ),
     ).toBe(false);
+  });
+});
+
+describe("desktop API error retry availability", () => {
+  const retryableError = {
+    kind: "error" as const,
+    id: "error-1",
+    message: "connection refused",
+    turn: 1,
+    retryable: true,
+  };
+
+  it("offers retry only for the latest retryable API failure while idle", () => {
+    const messages = [
+      { kind: "user" as const, text: "hello", clientId: "client-1", turn: 1 },
+      retryableError,
+      { kind: "status" as const, text: "request ended" },
+    ];
+
+    expect(canRetryErrorMessage(messages, 1, false)).toBe(true);
+    expect(canRetryErrorMessage(messages, 1, true)).toBe(false);
+    expect(
+      canRetryErrorMessage(
+        [...messages, { kind: "user", text: "new", clientId: "client-2", turn: 2 }],
+        1,
+        false,
+      ),
+    ).toBe(false);
+    expect(canRetryErrorMessage([{ ...retryableError, retryable: false }], 0, false)).toBe(false);
   });
 });
 

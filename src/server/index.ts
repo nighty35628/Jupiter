@@ -1,4 +1,4 @@
-/** Dashboard HTTP server — defaults to 127.0.0.1 with an ephemeral per-boot token; mutations require the token in the header (CSRF). Host + token can be pinned for LAN / mobile access (#968). */
+/** Legacy Dashboard HTTP server — loopback-only with token authentication. */
 
 import { randomBytes } from "node:crypto";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
@@ -8,13 +8,13 @@ import { renderIndexHtml, serveAsset } from "./assets.js";
 import type { DashboardContext } from "./context.js";
 import { handleApi } from "./router.js";
 
-/** Strict loopback set — anything outside this gets the LAN-exposure warning. */
+/** Strict allowlist: the legacy token-only Dashboard must never be remotely reachable. */
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 
 export interface StartDashboardOptions {
   /** Force a specific port. 0 = ephemeral. Default: 0. */
   port?: number;
-  /** Host to bind. Default 127.0.0.1. Set to 0.0.0.0 / :: / a LAN IP to expose to other devices (#968) — the URL token then becomes the only auth. */
+  /** Loopback host to bind. Default 127.0.0.1. Remote hosts are rejected. */
   host?: string;
   /** Pin a token across boots (#968). When unset, mintToken() generates a fresh 32-byte hex string. Min 16 chars; the caller enforces. */
   token?: string;
@@ -206,6 +206,15 @@ export function startDashboardServer(
 
   const ctxRef: { current: DashboardContext } = { current: ctx };
   return new Promise((resolve, reject) => {
+    if (!LOOPBACK_HOSTS.has(host)) {
+      reject(
+        new Error(
+          `Legacy Dashboard only supports loopback hosts (127.0.0.1, ::1, or localhost); received ${JSON.stringify(host)}. Remote access is disabled because URL-token authentication is not safe for LAN or public exposure.`,
+        ),
+      );
+      return;
+    }
+
     const server = createServer((req, res) => {
       dispatch(req, res, ctxRef.current, token).catch((err) => {
         if (!res.headersSent) {
@@ -219,11 +228,6 @@ export function startDashboardServer(
       const addr = server.address() as AddressInfo;
       const finalPort = addr.port;
       const url = `http://${host}:${finalPort}/?token=${token}`;
-      if (!LOOPBACK_HOSTS.has(host)) {
-        process.stderr.write(
-          `▲ Dashboard bound to ${host}:${finalPort} (non-loopback). The URL token is the only auth — keep it secret.\n`,
-        );
-      }
 
       let closed = false;
       const close = (): Promise<void> =>

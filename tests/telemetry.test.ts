@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Usage } from "../src/client.js";
 import { writeConfig } from "../src/config.js";
 import {
@@ -18,6 +18,13 @@ import {
 // The `costUsd` formula under test is:
 //   (hitT * hit + missT * miss + outT * out) / 1e6
 const CHAT = DEEPSEEK_PRICING["deepseek-chat"]!;
+
+beforeAll(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+});
+
+afterAll(() => vi.useRealTimers());
 
 describe("Usage.cacheHitRatio", () => {
   it("computes hit ratio", () => {
@@ -55,15 +62,39 @@ describe("Usage.cacheHitRatio", () => {
 describe("costUsd", () => {
   it("matches DeepSeek's published V4 USD pricing sheet", () => {
     expect(DEEPSEEK_PRICING["deepseek-v4-flash"]).toEqual({
-      inputCacheHit: 0.0028,
-      inputCacheMiss: 0.14,
-      output: 0.28,
+      inputCacheHit: 0.003,
+      inputCacheMiss: 0.15,
+      output: 0.6,
     });
     expect(DEEPSEEK_PRICING["deepseek-v4-pro"]).toEqual({
-      inputCacheHit: 0.003625,
-      inputCacheMiss: 0.435,
-      output: 0.87,
+      inputCacheHit: 0.022,
+      inputCacheMiss: 0.66,
+      output: 1.98,
     });
+  });
+
+  it("does not apply official pricing to a custom provider without an override", () => {
+    const usage = new Usage(1000, 100, 1100, 800, 200);
+    expect(costUsd("deepseek-v4-pro", usage, undefined, { providerId: "custom-relay" })).toBe(0);
+  });
+
+  it("applies the official peak multiplier in documented UTC windows", () => {
+    const usage = new Usage(1000, 100, 1100, 800, 200);
+    const offPeak = costUsd("deepseek-v4-flash", usage, undefined, {
+      providerId: "deepseek-official",
+      now: Date.parse("2026-01-01T00:00:00Z"),
+    });
+    const peak = costUsd("deepseek-v4-flash", usage, undefined, {
+      providerId: "deepseek-official",
+      now: Date.parse("2026-01-01T02:00:00Z"),
+    });
+    expect(peak).toBeCloseTo(offPeak * 2, 12);
+    expect(
+      costUsd("deepseek-v4-flash", usage, undefined, {
+        providerId: "deepseek-official",
+        now: Date.parse("2026-01-03T02:00:00Z"),
+      }),
+    ).toBeCloseTo(offPeak, 12);
   });
 
   it("applies DeepSeek pricing tiers", () => {
@@ -215,7 +246,7 @@ describe("inputCostUsd / outputCostUsd", () => {
     const reasoner = DEEPSEEK_PRICING["deepseek-reasoner"]!;
     const flash = DEEPSEEK_PRICING["deepseek-v4-flash"]!;
     expect(reasoner).toEqual(chat);
-    expect(chat).toEqual(flash);
+    expect(chat).not.toEqual(flash); // Retired V3 records retain their historical estimate.
   });
 
   it("v4-pro pricing is present and strictly above v4-flash", () => {
@@ -232,7 +263,8 @@ describe("inputCostUsd / outputCostUsd", () => {
     const u = new Usage(0, 100, 0, 0, 1000);
     const flashCost = costUsd("deepseek-v4-flash", u);
     const proCost = costUsd("deepseek-v4-pro", u);
-    expect(proCost).toBeGreaterThan(flashCost * 3); // current pro promo is ~3.1x flash
+    expect(proCost).toBeGreaterThan(flashCost);
+    expect(proCost).toBeCloseTo((1000 * 0.66 + 100 * 1.98) / 1_000_000, 12);
   });
 
   it("both return 0 for an unknown model", () => {

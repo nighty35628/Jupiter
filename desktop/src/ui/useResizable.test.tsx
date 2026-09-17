@@ -8,15 +8,20 @@ function ResizeProbe({
   side = "ctx",
   collapsed = false,
   activeWhenCollapsed = false,
+  maxWidth,
 }: {
   side?: "side" | "ctx";
   collapsed?: boolean;
   activeWhenCollapsed?: boolean;
+  maxWidth?: number;
 }) {
   const { width, onMouseDown } = useResizable(
     side,
     collapsed,
     activeWhenCollapsed,
+    maxWidth === undefined
+      ? undefined
+      : { maxWidth, scale: 1.25, persistKey: "jupiter.web.layout.v1.sideWidth" },
   );
   const widthVar = side === "side" ? "--side-width" : "--ctx-width";
   return (
@@ -29,8 +34,20 @@ function ResizeProbe({
   );
 }
 
-function BottomResizeProbe({ collapsed = false }: { collapsed?: boolean }) {
-  const { height, onMouseDown } = useBottomResizable(collapsed);
+function BottomResizeProbe({
+  collapsed = false,
+  maxHeight,
+}: { collapsed?: boolean; maxHeight?: number }) {
+  const { height, onMouseDown } = useBottomResizable(
+    collapsed,
+    maxHeight === undefined
+      ? undefined
+      : {
+          maxHeight,
+          scale: 1.25,
+          persistKey: "jupiter.web.layout.v1.bottomHeight",
+        },
+  );
   return (
     <div className="app" style={{ ["--bottom-height" as string]: `${height}px` }}>
       <button type="button" onMouseDown={onMouseDown}>
@@ -53,6 +70,29 @@ describe("useResizable", () => {
 
     rerender(<ResizeProbe side="ctx" />);
     expect(screen.getByTestId("width").textContent).toBe("254");
+  });
+
+  it("clamps saved widths temporarily without overwriting the preference", () => {
+    localStorage.setItem("jupiter.sideWidth", "900");
+    const { rerender } = render(<ResizeProbe side="side" maxWidth={260} />);
+    expect(screen.getByTestId("width").textContent).toBe("260");
+    expect(localStorage.getItem("jupiter.web.layout.v1.sideWidth")).toBeNull();
+    rerender(<ResizeProbe side="side" maxWidth={500} />);
+    expect(screen.getByTestId("width").textContent).toBe("500");
+    rerender(<ResizeProbe side="side" maxWidth={1000} />);
+    expect(screen.getByTestId("width").textContent).toBe("900");
+    expect(localStorage.getItem("jupiter.sideWidth")).toBe("900");
+  });
+
+  it("starts a zoomed drag from the effective width and saves only to the Web key", () => {
+    localStorage.setItem("jupiter.sideWidth", "900");
+    render(<ResizeProbe side="side" maxWidth={300} />);
+    fireEvent.mouseDown(screen.getByRole("button", { name: "drag" }), { clientX: 375 });
+    fireEvent.mouseMove(window, { clientX: 250 });
+    fireEvent.mouseUp(window);
+    expect(screen.getByTestId("width").textContent).toBe("200");
+    expect(localStorage.getItem("jupiter.web.layout.v1.sideWidth")).toBe("200");
+    expect(localStorage.getItem("jupiter.sideWidth")).toBe("900");
   });
 
   it("allows the right sidebar to grow beyond forty percent of the viewport", () => {
@@ -92,5 +132,15 @@ describe("useResizable", () => {
     fireEvent.mouseUp(window);
 
     expect(localStorage.getItem("jupiter.bottomHeight")).toBe("380");
+  });
+
+  it("temporarily clamps a saved bottom height as available height changes", () => {
+    localStorage.setItem("jupiter.bottomHeight", "700");
+    const { rerender } = render(<BottomResizeProbe maxHeight={180} />);
+    expect(screen.getByTestId("bottom-height").textContent).toBe("180");
+    rerender(<BottomResizeProbe maxHeight={750} />);
+    expect(screen.getByTestId("bottom-height").textContent).toBe("700");
+    expect(localStorage.getItem("jupiter.web.layout.v1.bottomHeight")).toBeNull();
+    expect(localStorage.getItem("jupiter.bottomHeight")).toBe("700");
   });
 });

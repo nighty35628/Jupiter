@@ -1,4 +1,5 @@
 import { COMPACTION_SUMMARY_MARKER } from "@jupiter/core-utils";
+import { messageImageTokens } from "./attachments/types.js";
 import type { DeepSeekClient } from "./client.js";
 import { Usage } from "./client.js";
 import { healLoadedMessages } from "./loop.js";
@@ -100,6 +101,7 @@ export interface FoldResult {
     | "insufficient-savings"
     | "summary-empty"
     | "session-changed"
+    | "persistence-failed"
     | "log-changed";
   totalTokens?: number;
   headTokens?: number;
@@ -208,7 +210,7 @@ export class ContextManager {
     let total = 0;
     for (const e of entries) {
       const content = typeof e.content === "string" ? e.content : "";
-      total += countTokensBounded(content);
+      total += countTokensBounded(content) + messageImageTokens(e);
       if (e.role === "assistant" && Array.isArray(e.tool_calls) && e.tool_calls.length > 0) {
         total += countTokensBounded(JSON.stringify(e.tool_calls));
       }
@@ -290,7 +292,8 @@ export class ContextManager {
     // arguments slip through the tail-budget check and the boundary slides past
     // the active tool turn. No chat-template wrapper here — that would double-count.
     const tokenCounts = all.map((m) => {
-      let n = countTokensBounded(typeof m.content === "string" ? m.content : "");
+      let n =
+        countTokensBounded(typeof m.content === "string" ? m.content : "") + messageImageTokens(m);
       if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
         n += countTokensBounded(JSON.stringify(m.tool_calls));
       }
@@ -344,7 +347,7 @@ export class ContextManager {
     }
 
     const { names: pinnedNames, bodies: pinnedBodies } = collectPinnedSkills(head);
-    const summary = await this.summarizeForFold(head, pinnedNames, opts?.signal);
+    const summary = await this.summarizeForFold(head, pinnedNames, opts?.signal, model);
     if (!summary.content) {
       return {
         ...noop,
@@ -396,9 +399,33 @@ export class ContextManager {
       model,
       summary.reasoningContent,
     );
+    const images = new Map(
+      head
+        .flatMap((message) => [
+          ...(message.attachments ?? []),
+          ...(message.sourceAttachments ?? []),
+        ])
+        .map((image) => [image.id, image]),
+    );
+    if (images.size) summaryMsg.sourceAttachments = [...images.values()];
     const replacement = [summaryMsg, ...tail];
+    if (images.size) {
+      if (
+        !currentBinding.sessionName ||
+        !this.persistRewrite(currentBinding.sessionName, replacement)
+      ) {
+        return {
+          ...noop,
+          reason: "persistence-failed",
+          totalTokens,
+          headTokens,
+          tailTokens: cumTokens,
+          tailBudget,
+        };
+      }
+    }
     this.deps.log.compactInPlace(replacement);
-    this.persistRewrite(currentBinding.sessionName, replacement);
+    if (!images.size) this.persistRewrite(currentBinding.sessionName, replacement);
     this.deps.onLogRewrite?.();
     return {
       folded: true,
@@ -433,8 +460,13 @@ export class ContextManager {
     messagesToSummarize: ChatMessage[],
     pinnedSkillNames: string[],
     signal?: AbortSignal,
+    activeModel?: string,
   ): Promise<{ content: string; reasoningContent: string }> {
-    const summaryModel = "deepseek-v4-flash";
+    const hasImages = messagesToSummarize.some((message) => message.attachments?.length);
+    const summaryModel =
+      hasImages || !this.deps.client.officialDeepSeek ? activeModel! : "deepseek-flash";
+    if (hasImages && !this.deps.client.supportsImages(summaryModel))
+      return { content: "", reasoningContent: "" };
     const healed = healLoadedMessages(messagesToSummarize, DEFAULT_MAX_RESULT_CHARS).messages;
     const agentSystem = this.deps.getSystemPrompt();
     const fewShots = this.deps.getFewShots?.() ?? [];
@@ -493,12 +525,14 @@ export class ContextManager {
     }
   }
 
-  private persistRewrite(sessionName: string | null, messages: ChatMessage[]): void {
-    if (!sessionName) return;
+  private persistRewrite(sessionName: string | null, messages: ChatMessage[]): boolean {
+    if (!sessionName) return false;
     try {
       rewriteSession(sessionName, messages);
+      return true;
     } catch {
       /* disk full / perms — in-memory mutation still applies */
+      return false;
     }
   }
 }

@@ -25,7 +25,7 @@ Do NOT emit any other content in the same response when you request escalation. 
 }
 
 /** Backward-compat — pre-#582 callers (and the `CODE_SYSTEM_PROMPT` public-API const) keep the historical flash phrasing. */
-export const ESCALATION_CONTRACT = escalationContract("deepseek-v4-flash");
+export const ESCALATION_CONTRACT = escalationContract("deepseek-flash");
 
 export const NEGATIVE_CLAIM_RULE = `Negative claims ("X is missing", "Y isn't implemented", "there's no Z") are the #1 hallucination shape. They feel safe to write because no citation seems possible — but that's exactly why you must NOT write them on instinct.
 

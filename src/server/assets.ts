@@ -91,7 +91,7 @@ function injectTokenIntoChunkImports(body: string, token: string): string {
 /** Same trick for CSS `url(/assets/foo.woff)` — fonts referenced from a token-stripped stylesheet would 401 otherwise. */
 function injectTokenIntoCssAssetUrls(body: string, token: string): string {
   return body.replace(
-    /url\((['"]?)(\/assets\/[\w./-]+\.(?:woff2?|ttf|otf|png|svg))(?:\?[^)'"]*)?\1\)/g,
+    /url\((['"]?)(\/assets\/[\w./-]+\.(?:woff2?|ttf|otf|png|svg|webp))(?:\?[^)'"]*)?\1\)/g,
     (_, q: string, path: string) => `url(${q}${path}?token=${token}${q})`,
   );
 }
@@ -119,38 +119,21 @@ function loadAppMap(): string | null {
 }
 
 function loadCss(token: string): string {
-  // Try new React dashboard first, then fall back to old Preact
-  let raw: string;
-  try {
-    raw = loadCachedText(join(ASSET_DIR, "dist", "app.css"));
-  } catch {
-    raw = loadCachedText(join(ASSET_DIR, "app.css"));
-  }
+  const raw = loadCachedText(join(ASSET_DIR, "dist", "app.css"));
   return injectTokenIntoCssAssetUrls(raw, token);
 }
 
 /** Token HTML-attribute-escaped in case a future mint produces non-hex bytes. */
-export function renderIndexHtml(token: string, mode: "standalone" | "attached"): string {
+export function renderIndexHtml(token: string, mode: "standalone" | "attached" | "web"): string {
   const tpl = loadIndexTemplate();
   const safeToken = token.replace(/[^a-zA-Z0-9]/g, "");
   // String.replace(string, replacement) only swaps the FIRST match. The
-  // template has __JUPITER_TOKEN__ in three places (meta + css href +
-  // script src) — without `replaceAll` only the meta tag gets the real
+  // template has __JUPITER_TOKEN__ in several places — without
+  // `replaceAll` only the first tag gets the real
   // token, the asset URLs keep the placeholder and the browser hits a
   // 401 on every asset fetch. Same trap for __JUPITER_MODE__ if it
   // ever appears more than once.
   return tpl.replaceAll("__JUPITER_TOKEN__", safeToken).replaceAll("__JUPITER_MODE__", mode);
-}
-
-/** Vendor CSS the bundle pulls from npm and the build script copies into `dashboard/dist/`. */
-const VENDOR_CSS_NAMES = new Set(["vendor-hljs.css", "vendor-uplot.css"]);
-
-function loadVendorCss(name: string, token: string): string | null {
-  try {
-    return injectTokenIntoCssAssetUrls(loadCachedText(join(ASSET_DIR, "dist", name)), token);
-  } catch {
-    return null;
-  }
 }
 
 /** MIME types for static files we serve from dist/. */
@@ -161,14 +144,16 @@ const MIME_MAP: Record<string, string> = {
   ".woff2": "font/woff2",
   ".woff": "font/woff",
   ".ttf": "font/ttf",
+  ".otf": "font/otf",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".webp": "image/webp",
   ".ico": "image/x-icon",
   ".json": "application/json; charset=utf-8",
 };
 
 /** Binary extensions that must be served as raw buffers, not UTF-8 strings. */
-const BINARY_EXTS = new Set([".woff2", ".woff", ".ttf", ".png", ".ico"]);
+const BINARY_EXTS = new Set([".woff2", ".woff", ".ttf", ".otf", ".png", ".webp", ".ico"]);
 
 function mimetypeFor(name: string): string | null {
   for (const [ext, mt] of Object.entries(MIME_MAP)) {
@@ -219,11 +204,6 @@ export function serveAsset(
     const body = loadChunk(name, token);
     if (body == null) return null;
     return { body, contentType: "application/javascript; charset=utf-8" };
-  }
-  if (VENDOR_CSS_NAMES.has(name)) {
-    const body = loadVendorCss(name, token);
-    if (body == null) return null;
-    return { body, contentType: "text/css; charset=utf-8" };
   }
   // 通用静态文件：字体、图片等
   const mt = mimetypeFor(name);

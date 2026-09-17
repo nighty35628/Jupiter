@@ -14,7 +14,7 @@ import {
   pathToFileUrl,
   readFileBytes,
 } from "../file-preview";
-import { t, useLang } from "../i18n";
+import { getLang, t, useLang } from "../i18n";
 import { I } from "../icons";
 import type {
   McpSpecInfo,
@@ -254,7 +254,16 @@ function CtxAiVisibleContent({
   const touchedFiles = sessionFiles.length;
   const modifiedFiles = sessionFiles.filter((file) => file.status === "m").length;
   const memoryEnabled = settings?.memoryGlobalEnabled !== false;
-  const rows: Array<{ key: string; label: string; value: string; detail?: string; active: boolean }> = [
+  const rows: Array<{
+    key: string;
+    label: string;
+    value: string;
+    detail?: string;
+    active: boolean;
+  }> = [
+    ...(diagnostics?.images ? [{ key: "images", label: getLang() === "zh-CN" ? "图片" : "Images",
+      value: `${diagnostics.images.request} / ${diagnostics.images.attached}`,
+      detail: getLang() === "zh-CN" ? `请求构建 ${diagnostics.images.request} 张 · 省略 ${diagnostics.images.omitted} 张 · 压缩后原图引用 ${diagnostics.images.retained} 张 · 估算 ${diagnostics.images.estimatedTokens} tokens` : `Request ${diagnostics.images.request} · Omitted ${diagnostics.images.omitted} · Retained ${diagnostics.images.retained} · Estimated ${diagnostics.images.estimatedTokens} tokens`, active: true }] : []),
     {
       key: "conversation",
       label: t("contextPanel.aiVisibleConversation"),
@@ -333,7 +342,9 @@ function CtxAiVisibleContent({
       <div className="h">
         <span>{t("contextPanel.aiVisibleTitle")}</span>
         <span className="right">
-          {diagnostics ? t("contextPanel.aiVisibleObserved") : t("contextPanel.aiVisiblePendingShort")}
+          {diagnostics
+            ? t("contextPanel.aiVisibleObserved")
+            : t("contextPanel.aiVisiblePendingShort")}
         </span>
       </div>
       <div className="ctx-ai-visible-hint">{t("contextPanel.aiVisibleHint")}</div>
@@ -668,6 +679,7 @@ function CtxBrowser({
   visible?: boolean;
   placement: "side" | "bottom";
 }) {
+  const webSurface = document.documentElement.dataset.runtime === "web";
   const [draft, setDraft] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -676,7 +688,7 @@ function CtxBrowser({
   const [reloadKey, setReloadKey] = useState(0);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const nativeRef = useRef<NativeBrowserWebview | null>(null);
-  if (!nativeRef.current) {
+  if (!webSurface && !nativeRef.current) {
     nativeRef.current = new NativeBrowserWebview(nextBrowserLabel());
   }
   const currentUrl = historyIndex >= 0 ? history[historyIndex] : null;
@@ -727,6 +739,7 @@ function CtxBrowser({
   }, [visible]);
   const syncNativeBrowser = useCallback(
     (forceReload = false) => {
+      if (webSurface) return;
       const native = nativeRef.current;
       if (!native) return;
       if (!visible) {
@@ -750,7 +763,7 @@ function CtxBrowser({
         },
       );
     },
-    [browserBounds, currentUrl, visible],
+    [browserBounds, currentUrl, visible, webSurface],
   );
   useLayoutEffect(() => {
     syncNativeBrowser(Boolean(currentUrl));
@@ -797,7 +810,9 @@ function CtxBrowser({
         className="ctx-browser-bar"
         onSubmit={(event) => {
           event.preventDefault();
+          const url = normalizeBrowserUrl(draft);
           open(draft);
+          if (webSurface && url) void openUrl(url).catch(() => undefined);
         }}
       >
         <div className="ctx-browser-nav">
@@ -872,12 +887,22 @@ function CtxBrowser({
                 <span>{t("contextPanel.browser.external")}</span>
               </button>
             </div>
-            <div
-              ref={hostRef}
-              className="ctx-browser-native-host"
-              title={t("contextPanel.browser.previewTitle")}
-              aria-label={t("contextPanel.browser.previewTitle")}
-            />
+            {webSurface ? (
+              <div className="ctx-browser-web-external">
+                <I.globe size={28} />
+                <button type="button" onClick={openCurrentExternal}>
+                  <I.link size={13} />
+                  <span>{t("contextPanel.browser.external")}</span>
+                </button>
+              </div>
+            ) : (
+              <div
+                ref={hostRef}
+                className="ctx-browser-native-host"
+                title={t("contextPanel.browser.previewTitle")}
+                aria-label={t("contextPanel.browser.previewTitle")}
+              />
+            )}
           </>
         ) : (
           <div className="ctx-browser-empty">
@@ -887,7 +912,9 @@ function CtxBrowser({
           </div>
         )}
       </div>
-      <div className="ctx-browser-hint">{t("contextPanel.browser.nativeHint")}</div>
+      {!webSurface ? (
+        <div className="ctx-browser-hint">{t("contextPanel.browser.nativeHint")}</div>
+      ) : null}
     </div>
   );
 }
@@ -944,11 +971,7 @@ function terminalTheme(host: HTMLElement) {
     foreground,
     cursor: foreground,
     cursorAccent: surface,
-    selectionBackground: cssColor(
-      host,
-      "--accent-soft",
-      "rgba(80, 120, 255, 0.22)",
-    ),
+    selectionBackground: cssColor(host, "--accent-soft", "rgba(80, 120, 255, 0.22)"),
     black: foreground,
     red: terminalColor(host, "--terminal-red", "--danger", "#cf222e"),
     green: terminalColor(host, "--terminal-green", "--success", "#1a7f37"),
@@ -1109,6 +1132,9 @@ function gitCommandMessage(result: TerminalCommandResult): string {
 
 function CtxGitInfo({ settings }: { settings: Settings | null }) {
   const workspaceDir = settings?.workspaceDir;
+  const gitWriteAllowed =
+    document.documentElement.dataset.runtime !== "web" ||
+    document.documentElement.dataset.webGitWrite === "true";
   const [commitMessage, setCommitMessage] = useState("");
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -1176,7 +1202,7 @@ function CtxGitInfo({ settings }: { settings: Settings | null }) {
 
   const info = state.info;
   const changedCount = state.entries.length;
-  const canCommit = Boolean(workspaceDir);
+  const canCommit = Boolean(workspaceDir) && gitWriteAllowed;
   return (
     <div className="ctx-block ctx-git-info">
       <div className="h">
@@ -1209,7 +1235,7 @@ function CtxGitInfo({ settings }: { settings: Settings | null }) {
             <select
               aria-label={t("contextPanel.git.branch")}
               value={info.branch ?? ""}
-              disabled={busyAction !== null || info.branches.length === 0}
+              disabled={!gitWriteAllowed || busyAction !== null || info.branches.length === 0}
               onChange={(event) => {
                 const branch = event.target.value;
                 if (!workspaceDir || !branch || branch === info.branch) return;
@@ -1237,6 +1263,7 @@ function CtxGitInfo({ settings }: { settings: Settings | null }) {
             <input
               aria-label={t("contextPanel.git.commitMessage")}
               value={commitMessage}
+              disabled={!gitWriteAllowed}
               placeholder={t("contextPanel.git.commitPlaceholder")}
               onChange={(event) => setCommitMessage(event.target.value)}
             />
@@ -1260,7 +1287,7 @@ function CtxGitInfo({ settings }: { settings: Settings | null }) {
             </button>
             <button
               type="button"
-              disabled={!workspaceDir || busyAction !== null}
+              disabled={!workspaceDir || !gitWriteAllowed || busyAction !== null}
               onClick={() => {
                 if (!workspaceDir) return;
                 void runGitAction(t("contextPanel.git.push"), () =>
@@ -1272,7 +1299,7 @@ function CtxGitInfo({ settings }: { settings: Settings | null }) {
             </button>
             <button
               type="button"
-              disabled={!workspaceDir || busyAction !== null}
+              disabled={!workspaceDir || !gitWriteAllowed || busyAction !== null}
               onClick={() => {
                 if (!workspaceDir) return;
                 void runGitAction(t("contextPanel.git.createPr"), () =>
@@ -1682,6 +1709,9 @@ function CtxTerminal({ settings }: { settings: Settings | null }) {
 }
 
 function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
+  const terminalAvailable =
+    document.documentElement.dataset.runtime !== "web" ||
+    document.documentElement.dataset.webTerminal === "true";
   const cards: Array<{
     mode: ContextPanelMode;
     icon: ReactNode;
@@ -1725,9 +1755,10 @@ function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
       desc: t("contextPanel.home.terminalDesc"),
     },
   ];
+  const visibleCards = cards.filter((card) => card.mode !== "terminal" || terminalAvailable);
   return (
     <div className="ctx-home">
-      {cards.map((card) => (
+      {visibleCards.map((card) => (
         <button
           type="button"
           key={card.mode}
@@ -2902,7 +2933,9 @@ function CtxSubagentDetail({ run }: { run?: SubagentRunInfo | null }) {
           <div className="ctx-subagent-role">{role}</div>
         </div>
       </div>
-      {metrics.length > 0 ? <div className="ctx-subagent-metrics">{metrics.join(" · ")}</div> : null}
+      {metrics.length > 0 ? (
+        <div className="ctx-subagent-metrics">{metrics.join(" · ")}</div>
+      ) : null}
       {run.summary ? (
         <div className="ctx-block">
           <div className="h">
@@ -2911,9 +2944,7 @@ function CtxSubagentDetail({ run }: { run?: SubagentRunInfo | null }) {
           <div className="ctx-subagent-text">{run.summary}</div>
         </div>
       ) : null}
-      {run.error ? (
-        <div className="ctx-browser-error ctx-subagent-error">{run.error}</div>
-      ) : null}
+      {run.error ? <div className="ctx-browser-error ctx-subagent-error">{run.error}</div> : null}
       <div className="ctx-subagent-note">{t("contextPanel.subagentSidebarHint")}</div>
     </div>
   );

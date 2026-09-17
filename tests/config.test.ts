@@ -56,6 +56,7 @@ import {
   saveEditMode,
   saveIndexConfig,
   saveLibraryRetrievalMode,
+  saveModel,
   savePromptHistory,
   saveReasoningEffort,
   saveSemanticEmbeddingConfig,
@@ -268,9 +269,9 @@ describe("config", () => {
     // make the first chat request 400 with "supported API model names are
     // deepseek-v4-pro or deepseek-v4-flash, but you passed …".
     writeConfig({ model: "deepseek-chat" }, path);
-    expect(loadModel(path)).toBe("deepseek-v4-flash");
+    expect(loadModel(path)).toBe("deepseek-flash");
     writeConfig({ model: "deepseek-made-up" }, path);
-    expect(loadModel(path)).toBe("deepseek-v4-flash");
+    expect(loadModel(path)).toBe("deepseek-flash");
   });
 
   it("loadModel passes through any persisted id when a custom baseUrl is set", () => {
@@ -281,6 +282,13 @@ describe("config", () => {
   it("loadModel keeps a supported v4 id on the official endpoint", () => {
     writeConfig({ model: "deepseek-v4-pro" }, path);
     expect(loadModel(path)).toBe("deepseek-v4-pro");
+  });
+
+  it("preserves the vision model after saving with the default official endpoint", () => {
+    saveModel("deepseek-v4-flash-vision-exp", path);
+    expect(readConfig(path).baseUrl).toBeUndefined();
+    expect(readConfig(path).model).toBe("deepseek-v4-flash-vision-exp");
+    expect(loadModel(path)).toBe("deepseek-v4-flash-vision-exp");
   });
 
   it("loadEndpoint: env tuple wins when env sets baseUrl", () => {

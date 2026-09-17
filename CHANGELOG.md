@@ -3,6 +3,70 @@
 All notable changes to Jupiter. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.0.9] — 2026-09-18
+
+### 中文
+
+**图片对话 Beta。** Desktop 与 Web 支持粘贴、选择和拖放图片，以及缩略图、原图预览、纯图片提问、排队、
+编辑重发与失败恢复。默认官方视觉模型使用 `deepseek-flash`；第三方模型须在模型设置中明确开启图片输入，
+Pro 不会被自动当作视觉模型，也不会自动把图片转发给辅助模型。
+
+**持久附件与图片上下文。** 图片经过有界 WASM 解码、方向校正和压缩后按内容哈希保存；会话只保存引用，不保存
+base64 或供应商 file ID。官方 Files 可复用上传，并在明确失效时受限回退到内联传输；第三方只使用内联图片。
+上下文压缩保留原图引用，工具图片可回传模型，信息面板显示图片请求与省略状态。存储清理保护会话、归档、备份和草稿引用。
+
+**第三方 DeepSeek API Beta。** Desktop 和本机 Web 的“模型”设置现在可以成组配置、测试并保存供应商地址、API key、
+协议预设和模型 ID；CLI 新增对应的 `jupiter setup --provider-*` 参数。Jupiter 区分 DeepSeek 与通用 OpenAI 兼容
+Chat Completions 协议，不再向普通兼容端点发送 `thinking`、reasoning、prefix 或缓存扩展字段。
+
+**供应商隔离与计费。** 会话元数据会绑定供应商端点和协议，切换供应商后已有对话不会被静默上传到新端点；旧会话和
+归档会话会在首次切换前补齐绑定。第三方网络错误默认不自动重放可能已计费的请求，未知第三方价格不再套用官方价格。
+远程 Web 客户端不能读取或修改供应商地址与凭据，本机和局域网 HTTP 端点仍可用于自托管服务。
+
+**Web Beta 与 Desktop 界面统一。** `jupiter web [目录]` 现在直接复用当前 Desktop React 界面、会话和 agent
+运行时，并为浏览器补齐工作区切换、文件上传下载与预览、终端、Git、通知、设备管理和移动端抽屉布局。桌宠、自动更新、
+全局快捷键和原生内嵌 WebView 仍只属于 Desktop。
+
+**安全远程访问。** Web Beta 新增本机、局域网和公网三种访问模式，使用一次性配对、可撤销设备、CSRF/Origin/Host
+校验、事件重放、连接 epoch、写入租约和跨进程会话锁。公网模式要求带身份验证的 HTTPS 反向代理，并固定关闭终端、
+Git/MCP 写入、密钥写入和 full-control agent 模式。
+
+### English
+
+**Image conversations Beta.** Desktop and Web support image paste, file picking and dropping, thumbnails, full previews,
+image-only questions, queues, editing and recovery. The default official visual model is `deepseek-flash`;
+third-party models require explicit image-input opt-in. Pro models do not inherit vision capability,
+and images are not automatically forwarded to a helper model.
+
+**Durable attachments and visual context.** Bounded WASM decoding normalizes orientation and image size before
+content-addressed storage. History stores references instead of base64 or provider file IDs. Official Files uploads
+are reused with bounded inline fallback; third parties use inline images only. Compaction retains source handles,
+tool images reach the model, and the context panel reports image inclusion and omissions. Cleanup preserves session,
+archive, backup and draft references.
+
+**Third-party DeepSeek API Beta.** Desktop and local Web can now test and atomically save a provider base URL, API
+key, protocol preset, and model ID from Models settings. CLI-only installations get matching `jupiter setup
+--provider-*` options. Jupiter distinguishes DeepSeek and generic OpenAI-compatible Chat Completions wire contracts,
+so generic endpoints no longer receive DeepSeek-only thinking, reasoning, prefix, or cache fields.
+
+**Provider isolation and accounting.** Session metadata binds transcripts to their provider endpoint and protocol, so
+changing providers cannot silently upload existing history elsewhere; legacy live and archived sessions are bound
+before the first switch. Ambiguous third-party network failures are not automatically replayed, unknown third-party
+prices do not inherit official rates, and remote Web clients can neither read nor edit provider endpoints or secrets.
+Local and private-network HTTP endpoints remain available for self-hosted services.
+
+**Desktop-aligned Web Beta.** `jupiter web [dir]` now directly reuses the current Desktop React UI, sessions, and agent
+runtime, with browser-native workspace switching, file upload/download and preview, terminal, Git, notifications,
+device management, and responsive mobile drawers. Pets, auto-update, global shortcuts, and the native embedded WebView
+remain Desktop-only.
+
+**Secure remote access.** Web Beta adds local, LAN, and public access modes with one-time pairing, revocable devices,
+CSRF/Origin/Host validation, event replay, connection epochs, a writer lease, and cross-process session locking. Public
+mode requires an authenticated HTTPS reverse proxy and always disables terminals, Git/MCP writes, secret writes, and
+full-control agent mode.
+
 ## [1.0.8] — 2026-08-14
 
 ### 中文
@@ -4269,7 +4333,7 @@ banner steers users to the Semantic panel when no index exists.
 - New top-of-Chat banner: `≈ Semantic search isn't enabled for
   this project — Build it →` with a dismiss `×`. Visible only
   when `semanticIndexExists === false` and not previously
-  dismissed (state in `localStorage` as `rx.semanticBannerDismissed`).
+  dismissed (state in `localStorage` as `jupiter.semanticBannerDismissed`).
 - Click "Build it →" fires `appBus.dispatchEvent("navigate-tab")`
   with `tabId: "semantic"` — the existing nav handler picks it up.
 
@@ -4437,7 +4501,7 @@ mistaking legitimate read → edit → verify cycles for storms.
 - New `◀ collapse` button at the bottom of the sidebar shrinks
   it from 220px → 52px and hides every label, leaving just the
   glyphs. `▶ expand` brings labels back. Choice persists in
-  `localStorage` (`rx.sidebarCollapsed`).
+  `localStorage` (`jupiter.sidebarCollapsed`).
 - Tabs in the collapsed state center the glyph and keep the
   primary-color active indicator.
 

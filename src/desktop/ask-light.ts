@@ -1,3 +1,4 @@
+import type { ImageAttachment } from "../attachments/types.js";
 import type { Usage } from "../client.js";
 import { costUsd } from "../telemetry/stats.js";
 import type { ChatMessage } from "../types.js";
@@ -6,6 +7,7 @@ export const LIGHT_ASK_SYSTEM_PROMPT =
   "You are Jupiter. Answer directly and concisely. Do not use tools. If the user asks you to inspect or modify files, tell them to use Agent mode.";
 
 type LightAskClient = {
+  providerId?: string;
   chat: (opts: {
     model: string;
     messages: ChatMessage[];
@@ -28,6 +30,7 @@ export type LightAskEmitEvent =
       turn: number;
       text: string;
       clientId?: string;
+      attachments?: ImageAttachment[];
     }
   | {
       type: "model.turn.started";
@@ -63,6 +66,7 @@ export async function runDesktopLightAsk(args: {
   reasoningEffort?: import("../config.js").ReasoningEffort;
   prefixHash?: string;
   text: string;
+  attachments?: ImageAttachment[];
   turn: number;
   clientId?: string;
   signal?: AbortSignal;
@@ -78,7 +82,7 @@ export async function runDesktopLightAsk(args: {
   emit: (event: LightAskEmitEvent) => void;
 }): Promise<{ content: string; usage: Usage; costUsd: number }> {
   const text = args.text.trim();
-  if (!text) throw new Error("ask_light requires non-empty text");
+  if (!text && !args.attachments?.length) throw new Error("ask_light requires text or images");
   const ts = () => new Date().toISOString();
   let id = Date.now();
   if (args.emitUserMessage !== false) {
@@ -89,6 +93,7 @@ export async function runDesktopLightAsk(args: {
       turn: args.turn,
       text,
       clientId: args.clientId,
+      ...(args.attachments?.length ? { attachments: args.attachments } : {}),
     });
   }
   args.emit({
@@ -104,7 +109,11 @@ export async function runDesktopLightAsk(args: {
     model: args.model,
     messages: [
       { role: "system", content: LIGHT_ASK_SYSTEM_PROMPT },
-      { role: "user", content: text },
+      {
+        role: "user",
+        content: text,
+        ...(args.attachments?.length ? { attachments: args.attachments } : {}),
+      },
     ],
     tools: [],
     thinking: "disabled",
@@ -121,14 +130,20 @@ export async function runDesktopLightAsk(args: {
       reasoningContent: response.reasoningContent ?? null,
     });
   } else if (args.appendAndPersist) {
-    args.appendAndPersist({ role: "user", content: text });
+    args.appendAndPersist({
+      role: "user",
+      content: text,
+      ...(args.attachments?.length ? { attachments: args.attachments } : {}),
+    });
     args.appendAndPersist({
       role: "assistant",
       content,
       ...(response.reasoningContent ? { reasoning_content: response.reasoningContent } : {}),
     });
   }
-  const dollars = costUsd(args.model, response.usage);
+  const dollars = costUsd(args.model, response.usage, undefined, {
+    providerId: args.client.providerId,
+  });
   args.emit({
     type: "model.final",
     id: id++,

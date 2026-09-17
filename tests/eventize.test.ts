@@ -8,6 +8,34 @@ const lev = (partial: Partial<LoopEvent>): LoopEvent =>
   ({ turn: 1, role: "status", content: "", ...partial }) as LoopEvent;
 
 describe("Eventizer.consume", () => {
+  it("preserves compaction lifecycle metadata without also emitting a warning banner", () => {
+    const e = new Eventizer();
+    const start = e.consume(
+      lev({
+        role: "status",
+        content: "starting",
+        activity: "compaction",
+        activityState: "running",
+      }),
+      ctx,
+    );
+    expect(start.at(-1)).toMatchObject({
+      type: "status",
+      activity: "compaction",
+      activityState: "running",
+    });
+    const finish = e.consume(
+      lev({ role: "warning", content: "done", activity: "compaction", activityState: "complete" }),
+      ctx,
+    );
+    expect(finish).toHaveLength(1);
+    expect(finish[0]).toMatchObject({
+      type: "status",
+      activity: "compaction",
+      activityState: "complete",
+      text: "done",
+    });
+  });
   it("synthesizes model.turn.started on first event of a new turn", () => {
     const e = new Eventizer();
     const out = e.consume(lev({ turn: 1, role: "status", content: "thinking" }), ctx);

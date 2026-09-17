@@ -36,7 +36,7 @@ describe("resolveDefaults", () => {
 
   it("empty flags + empty config → flash + high", () => {
     const r = resolveDefaults({});
-    expect(r.model).toBe("deepseek-v4-flash");
+    expect(r.model).toBe("deepseek-flash");
     expect(r.reasoningEffort).toBe("high");
     expect(r.mcp).toEqual([]);
     expect(r.session).toBe("default");
@@ -101,7 +101,7 @@ describe("resolveDefaults", () => {
       join(home, ".jupiter", "config.json"),
     );
     const r = resolveDefaults({ noConfig: true });
-    expect(r.model).toBe("deepseek-v4-flash");
+    expect(r.model).toBe("deepseek-flash");
     expect(r.reasoningEffort).toBe("high");
     expect(r.mcp).toEqual([]);
   });

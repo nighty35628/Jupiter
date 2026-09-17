@@ -1,7 +1,7 @@
-import { memo, useEffect, useState, type ReactNode } from "react";
-import { I } from "../icons";
+import { type ReactNode, memo, useEffect, useState } from "react";
 import { Markdown } from "../Markdown";
 import { t, useLang } from "../i18n";
+import { I } from "../icons";
 
 type Tone = "default" | "success" | "warning" | "danger" | "accent" | "violet";
 
@@ -362,6 +362,68 @@ function formatWorkflowResult(result: unknown): string {
 
 // ---- Reasoning ----
 
+export function renderReasoningInline(text: string, keyPrefix = "reasoning"): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const codeStart = text.indexOf("`", cursor);
+    const boldStart = text.indexOf("**", cursor);
+    const starts = [codeStart, boldStart].filter((index) => index >= 0);
+    const start = starts.length > 0 ? Math.min(...starts) : -1;
+
+    if (start < 0) {
+      nodes.push(text.slice(cursor));
+      break;
+    }
+    if (start > cursor) nodes.push(text.slice(cursor, start));
+
+    if (start === codeStart) {
+      const end = text.indexOf("`", start + 1);
+      if (end <= start + 1) {
+        nodes.push(text.slice(start, start + 1));
+        cursor = start + 1;
+        continue;
+      }
+      nodes.push(
+        <span className="hl" key={`${keyPrefix}-code-${start}`}>
+          {text.slice(start + 1, end)}
+        </span>,
+      );
+      cursor = end + 1;
+      continue;
+    }
+
+    const end = text.indexOf("**", start + 2);
+    if (end <= start + 2) {
+      nodes.push(text.slice(start, start + 2));
+      cursor = start + 2;
+      continue;
+    }
+    nodes.push(
+      <strong key={`${keyPrefix}-bold-${start}`}>
+        {renderReasoningInline(text.slice(start + 2, end), `${keyPrefix}-bold-${start}`)}
+      </strong>,
+    );
+    cursor = end + 2;
+  }
+
+  return nodes;
+}
+
+function splitReasoningParagraphs(text: string): Array<{ key: number; text: string }> {
+  const paragraphs: Array<{ key: number; text: string }> = [];
+  const separator = /\n\n+/g;
+  let start = 0;
+
+  for (const match of text.matchAll(separator)) {
+    paragraphs.push({ key: start, text: text.slice(start, match.index) });
+    start = (match.index ?? start) + match[0].length;
+  }
+  paragraphs.push({ key: start, text: text.slice(start) });
+  return paragraphs;
+}
+
 export function ReasoningCard({
   text,
   streaming,
@@ -405,15 +467,10 @@ export function ReasoningCard({
     >
       <div className="reason">
         <div className="stream">
-          {text.split(/\n\n+/).map((para, i) => (
-            <p
-              key={i}
-              dangerouslySetInnerHTML={{
-                __html: para
-                  .replace(/`([^`]+)`/g, '<span class="hl">$1</span>')
-                  .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>"),
-              }}
-            />
+          {splitReasoningParagraphs(text).map((paragraph) => (
+            <p key={paragraph.key}>
+              {renderReasoningInline(paragraph.text, `reasoning-${paragraph.key}`)}
+            </p>
           ))}
         </div>
         {model || tokens !== undefined ? (

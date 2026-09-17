@@ -1,5 +1,6 @@
 /** Pure projection reducers over the Event log — deterministic, no I/O, no mutation. */
 
+import { isImageAttachment } from "../attachments/types.js";
 import type { ChatMessage } from "../types.js";
 import type {
   BudgetView,
@@ -74,6 +75,8 @@ export const conversation: Reducer<ConversationView> = (v, ev) => {
   switch (ev.type) {
     case "user.message": {
       const msg: ChatMessage = { role: "user", content: ev.text };
+      if (ev.attachments?.length) msg.attachments = ev.attachments.filter(isImageAttachment);
+      if (ev.clientId) msg.clientId = ev.clientId;
       return { ...v, messages: [...v.messages, msg] };
     }
     case "model.final": {
@@ -89,6 +92,7 @@ export const conversation: Reducer<ConversationView> = (v, ev) => {
       };
     case "tool.result": {
       const msg: ChatMessage = { role: "tool", content: ev.output, tool_call_id: ev.callId };
+      if (ev.attachments?.length) msg.attachments = ev.attachments;
       return {
         messages: [...v.messages, msg],
         pendingToolCalls: v.pendingToolCalls.filter((c) => c.callId !== ev.callId),

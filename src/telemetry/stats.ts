@@ -1,22 +1,57 @@
 import type { Usage } from "../client.js";
 import { loadContextTokens, loadPricingOverride } from "../config.js";
 
-/** USD per 1M tokens; display currency conversion happens at the UI boundary. */
+/** Current DeepSeek off-peak USD rates per 1M tokens. */
 export const DEEPSEEK_PRICING: Record<
   string,
   { inputCacheHit: number; inputCacheMiss: number; output: number }
 > = {
-  "deepseek-v4-flash": { inputCacheHit: 0.0028, inputCacheMiss: 0.14, output: 0.28 },
-  "deepseek-v4-pro": { inputCacheHit: 0.003625, inputCacheMiss: 0.435, output: 0.87 },
-  // Compat aliases — priced as v4-flash per the deprecation notice.
-  "deepseek-chat": { inputCacheHit: 0.0028, inputCacheMiss: 0.14, output: 0.28 },
-  "deepseek-reasoner": { inputCacheHit: 0.0028, inputCacheMiss: 0.14, output: 0.28 },
+  "deepseek-flash": { inputCacheHit: 0.003, inputCacheMiss: 0.15, output: 0.6 },
+  "deepseek-v4-flash": { inputCacheHit: 0.003, inputCacheMiss: 0.15, output: 0.6 },
+  "deepseek-v4-flash-vision-exp": { inputCacheHit: 0.003, inputCacheMiss: 0.15, output: 0.6 },
+  "deepseek-v4-pro": { inputCacheHit: 0.022, inputCacheMiss: 0.66, output: 1.98 },
+  // Deprecated aliases remain mapped to Flash for legacy transcript replay only.
+  "deepseek-chat": { inputCacheHit: 0.007, inputCacheMiss: 0.22, output: 0.66 },
+  "deepseek-reasoner": { inputCacheHit: 0.007, inputCacheMiss: 0.22, output: 0.66 },
 };
+
+export const DEEPSEEK_PEAK_PRICING: typeof DEEPSEEK_PRICING = Object.fromEntries(
+  Object.entries(DEEPSEEK_PRICING).map(([model, pricing]) => [
+    model,
+    {
+      inputCacheHit: pricing.inputCacheHit * 2,
+      inputCacheMiss: pricing.inputCacheMiss * 2,
+      output: pricing.output * 2,
+    },
+  ]),
+) as typeof DEEPSEEK_PRICING;
 
 export type ModelPricing = (typeof DEEPSEEK_PRICING)[string];
 
-export function pricingFor(model: string, path?: string): ModelPricing | undefined {
-  const defaults = DEEPSEEK_PRICING[model];
+export interface ProviderPricingContext {
+  providerId?: string;
+  now?: number;
+}
+
+export function isDeepSeekPeakTime(now = Date.now()): boolean {
+  const date = new Date(now);
+  const hour = date.getUTCHours();
+  return (
+    date.getUTCDay() > 0 &&
+    date.getUTCDay() < 6 &&
+    ((hour >= 1 && hour < 4) || (hour >= 6 && hour < 10))
+  );
+}
+
+export function pricingFor(
+  model: string,
+  path?: string,
+  context: ProviderPricingContext = {},
+): ModelPricing | undefined {
+  const official = !context.providerId || context.providerId === "deepseek-official";
+  const defaults = official
+    ? (isDeepSeekPeakTime(context.now) ? DEEPSEEK_PEAK_PRICING : DEEPSEEK_PRICING)[model]
+    : undefined;
   const override = loadPricingOverride(path)[model];
   if (!override) return defaults;
   const pricing = { ...defaults, ...override };
@@ -35,7 +70,9 @@ export const CLAUDE_SONNET_PRICING = { input: 3.0, output: 15.0 };
 
 /** Prompt-side window only; completion caps live server-side and don't affect this gauge. */
 export const DEEPSEEK_CONTEXT_TOKENS: Record<string, number> = {
+  "deepseek-flash": 1_000_000,
   "deepseek-v4-flash": 1_000_000,
+  "deepseek-v4-flash-vision-exp": 1_000_000,
   "deepseek-v4-pro": 1_000_000,
   "deepseek-chat": 1_000_000,
   "deepseek-reasoner": 1_000_000,
@@ -55,8 +92,13 @@ export function resolveContextTokens(model: string, configPath?: string): number
  *  Each TurnStats holds usage + cost + model — at N=200 this caps memory at ~50KB. */
 export const MAX_TURNS = 200;
 
-export function costUsd(model: string, usage: Usage, path?: string): number {
-  const p = pricingFor(model, path);
+export function costUsd(
+  model: string,
+  usage: Usage,
+  path?: string,
+  context: ProviderPricingContext = {},
+): number {
+  const p = pricingFor(model, path, context);
   if (!p) return 0;
   return (
     (usage.promptCacheHitTokens * p.inputCacheHit +
@@ -67,8 +109,13 @@ export function costUsd(model: string, usage: Usage, path?: string): number {
 }
 
 /** Input-side cost only (prompt, cache hit + miss). Used for the panel breakdown. */
-export function inputCostUsd(model: string, usage: Usage, path?: string): number {
-  const p = pricingFor(model, path);
+export function inputCostUsd(
+  model: string,
+  usage: Usage,
+  path?: string,
+  context: ProviderPricingContext = {},
+): number {
+  const p = pricingFor(model, path, context);
   if (!p) return 0;
   return (
     (usage.promptCacheHitTokens * p.inputCacheHit +
@@ -78,15 +125,25 @@ export function inputCostUsd(model: string, usage: Usage, path?: string): number
 }
 
 /** Output-side cost only (completion tokens). Used for the panel breakdown. */
-export function outputCostUsd(model: string, usage: Usage, path?: string): number {
-  const p = pricingFor(model, path);
+export function outputCostUsd(
+  model: string,
+  usage: Usage,
+  path?: string,
+  context: ProviderPricingContext = {},
+): number {
+  const p = pricingFor(model, path, context);
   if (!p) return 0;
   return (usage.completionTokens * p.output) / 1_000_000;
 }
 
-export function cacheSavingsUsd(model: string, hitTokens: number, path?: string): number {
+export function cacheSavingsUsd(
+  model: string,
+  hitTokens: number,
+  path?: string,
+  context: ProviderPricingContext = {},
+): number {
   if (hitTokens <= 0) return 0;
-  const p = pricingFor(model, path);
+  const p = pricingFor(model, path, context);
   if (!p) return 0;
   return (hitTokens * (p.inputCacheMiss - p.inputCacheHit)) / 1_000_000;
 }
@@ -109,6 +166,8 @@ export interface TurnStats {
   usageComplete?: boolean;
   /** Prompt tokens from the final request, distinct from aggregate billable prompt tokens. */
   contextPromptTokens?: number;
+  providerId?: string;
+  recordedAt?: number;
 }
 
 export interface SessionSummary {
@@ -138,6 +197,8 @@ export class SessionStats {
   private _carryoverCompletion = 0;
   /** Last turn's promptTokens before exit — surfaced via summary() until the next live turn lands. */
   private _carryoverLastPromptTokens = 0;
+
+  constructor(private readonly pricingContext: ProviderPricingContext = {}) {}
 
   /** Seed totals from a resumed session's persisted meta — only call once at construction. */
   seedCarryover(opts: {
@@ -205,7 +266,11 @@ export class SessionStats {
     usage: Usage,
     meta: { usageComplete?: boolean; contextPromptTokens?: number } = {},
   ): TurnStats {
-    const cost = costUsd(model, usage);
+    const recordedAt = Date.now();
+    const cost = costUsd(model, usage, undefined, {
+      ...this.pricingContext,
+      now: recordedAt,
+    });
     const stats: TurnStats = {
       turn,
       model,
@@ -213,6 +278,8 @@ export class SessionStats {
       cost,
       cacheHitRatio: usage.cacheHitRatio,
       ...meta,
+      providerId: this.pricingContext.providerId,
+      recordedAt,
     };
     this.turns.push(stats);
     this.trimOldTurns();
@@ -220,8 +287,11 @@ export class SessionStats {
   }
 
   /** Fold external usage (e.g. subagent child-loop) into session totals without creating a turn entry. (#2008) */
-  recordExternal(model: string, usage: Usage): void {
-    this._carryoverCost += costUsd(model, usage);
+  recordExternal(model: string, usage: Usage, providerId?: string): void {
+    this._carryoverCost += costUsd(model, usage, undefined, {
+      ...this.pricingContext,
+      ...(providerId ? { providerId } : {}),
+    });
     this._carryoverCacheHit += usage.promptCacheHitTokens;
     this._carryoverCacheMiss += usage.promptCacheMissTokens;
     this._carryoverCompletion += usage.completionTokens;
@@ -256,11 +326,27 @@ export class SessionStats {
   }
 
   get totalInputCost(): number {
-    return this.turns.reduce((sum, t) => sum + inputCostUsd(t.model, t.usage), 0);
+    return this.turns.reduce(
+      (sum, t) =>
+        sum +
+        inputCostUsd(t.model, t.usage, undefined, {
+          providerId: t.providerId,
+          now: t.recordedAt,
+        }),
+      0,
+    );
   }
 
   get totalOutputCost(): number {
-    return this.turns.reduce((sum, t) => sum + outputCostUsd(t.model, t.usage), 0);
+    return this.turns.reduce(
+      (sum, t) =>
+        sum +
+        outputCostUsd(t.model, t.usage, undefined, {
+          providerId: t.providerId,
+          now: t.recordedAt,
+        }),
+      0,
+    );
   }
 
   get aggregateCacheHitRatio(): number {

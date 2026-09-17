@@ -219,7 +219,7 @@ export const JA: TranslationSchema = {
     newHint: "強制的に新規セッション（--session / --continue を無視）",
     transcriptHint: "JSONLトランスクリプトの書き込み先パス",
     budgetHint: "セッションのUSD上限 — 80%で警告、100%で次のターンを拒否",
-    modelIdHint: "DeepSeekモデルID（例: deepseek-v4-flash）",
+    modelIdHint: "DeepSeekモデルID（例: deepseek-flash）",
     systemPromptHint: "デフォルトのシステムプロンプトを上書き",
     effortHint: "推論努力 — low|medium|high|max",
     sessionNameHint: "セッション名（デフォルト: 'default'）",
@@ -267,7 +267,7 @@ export const JA: TranslationSchema = {
     mcpMaxPagesHint: "検索時に走査する最大ページ数（デフォルト20）",
     jsonHintCatalog: "JSONとして出力",
     jsonHintReport: "検査レポートをJSONとして出力",
-    modelOverrideFlash: "モデルを上書き（デフォルト: deepseek-v4-flash）",
+    modelOverrideFlash: "モデルを上書き（デフォルト: deepseek-flash）",
     skipConfirmHint: "確認プロンプトをスキップ",
     yoloHint:
       "この実行でプランチェックポイントを自動承認（editMode=yolo 相当、設定は変更しません）",
@@ -752,6 +752,7 @@ export const JA: TranslationSchema = {
     stormSuppressed:
       "{count} 件の繰り返しツール呼び出しを抑制 — 同じ名前+引数が3回以上発行されました。",
     compactingHistoryStatus: "履歴を圧縮中{aggressiveTag}…",
+    compactionUnchanged: "履歴の圧縮が終了しました。変更はありません。",
     aggressiveTag: "（強制）",
     foldedHistory:
       "コンテキスト {before}/{ctxMax} ({pct}%) — {beforeMessages} メッセージ → {afterMessages} に折りたたみ（サマリー {summaryChars} 文字）。続行します。",
@@ -1021,7 +1022,7 @@ export const JA: TranslationSchema = {
     },
     model: {
       modelHint:
-        "deepseek-v4-flash または deepseek-v4-pro を試してください — /models で最新リストを取得",
+        "deepseek-flash または deepseek-v4-pro を試してください — /models で最新リストを取得",
       modelUsage: "使い方: /model <id>   ({hint})",
       modelNotInCatalog:
         "model → {id}   （⚠ 取得済みカタログにありません: {list}。間違いの場合、次の呼び出しが400になります — /models で更新してください。）",

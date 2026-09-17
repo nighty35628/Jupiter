@@ -768,7 +768,7 @@ export function useTelegramChannel({
       "pro",
       ...((models && models.length > 0
         ? models
-        : ["deepseek-v4-flash", "deepseek-v4-pro"]) as string[]),
+        : ["deepseek-flash", "deepseek-v4-pro"]) as string[]),
     ],
     [],
   );

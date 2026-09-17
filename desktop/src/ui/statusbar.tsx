@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState, type RefObject } from "react";
+import { useQuickSettingsFocus } from "./overlay-focus";
 import { I } from "../icons";
 import { t } from "../i18n";
 import type { Balance, UsageStats } from "../App";
@@ -52,6 +53,7 @@ export function SettingsStatusCard({
   onToggleCurrency,
   onOpenSettings,
   onClose,
+  returnFocus,
 }: {
   balance: Balance | null;
   usage: UsageStats;
@@ -66,7 +68,10 @@ export function SettingsStatusCard({
   onToggleCurrency: () => void;
   onOpenSettings: () => void;
   onClose: () => void;
+  returnFocus?: RefObject<HTMLElement | null>;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  useQuickSettingsFocus(dialogRef, onClose, returnFocus);
   const sessionPromptTokens =
     usage.totalPromptTokens || usage.cacheHitTokens + usage.cacheMissTokens;
   const liveContextTokens = usage.reservedTokens + usage.liveLogTokens;
@@ -85,7 +90,7 @@ export function SettingsStatusCard({
 
   return (
     <div className="settings-card-layer" onMouseDown={onClose}>
-      <section className="settings-card" onMouseDown={(e) => e.stopPropagation()}>
+      <section ref={dialogRef} className="settings-card" role="dialog" aria-modal="true" aria-label={t("settings.title")} tabIndex={-1} onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-card-head">
           <div>
             <div className="settings-card-title">Jupiter</div>

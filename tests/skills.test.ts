@@ -275,7 +275,7 @@ describe("SkillStore", () => {
       });
       const byName = new Map(store.list().map((s) => [s.name, s]));
       expect(byName.get("explore")?.model).toBe("deepseek-v4-pro");
-      expect(byName.get("review")?.model).toBe("deepseek-v4-flash");
+      expect(byName.get("review")?.model).toBe("deepseek-flash");
     });
 
     it("leaves inline skills (test) untouched even when their name appears in the override map", () => {
@@ -330,7 +330,7 @@ describe("SkillStore", () => {
         subagentModels: { "custom-sub": "flash" },
       });
       const sub = store.list().find((s) => s.name === "custom-sub");
-      expect(sub?.model).toBe("deepseek-v4-flash");
+      expect(sub?.model).toBe("deepseek-flash");
     });
   });
 

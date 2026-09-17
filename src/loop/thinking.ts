@@ -1,7 +1,9 @@
+import { isOfficialDeepSeekV4Model } from "../provider-capabilities.js";
+
 /** True when the model emits reasoning_content and requires it round-tripped on follow-ups. */
 export function isThinkingModeModel(model: string): boolean {
   if (model.includes("reasoner")) return true;
-  if (model === "deepseek-v4-flash" || model === "deepseek-v4-pro") return true;
+  if (isOfficialDeepSeekV4Model(model)) return true;
   return false;
 }
 
@@ -12,7 +14,7 @@ export function thinkingModeForModel(
 ): "enabled" | "disabled" | undefined {
   if (model === "deepseek-chat") return "disabled";
   if (model.includes("reasoner")) return "enabled";
-  if (model === "deepseek-v4-flash" || model === "deepseek-v4-pro") {
+  if (isOfficialDeepSeekV4Model(model)) {
     return thinkingEnabled ? "enabled" : "disabled";
   }
   return undefined;

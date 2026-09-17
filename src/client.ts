@@ -1,9 +1,17 @@
 import { type EventSourceMessage, createParser } from "eventsource-parser";
+import { FilesUnavailable, ImageFileCache, isExpiredImageResponse } from "./attachments/files.js";
+import {
+  type ImageRequestSnapshot,
+  type WireMessage,
+  projectImages,
+} from "./attachments/projection.js";
+import { type AttachmentStore, attachments } from "./attachments/store.js";
 import { loadRateLimit, resolveBaseUrlEnv } from "./config.js";
 import {
+  DEEPSEEK_FLASH_ALIASES,
+  type ProviderDialect,
   isStrictOfficialDeepSeekEndpoint,
   normalizeOfficialDeepSeekEffort,
-  resolveModelCapability,
 } from "./provider-capabilities.js";
 import { providerHttpErrorFromResponse } from "./provider-http-error.js";
 import { type RetryOptions, fetchWithRetry } from "./retry.js";
@@ -37,13 +45,14 @@ export class Usage {
     );
   }
 
-  static fromApi(raw: RawUsage | undefined | null): Usage {
+  static fromApi(raw: RawUsage | undefined | null, inferCacheMiss = true): Usage {
     const u = raw ?? {};
     const promptTokens = u.prompt_tokens ?? u.prompt_eval_count ?? 0;
     const completionTokens = u.completion_tokens ?? u.eval_count ?? 0;
     const cacheHitTokens = u.prompt_cache_hit_tokens ?? 0;
     const cacheMissTokens =
-      u.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - cacheHitTokens);
+      u.prompt_cache_miss_tokens ??
+      (inferCacheMiss ? Math.max(0, promptTokens - cacheHitTokens) : 0);
     return new Usage(
       promptTokens,
       completionTokens,
@@ -143,6 +152,9 @@ export interface ModelList {
 }
 
 export interface DeepSeekClientOptions {
+  visionModels?: readonly string[];
+  imageTransport?: "auto" | "inline";
+  attachmentStore?: AttachmentStore;
   apiKey?: string;
   baseUrl?: string;
   timeoutMs?: number;
@@ -151,6 +163,50 @@ export interface DeepSeekClientOptions {
   rateLimit?: { rpm?: number };
   /** Retry configuration. Pass `{ maxAttempts: 1 }` to disable retries. */
   retry?: RetryOptions;
+  /** Explicit wire preset. Custom endpoints must not be classified from model names. */
+  dialect?: ProviderDialect;
+  /** Non-secret stable id used for session/usage attribution. */
+  providerId?: string;
+}
+
+export function projectMessagesForDialect(
+  messages: readonly ChatMessage[],
+  dialect: ProviderDialect,
+): ChatMessage[] {
+  return messages.map(
+    ({ attachments: _images, sourceAttachments: _sources, clientId: _id, ...message }) => {
+      if (dialect === "deepseek") return message;
+      const { reasoning_content: _reasoning, prefix: _prefix, ...plain } = message;
+      return plain;
+    },
+  );
+}
+
+function normalizeToolCalls(value: unknown): ToolCall[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("Provider response tool_calls must be an array.");
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error(`Provider response tool call ${index} is invalid.`);
+    }
+    const call = entry as Record<string, any>;
+    if (typeof call.id !== "string" || !call.id) {
+      throw new Error(`Provider response tool call ${index} is missing an id.`);
+    }
+    if (
+      !call.function ||
+      typeof call.function.name !== "string" ||
+      !call.function.name ||
+      typeof call.function.arguments !== "string"
+    ) {
+      throw new Error(`Provider response tool call ${index} has an invalid function payload.`);
+    }
+    return {
+      id: call.id,
+      type: "function",
+      function: { name: call.function.name, arguments: call.function.arguments },
+    };
+  });
 }
 
 // DeepSeek's strict JSON parser rejects lone UTF-16 surrogate escapes
@@ -197,11 +253,19 @@ function stringifyJsonTransport(value: unknown): string {
 }
 
 export class DeepSeekClient {
+  readonly attachmentStore: AttachmentStore;
+  readonly imageTransport: "auto" | "inline";
+  readonly visionModels: readonly string[];
+  lastImageRequest: ImageRequestSnapshot | null = null;
+  private readonly imageFiles: ImageFileCache;
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly timeoutMs: number;
   readonly streamIdleTimeoutMs: number;
   readonly retry: RetryOptions;
+  readonly dialect: ProviderDialect;
+  readonly providerId: string;
+  readonly officialDeepSeek: boolean;
   private readonly _fetch: typeof fetch;
   private readonly minChatIntervalMs: number;
   private nextChatRequestAt = 0;
@@ -218,6 +282,18 @@ export class DeepSeekClient {
     // Manual trim — `/\/+$/` is O(n²) on slash-heavy non-matches per CodeQL js/polynomial-redos.
     while (url.endsWith("/")) url = url.slice(0, -1);
     this.baseUrl = url;
+    this.officialDeepSeek = isStrictOfficialDeepSeekEndpoint(this.baseUrl);
+    this.dialect = opts.dialect ?? (this.officialDeepSeek ? "deepseek" : "openai-compatible");
+    this.providerId = opts.providerId ?? (this.officialDeepSeek ? "deepseek-official" : "custom");
+    this.attachmentStore = opts.attachmentStore ?? attachments;
+    this.imageTransport = opts.imageTransport ?? "auto";
+    this.visionModels = opts.visionModels ?? [];
+    this.imageFiles = new ImageFileCache({
+      baseUrl: this.baseUrl,
+      apiKey: this.apiKey,
+      fetch: opts.fetch ?? globalThis.fetch.bind(globalThis),
+      root: this.attachmentStore.root,
+    });
     // 11 min. DeepSeek's load-balancer may keep a connection open for
     // up to 10 minutes while the request waits in queue (non-streaming
     // sends empty lines, streaming sends `:` SSE keep-alive comments —
@@ -257,38 +333,114 @@ export class DeepSeekClient {
     });
   }
 
-  private buildPayload(opts: ChatRequestOptions, stream: boolean) {
+  supportsImages(model: string): boolean {
+    return this.officialDeepSeek
+      ? DEEPSEEK_FLASH_ALIASES.has(model)
+      : this.visionModels.includes(model);
+  }
+
+  private buildPayload(opts: ChatRequestOptions, stream: boolean, messages?: WireMessage[]) {
     const payload: Record<string, unknown> = {
       model: opts.model,
-      messages: opts.messages,
+      messages: messages ?? projectMessagesForDialect(opts.messages, this.dialect),
       stream,
     };
-    if (stream) payload.stream_options = { include_usage: true };
+    if (stream && this.dialect === "deepseek") payload.stream_options = { include_usage: true };
     if (opts.tools?.length) payload.tools = opts.tools;
     if (opts.temperature !== undefined) payload.temperature = opts.temperature;
     if (opts.maxTokens !== undefined) payload.max_tokens = opts.maxTokens;
     if (opts.responseFormat) payload.response_format = opts.responseFormat;
-    const capability = resolveModelCapability(this.baseUrl, opts.model);
-    if (opts.thinking) {
-      if (capability.dialect === "deepseek") {
-        // This client sends raw HTTP. `extra_body` is only an OpenAI SDK
-        // escape hatch; DeepSeek's wire contract requires a top-level field.
-        payload.thinking = { type: opts.thinking };
-      } else if (capability.dialect === "openai-compatible") {
-        // Preserve the legacy custom-gateway request shape. A future explicit
-        // dialect setting can opt compatible gateways into DeepSeek's wire form.
-        payload.extra_body = { thinking: { type: opts.thinking } };
-      }
+    if (opts.thinking && this.dialect === "deepseek") {
+      payload.thinking = { type: opts.thinking };
     }
-    if (
-      opts.reasoningEffort &&
-      !(capability.dialect === "deepseek" && opts.thinking === "disabled")
-    ) {
-      payload.reasoning_effort = capability.officialDeepSeekV4
+    if (opts.reasoningEffort && this.dialect === "deepseek" && opts.thinking !== "disabled") {
+      payload.reasoning_effort = this.officialDeepSeek
         ? normalizeOfficialDeepSeekEffort(opts.reasoningEffort)
         : opts.reasoningEffort;
     }
     return payload;
+  }
+
+  private async request(
+    opts: ChatRequestOptions,
+    stream: boolean,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const hasImages = opts.messages.some(
+      (message) => message.attachments?.length || message.sourceAttachments?.length,
+    );
+    let files = hasImages && this.officialDeepSeek && this.imageTransport === "auto";
+    let recoveredFile = false;
+    const budget = {
+      attempts: 0,
+      maxAttempts: opts.disableRetry ? 1 : (this.retry.maxAttempts ?? 6),
+    };
+    for (;;) {
+      let messages: WireMessage[] | undefined;
+      if (hasImages) {
+        try {
+          const projected = await projectImages(opts.messages, {
+            supportsImages: this.supportsImages(opts.model),
+            store: this.attachmentStore,
+            signal,
+            ...(files
+              ? {
+                  fileForImage: (_image, data, mime) => this.imageFiles.resolve(data, mime, signal),
+                }
+              : {}),
+          });
+          messages = projected.messages.map((message) => {
+            if (this.dialect === "deepseek") return message;
+            const { reasoning_content: _reasoning, prefix: _prefix, ...plain } = message;
+            return plain;
+          });
+          this.lastImageRequest = projected.snapshot;
+        } catch (error) {
+          if (files && error instanceof FilesUnavailable) {
+            files = false;
+            continue;
+          }
+          throw error;
+        }
+      } else this.lastImageRequest = null;
+      const body = stringifyJsonTransport(this.buildPayload(opts, stream, messages));
+      if (hasImages && Buffer.byteLength(body) > 40 * 1024 * 1024)
+        throw Object.assign(
+          new Error(
+            "Image request exceeds the 40 MiB safety budget; send fewer images or compact the conversation",
+          ),
+          { status: 413 },
+        );
+      const response = await fetchWithRetry(
+        this._fetch,
+        chatCompletionsUrl(this.baseUrl, opts.betaPrefix),
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+            ...(stream ? { Accept: "text/event-stream" } : {}),
+          },
+          body,
+          signal,
+          redirect: "error",
+        },
+        { ...this.retry, budget, ...(opts.disableRetry ? { maxAttempts: 1 } : {}), signal },
+      );
+      if (
+        files &&
+        !recoveredFile &&
+        budget.attempts < budget.maxAttempts &&
+        (await isExpiredImageResponse(response))
+      ) {
+        await response.body?.cancel();
+        await this.imageFiles.invalidate();
+        recoveredFile = true;
+        files = false;
+        continue;
+      }
+      return response;
+    }
   }
 
   /** Returns null on failure so callers can degrade — session must keep working without balance UI. */
@@ -339,21 +491,7 @@ export class DeepSeekClient {
 
     try {
       await this.waitForChatRateLimit(signal);
-      const resp = await fetchWithRetry(
-        this._fetch,
-        chatCompletionsUrl(this.baseUrl, opts.betaPrefix),
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: stringifyJsonTransport(this.buildPayload(opts, false)),
-          signal,
-          redirect: "error",
-        },
-        { ...this.retry, ...(opts.disableRetry ? { maxAttempts: 1 } : {}), signal },
-      );
+      const resp = await this.request(opts, false, signal);
       if (!resp.ok) {
         throw await providerHttpErrorFromResponse(resp, {
           baseUrl: this.baseUrl,
@@ -361,14 +499,29 @@ export class DeepSeekClient {
         });
       }
       const data: any = await resp.json();
-      const responseChoice = data.choices?.[0] ?? {};
-      const choice = responseChoice.message ?? {};
+      const openAiChoice = Array.isArray(data?.choices) ? data.choices[0] : undefined;
+      const ollamaNative =
+        data?.message &&
+        typeof data.message === "object" &&
+        typeof data.message.content === "string" &&
+        (typeof data.prompt_eval_count === "number" ||
+          typeof data.eval_count === "number" ||
+          typeof data.done === "boolean" ||
+          typeof data.done_reason === "string");
+      if (!openAiChoice?.message && !ollamaNative) {
+        throw new Error("Provider returned HTTP 200 without a Chat Completions choice.");
+      }
+      const responseChoice = openAiChoice ?? {
+        message: data.message,
+        finish_reason: data.done_reason ?? (data.done ? "stop" : undefined),
+      };
+      const choice = responseChoice.message;
       const rawUsage = data.usage ?? (Usage.hasApiUsage(data) ? data : undefined);
       return {
         content: choice.content ?? "",
         reasoningContent: choice.reasoning_content ?? null,
-        toolCalls: choice.tool_calls ?? [],
-        usage: Usage.fromApi(rawUsage),
+        toolCalls: normalizeToolCalls(choice.tool_calls),
+        usage: Usage.fromApi(rawUsage, this.dialect === "deepseek"),
         usageComplete: Usage.hasApiUsage(rawUsage),
         finishReason: normalizeChatFinishReason(responseChoice.finish_reason),
         raw: data,
@@ -395,22 +548,7 @@ export class DeepSeekClient {
       // Only the initial fetch is retried. Once the server has started sending
       // the stream body we do NOT retry — a mid-stream retry would re-bill and
       // desync the session context.
-      resp = await fetchWithRetry(
-        this._fetch,
-        chatCompletionsUrl(this.baseUrl, opts.betaPrefix),
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            "Content-Type": "application/json",
-            Accept: "text/event-stream",
-          },
-          body: stringifyJsonTransport(this.buildPayload(opts, true)),
-          signal,
-          redirect: "error",
-        },
-        { ...this.retry, ...(opts.disableRetry ? { maxAttempts: 1 } : {}), signal },
-      );
+      resp = await this.request(opts, true, signal);
     } catch (err) {
       clearTimeout(timer);
       throw err;
@@ -428,7 +566,7 @@ export class DeepSeekClient {
     }
 
     const queue: StreamChunk[] = [];
-    const requireDoneMarker = isStrictOfficialDeepSeekEndpoint(this.baseUrl);
+    const requireDoneMarker = this.officialDeepSeek;
     let done = false;
     let sawDoneMarker = false;
     let sawTerminalFinishReason = false;
@@ -444,6 +582,11 @@ export class DeepSeekClient {
         }
         try {
           const json = JSON.parse(ev.data);
+          if (json?.error) {
+            const detail =
+              typeof json.error?.message === "string" ? json.error.message : "unknown error";
+            throw new Error(`Provider stream error: ${detail}`);
+          }
           const delta = json.choices?.[0]?.delta ?? {};
           const rawFinishReason = json.choices?.[0]?.finish_reason;
           const finishReason =
@@ -468,7 +611,7 @@ export class DeepSeekClient {
           }
           const rawUsage = json.usage ?? (Usage.hasApiUsage(json) ? json : undefined);
           if (rawUsage) {
-            chunk.usage = Usage.fromApi(rawUsage);
+            chunk.usage = Usage.fromApi(rawUsage, this.dialect === "deepseek");
           }
           queue.push(chunk);
         } catch (err) {

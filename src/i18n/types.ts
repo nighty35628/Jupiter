@@ -305,6 +305,7 @@ export interface TranslationSchema {
     stormStuck: string;
     stormSuppressed: string;
     compactingHistoryStatus: string;
+    compactionUnchanged: string;
     aggressiveTag: string;
     foldedHistory: string;
     aggressivelyFoldedHistory: string;

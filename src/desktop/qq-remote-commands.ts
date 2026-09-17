@@ -121,7 +121,7 @@ export function qqRemoteDesktopHelpText(skillNames: Iterable<string>): string {
     "- /session new",
     "- /workspace list",
     "- /workspace switch <number|path>",
-    "- /model <flash|pro|deepseek-v4-flash|deepseek-v4-pro>",
+    "- /model <flash|pro|deepseek-flash|deepseek-v4-pro>",
     "- /effort <off|medium|high|max>",
     "- /plan <review|auto|yolo>",
     "- /btw <question>",

@@ -66,25 +66,26 @@ function renderSummary(report: BenchReport): string {
   const byMode: Record<RunMode, RunResult[]> = { baseline: [], jupiter: [] };
   for (const r of report.results) byMode[r.mode].push(r);
   const b = aggregate(byMode.baseline);
-  const rx = aggregate(byMode.jupiter);
+  const jupiter = aggregate(byMode.jupiter);
 
-  const costRatio = b.avgCost > 0 ? rx.avgCost / b.avgCost : 0;
-  const claudeSavings = b.avgClaudeCost > 0 ? (1 - rx.avgCost / b.avgClaudeCost) * 100 : 0;
+  const costRatio = b.avgCost > 0 ? jupiter.avgCost / b.avgCost : 0;
+  const claudeSavings =
+    b.avgClaudeCost > 0 ? (1 - jupiter.avgCost / b.avgClaudeCost) * 100 : 0;
 
   return `
 ## Summary
 
 | metric | baseline | jupiter | delta |
 |---|---:|---:|---:|
-| runs | ${b.runs} | ${rx.runs} | — |
-| pass rate | ${pct(b.passes, b.runs)} | ${pct(rx.passes, rx.runs)} | ${signPct(rx.passes, rx.runs, b.passes, b.runs)} |
-| cache hit | ${pct1(b.avgCache)} | ${pct1(rx.avgCache)} | **${signPctAbs(rx.avgCache - b.avgCache)}** |
-| mean cost / task | $${fmt(b.avgCost, 6)} | $${fmt(rx.avgCost, 6)} | ${costRatio > 0 ? `×${fmt(costRatio, 2)}` : "—"} |
-| mean turns | ${fmt(b.avgTurns, 1)} | ${fmt(rx.avgTurns, 1)} | — |
-| mean tool calls | ${fmt(b.avgToolCalls, 1)} | ${fmt(rx.avgToolCalls, 1)} | — |
+| runs | ${b.runs} | ${jupiter.runs} | — |
+| pass rate | ${pct(b.passes, b.runs)} | ${pct(jupiter.passes, jupiter.runs)} | ${signPct(jupiter.passes, jupiter.runs, b.passes, b.runs)} |
+| cache hit | ${pct1(b.avgCache)} | ${pct1(jupiter.avgCache)} | **${signPctAbs(jupiter.avgCache - b.avgCache)}** |
+| mean cost / task | $${fmt(b.avgCost, 6)} | $${fmt(jupiter.avgCost, 6)} | ${costRatio > 0 ? `×${fmt(costRatio, 2)}` : "—"} |
+| mean turns | ${fmt(b.avgTurns, 1)} | ${fmt(jupiter.avgTurns, 1)} | — |
+| mean tool calls | ${fmt(b.avgToolCalls, 1)} | ${fmt(jupiter.avgToolCalls, 1)} | — |
 
 **Jupiter vs Claude Sonnet 4.6 (estimated, same token counts):**
-Claude would cost ~$${fmt(rx.avgClaudeCost, 6)} / task, so Jupiter saves ~${fmt(
+Claude would cost ~$${fmt(jupiter.avgClaudeCost, 6)} / task, so Jupiter saves ~${fmt(
     claudeSavings,
     1,
   )}%.

@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
+import { type ImageAttachment, messageImageTokens } from "./attachments/types.js";
 import { LruCache } from "./core/lru.js";
 
 interface AddedToken {
@@ -548,6 +549,8 @@ function cachedBoundedTokens(s: string): number {
 
 function tokensForMessage(
   m: {
+    attachments?: ImageAttachment[];
+    sourceAttachments?: ImageAttachment[];
     role?: string;
     content?: string | null;
     tool_calls?: unknown;
@@ -555,7 +558,7 @@ function tokensForMessage(
   },
   dropThisReasoning: boolean,
 ): number {
-  let n = 0;
+  let n = messageImageTokens(m);
   if (typeof m.content === "string" && m.content.length > 0) {
     n += cachedBoundedTokens(m.content);
   }

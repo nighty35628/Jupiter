@@ -68,7 +68,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 桌面安装包发布在 GitHub Releases：
 
-- 当前版本：`desktop-v1.0.8`，2026-08-14 发布
+- 当前版本：`desktop-v1.0.9`，2026-09-18 发布
 - [最新版本](https://github.com/nighty35628/Jupiter/releases/latest)
 - [全部版本](https://github.com/nighty35628/Jupiter/releases)
 
@@ -118,9 +118,39 @@ jupiter
 ```bash
 jupiter              # 在当前目录启动 coding agent
 jupiter chat         # 启动普通聊天/TUI
+jupiter web [目录]   # 启动 Web Beta（默认仅本机）
 jupiter setup        # 重新配置 API key、语言、主题和 MCP
 jupiter --help
 ```
+
+第三方 DeepSeek 或 OpenAI 兼容 Chat Completions 服务可以在 Desktop 的 **设置 -> 模型** 中配置、测试并保存。
+纯 CLI 环境可以使用：
+
+```bash
+jupiter setup \
+  --provider-url https://example.com/v1 \
+  --provider-protocol openai-compatible \
+  --provider-model your-model-id \
+  --provider-key sk-...
+```
+
+`--provider-protocol` 支持 `auto`、`deepseek` 和 `openai-compatible`。DeepSeek 协议会发送 `thinking`、
+reasoning 和缓存统计等扩展字段；普通兼容端点不会收到这些字段。供应商修改只用于新对话，已有会话会绑定原端点，
+防止历史上下文被静默发送给另一个服务。第三方价格未知时 Jupiter 不会套用官方 DeepSeek 价格。
+
+Web Beta 默认只监听 `127.0.0.1`，复用当前 Desktop 界面、会话与 agent 运行时。浏览器文件通过授权工作区和上传/下载流转；多个已配对设备可以观察，但同一时刻只有一个设备持有写入租约。Desktop 与 Web 同时打开同一会话时也会启用跨进程单写保护。
+
+局域网使用 `--access lan`；公网使用 `--access public`，并且必须放在带身份验证的 HTTPS 反向代理后，Jupiter 本身仍只绑定回环地址。公网模式固定关闭终端、MCP 写入、Git 写入和密钥写入。完整命令、能力差异与代理示例见 [Web Beta 访问指南](docs/web-beta.md)。
+
+### 图片对话 Beta
+
+在 Desktop 或 Web 选择 `deepseek-flash` 后，可以粘贴截图、拖入图片，或通过输入框的“添加文件”选择图片。
+支持 PNG、JPEG、WebP、GIF；每条最多 12 张、单张原始文件不超过 20 MiB，动图只使用首帧。图片会先归一化、压缩并持久保存，
+缩略图可打开大图；纯图片、询问模式、排队、编辑和失败恢复都会保留附件。
+
+第三方接口需要在 **设置 -> 模型** 勾选“此模型支持图片输入”，并确认服务端支持 Chat Completions 的图片格式。
+官方 Pro 不支持直接附图，也不会自动转发给其他模型。图片传输方式默认自动，第三方始终使用内联传输。
+Markdown 导出包含附件说明，不包含图片本体。详细资源限制、清理策略和测试记录见 [多模态实现说明](docs/codebase/multimodal-implementation.md)。
 
 ### 开发
 
@@ -217,7 +247,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 Desktop installers are published on GitHub Releases:
 
-- Current version: `desktop-v1.0.8`, released on 2026-08-14
+- Current version: `desktop-v1.0.9`, released on 2026-09-18
 - [Latest Release](https://github.com/nighty35628/Jupiter/releases/latest)
 - [All Releases](https://github.com/nighty35628/Jupiter/releases)
 
@@ -270,9 +300,42 @@ Common commands:
 ```bash
 jupiter              # start the coding agent in the current directory
 jupiter chat         # start plain chat/TUI mode
+jupiter web [dir]    # start Web Beta (localhost by default)
 jupiter setup        # reconfigure API key, language, theme, and MCP
 jupiter --help
 ```
+
+Third-party DeepSeek or OpenAI-compatible Chat Completions services can be configured and tested under
+**Settings -> Models** in Desktop. In a CLI-only environment, use:
+
+```bash
+jupiter setup \
+  --provider-url https://example.com/v1 \
+  --provider-protocol openai-compatible \
+  --provider-model your-model-id \
+  --provider-key sk-...
+```
+
+`--provider-protocol` accepts `auto`, `deepseek`, or `openai-compatible`. The DeepSeek preset sends supported
+thinking, reasoning, and cache extensions; the generic preset strips those fields. Provider changes apply only to new
+conversations, while existing sessions remain bound to their original endpoint. Jupiter does not apply official
+DeepSeek prices to third-party usage when pricing is unknown.
+
+Web Beta listens on `127.0.0.1` by default and reuses the current Desktop UI, sessions, and agent runtime. Browser files flow through approved workspaces and upload/download APIs. Multiple paired devices may observe, while only one device holds the writer lease at a time. A cross-process single-writer lock also protects a session opened by Desktop and Web simultaneously.
+
+Use `--access lan` on a private network. Public access uses `--access public` behind an authenticated HTTPS reverse proxy while Jupiter remains bound to loopback. Public mode always disables terminals, MCP writes, Git writes, and secret writes. See the [Web Beta access guide](docs/web-beta.md) for commands, capability differences, and proxy configuration.
+
+### Image Conversations Beta
+
+Select `deepseek-flash` in Desktop or Web, then paste, drop, or pick PNG, JPEG, WebP or GIF images.
+A message accepts up to 12 images of at most 20 MiB each; animated formats use their first frame. Images are normalized,
+compressed and saved before submission. Previews, image-only messages, Ask, queues, edits and recovery retain attachments.
+
+For third-party endpoints, enable **Settings -> Models -> This model supports image input** only when the endpoint
+supports Chat Completions image content. Official Pro does not accept images or silently route them to
+another model. Third-party endpoints always use inline images; official transport defaults to automatic Files reuse.
+Markdown exports describe attachments but do not embed their bytes. See [Multimodal implementation](docs/codebase/multimodal-implementation.md)
+for limits, retention and verification details.
 
 ### Development
 
@@ -309,4 +372,4 @@ Jupiter is licensed under the GNU General Public License v3.0 or later (`GPL-3.0
 under the project CLA in [`CLA.md`](./CLA.md), which grants the project owner the right to maintain, relicense, and
 offer separate commercial licensing where needed.
 
-Required source-only upstream notice is kept in `src/legal/upstream-notice.ts`.
+Required upstream attribution is kept in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md), outside the runtime source tree.

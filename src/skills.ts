@@ -98,7 +98,7 @@ function parseAllowedTools(raw: string | undefined): readonly string[] | undefin
 
 /** flash/pro preset → concrete deepseek model id. Kept local so this file doesn't import the CLI preset bundle. */
 function subagentModelForPreset(preset: "flash" | "pro"): string {
-  return preset === "pro" ? "deepseek-v4-pro" : "deepseek-v4-flash";
+  return preset === "pro" ? "deepseek-v4-pro" : "deepseek-flash";
 }
 
 export class SkillStore {

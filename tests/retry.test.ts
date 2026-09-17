@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchWithRetry } from "../src/retry.js";
+import { DEFAULT_API_RETRIES, fetchWithRetry } from "../src/retry.js";
 
 function makeFetch(responses: Array<Response | Error | (() => Response | Error)>): {
   fn: typeof fetch;
@@ -71,6 +71,21 @@ describe("fetchWithRetry", () => {
     const r = await fetchWithRetry(f.fn, "https://x", {}, BASE);
     expect(r.status).toBe(200);
     expect(f.calls).toBe(2);
+  });
+
+  it("retries a network failure five times by default", async () => {
+    const err = new TypeError("connection refused");
+    const f = makeFetch([err]);
+    const onRetry = vi.fn();
+
+    await expect(fetchWithRetry(f.fn, "https://x", {}, { ...BASE, onRetry })).rejects.toThrow(
+      /connection refused/,
+    );
+
+    expect(DEFAULT_API_RETRIES).toBe(5);
+    expect(f.calls).toBe(6);
+    expect(onRetry).toHaveBeenCalledTimes(5);
+    expect(onRetry.mock.calls.map(([info]) => info.attempt)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("gives up after maxAttempts and rethrows the last network error", async () => {

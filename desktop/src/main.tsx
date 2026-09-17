@@ -11,6 +11,7 @@ import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 import "katex/dist/katex.min.css";
 import { createRoot } from "react-dom/client";
+import { isTauri } from "@tauri-apps/api/core";
 import { THEME, defaultStyleForTheme, isTheme, isThemeStyle, themeForStyle } from "./theme";
 
 const stored = localStorage.getItem("jupiter.theme");
@@ -34,6 +35,11 @@ const platform = /Mac|macOS/i.test(navigator.userAgent)
     : "default";
 document.documentElement.dataset.platform = platform;
 document.body.dataset.platform = platform;
+const nativeWindow = isTauri();
+document.documentElement.dataset.nativeWindow = String(nativeWindow);
+document.body.dataset.nativeWindow = String(nativeWindow);
+document.documentElement.dataset.runtime = nativeWindow ? "desktop" : "web";
+document.body.dataset.runtime = nativeWindow ? "desktop" : "web";
 
 const isPetOverlay = new URLSearchParams(window.location.search).get("window") === "pet-overlay";
 if (isPetOverlay) {

@@ -1,10 +1,20 @@
 import { COMPACTION_SUMMARY_MARKER } from "@jupiter/core-utils";
+import type { ImageRequestSnapshot } from "../attachments/projection.js";
+import { messageImageTokens } from "../attachments/types.js";
 import type { Usage } from "../client.js";
 import { countTokensBounded } from "../tokenizer.js";
 import type { ChatMessage, ToolSpec } from "../types.js";
 import { type SessionSummary, resolveContextTokens } from "./stats.js";
 
 export interface ContextDiagnostics {
+  images?: {
+    attached: number;
+    retained: number;
+    request: number;
+    omitted: number;
+    estimatedTokens: number;
+    transport?: string;
+  };
   systemTokens: number;
   toolsTokens: number;
   logTokens: number;
@@ -33,6 +43,7 @@ export interface ContextDiagnosticsInput {
 }
 
 export interface ContextDiagnosticsLoopLike {
+  client?: { lastImageRequest?: ImageRequestSnapshot | null };
   prefix: {
     system: string;
     toolSpecs: readonly ToolSpec[];
@@ -80,7 +91,7 @@ export function computeContextDiagnosticsFromLoop(
   const summary = loop.stats?.summary();
   const turns = loop.stats?.turns ?? [];
   const lastUsage = turns[turns.length - 1]?.usage ?? null;
-  return computeContextDiagnostics({
+  const result = computeContextDiagnostics({
     systemPrompt: loop.prefix.system,
     toolSpecs: loop.prefix.toolSpecs,
     messages: loop.log.toFullHistory(),
@@ -88,6 +99,25 @@ export function computeContextDiagnosticsFromLoop(
     summary,
     lastUsage,
   });
+  const messages = loop.log.toFullHistory();
+  const attached = messages.reduce(
+    (count, message) => count + (message.attachments?.length ?? 0),
+    0,
+  );
+  const retained = messages.reduce(
+    (count, message) => count + (message.sourceAttachments?.length ?? 0),
+    0,
+  );
+  if (attached || retained)
+    result.images = {
+      attached,
+      retained,
+      request: loop.client?.lastImageRequest?.sent.length ?? 0,
+      omitted: loop.client?.lastImageRequest?.omitted.length ?? 0,
+      estimatedTokens: messages.reduce((total, message) => total + messageImageTokens(message), 0),
+      transport: loop.client?.lastImageRequest?.transport,
+    };
+  return result;
 }
 
 export function estimateMemoryTokens(systemPrompt: string): number {
@@ -115,12 +145,12 @@ function computeLogDiagnostics(messages: readonly ChatMessage[]): {
   for (const message of messages) {
     const content = typeof message.content === "string" ? message.content : "";
     if (message.role === "user") {
-      userTokens += countTokensBounded(content);
+      userTokens += countTokensBounded(content) + messageImageTokens(message);
       logTurn += 1;
       continue;
     }
     if (message.role === "assistant") {
-      const contentTokens = countTokensBounded(content);
+      const contentTokens = countTokensBounded(content) + messageImageTokens(message);
       assistantTokens += contentTokens;
       if (content.startsWith(COMPACTION_SUMMARY_MARKER)) {
         summaryTokens += contentTokens;
@@ -131,7 +161,7 @@ function computeLogDiagnostics(messages: readonly ChatMessage[]): {
       continue;
     }
     if (message.role === "tool") {
-      const tokens = countTokensBounded(content);
+      const tokens = countTokensBounded(content) + messageImageTokens(message);
       toolResultTokens += tokens;
       toolBreakdown.push({ name: message.name ?? "?", tokens, turn: logTurn });
     }

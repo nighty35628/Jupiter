@@ -15,6 +15,7 @@ import {
 } from "./index/config.js";
 import { type McpServerSpec, parseMcpSpec } from "./mcp/spec.js";
 import { isStrictOfficialDeepSeekEndpoint } from "./provider-capabilities.js";
+import { normalizeProviderBaseUrl } from "./provider-url.js";
 import { normalizeQQAllowlist, normalizeQQOpenId } from "./qq/access.js";
 import type { SkillPackSource } from "./skill-packs.js";
 import { normalizeTelegramAllowlist, normalizeTelegramUserId } from "./telegram/access.js";
@@ -27,6 +28,7 @@ import {
 /** Single trust dial: review queues edits + gates shell; auto applies + gates shell; yolo skips both gates; plan blocks every non-readonly tool (write_file / edit_file / multi_edit / run_command) at dispatch. */
 export type EditMode = "review" | "auto" | "yolo" | "plan";
 export type DesktopCloseBehavior = "closeToTray" | "closeToQuit";
+export type ProviderDialectPreference = "auto" | "deepseek" | "openai-compatible";
 
 export type WebSearchEngine =
   | "bing"
@@ -72,13 +74,15 @@ export function saveWebSearchEngine(
   return engine;
 }
 
-export const DEFAULT_MODEL = "deepseek-v4-flash";
+export const DEFAULT_MODEL = "deepseek-flash";
 
 /** Models the official api.deepseek.com endpoint currently accepts. v3-era
  *  `deepseek-chat`/`deepseek-reasoner` are gone — sending them produces a 400. */
 export const SUPPORTED_OFFICIAL_MODELS: readonly string[] = [
+  "deepseek-flash",
   "deepseek-v4-flash",
   "deepseek-v4-pro",
+  "deepseek-v4-flash-vision-exp",
 ];
 
 export type ReasoningEffort = "low" | "medium" | "high" | "max";
@@ -229,8 +233,13 @@ export interface ProxyConfig {
 }
 
 export interface JupiterConfig {
+  /** Explicit per-endpoint/model vision support for third-party gateways. */
+  visionModels?: Record<string, boolean>;
+  imageTransport?: "auto" | "inline";
   apiKey?: string;
   baseUrl?: string;
+  /** Explicit Chat Completions wire preset. Missing/auto preserves legacy host detection. */
+  providerDialect?: ProviderDialectPreference;
   lang?: LanguageCode;
   /** Persisted DeepSeek model id — `/model <id>` and the dashboard model picker write through this. */
   model?: string;
@@ -996,6 +1005,71 @@ export function loadBaseUrl(path: string = defaultConfigPath()): string | undefi
   return loadEndpoint(path).baseUrl;
 }
 
+export function loadProviderDialect(path: string = defaultConfigPath()): ProviderDialectPreference {
+  const value = readConfig(path).providerDialect;
+  return value === "deepseek" || value === "openai-compatible" ? value : "auto";
+}
+
+export function saveProviderDialect(
+  dialect: ProviderDialectPreference,
+  path: string = defaultConfigPath(),
+): void {
+  const cfg = readConfig(path);
+  cfg.providerDialect = dialect === "auto" ? undefined : dialect;
+  writeConfig(cfg, path);
+}
+
+export interface ProviderSettingsInput {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  dialect: ProviderDialectPreference;
+  vision?: boolean;
+  imageTransport?: "auto" | "inline";
+}
+
+/** Persist the active provider tuple in one write so endpoint and credential cannot diverge. */
+export function saveProviderSettings(
+  input: ProviderSettingsInput,
+  path: string = defaultConfigPath(),
+): void {
+  const dialect = input.dialect;
+  if (dialect !== "auto" && dialect !== "deepseek" && dialect !== "openai-compatible") {
+    throw new Error(`Unsupported provider protocol: ${String(dialect)}`);
+  }
+  const model = input.model.trim();
+  if (!model) throw new Error("Provider model is required.");
+  const apiKey = input.apiKey.trim();
+  if (!apiKey) throw new Error("Provider API key is required.");
+
+  const normalized = normalizeProviderBaseUrl(input.baseUrl);
+  const cfg = readConfig(path);
+  cfg.baseUrl = isStrictOfficialDeepSeekEndpoint(normalized) ? undefined : normalized;
+  cfg.apiKey = apiKey;
+  cfg.model = model;
+  cfg.providerDialect = dialect === "auto" ? undefined : dialect;
+  cfg.setupCompleted = true;
+  if (typeof input.vision === "boolean") {
+    cfg.visionModels = { ...cfg.visionModels, [`${normalized}|${model}`]: input.vision };
+  }
+  if (input.imageTransport === "auto" || input.imageTransport === "inline")
+    cfg.imageTransport = input.imageTransport;
+  writeConfig(cfg, path);
+}
+
+export function loadVisionModel(
+  baseUrl: string,
+  model: string,
+  path: string = defaultConfigPath(),
+): boolean | undefined {
+  const value = readConfig(path).visionModels?.[`${normalizeProviderBaseUrl(baseUrl)}|${model}`];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+export function loadImageTransport(path: string = defaultConfigPath()): "auto" | "inline" {
+  return readConfig(path).imageTransport === "inline" ? "inline" : "auto";
+}
+
 /** Compatibility no-op: runtime clients receive endpoints explicitly and config secrets never enter process.env. */
 export function bridgeEndpointEnv(path: string = defaultConfigPath()): void {
   void path;
@@ -1092,7 +1166,8 @@ export function saveBaseUrl(url: string, path: string = defaultConfigPath()): vo
   const cfg = readConfig(path);
   const trimmed = url.trim();
   if (trimmed) {
-    cfg.baseUrl = trimmed;
+    const normalized = normalizeProviderBaseUrl(trimmed);
+    cfg.baseUrl = isStrictOfficialDeepSeekEndpoint(normalized) ? undefined : normalized;
   } else {
     cfg.baseUrl = undefined;
   }

@@ -77,7 +77,7 @@ export const de: TranslationSchema = {
     newHint: "Eine neue Sitzung erzwingen (--session / --continue ignorieren)",
     transcriptHint: "Pfad zum Speichern der JSONL-Ausgabe",
     budgetHint: "Sitzungs-USD-Obergrenze – warnt bei 80 %, verweigert den nächsten Zug bei 100 %",
-    modelIdHint: "DeepSeek-Modell-ID (z. B. deepseek-v4-flash)",
+    modelIdHint: "DeepSeek-Modell-ID (z. B. deepseek-flash)",
     systemPromptHint: "den Standard-System-Prompt überschreiben",
     effortHint: "Reasoning-Effort – niedrig|mittel|hoch|maximal",
     sessionNameHint: "Sitzungsname (Standard: „default“)",
@@ -131,7 +131,7 @@ export const de: TranslationSchema = {
       "Begrenze die Anzahl der Seiten, die bei der Suche durchsucht werden sollen (Standard: 20)",
     jsonHintCatalog: "Ausgabe als JSON",
     jsonHintReport: "Gib den Inspektionsbericht als JSON aus",
-    modelOverrideFlash: "das Modell überschreiben (Standard: deepseek-v4-flash)",
+    modelOverrideFlash: "das Modell überschreiben (Standard: deepseek-flash)",
     skipConfirmHint: "Die Bestätigungsabfrage überspringen",
     yoloHint:
       "Plan-Checkpoints für diesen Aufruf automatisch genehmigen (entspricht editMode=yolo, ohne die Konfiguration zu ändern)",
@@ -746,6 +746,7 @@ export const de: TranslationSchema = {
     stormSuppressed:
       "{count} wiederholte Tool-Aufrufe unterdrückt — gleicher Name + Argumente 3+ Mal gesendet.",
     compactingHistoryStatus: "Komprimiere Verlauf{aggressiveTag}...",
+    compactionUnchanged: "Verlaufskomprimierung ohne Änderungen beendet.",
     aggressiveTag: " (aggressiv)",
     foldedHistory:
       "Kontext {before}/{ctxMax} ({pct}%) — {beforeMessages} Nachrichten → {afterMessages} gefaltet (Zusammenfassung {summaryChars} Zeichen). Fahre fort.",
@@ -1030,7 +1031,7 @@ export const de: TranslationSchema = {
     model: {
       ...EN.handlers.model,
       modelHint:
-        "Versuche deepseek-v4-flash oder deepseek-v4-pro — führe /models aus, um die Live-Liste abzurufen",
+        "Versuche deepseek-flash oder deepseek-v4-pro — führe /models aus, um die Live-Liste abzurufen",
       modelUsage: "Verwendung: /model <id>   ({hint})",
       modelNotInCatalog:
         "Modell → {id}   (⚠ nicht im abgerufenen Katalog: {list}. Falls das falsch ist, wird der nächste Aufruf 400 geben — führe /models zum Aktualisieren aus.)",

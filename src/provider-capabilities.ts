@@ -1,4 +1,10 @@
-import type { ReasoningEffort } from "./config.js";
+import type { ProviderDialectPreference, ReasoningEffort } from "./config.js";
+import { DEEPSEEK_FLASH_ALIASES } from "./provider-models.js";
+export {
+  DEEPSEEK_FLASH_ALIASES,
+  DEEPSEEK_MODELS,
+  DEEPSEEK_VISION_MODEL,
+} from "./provider-models.js";
 
 export type ProviderDialect = "deepseek" | "azure" | "openai-compatible";
 export type DeepSeekThinkingLevel = "off" | "low" | "high" | "max";
@@ -10,14 +16,24 @@ export interface ModelCapability {
   thinkingLevels: readonly ReasoningSelection[];
   supportsPrefixContinuation: boolean;
   contextWindowTokens?: number;
+  supportsThinking: boolean;
+  supportsReasoningEffort: boolean;
+  supportsStreamUsage: boolean;
+  requiresReasoningContentForTools: boolean;
+  supportsImages: boolean;
+  supportsImageFiles: boolean;
 }
 
-const DEEPSEEK_V4_MODELS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+const DEEPSEEK_V4_MODELS = new Set([...DEEPSEEK_FLASH_ALIASES, "deepseek-v4-pro"]);
 const DEEPSEEK_THINKING_LEVELS: readonly DeepSeekThinkingLevel[] = ["off", "low", "high", "max"];
 const STANDARD_THINKING_LEVELS: readonly ReasoningSelection[] = ["low", "medium", "high"];
 
-export function resolveProviderDialect(baseUrl: string | undefined | null): ProviderDialect {
-  if (!baseUrl) return "openai-compatible";
+export function resolveProviderDialect(
+  baseUrl: string | undefined | null,
+  preference: ProviderDialectPreference = "auto",
+): ProviderDialect {
+  if (preference === "deepseek" || preference === "openai-compatible") return preference;
+  if (!baseUrl) return "deepseek";
   try {
     const host = new URL(baseUrl).hostname.toLowerCase();
     if (host === "api.deepseek.com") return "deepseek";
@@ -52,8 +68,10 @@ export function isOfficialDeepSeekV4Model(model: string): boolean {
 export function resolveModelCapability(
   baseUrl: string | undefined | null,
   model: string,
+  preference: ProviderDialectPreference = "auto",
+  visionOverride?: boolean,
 ): ModelCapability {
-  const dialect = resolveProviderDialect(baseUrl);
+  const dialect = resolveProviderDialect(baseUrl, preference);
   const officialDeepSeekV4 = dialect === "deepseek" && isOfficialDeepSeekV4Model(model);
   return {
     dialect,
@@ -61,6 +79,15 @@ export function resolveModelCapability(
     thinkingLevels: officialDeepSeekV4 ? DEEPSEEK_THINKING_LEVELS : STANDARD_THINKING_LEVELS,
     supportsPrefixContinuation: officialDeepSeekV4,
     contextWindowTokens: officialDeepSeekV4 ? 1_048_576 : undefined,
+    supportsThinking: dialect === "deepseek",
+    supportsReasoningEffort: dialect === "deepseek",
+    supportsStreamUsage: dialect === "deepseek",
+    requiresReasoningContentForTools: dialect === "deepseek",
+    supportsImages: isStrictOfficialDeepSeekEndpoint(baseUrl)
+      ? DEEPSEEK_FLASH_ALIASES.has(model)
+      : visionOverride === true,
+    supportsImageFiles:
+      isStrictOfficialDeepSeekEndpoint(baseUrl) && DEEPSEEK_FLASH_ALIASES.has(model),
   };
 }
 

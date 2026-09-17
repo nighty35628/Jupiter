@@ -2,34 +2,45 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  base: command === "build" ? "/assets/" : "/",
   plugins: [
     react(),
-    // 开发模式下：将生产路径重写为源码路径；移除不需要的 vendor CSS
+    // 开发模式下由 main.tsx 载入共享样式，移除生产环境的静态 CSS 标签。
     {
       name: "dev-html-rewrite",
+      apply: "serve",
       transformIndexHtml(html: string) {
         return html
           .replace('/assets/app.js?token=__JUPITER_TOKEN__', '/src/main.tsx')
-          .replace('/assets/app.css?token=__JUPITER_TOKEN__', '/src/styles.css');
+          .replace('/assets/icon.png?token=__JUPITER_TOKEN__', `/@fs/${resolve(__dirname, "../desktop/src-tauri/icons/icon.png")}`)
+          .replace(
+            '<link rel="stylesheet" href="/assets/app.css?token=__JUPITER_TOKEN__" />',
+            "",
+          );
       },
     },
   ],
   define: {
-    __APP_VERSION__: JSON.stringify("0.47.2"),
+    __APP_VERSION__: JSON.stringify("1.0.9"),
   },
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
       "@jupiter/core-utils/compaction": resolve(__dirname, "../packages/core-utils/src/compaction.ts"),
       "@jupiter/core-utils/derive-prefix": resolve(__dirname, "../packages/core-utils/src/derive-prefix.ts"),
       "@jupiter/core-utils": resolve(__dirname, "../packages/core-utils/src/index.ts"),
       "@tauri-apps/api/core": resolve(__dirname, "src/lib/tauri-bridge.ts"),
       "@tauri-apps/api/event": resolve(__dirname, "src/lib/tauri-bridge.ts"),
-      "@tauri-apps/api/window": resolve(__dirname, "src/lib/tauri-bridge.ts"),
-      "@tauri-apps/api/webview": resolve(__dirname, "src/lib/tauri-bridge.ts"),
-      "@tauri-apps/plugin-dialog": resolve(__dirname, "src/lib/tauri-bridge.ts"),
-      "@tauri-apps/plugin-opener": resolve(__dirname, "src/lib/tauri-bridge.ts"),
-      "@tauri-apps/plugin-process": resolve(__dirname, "src/lib/tauri-bridge.ts"),
+      "@tauri-apps/api/window": resolve(__dirname, "src/lib/shell-services.ts"),
+      "@tauri-apps/api/webview": resolve(__dirname, "src/lib/shell-services.ts"),
+      "@tauri-apps/api/dpi": resolve(__dirname, "src/lib/shell-services.ts"),
+      "@tauri-apps/api/menu": resolve(__dirname, "src/lib/shell-services.ts"),
+      "@tauri-apps/plugin-dialog": resolve(__dirname, "src/lib/shell-services.ts"),
+      "@tauri-apps/plugin-notification": resolve(__dirname, "src/lib/shell-services.ts"),
+      "@tauri-apps/plugin-opener": resolve(__dirname, "src/lib/shell-services.ts"),
+      "@tauri-apps/plugin-process": resolve(__dirname, "src/lib/shell-services.ts"),
+      "@tauri-apps/plugin-updater": resolve(__dirname, "src/lib/shell-services.ts"),
     },
   },
   build: {
@@ -37,7 +48,7 @@ export default defineConfig({
     minify: "esbuild",
     sourcemap: true,
     outDir: "dist",
-    emptyOutDir: false, // 避免清空 dist 下原有的第三方资源 (如 vendor-css)
+    emptyOutDir: true,
     rollupOptions: {
       input: {
         app: resolve(__dirname, "src/main.tsx")
@@ -47,8 +58,7 @@ export default defineConfig({
         chunkFileNames: "[name].js",
         assetFileNames: (assetInfo) => {
           if (assetInfo.name === "app.css" || assetInfo.name === "index.css") return "app.css";
-          // 字体等静态文件输出到 assets/ 子目录，匹配服务器 /assets/* 路由
-          if (/\.(woff2?|ttf|otf)$/.test(assetInfo.name ?? "")) return "assets/[name].[ext]";
+          // The server mounts this entire output directory at /assets/.
           return "[name].[ext]";
         },
         manualChunks(id) {
@@ -76,6 +86,9 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     port: 3000,
-    strictPort: true
+    strictPort: true,
+    fs: {
+      allow: [resolve(__dirname, "..")],
+    },
   }
-});
+}));

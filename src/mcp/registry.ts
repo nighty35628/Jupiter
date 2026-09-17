@@ -103,6 +103,25 @@ export function registerSingleMcpTool(
         signal: ctx?.signal,
       });
       if (env.tracker) env.tracker.record(Date.now() - t0);
+      validateResultShape(toolResult);
+      if (ctx?.reportImage && !toolResult.isError) {
+        const imageBlocks = toolResult.content.filter((block) => block.type === "image");
+        if (imageBlocks.length > 12) throw new Error("MCP result contains too many images");
+        for (const block of imageBlocks) {
+          if (block.type !== "image") continue;
+          if (
+            block.data.length > Math.ceil(MAX_IMAGE_INPUT_BYTES / 3) * 4 ||
+            !/^image\/(png|jpeg|webp|gif)$/.test(block.mimeType)
+          )
+            throw new Error("MCP image format/size is not supported");
+          const image = await attachments.importBytes(
+            Buffer.from(block.data, "base64"),
+            `${mcpTool.name}-image`,
+            ctx.signal,
+          );
+          ctx.reportImage(image);
+        }
+      }
       return flattenMcpResult(toolResult, { maxChars: env.maxResultChars });
     },
   });
@@ -163,6 +182,9 @@ async function waitForReady(
     if (signal && onAbort) signal.removeEventListener("abort", onAbort);
   }
 }
+
+import { attachments } from "../attachments/store.js";
+import { MAX_IMAGE_INPUT_BYTES } from "../attachments/types.js";
 
 export async function bridgeMcpTools(
   client: McpClient,

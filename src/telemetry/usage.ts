@@ -33,6 +33,8 @@ export interface UsageRecord {
   session: string | null;
   /** Model id the turn ran against (drives the pricing lookup). */
   model: string;
+  /** Stable non-secret provider identity. Missing on legacy records. */
+  providerId?: string;
   promptTokens: number;
   completionTokens: number;
   cacheHitTokens: number;
@@ -70,6 +72,8 @@ export function defaultUsageLogPath(homeDirOverride?: string): string {
 export interface AppendUsageInput {
   session: string | null;
   model: string;
+  providerId?: string;
+  costUsdOverride?: number;
   usage: Usage;
   /** Override the timestamp (tests). */
   now?: number;
@@ -146,11 +150,17 @@ export function appendUsage(input: AppendUsageInput): UsageRecord {
     ts: input.now ?? Date.now(),
     session: input.session,
     model: input.model,
+    ...(input.providerId ? { providerId: input.providerId } : {}),
     promptTokens: input.usage.promptTokens,
     completionTokens: input.usage.completionTokens,
     cacheHitTokens: input.usage.promptCacheHitTokens,
     cacheMissTokens: input.usage.promptCacheMissTokens,
-    costUsd: costUsd(input.model, input.usage),
+    costUsd:
+      input.costUsdOverride ??
+      costUsd(input.model, input.usage, undefined, {
+        providerId: input.providerId,
+        now: input.now,
+      }),
     claudeEquivUsd: claudeEquivalentCost(input.usage),
   };
   if (input.kind === "subagent" || input.kind === "auxiliary") record.kind = input.kind;
@@ -254,7 +264,10 @@ function addToBucket(b: UsageBucket, r: UsageRecord): void {
   b.cacheMissTokens += r.cacheMissTokens;
   b.costUsd += r.costUsd;
   b.claudeEquivUsd += r.claudeEquivUsd;
-  b.cacheSavingsUsd += cacheSavingsUsd(r.model, r.cacheHitTokens);
+  b.cacheSavingsUsd += cacheSavingsUsd(r.model, r.cacheHitTokens, undefined, {
+    providerId: r.providerId,
+    now: r.ts,
+  });
 }
 
 export interface AggregateOptions {
@@ -433,7 +446,10 @@ function addRecordToHistoryDay(day: UsageHistoryDay, record: UsageRecord): void 
   day.cacheMissTokens += record.cacheMissTokens;
   day.costUsd += record.costUsd;
   day.claudeEquivUsd += record.claudeEquivUsd;
-  day.cacheSavingsUsd += cacheSavingsUsd(record.model, record.cacheHitTokens);
+  day.cacheSavingsUsd += cacheSavingsUsd(record.model, record.cacheHitTokens, undefined, {
+    providerId: record.providerId,
+    now: record.ts,
+  });
 }
 
 export function aggregateUsageHistory(

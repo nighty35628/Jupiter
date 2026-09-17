@@ -1155,7 +1155,7 @@ describe("CacheFirstLoop - configure() method", () => {
       prefix: new ImmutablePrefix({ system: "s" }),
       stream: false,
     });
-    expect(loop.model).toBe("deepseek-v4-flash");
+    expect(loop.model).toBe("deepseek-flash");
     loop.configure({ model: "deepseek-v4-pro" });
     expect(loop.model).toBe("deepseek-v4-pro");
   });
@@ -2458,6 +2458,7 @@ describe("CacheFirstLoop — mid-turn steer injection", () => {
     const client = new DeepSeekClient({
       apiKey: "sk-test",
       fetch,
+      retry: { maxAttempts: 1 },
     });
     const loop = new CacheFirstLoop({
       client,

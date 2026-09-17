@@ -33,6 +33,8 @@ import {
   parseEditResult,
 } from "./cards";
 import { ApprovalCard, TaskCard, type TaskStepView } from "./extra-cards";
+import type { ImageAttachment } from "../../../src/attachments/types";
+import { ImageAttachmentView } from "./image-attachments";
 
 export function TurnDivider({ label }: { label: string }) {
   return (
@@ -45,6 +47,7 @@ export function TurnDivider({ label }: { label: string }) {
 
 export const UserMsg = memo(function UserMsg({
   text,
+  attachments,
   time,
   skill,
   onEdit,
@@ -52,9 +55,10 @@ export const UserMsg = memo(function UserMsg({
   rollbackAvailable = false,
 }: {
   text: string;
+  attachments?: ImageAttachment[];
   time?: string;
   skill?: SkillOrigin;
-  onEdit?: (text: string) => void;
+  onEdit?: (text: string, attachments?: ImageAttachment[]) => void;
   onRollback?: () => void;
   rollbackAvailable?: boolean;
 }) {
@@ -86,6 +90,7 @@ export const UserMsg = memo(function UserMsg({
           {time ? <span className="time">{time}</span> : null}
         </div>
         <div className="msg-text">{text}</div>
+        {attachments?.length ? <div className="image-attachments">{attachments.map((image) => <ImageAttachmentView key={image.id} image={image} />)}</div> : null}
         <div className="msg-actions">
           <RollbackButton
             available={rollbackAvailable}
@@ -95,7 +100,7 @@ export const UserMsg = memo(function UserMsg({
             <button
               type="button"
               className="edit-btn"
-              onClick={() => onEdit(text)}
+              onClick={() => onEdit(text, attachments)}
               title={t("thread.editMessage")}
             >
               <I.pencil size={11} />
@@ -409,8 +414,8 @@ export const AssistantMsg = memo(function AssistantMsg({
       );
     }
     return (
+      <div key={idx}>
       <ToolCard
-        key={idx}
         name={s.name}
         args={s.args}
         result={s.result}
@@ -421,6 +426,8 @@ export const AssistantMsg = memo(function AssistantMsg({
           (s.result === undefined || s.ok === false || processCardsDefaultOpen)
         }
       />
+      {s.attachments?.length ? <div className="image-attachments">{s.attachments.map((image) => <ImageAttachmentView key={image.id} image={image} />)}</div> : null}
+      </div>
     );
   }
 
@@ -490,6 +497,13 @@ export const AssistantMsg = memo(function AssistantMsg({
       );
       continue;
     }
+    if (s.kind === "compaction") {
+      flushToolGroup();
+      rendered.push(<div className="sys-event-row" key={s.id} data-compaction-state={s.pending ? "running" : "complete"}>
+        <span className="line" /><span className="label">{s.text}</span><span className="line" />
+      </div>);
+      continue;
+    }
     // Tool segment — accumulate into group
     if (!toolGroup) {
       toolGroup = { segments: [], indices: [] };
@@ -501,7 +515,7 @@ export const AssistantMsg = memo(function AssistantMsg({
   flushToolGroup();
 
   return (
-    <div className="msg assistant">
+    <div className="msg assistant" data-pending={pending ? "true" : undefined}>
       <div className="avatar">J</div>
       <div className="body">
         <div className="who">

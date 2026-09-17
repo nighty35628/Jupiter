@@ -1,3 +1,5 @@
+import type { ImageAttachment } from "../attachments/types.js";
+
 export type SessionMarkdownSegment =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
@@ -10,7 +12,7 @@ export type SessionMarkdownSegment =
   | { kind: "elision"; segmentCount: number; charCount: number };
 
 export type SessionMarkdownMessage =
-  | { kind: "user"; text: string; turn: number }
+  | { kind: "user"; text: string; turn: number; attachments?: ImageAttachment[] }
   | { kind: "assistant"; segments: SessionMarkdownSegment[]; turn: number };
 
 export interface SessionMarkdownLabels {
@@ -36,7 +38,8 @@ export function formatSessionMarkdown(
 ): string {
   return messages
     .map((message) => {
-      if (message.kind === "user") return `### ${labels.user}\n\n${message.text}`;
+      if (message.kind === "user")
+        return `### ${labels.user}\n\n${message.text}${(message.attachments ?? []).map((image) => `\n\n[Image attachment: ${escapeHtml(JSON.stringify(image.name))}; ${image.width}x${image.height}; ${image.id}. Image bytes are not included in this Markdown export.]`).join("")}`;
       const body = message.segments
         .map((segment) => {
           if (segment.kind === "text") return segment.text;

@@ -1,7 +1,7 @@
 import { type LoadedQQConfig, type QQBotConfig, loadQQConfig, saveQQConfig } from "../config.js";
 import { describeQQAccess } from "../qq/access.js";
 
-export interface DesktopQQSettingsState extends Omit<LoadedQQConfig, "sandbox" | "enabled"> {
+export interface DesktopQQSettingsState {
   sandbox: boolean;
   enabled: boolean;
   configured: boolean;
@@ -38,7 +38,6 @@ export function loadDesktopQQState(path?: string): DesktopQQSettingsState {
   const config = loadQQConfig(path);
   const configured = Boolean(config.appId && config.appSecret);
   return {
-    ...config,
     sandbox: config.sandbox ?? false,
     enabled: config.enabled === true,
     configured,
@@ -56,8 +55,8 @@ export function saveDesktopQQSettings(
   saveQQConfig(
     {
       ...existing,
-      appId: trimOptional(patch.appId),
-      appSecret: trimOptional(patch.appSecret),
+      appId: trimOptional(patch.appId) ?? existing.appId,
+      appSecret: trimOptional(patch.appSecret) ?? existing.appSecret,
       sandbox: patch.sandbox,
     },
     path,

@@ -1,7 +1,9 @@
 /** No retry on aborts or mid-stream body errors — re-billing the user for desynced output is worse than failing. */
 
 export interface RetryOptions {
-  /** Maximum total attempts (including the first). Default 4. */
+  /** Shared by representation changes of the same logical model request. */
+  budget?: { attempts: number; maxAttempts: number };
+  /** Maximum total attempts (including the first). Default 6: one initial request plus five retries. */
   maxAttempts?: number;
   /** Initial backoff in ms. Doubles each retry, with jitter. Default 500. */
   initialBackoffMs?: number;
@@ -11,6 +13,8 @@ export interface RetryOptions {
   retryableStatuses?: readonly number[];
   /** Abort signal; we do NOT retry once aborted. */
   signal?: AbortSignal;
+  /** Whether ambiguous fetch/network failures may be replayed. Default true for legacy/official behavior. */
+  retryNetworkErrors?: boolean;
   /** Telemetry hook — called before each wait. */
   onRetry?: (info: RetryInfo) => void;
 }
@@ -22,6 +26,7 @@ export interface RetryInfo {
 }
 
 const DEFAULT_RETRYABLE_STATUSES = [408, 429, 500, 502, 503, 504] as const;
+export const DEFAULT_API_RETRIES = 5;
 
 export async function fetchWithRetry(
   fetchFn: typeof fetch,
@@ -29,7 +34,10 @@ export async function fetchWithRetry(
   init: RequestInit,
   opts: RetryOptions = {},
 ): Promise<Response> {
-  const maxAttempts = opts.maxAttempts ?? 4;
+  const maxAttempts = Math.min(
+    opts.maxAttempts ?? DEFAULT_API_RETRIES + 1,
+    opts.budget ? opts.budget.maxAttempts - opts.budget.attempts : Number.POSITIVE_INFINITY,
+  );
   const initial = opts.initialBackoffMs ?? 500;
   const cap = opts.maxBackoffMs ?? 10_000;
   const retryable = new Set(opts.retryableStatuses ?? DEFAULT_RETRYABLE_STATUSES);
@@ -40,6 +48,7 @@ export async function fetchWithRetry(
     if (opts.signal?.aborted) throw new Error("aborted");
 
     try {
+      if (opts.budget) opts.budget.attempts++;
       const resp = await fetchFn(url, init);
 
       // Success or non-retryable failure: return as-is.
@@ -59,6 +68,7 @@ export async function fetchWithRetry(
       lastError = err;
       // Respect explicit aborts — do not retry.
       if (isAbortError(err) || opts.signal?.aborted) throw err;
+      if (opts.retryNetworkErrors === false) throw err;
       if (attempt === maxAttempts - 1) throw err;
 
       const waitMs = computeWait(attempt, initial, cap, null);

@@ -103,7 +103,7 @@ describe("desktop QQ remote commands", () => {
     expect(help).toContain("/session list");
     expect(help).toContain("/session switch <number|session-name>");
     expect(help).toContain("/workspace switch <number|path>");
-    expect(help).toContain("/model <flash|pro|deepseek-v4-flash|deepseek-v4-pro>");
+    expect(help).toContain("/model <flash|pro|deepseek-flash|deepseek-v4-pro>");
     expect(help).toContain("/effort <off|medium|high|max>");
     expect(help).toContain("/plan <review|auto|yolo>");
     expect(help).toContain("/btw <question>");

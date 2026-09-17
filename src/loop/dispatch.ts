@@ -3,6 +3,7 @@ import type { ChatMessage, ToolCall } from "../types.js";
 import type { LoopEvent } from "./types.js";
 
 export interface RunOneToolCallResult {
+  attachments?: ChatMessage["attachments"];
   preWarnings: LoopEvent[];
   postWarnings: LoopEvent[];
   result: string;
@@ -103,12 +104,18 @@ export async function* dispatchToolCallsChunked(
         tool_call_id: call.id ?? "",
         name,
         content: result,
+        ...(s.status === "fulfilled" && s.value.attachments?.length
+          ? { attachments: s.value.attachments }
+          : {}),
       });
 
       yield {
         turn: ctx.turn,
         role: "tool",
         content: result,
+        ...(s.status === "fulfilled" && s.value.attachments?.length
+          ? { attachments: s.value.attachments }
+          : {}),
         toolName: name,
         toolArgs: args,
         callId: ctx.inflightIdFor(call),

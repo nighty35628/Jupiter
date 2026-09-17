@@ -7,7 +7,6 @@ import {
   isPlausibleKey,
   loadApiKey,
   loadDeepSeekAutoContinue,
-  loadEndpoint,
   loadReasoningEffort,
   loadThinkingEnabled,
   loadToolRateLimit,
@@ -22,12 +21,13 @@ import {
 } from "../../core/event-redaction.js";
 import { loadDotenv } from "../../env.js";
 import { t } from "../../i18n/index.js";
-import { CacheFirstLoop, DeepSeekClient, ImmutablePrefix } from "../../index.js";
+import { CacheFirstLoop, ImmutablePrefix } from "../../index.js";
 import type { LoopEvent } from "../../loop.js";
 import { McpClient } from "../../mcp/client.js";
 import { preflightStdioSpec } from "../../mcp/preflight.js";
 import { bridgeMcpTools } from "../../mcp/registry.js";
 import { buildTransportFromSpec } from "../../mcp/transport-from-spec.js";
+import { createProviderClient, resolveProviderSnapshot } from "../../provider-runtime.js";
 import type { SessionSummary, TurnStats } from "../../telemetry/stats.js";
 import { appendUsage } from "../../telemetry/usage.js";
 import { ToolRegistry } from "../../tools.js";
@@ -392,8 +392,8 @@ export async function runCommand(opts: RunOptions): Promise<void> {
     if (successCount === 0) tools = undefined;
   }
 
-  const ep = loadEndpoint();
-  const client = new DeepSeekClient({ apiKey: ep.apiKey, baseUrl: ep.baseUrl });
+  const provider = resolveProviderSnapshot({ model: opts.model });
+  const client = createProviderClient(provider);
   const prefix = new ImmutablePrefix({
     system: opts.system,
     toolSpecs: tools?.specs(),
@@ -452,7 +452,13 @@ export async function runCommand(opts: RunOptions): Promise<void> {
         // `jupiter run` is often used in CI / scripting — we want
         // those turns to show up in `jupiter stats` too so the
         // dashboard reflects all DeepSeek spend, not just TUI sessions.
-        appendUsage({ session: null, model: ev.stats.model, usage: ev.stats.usage });
+        appendUsage({
+          session: null,
+          model: ev.stats.model,
+          providerId: ev.stats.providerId,
+          costUsdOverride: ev.stats.cost,
+          usage: ev.stats.usage,
+        });
       }
       // Persist every non-streaming event — deltas would flood the file and
       // aren't useful for replay (replay renders final content, not keystrokes).

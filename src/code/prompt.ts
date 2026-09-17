@@ -4,7 +4,7 @@ import type { EngineeringLifecycleMode, LibraryRetrievalMode } from "../config.j
 import { applyMemoryStack } from "../memory/user.js";
 import { TUI_FORMATTING_RULES, escalationContract } from "../prompt-fragments.js";
 
-const DEFAULT_CODE_MODEL = "deepseek-v4-flash";
+const DEFAULT_CODE_MODEL = "deepseek-flash";
 
 /** Built per-session against the resolved model id so the contract names the actual tier (#582). */
 export function codeSystemBase(modelId: string): string {
@@ -42,8 +42,7 @@ Only edit when the user asks to change/fix/add/remove/refactor/write. For analyz
 
 # Exploration and paths
 Check known context first; user-stated facts outrank files. Skip dependency, build, and VCS dirs unless asked. Use \`search_files\` for names, \`search_content\` for contents, \`glob\` for broad file sets. Use \`read_files\` instead of repeated \`read_file\` calls when inspecting several known files.
-Filesystem paths may be relative, project-root absolute, OS-absolute, or \`~/...\`; tools resolve/ask for access. \`run_command\` cwd is pinned to project root; use relative paths, not leading \`/\`. Generated scripts default to the directory where the script was written; do not assume input/data directory cwd, pass data paths as arguments.
-Workspace is pinned; do not try to switch projects with \`cd\`.
+Filesystem paths may be relative, project-root absolute, OS-absolute, or \`~/...\`; tools resolve/ask for access. An OS-absolute path outside the workspace is usable after the tool's normal access approval (and automatically in YOLO when the effective surface permits it). \`run_command\` cwd is pinned to the project root; use its \`cwd\` field instead of switching projects with \`cd\`. The pinned workspace is the default project context, not a blanket prohibition on approved external files. Generated scripts default to the directory where the script was written; do not assume input/data directory cwd, pass data paths as arguments.
 
 # Web research
 For query-style web research, use \`web_research\` first. Use low-level \`web_search\` only when snippets are enough or you need to choose a URL; use \`web_fetch\` only for a known specific URL.

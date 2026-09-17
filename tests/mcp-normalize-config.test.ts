@@ -373,12 +373,12 @@ describe("normalizeMcpConfig: headers round-trip into transport", () => {
     expect(transport).toBeInstanceOf(StreamableHttpTransport);
   });
 
-  it("stdio server with headers ignores headers", () => {
+  it("stdio server with headers ignores headers", async () => {
     const cfg: JupiterConfig = {
       mcpServers: {
         local: {
-          command: "npx",
-          args: ["-y", "@scope/local"],
+          command: process.execPath,
+          args: ["-e", ""],
           headers: { Authorization: "Bearer tok" },
         },
       },
@@ -390,10 +390,10 @@ describe("normalizeMcpConfig: headers round-trip into transport", () => {
     expect((spec as Record<string, unknown>).headers).toBeUndefined();
     const transport = buildTransportFromSpec(spec);
     expect(transport).toBeInstanceOf(StdioTransport);
-    void transport.close();
+    await transport.close();
   });
 
-  it("env on stdio spec is passed to StdioTransport", () => {
+  it("env on stdio spec is passed to StdioTransport", async () => {
     const cfg: JupiterConfig = {
       mcpServers: {
         local: {
@@ -406,7 +406,7 @@ describe("normalizeMcpConfig: headers round-trip into transport", () => {
     const specs = normalizeMcpConfig(cfg);
     const transport = buildTransportFromSpec(specs[0]!);
     expect(transport).toBeInstanceOf(StdioTransport);
-    void transport.close();
+    await transport.close();
   });
 });
 

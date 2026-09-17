@@ -98,7 +98,7 @@ describe("computeEventsCockpit", () => {
   let sessionsDir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "rx-cockpit-events-"));
+    dir = mkdtempSync(join(tmpdir(), "jupiter-cockpit-events-"));
     sessionsDir = join(dir, "sessions");
     mkdirSync(sessionsDir, { recursive: true });
   });

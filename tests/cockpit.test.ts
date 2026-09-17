@@ -44,7 +44,7 @@ describe("computeWarm", () => {
   let sessionsDir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "rx-cockpit-"));
+    dir = mkdtempSync(join(tmpdir(), "jupiter-cockpit-"));
     usagePath = join(dir, "usage.jsonl");
     sessionsDir = join(dir, "sessions");
     _resetCockpitCacheForTests();
@@ -117,7 +117,7 @@ describe("computeCockpit", () => {
   let sessionsDir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "rx-cockpit-"));
+    dir = mkdtempSync(join(tmpdir(), "jupiter-cockpit-"));
     usagePath = join(dir, "usage.jsonl");
     sessionsDir = join(dir, "sessions");
     _resetCockpitCacheForTests();

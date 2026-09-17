@@ -1,0 +1,46 @@
+.web-session-gate {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 32px 24px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.web-session-content {
+  width: min(100%, 420px);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.web-session-content .empty-logo { margin: 0 0 16px; }
+.web-session-content h1 { margin: 0 0 24px; font-size: 24px; }
+.web-session-content h2 { margin: 0 0 12px; font-size: 16px; }
+.web-session-content p { color: var(--fg-2); line-height: 1.6; }
+.web-session-content label { display: block; margin: 24px 0 8px; }
+.web-session-content input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+}
+.web-session-content #web-session-error { min-height: 24px; color: var(--danger); }
+.web-session-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.web-session-actions button {
+  min-height: 44px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 10px 16px;
+  color: var(--fg);
+  background: var(--card);
+  font: inherit;
+  cursor: pointer;
+}
+.web-session-actions .web-session-connect { background: var(--accent); color: white; }
+.web-session-actions button:hover:not(:disabled) { filter: brightness(0.95); }
+.web-session-actions button:disabled { opacity: 0.5; cursor: default; }
+.web-session-content :is(input, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

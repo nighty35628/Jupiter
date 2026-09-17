@@ -7,7 +7,7 @@ import {
 /** `max` is a DeepSeek-only reasoning extension; non-DeepSeek hosts 400 on it (#1794). */
 export function effortChoicesForBaseUrl(
   baseUrl: string | undefined | null,
-  model = "deepseek-v4-flash",
+  model = "deepseek-flash",
 ): readonly ReasoningSelection[] {
   return resolveModelCapability(baseUrl, model).thinkingLevels;
 }

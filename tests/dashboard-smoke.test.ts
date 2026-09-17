@@ -101,16 +101,24 @@ describe("dashboard server integration", () => {
     }
   });
 
-  it("vendor CSS files are served when present", async () => {
+  it("builds logo and font URLs under the server's asset mount", async () => {
     const { serveAsset } = await import("../src/server/assets.js");
-    const hljs = serveAsset("vendor-hljs.css");
-    const uplot = serveAsset("vendor-uplot.css");
-    // These may be null if copy-dashboard-vendor-css.mjs hasn't run
-    if (hljs) {
-      expect(hljs.contentType).toMatch(/css/);
+    const css = readFileSync(join(DASHBOARD_DIST, "app.css"), "utf8");
+    const urls = [...css.matchAll(/url\(["']?([^)'"\s]+)["']?\)/g)]
+      .map((match) => match[1]!)
+      .filter((url) => !url.startsWith("data:") && !url.startsWith("http"));
+    expect(urls).toContain("/assets/icon.png");
+    for (const url of new Set(urls)) {
+      expect(url).toMatch(/^\/assets\//);
+      const asset = serveAsset(url.slice("/assets/".length));
+      expect(asset, url).not.toBeNull();
     }
-    if (uplot) {
-      expect(uplot.contentType).toMatch(/css/);
-    }
+    const icon = serveAsset("icon.png");
+    expect(icon?.contentType).toBe("image/png");
+    expect(Buffer.isBuffer(icon?.body)).toBe(true);
+    expect((icon?.body as Buffer).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(readFileSync(join(DASHBOARD_ROOT, "index.html"), "utf8")).toContain(
+      'rel="icon" type="image/png" href="/assets/icon.png?token=',
+    );
   });
 });

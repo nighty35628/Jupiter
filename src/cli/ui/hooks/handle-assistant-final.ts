@@ -84,6 +84,8 @@ export function handleAssistantFinal(ev: LoopEvent, ctx: AssistantFinalContext):
     appendUsage({
       session: ctx.session,
       model: ev.stats.model,
+      providerId: ev.stats.providerId,
+      costUsdOverride: ev.stats.cost,
       usage: ev.stats.usage,
     });
     // Pass the session-aggregate cache-hit so the persistent status bar

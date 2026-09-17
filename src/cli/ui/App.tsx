@@ -38,7 +38,6 @@ import {
   editModeHintShown,
   isReasoningEffort,
   loadDeepSeekAutoContinue,
-  loadEndpoint,
   loadEngineeringLifecycleMode,
   loadHistoryScrollMode,
   loadMouseWheelRows,
@@ -67,7 +66,7 @@ import type { FeishuChannel } from "../../feishu/channel.js";
 import { useFeishuChannel } from "../../feishu/use-feishu-channel.js";
 import { formatHookOutcomeMessage, runHooks } from "../../hooks.js";
 import { t, tObj } from "../../i18n/index.js";
-import { CacheFirstLoop, DeepSeekClient, ImmutablePrefix } from "../../index.js";
+import { CacheFirstLoop, ImmutablePrefix } from "../../index.js";
 import type { LoopEvent } from "../../loop.js";
 import {
   deleteSession,
@@ -137,6 +136,11 @@ import { ShellConfirm, type ShellConfirmChoice } from "./ShellConfirm.js";
 import { useRenderTrace } from "./render-trace.js";
 
 import { displayReasoningSelection } from "../../provider-capabilities.js";
+import {
+  createProviderClient,
+  providerSessionBinding,
+  resolveProviderSnapshot,
+} from "../../provider-runtime.js";
 import { SlashArgPicker } from "./SlashArgPicker.js";
 import { SlashSuggestions } from "./SlashSuggestions.js";
 import { type ThemeChoice, ThemePicker } from "./ThemePicker.js";
@@ -1011,8 +1015,8 @@ function AppInner({
   // biome-ignore lint/correctness/useExhaustiveDependencies: currentRootDir —see comment above
   const loop = useMemo(() => {
     if (loopRef.current) return loopRef.current;
-    const ep = loadEndpoint();
-    const client = new DeepSeekClient({ apiKey: ep.apiKey, baseUrl: ep.baseUrl });
+    const provider = resolveProviderSnapshot({ model });
+    const client = createProviderClient(provider);
     // Register run_skill HERE (not in code.tsx / chat.tsx) because
     // subagent-runAs skills need the client + parent registry to
     // spawn child loops. Wiring lives in App.tsx so the same code
@@ -1059,6 +1063,7 @@ function AppInner({
       model,
       budgetUsd,
       session,
+      providerBinding: providerSessionBinding(provider),
       hooks: hookList,
       hookCwd: currentRootDir,
       thinkingEnabled: loadThinkingEnabled(),
@@ -2174,7 +2179,13 @@ function AppInner({
           turn: loop.currentTurn + 1,
           recordExchange: (exchange) => {
             const stats = loop.recordLightAskExchange(exchange);
-            appendUsage({ session: session ?? null, model: stats.model, usage: stats.usage });
+            appendUsage({
+              session: session ?? null,
+              model: stats.model,
+              providerId: stats.providerId,
+              costUsdOverride: stats.cost,
+              usage: stats.usage,
+            });
             setSummary(loop.stats.summary());
           },
           emit: () => {},

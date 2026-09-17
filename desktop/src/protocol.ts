@@ -3,6 +3,7 @@ import type {
   TranscriptElisionSegment,
 } from "../../src/desktop/transcript-budget";
 import type { WorkflowEvent, WorkflowRun } from "../../src/workflows/types";
+import type { ImageAttachment } from "../../src/attachments/types";
 
 export type { WorkflowRun };
 
@@ -375,6 +376,7 @@ export type SkillsEvent = {
 };
 
 export type ContextDiagnosticsInfo = {
+  images?: { attached: number; retained: number; request: number; omitted: number; estimatedTokens: number; transport?: string };
   systemTokens: number;
   toolsTokens: number;
   logTokens: number;
@@ -465,7 +467,7 @@ export type MemoryDetailEvent = {
   detail: MemoryDetail;
 };
 
-export type RetryResultEvent = { type: "$retry_result"; text: string };
+export type RetryResultEvent = { type: "$retry_result"; text: string; attachments?: ImageAttachment[] };
 
 export type BtwResultEvent = {
   type: "$btw_result";
@@ -498,6 +500,7 @@ export type LoadedSegment =
   | TranscriptElisionSegment
   | {
       kind: "tool";
+      attachments?: ImageAttachment[];
       callId: string;
       name: string;
       args: string;
@@ -508,6 +511,8 @@ export type LoadedSegment =
 export type LoadedMessage =
   | {
       kind: "user";
+      attachments?: ImageAttachment[];
+      clientId?: string;
       text: string;
       turn: number;
       messageId: string;
@@ -576,6 +581,7 @@ export type SessionActionResultEvent = {
   action: "copy" | "export";
   ok: boolean;
   error?: string;
+  content?: string;
 };
 
 export type TurnCommittedEvent = {
@@ -712,6 +718,13 @@ export type SettingsEvent = {
   budgetUsd: number | null;
   baseUrl?: string;
   apiKeyPrefix?: string;
+  providerDialect?: "auto" | "deepseek" | "openai-compatible";
+  providerLabel?: string;
+  providerId?: string;
+  officialDeepSeek?: boolean;
+  supportsImages?: boolean;
+  vision?: boolean;
+  imageTransport?: "auto" | "inline";
   workspaceDir: string;
   recentWorkspaces: string[];
   model: string;
@@ -744,6 +757,14 @@ export type SettingsEvent = {
   /** Desktop prompt-history entries seeded on tab load, most-recent-first (#2051). */
   promptHistory?: string[];
   version: string;
+};
+
+export type ProviderTestResultEvent = {
+  type: "$provider_test_result";
+  requestId: string;
+  ok: boolean;
+  message: string;
+  models?: string[];
 };
 
 export type QQSettingsEvent = {
@@ -853,11 +874,15 @@ export type BalanceEvent = {
 };
 
 export type SettingsPatch = {
+  vision?: boolean;
+  imageTransport?: "auto" | "inline";
   reasoningEffort?: ReasoningEffort;
   thinkingEnabled?: boolean;
   editMode?: EditMode;
   budgetUsd?: number | null;
   baseUrl?: string;
+  apiKey?: string;
+  providerDialect?: "auto" | "deepseek" | "openai-compatible";
   workspaceDir?: string;
   recentWorkspaces?: string[];
   model?: string;
@@ -906,6 +931,7 @@ export type DingTalkConfigPatch = {
 };
 
 export type UserMessageEvent = {
+  attachments?: ImageAttachment[];
   type: "user.message";
   id: number;
   ts: string;
@@ -974,6 +1000,7 @@ export type ToolIntentEvent = {
 };
 
 export type ToolResultEvent = {
+  attachments?: ImageAttachment[];
   type: "tool.result";
   id: number;
   ts: string;
@@ -985,6 +1012,8 @@ export type ToolResultEvent = {
 
 export type StatusEvent = {
   type: "status";
+  activity?: "compaction";
+  activityState?: "running" | "complete";
   id: number;
   ts: string;
   turn: number;
@@ -1033,6 +1062,10 @@ export type KernelErrorEvent = {
   turn: number;
   message: string;
   recoverable: boolean;
+  name?: string;
+  code?: string;
+  phase?: string;
+  retryable?: boolean;
 };
 
 export type WorkflowRunEvent = WorkflowEvent;
@@ -1058,6 +1091,7 @@ export type IncomingEvent = { tabId?: string } & (
   | SessionEmptyEvent
   | NeedsSetupEvent
   | SettingsEvent
+  | ProviderTestResultEvent
   | QQSettingsEvent
   | FeishuSettingsEvent
   | DingTalkSettingsEvent
@@ -1108,8 +1142,9 @@ export type OutgoingCommand = { tabId?: string } & (
       clientId?: string;
       displayText?: string;
       planOneShot?: boolean;
+      imagePaths?: string[];
     }
-  | { cmd: "ask_light"; text: string; clientId?: string }
+  | { cmd: "ask_light"; text: string; clientId?: string; imagePaths?: string[] }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
@@ -1174,6 +1209,14 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_sign_out" }
   | { cmd: "settings_get" }
+  | {
+      cmd: "provider_test";
+      requestId: string;
+      baseUrl: string;
+      apiKey?: string;
+      model: string;
+      providerDialect: "auto" | "deepseek" | "openai-compatible";
+    }
   | { cmd: "context_diagnostics_get" }
   | ({ cmd: "settings_save"; requestId?: string } & SettingsPatch)
   | { cmd: "qq_status_get" }
@@ -1225,6 +1268,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "jobs_stop_all" }
   | { cmd: "compact_history" }
   | { cmd: "retry" }
+  | { cmd: "retry_api" }
   | { cmd: "rollback_to_turn"; turn: number; role: "user" | "assistant" }
   | { cmd: "slash"; text: string; clientId?: string }
   | { cmd: "btw"; text: string; clientId?: string }

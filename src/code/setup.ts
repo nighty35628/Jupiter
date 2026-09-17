@@ -1,8 +1,6 @@
-import { DeepSeekClient } from "../client.js";
 import {
   type EditMode,
   loadEditMode,
-  loadEndpoint,
   loadFilesystemOutlineThresholdBytes,
   loadJavaSourceEnabled,
   loadLibraryRetrievalMode,
@@ -17,6 +15,7 @@ import {
   searchEnabled,
 } from "../config.js";
 import { bootstrapSemanticSearchInCodeMode } from "../index/semantic/tool.js";
+import { createProviderClient, resolveProviderSnapshot } from "../provider-runtime.js";
 import { ToolRegistry } from "../tools.js";
 import { registerChoiceTool } from "../tools/choice.js";
 import { registerCodeQueryTools } from "../tools/code-query.js";
@@ -121,7 +120,6 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
   // which would kill `jupiter code` before the setup wizard can prompt for
   // one. Defer to first subagent dispatch — by then the user has either keyed
   // in or we error per-call instead of at boot.
-  let subagentClient: DeepSeekClient | null = null;
   registerSkillTools(tools, {
     projectRoot: opts.rootDir,
     customSkillPaths: loadResolvedSkillPaths(opts.rootDir),
@@ -129,10 +127,7 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
     subagentModels: loadSubagentModels(),
     onSkillInstalled: opts.onSkillInstalled,
     subagentRunner: async (skill, task, signal) => {
-      if (!subagentClient) {
-        const ep = loadEndpoint();
-        subagentClient = new DeepSeekClient({ apiKey: ep.apiKey, baseUrl: ep.baseUrl });
-      }
+      const subagentClient = createProviderClient(resolveProviderSnapshot({ model: skill.model }));
       const result = await spawnSubagent({
         client: subagentClient,
         parentRegistry: tools,

@@ -1,6 +1,6 @@
 {
   "name": "jupiter",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Jupiter: a cache-first AI workbench with full coding-agent workflows, workspace libraries, and tabbed desktop sessions.",
   "type": "module",
   "bin": {
@@ -20,12 +20,12 @@
     "dist",
     "data/deepseek-tokenizer.json.gz",
     "dashboard/index.html",
-    "dashboard/app.css",
     "dashboard/dist",
     "resources/skill-packs",
     "patches",
     "scripts/postinstall.mjs",
     "README.md",
+    "THIRD_PARTY_NOTICES.md",
     "LICENSE"
   ],
   "workspaces": [
@@ -34,7 +34,7 @@
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
     "build:dashboard": "npm --prefix dashboard run build",
-    "build": "npm run build:dashboard && tsup && node scripts/copy-dashboard-vendor-css.mjs && node scripts/copy-tree-sitter-grammars.mjs",
+    "build": "npm run build:dashboard && tsup && node scripts/write-cli-package-marker.mjs && node scripts/copy-tree-sitter-grammars.mjs && node scripts/copy-image-runtime.mjs",
     "dev": "tsx src/cli/index.ts",
     "chat": "tsx src/cli/index.ts chat",
     "test": "vitest run",
@@ -75,6 +75,7 @@
   "dependencies": {
     "@alcalzone/ansi-tokenize": "^0.3.0",
     "@larksuiteoapi/node-sdk": "^1.66.1",
+    "@silvia-odwyer/photon-node": "0.3.4",
     "auto-bind": "^5.0.1",
     "bidi-js": "^1.0.3",
     "chalk": "^5.3.0",
@@ -89,10 +90,12 @@
     "grammy": "^1.43.0",
     "iconv-lite": "^0.7.2",
     "ignore": "^7.0.5",
+    "image-size": "2.0.2",
     "indent-string": "^5.0.0",
     "ink": "workspace:*",
     "lodash-es": "^4.17.21",
     "node-html-parser": "^7.1.0",
+    "node-pty": "^1.1.0",
     "picomatch": "^4.0.4",
     "playwright-core": "^1.61.0",
     "react": "^19.2.6",
@@ -124,12 +127,9 @@
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^2.1.5",
     "esbuild": "^0.21.5",
-    "highlight.js": "^11.10.0",
-    "htm": "^3.1.1",
     "ink-testing-library": "^4.0.0",
     "jsdom": "^29.1.1",
     "marked": "^15.0.12",
-    "preact": "^10.22.0",
     "react-test-renderer": "^19.2.6",
     "simple-git-hooks": "^2.13.1",
     "strip-ansi": "^7.1.0",
@@ -142,7 +142,9 @@
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "uplot": "^1.6.31",
     "vitest": "^2.1.5"
+  },
+  "overrides": {
+    "qs": "6.15.3"
   }
 }

@@ -1,3 +1,4 @@
+import type { ImageAttachment } from "./attachments/types.js";
 import type { PauseGate } from "./core/pause-gate.js";
 import { truncateForModel, truncateForModelByTokens } from "./mcp/registry.js";
 import { analyzeSchema, flattenSchema, nestArguments } from "./repair/flatten.js";
@@ -12,6 +13,8 @@ import { saveTruncatedResult, shouldSkipSave } from "./tools/truncated-result-sa
 import type { JSONSchema, ToolSpec } from "./types.js";
 
 export interface ToolCallContext {
+  reportImage?: (image: ImageAttachment) => void;
+  allowedImageIds?: ReadonlySet<string>;
   signal?: AbortSignal;
   /** Inject a mock PauseGate for tests. When absent, tools use the singleton. */
   confirmationGate?: PauseGate;
@@ -202,6 +205,8 @@ export class ToolRegistry {
     name: string,
     argumentsRaw: string | Record<string, unknown>,
     opts: {
+      reportImage?: (image: ImageAttachment) => void;
+      allowedImageIds?: ReadonlySet<string>;
       signal?: AbortSignal;
       maxResultChars?: number;
       maxResultTokens?: number;
@@ -320,6 +325,8 @@ export class ToolRegistry {
         confirmationGate: opts.confirmationGate,
         readTracker: opts.readTracker,
         reportAuxiliaryUsage: opts.reportAuxiliaryUsage,
+        reportImage: opts.reportImage,
+        allowedImageIds: opts.allowedImageIds,
       });
       const str = typeof result === "string" ? result : JSON.stringify(result);
       // Pre-clip at dispatch so a single fat result can't balloon the

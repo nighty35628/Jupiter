@@ -23,10 +23,13 @@ export type EventRole =
 export type EventSeverity = "low" | "high";
 
 export interface LoopEvent {
+  attachments?: import("../attachments/types.js").ImageAttachment[];
   turn: number;
   role: EventRole;
   content: string;
   severity?: EventSeverity;
+  activity?: "compaction";
+  activityState?: "running" | "complete";
   reasoningDelta?: string;
   /** Full reasoning text available on assistant_final; deltas may be absent on some model paths. */
   reasoningContent?: string;

@@ -40,10 +40,10 @@ describe("effortChoicesForBaseUrl", () => {
     ]);
   });
 
-  it("treats null / undefined / empty baseUrl as non-DeepSeek", () => {
-    expect(effortChoicesForBaseUrl(undefined)).toEqual(["low", "medium", "high"]);
-    expect(effortChoicesForBaseUrl(null)).toEqual(["low", "medium", "high"]);
-    expect(effortChoicesForBaseUrl("")).toEqual(["low", "medium", "high"]);
+  it("treats a missing baseUrl as the official DeepSeek default", () => {
+    expect(effortChoicesForBaseUrl(undefined)).toEqual(["off", "low", "high", "max"]);
+    expect(effortChoicesForBaseUrl(null)).toEqual(["off", "low", "high", "max"]);
+    expect(effortChoicesForBaseUrl("")).toEqual(["off", "low", "high", "max"]);
   });
 
   it("rejects deepseek-spoofing hosts (substring match would be wrong)", () => {

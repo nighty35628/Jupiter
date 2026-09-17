@@ -199,7 +199,7 @@ export const EN: TranslationSchema = {
     newHint: "force a fresh session (ignore --session / --continue)",
     transcriptHint: "path to write the JSONL transcript",
     budgetHint: "session USD cap — warns at 80%, refuses next turn at 100%",
-    modelIdHint: "DeepSeek model id (e.g. deepseek-v4-flash)",
+    modelIdHint: "DeepSeek model id (e.g. deepseek-flash)",
     systemPromptHint: "override the default system prompt",
     effortHint: "reasoning effort — low|medium|high|max",
     sessionNameHint: "session name (default: 'default')",
@@ -247,7 +247,7 @@ export const EN: TranslationSchema = {
     mcpMaxPagesHint: "cap how many pages to walk while searching (default 20)",
     jsonHintCatalog: "output as JSON",
     jsonHintReport: "output the inspection report as JSON",
-    modelOverrideFlash: "override the model (default: deepseek-v4-flash)",
+    modelOverrideFlash: "override the model (default: deepseek-flash)",
     skipConfirmHint: "skip the confirmation prompt",
     yoloHint:
       "auto-approve plan checkpoints for this invocation (equivalent to editMode=yolo without mutating config)",
@@ -742,6 +742,7 @@ export const EN: TranslationSchema = {
       "Stopped a stuck retry loop — the model kept calling the same tool with identical args after a self-correction nudge. Try /retry, rephrase, or rule out the underlying blocker.",
     stormSuppressed: "Suppressed {count} repeated tool call(s) — same name + args fired 3+ times.",
     compactingHistoryStatus: "compacting history{aggressiveTag}…",
+    compactionUnchanged: "History compaction finished without changes.",
     aggressiveTag: " (aggressive)",
     foldedHistory:
       "context {before}/{ctxMax} ({pct}%) — folded {beforeMessages} messages → {afterMessages} (summary {summaryChars} chars). Continuing.",
@@ -1095,7 +1096,7 @@ export const EN: TranslationSchema = {
       cwdUsageNoCurrent: "usage: /cwd <path>   re-points the workspace root to <path>.",
     },
     model: {
-      modelHint: "try deepseek-v4-flash or deepseek-v4-pro — run /models to fetch the live list",
+      modelHint: "try deepseek-flash or deepseek-v4-pro — run /models to fetch the live list",
       modelUsage: "usage: /model <id>   ({hint})",
       modelNotInCatalog:
         "model → {id}   (⚠ not in the fetched catalog: {list}. If this is wrong the next call will 400 — run /models to refresh.)",

@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { totalmem } from "node:os";
 import { fileURLToPath } from "node:url";
 import { getHeapStatistics } from "node:v8";
-import { RX_HEAP_REEXEC_ENV, decideHeapTargetMb } from "./heap-limit.js";
+import { JUPITER_HEAP_REEXEC_ENV, decideHeapTargetMb } from "./heap-limit.js";
 
 const runningUnderVitest =
   process.env.VITEST === "true" || process.env.VITEST_WORKER_ID !== undefined;
@@ -14,13 +14,13 @@ const target = decideHeapTargetMb({
   totalMemMb: Math.floor(totalmem() / 1024 / 1024),
   nodeOptions: process.env.NODE_OPTIONS ?? "",
   execArgv: process.execArgv,
-  alreadyReexec: process.env[RX_HEAP_REEXEC_ENV] === "1" || runningUnderVitest,
+  alreadyReexec: process.env[JUPITER_HEAP_REEXEC_ENV] === "1" || runningUnderVitest,
 });
 
 if (target !== null) {
   const existing = process.env.NODE_OPTIONS ?? "";
   const nextOptions = `${existing} --max-old-space-size=${target}`.trim();
-  const childEnv = { ...process.env, NODE_OPTIONS: nextOptions, [RX_HEAP_REEXEC_ENV]: "1" };
+  const childEnv = { ...process.env, NODE_OPTIONS: nextOptions, [JUPITER_HEAP_REEXEC_ENV]: "1" };
   const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
   const entrypoint = fileURLToPath(new URL(`./index.${extension}`, import.meta.url));
   const result = spawnSync(

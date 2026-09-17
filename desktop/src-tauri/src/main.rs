@@ -1134,16 +1134,81 @@ fn sanitize_image_extension(raw: Option<&str>) -> String {
 
 #[tauri::command]
 fn save_clipboard_image(bytes: Vec<u8>, extension: Option<String>) -> Result<String, String> {
+    if bytes.is_empty() || bytes.len() > 20 * 1024 * 1024 {
+        return Err("Image must be between 1 byte and 20 MiB".into());
+    }
     let ext = sanitize_image_extension(extension.as_deref());
     let dir = pasted_images_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir failed: {e}"))?;
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("clock error: {e}"))?
-        .as_millis();
+        .as_nanos();
     let path = dir.join(format!("jupiter-pasted-{ts}.{ext}"));
-    std::fs::write(&path, bytes).map_err(|e| format!("write failed: {e}"))?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| format!("create image failed: {e}"))?;
+    std::io::Write::write_all(&mut file, &bytes).map_err(|e| format!("write failed: {e}"))?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn save_clipboard_file(bytes: Vec<u8>, name: Option<String>) -> Result<String, String> {
+    const MAX_BYTES: usize = 64 * 1024 * 1024;
+    if bytes.is_empty() || bytes.len() > MAX_BYTES {
+        return Err("File must be between 1 byte and 64 MiB".into());
+    }
+    let display_name = name
+        .as_deref()
+        .and_then(|value| Path::new(value).file_name())
+        .and_then(|value| value.to_str())
+        .map(|value| {
+            value
+                .chars()
+                .filter(|character| !character.is_control())
+                .take(200)
+                .collect::<String>()
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "jupiter-pasted-file".to_string());
+    let dir = pasted_images_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir failed: {e}"))?;
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("clock error: {e}"))?
+        .as_nanos();
+    let path = dir.join(format!("jupiter-pasted-{ts}-{display_name}"));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| format!("create file failed: {e}"))?;
+    std::io::Write::write_all(&mut file, &bytes).map_err(|e| format!("write failed: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn resolve_image_attachment_path(root: &Path, id: &str, thumbnail: bool) -> Result<PathBuf, String> {
+    if id.len() != 64 || !id.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+        return Err("Invalid image attachment id".into());
+    }
+    // Normalize the root first, including Windows extended paths and macOS /var aliases.
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let file = root.join(id).join(if thumbnail { "thumbnail" } else { "image" });
+    let canonical = file.canonicalize().map_err(|e| e.to_string())?;
+    if canonical != file || !canonical.is_file() {
+        return Err("Invalid image attachment path".into());
+    }
+    Ok(canonical)
+}
+
+#[tauri::command]
+fn image_attachment_path(app: tauri::AppHandle, id: String, thumbnail: bool) -> Result<String, String> {
+    let root = app.path().home_dir().map_err(|e| e.to_string())?.join(".jupiter/attachments/v1/objects");
+    let canonical = resolve_image_attachment_path(&root, &id, thumbnail)?;
+    app.asset_protocol_scope().allow_file(&canonical).map_err(|e| e.to_string())?;
+    Ok(canonical.to_string_lossy().into_owned())
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
@@ -1352,7 +1417,9 @@ fn main() {
             pets::pet_catalog_scan,
             pets::pet_directory_prepare,
             read_clipboard_file_paths,
-            save_clipboard_image
+            save_clipboard_image,
+            save_clipboard_file,
+            image_attachment_path
         ])
         .setup(|app| {
             append_native_diagnostic("native_started");
@@ -1416,10 +1483,43 @@ mod tests {
     use super::{
         default_pet_overlay_position, docx_xml_to_text, parse_clipboard_file_paths,
         parse_desktop_close_behavior, persisted_window_state_flags, sanitize_image_extension,
-        DesktopCloseBehavior,
+        resolve_image_attachment_path, DesktopCloseBehavior,
     };
     use serde_json::json;
     use tauri_plugin_window_state::StateFlags;
+
+    #[test]
+    fn image_preview_normalizes_its_root_and_rejects_non_hash_ids() {
+        let root = std::env::temp_dir().join(format!("jupiter-image-path-{}", std::process::id()));
+        let id = "a".repeat(64);
+        std::fs::create_dir_all(root.join(&id)).unwrap();
+        let file = root.join(&id).join("image");
+        std::fs::write(&file, b"fixture").unwrap();
+        assert_eq!(resolve_image_attachment_path(&root.join("."), &id, false).unwrap(), file.canonicalize().unwrap());
+        assert!(resolve_image_attachment_path(&root, "../outside", false).is_err());
+        assert!(resolve_image_attachment_path(&root, &id, true).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_preview_accepts_root_aliases_but_rejects_symlinked_objects() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("jupiter-image-alias-{}", std::process::id()));
+        let objects = root.join("objects");
+        let alias = root.join("alias");
+        let id = "b".repeat(64);
+        std::fs::create_dir_all(objects.join(&id)).unwrap();
+        let file = objects.join(&id).join("image");
+        std::fs::write(&file, b"fixture").unwrap();
+        symlink(&objects, &alias).unwrap();
+        assert_eq!(resolve_image_attachment_path(&alias, &id, false).unwrap(), file.canonicalize().unwrap());
+        let outside = root.join("outside");
+        std::fs::write(&outside, b"not an attachment").unwrap();
+        symlink(&outside, objects.join(&id).join("thumbnail")).unwrap();
+        assert!(resolve_image_attachment_path(&alias, &id, true).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn accepts_alphanumeric_extensions() {

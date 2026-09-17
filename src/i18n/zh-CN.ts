@@ -192,7 +192,7 @@ export const zhCN: TranslationSchema = {
     newHint: "强制创建新会话（忽略 --session / --continue）",
     transcriptHint: "JSONL 转录稿的写入路径",
     budgetHint: "会话美元上限 — 80% 时警告，100% 时拒绝下一轮",
-    modelIdHint: "DeepSeek 模型 ID（例如 deepseek-v4-flash）",
+    modelIdHint: "DeepSeek 模型 ID（例如 deepseek-flash）",
     systemPromptHint: "覆盖默认系统提示词",
     effortHint: "推理强度 — low|medium|high|max",
     sessionNameHint: "会话名称（默认：'default'）",
@@ -240,7 +240,7 @@ export const zhCN: TranslationSchema = {
     mcpMaxPagesHint: "搜索时最多走多少页（默认 20）",
     jsonHintCatalog: "以 JSON 格式输出",
     jsonHintReport: "以 JSON 格式输出检查报告",
-    modelOverrideFlash: "覆盖模型（默认：deepseek-v4-flash）",
+    modelOverrideFlash: "覆盖模型（默认：deepseek-flash）",
     skipConfirmHint: "跳过确认提示",
     yoloHint: "自动批准本次调用的计划检查点（等同于 editMode=yolo，但不修改配置文件）",
   },
@@ -710,6 +710,7 @@ export const zhCN: TranslationSchema = {
       "已停止卡死的重试循环 — 模型在自纠提示后仍以相同参数重复调用同一工具。请尝试 /retry、换种说法，或排查底层阻塞。",
     stormSuppressed: "已抑制 {count} 次重复工具调用 — 同一名称 + 参数触发 3 次以上。",
     compactingHistoryStatus: "正在压缩历史{aggressiveTag}…",
+    compactionUnchanged: "历史压缩已结束，内容未变更。",
     aggressiveTag: "（激进）",
     foldedHistory:
       "上下文 {before}/{ctxMax}（{pct}%）— 已折叠 {beforeMessages} 条消息 → {afterMessages}（总结 {summaryChars} 字）。继续。",
@@ -1034,7 +1035,7 @@ export const zhCN: TranslationSchema = {
       cwdUsageNoCurrent: "用法：/cwd <path>   将工作区根目录切换到 <path>。",
     },
     model: {
-      modelHint: "尝试 deepseek-v4-flash 或 deepseek-v4-pro — 运行 /models 获取实时列表",
+      modelHint: "尝试 deepseek-flash 或 deepseek-v4-pro — 运行 /models 获取实时列表",
       modelUsage: "用法：/model <id>   （{hint}）",
       modelNotInCatalog:
         "model → {id}   （⚠ 不在获取的目录中：{list}。如果这是错误的，下次调用将返回 400 — 运行 /models 刷新。）",

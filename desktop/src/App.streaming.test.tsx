@@ -282,7 +282,11 @@ function visibleMain(): HTMLElement {
   return main;
 }
 
+const originalViewportWidth = window.innerWidth;
 beforeEach(() => {
+  delete document.documentElement.dataset.runtime;
+  delete document.documentElement.dataset.nativeWindow;
+  Object.defineProperty(window, "innerWidth", { value: originalViewportWidth, configurable: true });
   tauri.listeners.clear();
   tauri.listenFailures.clear();
   tauri.invoke.mockReset();
@@ -299,6 +303,146 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  delete document.documentElement.dataset.runtime;
+  delete document.documentElement.dataset.nativeWindow;
+  Object.defineProperty(window, "innerWidth", { value: originalViewportWidth, configurable: true });
+});
+
+describe("Web workbench layout", () => {
+  async function startWeb(width: number, busy = false) {
+    document.documentElement.dataset.runtime = "web";
+    document.documentElement.dataset.nativeWindow = "false";
+    Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    render(<App />);
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("web-tab", "/tmp/web-layout", { busy });
+  }
+
+  async function resizeWeb(width: number) {
+    Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    fireEvent(window, new Event("resize"));
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  }
+
+  it("keeps the docked sidebar, draft and busy task through quick and full settings", async () => {
+    await startWeb(727, true);
+    const app = activeApp();
+    const sidebar = app.querySelector(".sidebar")!;
+    const composer = visibleMain().querySelector("textarea")!;
+    fireEvent.change(composer, { target: { value: "unfinished draft" } });
+    expect(app.dataset.webLayout).toBe("compact");
+    expect(app.dataset.sideCollapsed).toBe("false");
+    expect(app.querySelector(".win-controls")).toBeNull();
+    expect(app.querySelector("[data-tauri-drag-region]")).toBeNull();
+    const settingsButton = within(sidebar as HTMLElement).getByRole("button", { name: "Settings" });
+    settingsButton.focus();
+    fireEvent.click(settingsButton);
+    const quick = screen.getByRole("dialog", { name: "Settings" });
+    expect(quick.className).toBe("settings-card");
+    expect(app.dataset.sideCollapsed).toBe("false");
+    expect(sidebar.hasAttribute("inert")).toBe(true);
+    fireEvent.click(within(quick).getByRole("button", { name: "Settings" }));
+    expect(app.querySelector(".settings-card")).toBeNull();
+    expect(app.querySelector(".settings-mask")).not.toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(app.querySelector(".settings-mask")).toBeNull();
+    expect(app.querySelector(".sidebar")).toBe(sidebar);
+    expect(visibleMain().querySelector("textarea")).toBe(composer);
+    expect(composer.value).toBe("unfinished draft");
+    expect(sidebar.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement).toBe(settingsButton);
+    expect(sentRpcCommands().some((cmd) => cmd.cmd === "abort")).toBe(false);
+    expect(localStorage.getItem("jupiter.web.layout.v1.sideCollapsed")).toBeNull();
+    await resizeWeb(375);
+    await resizeWeb(727);
+    expect(app.querySelector(".sidebar")).toBe(sidebar);
+    expect(composer.value).toBe("unfinished draft");
+    expect(app.dataset.sideCollapsed).toBe("false");
+  });
+
+  it("closes narrow drawers with Esc without aborting, and restores settings to the open drawer", async () => {
+    await startWeb(375, true);
+    const app = activeApp();
+    const sidebar = app.querySelector<HTMLElement>(".sidebar")!;
+    expect(sidebar.hasAttribute("inert")).toBe(true);
+    const toggle = screen.getByTitle("Sidebar");
+    toggle.focus();
+    fireEvent.click(toggle);
+    expect(app.dataset.sideCollapsed).toBe("false");
+    const settingsButton = within(sidebar).getByRole("button", { name: "Settings" });
+    settingsButton.focus();
+    fireEvent.click(settingsButton);
+    expect(app.dataset.sideCollapsed).toBe("false");
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(app.querySelector(".settings-card")).toBeNull();
+    expect(sidebar.hasAttribute("inert")).toBe(false);
+    expect(app.dataset.sideCollapsed).toBe("false");
+    expect(document.activeElement).toBe(settingsButton);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(app.dataset.sideCollapsed).toBe("true");
+    expect(sentRpcCommands().some((cmd) => cmd.cmd === "abort")).toBe(false);
+    expect(localStorage.getItem("jupiter.web.layout.v1.sideCollapsed")).toBeNull();
+  });
+
+  it("treats compact info and right panels as overlays without taking away the left column", async () => {
+    await startWeb(727);
+    const app = activeApp();
+    const sideWidth = app.style.getPropertyValue("--side-width");
+    fireEvent.click(screen.getByRole("button", { name: "Show information" }));
+    expect(app.dataset.webDrawerOpen).toBe("true");
+    expect(app.style.getPropertyValue("--side-width")).toBe(sideWidth);
+    expect(app.style.getPropertyValue("--ctx-width")).toBe("0px");
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(app.dataset.contextInfoOpen).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Toggle right sidebar" }));
+    expect(app.dataset.ctxCollapsed).toBe("false");
+    expect(app.dataset.sideCollapsed).toBe("false");
+    expect(app.style.getPropertyValue("--ctx-width")).toBe("0px");
+    fireEvent.click(app.querySelector(".web-drawer-scrim")!);
+    fireEvent.click(app.querySelector(".web-drawer-scrim")!);
+    expect(app.dataset.ctxCollapsed).toBe("true");
+    expect(localStorage.getItem("jupiter.web.layout.v1.ctxCollapsed")).toBeNull();
+  });
+
+  it("uses the same transient operations for keyboard panel toggles", async () => {
+    await startWeb(375, true);
+    const app = activeApp();
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    expect(app.dataset.sideCollapsed).toBe("false");
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true, altKey: true });
+    expect(app.dataset.sideCollapsed).toBe("true");
+    expect(app.dataset.ctxCollapsed).toBe("false");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(app.dataset.ctxCollapsed).toBe("true");
+    expect(localStorage.getItem("jupiter.sideCollapsed")).toBeNull();
+    expect(localStorage.getItem("jupiter.ctxCollapsed")).toBeNull();
+    expect(localStorage.getItem("jupiter.web.layout.v1.sideCollapsed")).toBeNull();
+    expect(localStorage.getItem("jupiter.web.layout.v1.ctxCollapsed")).toBeNull();
+    expect(sentRpcCommands().some((cmd) => cmd.cmd === "abort")).toBe(false);
+  });
+
+  it("preserves quick-settings shortcut toggling without leaking global tab actions", async () => {
+    await startWeb(727);
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    expect(activeApp().querySelector(".settings-card")).not.toBeNull();
+    fireEvent.keyDown(window, { key: "t", ctrlKey: true });
+    expect(sentRpcCommands().some((cmd) => cmd.cmd === "tab_open")).toBe(false);
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    expect(activeApp().querySelector(".settings-card")).toBeNull();
+  });
+
+  it("keeps the drawer open when Esc dismisses jobs opened through settings", async () => {
+    await startWeb(375, true);
+    fireEvent.click(screen.getByTitle("Sidebar"));
+    const sidebar = activeApp().querySelector<HTMLElement>(".sidebar")!;
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    fireEvent.click(activeApp().querySelector(".settings-card-row")!);
+    expect(activeApp().querySelector(".jobs-mask")).not.toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(activeApp().querySelector(".jobs-mask")).toBeNull();
+    expect(activeApp().dataset.sideCollapsed).toBe("false");
+    expect(sentRpcCommands().some((cmd) => cmd.cmd === "abort")).toBe(false);
+  });
 });
 
 describe("App streaming events", () => {
@@ -332,6 +476,41 @@ describe("App streaming events", () => {
 
     expect(screen.getByText("Switch workspace")).toBeTruthy();
     expect(document.querySelector(".wd-pop")?.textContent).toContain("jupiter-streaming-test");
+  });
+
+  it("offers a one-click manual retry after a retryable API failure", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-retry", "/tmp/jupiter-streaming-test");
+    await emitRpc({
+      type: "user.message",
+      tabId: "tab-retry",
+      id: 1,
+      ts: "2026-08-14T00:00:00.000Z",
+      turn: 1,
+      text: "hello",
+    });
+    await emitRpc({
+      type: "error",
+      tabId: "tab-retry",
+      id: 2,
+      ts: "2026-08-14T00:00:01.000Z",
+      turn: 1,
+      message: "connection refused",
+      recoverable: false,
+      retryable: true,
+    });
+    await emitRpc({ type: "$turn_complete", tabId: "tab-retry" });
+
+    const retry = screen.getByRole("button", { name: "Retry request" });
+    fireEvent.click(retry);
+
+    await waitFor(() =>
+      expect(sentRpcCommands()).toContainEqual({ tabId: "tab-retry", cmd: "retry_api" }),
+    );
+    expect(screen.queryByText("connection refused")).toBeNull();
+    expect(visibleMain().querySelector(".msg.assistant")).toBeTruthy();
   });
 
   it("does not show recent prompt history as blank-chat suggestions", async () => {
@@ -1529,6 +1708,28 @@ describe("App streaming events", () => {
         }),
       ).toBe(true);
     });
+  });
+
+  it("drains a pure-image Ask queue after a locally submitted turn completes", async () => {
+    render(<App />);
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-image-queue");
+    await emitRpc({ type: "$settings", tabId: "tab-image-queue", model: "vision-test", supportsImages: true });
+    const image = { kind: "image", id: "b".repeat(64), name: "queue.png", mime: "image/png", width: 2, height: 1, bytes: 3 };
+    const textarea = screen.getByPlaceholderText("Ask the agent / describe a task…");
+    fireEvent.change(textarea, { target: { value: "start locally" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await waitFor(() => expect(sentRpcCommands().some((command) => command.cmd === "user_input" && command.text === "start locally")).toBe(true));
+    await emitRpc({ type: "$retry_result", tabId: "tab-image-queue", text: "", attachments: [image] });
+    fireEvent.click(screen.getByRole("button", { name: "Answer the next message directly" }));
+    fireEvent.keyDown(screen.getByPlaceholderText("Ask the agent / describe a task…"), { key: "Enter" });
+    await emitRpc({ type: "$turn_complete", tabId: "tab-image-queue" });
+    await waitFor(() => expect(sentRpcCommands().some((command) => command.cmd === "ask_light" && command.text === "" && (command.imagePaths as string[])?.[0] === `jupiter-image:${image.id}`)).toBe(true));
+    const sent = sentRpcCommands().find((command) => command.cmd === "ask_light")!;
+    await emitRpc({ type: "user.message", tabId: "tab-image-queue", clientId: sent.clientId, turn: 2, text: "", attachments: [image], id: 2, ts: new Date().toISOString() });
+    await emitRpc({ type: "$turn_complete", tabId: "tab-image-queue" });
+    expect(sentRpcCommands().filter((command) => command.cmd === "ask_light")).toHaveLength(1);
+    expect(document.querySelectorAll(".composer .image-attachment")).toHaveLength(0);
   });
 
   it("ingests web source text when adding a web search result", async () => {

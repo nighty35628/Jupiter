@@ -12,20 +12,24 @@ const PERSIST_KEY_BOTTOM = "jupiter.bottomHeight";
 const DEFAULT_SIDEBAR_WIDTH = 254;
 const DEFAULT_BOTTOM_HEIGHT = 180;
 
+type ResizeOptions = { maxWidth: number; scale: number; persistKey: string };
+
 export function useResizable(
   side: "side" | "ctx",
   collapsed: boolean,
   activeWhenCollapsed = false,
+  options?: ResizeOptions,
 ): {
   width: number;
   onMouseDown: (e: React.MouseEvent) => void;
 } {
-  const persistKey = side === "side" ? PERSIST_KEY_SIDE : PERSIST_KEY_CTX;
+  const legacyKey = side === "side" ? PERSIST_KEY_SIDE : PERSIST_KEY_CTX;
+  const persistKey = options?.persistKey ?? legacyKey;
   const defaultWidth = DEFAULT_SIDEBAR_WIDTH;
 
-  const [width, setWidth] = useState(() => {
+  const [preferredWidth, setWidth] = useState(() => {
     try {
-      const saved = localStorage.getItem(persistKey);
+      const saved = localStorage.getItem(persistKey) ?? localStorage.getItem(legacyKey);
       if (saved) {
         const n = Number(saved);
         if (Number.isFinite(n) && n >= MIN_WIDTH) return n;
@@ -35,6 +39,9 @@ export function useResizable(
     }
     return defaultWidth;
   });
+  const width = options ? Math.min(preferredWidth, options.maxWidth) : preferredWidth;
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   const draggingRef = useRef(false);
   const startXRef = useRef(0);
@@ -64,14 +71,15 @@ export function useResizable(
       const appEl = appRef.current;
       if (!appEl) return;
 
-      const delta = e.clientX - startXRef.current;
+      const delta = (e.clientX - startXRef.current) / (optionsRef.current?.scale ?? 1);
       let next: number;
       if (side === "side") {
         next = startWidthRef.current + delta;
       } else {
         next = startWidthRef.current - delta;
       }
-      const maxW = Math.floor(window.innerWidth * MAX_WIDTH_PCT[side]);
+      const maxW =
+        optionsRef.current?.maxWidth ?? Math.floor(window.innerWidth * MAX_WIDTH_PCT[side]);
       next = Math.max(MIN_WIDTH, Math.min(next, maxW));
       widthRef.current = next;
 
@@ -81,7 +89,7 @@ export function useResizable(
       const otherVar = side === "side" ? "--ctx-width" : "--side-width";
       const otherW = Number.parseFloat(appEl.style.getPropertyValue(otherVar)) || 0;
       const tMax = getThreadMaxWidth({
-        viewportWidth: window.innerWidth,
+        viewportWidth: window.innerWidth / (optionsRef.current?.scale ?? 1),
         visibleSide: side === "side" ? next : otherW,
         visibleCtx: side === "ctx" ? next : otherW,
       });
@@ -109,19 +117,29 @@ export function useResizable(
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      if (draggingRef.current) {
+        draggingRef.current = false;
+        if (appRef.current) delete appRef.current.dataset.dragging;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
     };
   }, [collapsed, activeWhenCollapsed, side, persistKey, cssVar]);
 
   return { width, onMouseDown };
 }
 
-export function useBottomResizable(collapsed: boolean): {
+export function useBottomResizable(
+  collapsed: boolean,
+  options?: { maxHeight: number; scale: number; persistKey: string },
+): {
   height: number;
   onMouseDown: (e: React.MouseEvent) => void;
 } {
-  const [height, setHeight] = useState(() => {
+  const persistKey = options?.persistKey ?? PERSIST_KEY_BOTTOM;
+  const [preferredHeight, setHeight] = useState(() => {
     try {
-      const saved = localStorage.getItem(PERSIST_KEY_BOTTOM);
+      const saved = localStorage.getItem(persistKey) ?? localStorage.getItem(PERSIST_KEY_BOTTOM);
       if (saved) {
         const n = Number(saved);
         if (Number.isFinite(n) && n >= MIN_HEIGHT) return n;
@@ -131,6 +149,9 @@ export function useBottomResizable(collapsed: boolean): {
     }
     return DEFAULT_BOTTOM_HEIGHT;
   });
+  const height = options ? Math.min(preferredHeight, options.maxHeight) : preferredHeight;
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   const draggingRef = useRef(false);
   const startYRef = useRef(0);
@@ -158,9 +179,10 @@ export function useBottomResizable(collapsed: boolean): {
       if (!draggingRef.current) return;
       const appEl = appRef.current;
       if (!appEl) return;
-      const delta = startYRef.current - e.clientY;
-      const maxH = Math.floor(window.innerHeight * MAX_BOTTOM_HEIGHT_PCT);
-      const next = Math.max(MIN_HEIGHT, Math.min(startHeightRef.current + delta, maxH));
+      const delta = (startYRef.current - e.clientY) / (optionsRef.current?.scale ?? 1);
+      const maxH =
+        optionsRef.current?.maxHeight ?? Math.floor(window.innerHeight * MAX_BOTTOM_HEIGHT_PCT);
+      const next = Math.min(maxH, Math.max(MIN_HEIGHT, startHeightRef.current + delta));
       heightRef.current = next;
       appEl.style.setProperty("--bottom-height", `${next}px`);
       setHeight(next);
@@ -175,7 +197,7 @@ export function useBottomResizable(collapsed: boolean): {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       try {
-        localStorage.setItem(PERSIST_KEY_BOTTOM, String(heightRef.current));
+        localStorage.setItem(persistKey, String(heightRef.current));
       } catch {
         /* localStorage not available */
       }
@@ -186,8 +208,14 @@ export function useBottomResizable(collapsed: boolean): {
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      if (draggingRef.current) {
+        draggingRef.current = false;
+        if (appRef.current) delete appRef.current.dataset.dragging;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
     };
-  }, [collapsed]);
+  }, [collapsed, persistKey]);
 
   return { height, onMouseDown };
 }

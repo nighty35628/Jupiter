@@ -461,6 +461,8 @@ function normalizeClaudeAssistant(content: unknown): {
   for (const item of content) {
     if (!item || typeof item !== "object") continue;
     const type = firstString((item as Record<string, unknown>).type);
+    if (type === "input_image" || type === "image" || type === "image_url")
+      textParts.push("[Image unavailable in this imported conversation]");
     if (type === "text") {
       const text = firstString((item as Record<string, unknown>).text);
       if (text) textParts.push(text);
@@ -539,6 +541,8 @@ function normalizeCodexMessageContent(role: "user" | "assistant", content: unkno
   for (const item of content) {
     if (!item || typeof item !== "object") continue;
     const type = firstString((item as Record<string, unknown>).type);
+    if (type === "input_image" || type === "image" || type === "image_url")
+      textParts.push("[Image unavailable in this imported conversation]");
     if (type === "input_text" || type === "output_text" || type === "text") {
       const text = firstString((item as Record<string, unknown>).text);
       if (!text) continue;

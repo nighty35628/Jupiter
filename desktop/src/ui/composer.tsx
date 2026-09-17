@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
   type ChangeEvent,
@@ -11,17 +11,25 @@ import {
   useState,
 } from "react";
 import type React from "react";
-import { type TKey, t } from "../i18n";
+import { type TKey, getLang, t } from "../i18n";
 import { I } from "../icons";
 import { displayReasoningSelection } from "../protocol";
-import { DEFAULT_COMPOSER_ROWS, applyComposerTextareaAutosize } from "./composer-sizing";
+import {
+  DEFAULT_COMPOSER_ROWS,
+  applyComposerTextareaAutosize,
+  observeComposerTextareaWidth,
+} from "./composer-sizing";
 import { fmtElapsed } from "./live";
+import { ImageAttachmentView, importImage } from "./image-attachments";
+import { type ImageAttachment, MAX_MESSAGE_IMAGES, MAX_IMAGE_INPUT_BYTES } from "../../../src/attachments/types";
+import { DEEPSEEK_MODELS } from "../../../src/provider-models";
 
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
 export type EditMode = "review" | "auto" | "yolo";
 
 type ModeEntry = { k: EditMode; label: TKey; icon: React.ReactNode; hint: TKey };
-export type ComposerSendPayload = { hiddenMentions?: string[]; ask?: boolean };
+export type ComposerSendPayload = { hiddenMentions?: string[]; ask?: boolean; attachments?: ImageAttachment[]; plan?: boolean; clientId?: string };
+export type QueuedComposerDraft = { text: string; payload?: ComposerSendPayload };
 
 const MODE_INFO: ModeEntry[] = [
   {
@@ -121,7 +129,7 @@ function fileMeta(path: string): string {
 
 function isImagePath(path: string): boolean {
   const clean = path.split(/[?#]/)[0] ?? path;
-  return /\.(png|jpe?g|gif|webp|svg|avif|bmp|tiff?)$/i.test(clean);
+  return /^jupiter-image:/.test(clean) || /\.(png|jpe?g|gif|webp)$/i.test(clean);
 }
 
 /** For long paths show only the filename; truncate filename if it's still too long. */
@@ -351,6 +359,11 @@ export function clipboardFileMentionPaths(
 }
 
 export function Composer({
+  tabId,
+  images = [],
+  onImagesChange,
+  supportsImages = false,
+  intakePending = 0,
   draft,
   setDraft,
   onSend,
@@ -388,6 +401,11 @@ export function Composer({
   initialHistory,
   onHistoryPush,
 }: {
+  tabId?: string;
+  images?: ImageAttachment[];
+  onImagesChange?: React.Dispatch<React.SetStateAction<ImageAttachment[]>>;
+  supportsImages?: boolean;
+  intakePending?: number;
   draft: string;
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   onSend: (payload?: ComposerSendPayload) => void;
@@ -420,9 +438,9 @@ export function Composer({
   onOpenWorkspacePicker?: (anchor: { top?: number; bottom?: number; left: number }) => void;
   workspaceDir?: string;
   /** Messages typed while busy=true; rendered as removable chips above the textarea and auto-drained FIFO on turn-complete. */
-  queuedSends?: string[];
+  queuedSends?: (string | QueuedComposerDraft)[];
   /** Called when the user presses Enter while busy with a non-empty draft. Owns clearing the draft. */
-  onQueueWhileBusy?: (text: string) => void;
+  onQueueWhileBusy?: (text: string, payload?: ComposerSendPayload) => void;
   onDequeueSend?: (index: number) => void;
   onPrioritizeQueuedSend?: (index: number) => void;
   /** Seed the in-session history from persisted storage so ArrowUp works after restart (#2051). */
@@ -433,6 +451,14 @@ export function Composer({
   const [popup, setPopup] = useState<Popup>(null);
   const [pickedChips, setPickedChips] = useState<Map<string, Chip["kind"]>>(new Map());
   const [imageAttachments, setImageAttachments] = useState<ComposerAttachment[]>([]);
+  const [localImagePending, setImagePending] = useState(0);
+  const [clipboardProbing, setClipboardProbing] = useState(false);
+  const clipboardProbeRef = useRef(false);
+  const imagePending = localImagePending + intakePending + (clipboardProbing ? 1 : 0);
+  const [imageError, setImageError] = useState("");
+  const imagePendingRef = useRef(0);
+  const durableImagesRef = useRef(images);
+  durableImagesRef.current = images;
   const chips = useMemo(() => {
     const result: Chip[] = [];
     for (const [label, kind] of pickedChips) {
@@ -534,36 +560,37 @@ export function Composer({
     });
   };
 
-  const addImageAttachment = (path: string, preview?: ImagePreview) => {
-    const normalized = normalizeMentionPath(path, workspaceDir);
-    const attachment: ComposerAttachment = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      kind: "image",
-      path: normalized,
-      previewUrl: preview?.url ?? convertFileSrc(path),
-      revokePreviewUrl: preview?.revoke,
-      name: basename(path),
-      meta: fileMeta(path),
-    };
-    setImageAttachments((prev) => [...prev, attachment]);
-    onMentionPicked?.(normalized);
-    setPopup(null);
-    textareaRef.current?.focus();
+  const addImageAttachment = async (source: string | (() => Promise<string>), preview?: ImagePreview) => {
+    if (!tabId || !onImagesChange) { revokeImagePreview(preview); return; }
+    if (durableImagesRef.current.length + imagePendingRef.current >= MAX_MESSAGE_IMAGES) {
+      setImageError(`At most ${MAX_MESSAGE_IMAGES} images per message`); revokeImagePreview(preview); return;
+    }
+    imagePendingRef.current++;
+    setImagePending(imagePendingRef.current);
+    setImageError("");
+    try {
+      const picked = typeof source === "string" ? source : await source();
+      const path = /^jupiter-image:|^(?:[a-zA-Z]:)?[\\/]/.test(picked) || !workspaceDir ? picked : `${workspaceDir}/${picked}`;
+      const image = await importImage(path, tabId);
+      onImagesChange((current) => current.some((item) => item.id === image.id) ? current : [...current, image].slice(0, MAX_MESSAGE_IMAGES));
+    } catch (error) { setImageError((error as Error).message); }
+    finally { imagePendingRef.current--; setImagePending(imagePendingRef.current); revokeImagePreview(preview); }
   };
 
-  const addFileAttachments = (paths: string[]) => {
+  const addFileAttachments = (paths: string[], labels?: string[]) => {
     const attachments: ComposerAttachment[] = [];
     const seen = new Set<string>();
-    for (const path of paths) {
+    for (const [index, path] of paths.entries()) {
       const normalized = normalizeMentionPath(path, workspaceDir);
       if (!normalized || seen.has(normalized)) continue;
       seen.add(normalized);
+      const label = labels?.[index] || basename(normalized);
       attachments.push({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${attachments.length}`,
         kind: "file",
         path: normalized,
-        name: basename(normalized),
-        meta: fileMeta(normalized),
+        name: label,
+        meta: fileMeta(label),
       });
       onMentionPicked?.(normalized);
     }
@@ -571,6 +598,27 @@ export function Composer({
     setImageAttachments((prev) => [...prev, ...attachments]);
     setPopup(null);
     textareaRef.current?.focus();
+  };
+
+  const addClipboardFileAttachments = async (files: File[]) => {
+    const paths: string[] = [];
+    const labels: string[] = [];
+    try {
+      for (const file of files) {
+        const bytes = await file.arrayBuffer();
+        const path = document.documentElement.dataset.runtime === "web"
+          ? await invoke<string>("web_upload_file", { file })
+          : await invoke<string>("save_clipboard_file", {
+              bytes: Array.from(new Uint8Array(bytes)),
+              name: file.name,
+            });
+        paths.push(path);
+        labels.push(file.name || basename(path));
+      }
+      addFileAttachments(paths, labels);
+    } catch (error) {
+      setImageError(`File attachment failed: ${(error as Error).message}`);
+    }
   };
 
   const addPathAttachments = (paths: string[]) => {
@@ -581,6 +629,8 @@ export function Composer({
   };
 
   const tryAddDesktopClipboardPaths = async (logLabel: string) => {
+    clipboardProbeRef.current = true;
+    setClipboardProbing(true);
     try {
       const paths = await invoke<string[]>("read_clipboard_file_paths");
       if (Array.isArray(paths) && paths.length > 0) {
@@ -589,25 +639,25 @@ export function Composer({
       }
     } catch (err) {
       console.error(logLabel, err);
+    } finally {
+      clipboardProbeRef.current = false;
+      setClipboardProbing(false);
     }
     return false;
   };
 
   const addPastedImageFile = async (file: File) => {
+    if (file.size > MAX_IMAGE_INPUT_BYTES || !/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
+      setImageError("Use a PNG, JPEG, GIF or WebP image up to 20 MiB"); return false;
+    }
     const preview = createImagePreview(file);
-    try {
+    return addImageAttachment(async () => {
       const buffer = await file.arrayBuffer();
-      const savedPath = await invoke<string>("save_clipboard_image", {
-        bytes: buffer,
+      return invoke<string>("save_clipboard_image", {
+        bytes: document.documentElement.dataset.runtime === "web" ? buffer : Array.from(new Uint8Array(buffer)),
         extension: guessImageExtension(file.type),
       });
-      addImageAttachment(savedPath, preview);
-      return true;
-    } catch (err) {
-      revokeImagePreview(preview);
-      console.error("clipboard image paste failed", err);
-      return false;
-    }
+    }, preview).then(() => true);
   };
 
   const tryAddNavigatorClipboardImage = async () => {
@@ -634,6 +684,12 @@ export function Composer({
     if (!textarea) return;
     applyComposerTextareaAutosize(textarea);
   });
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea || document.documentElement.dataset.runtime !== "web") return;
+    return observeComposerTextareaWidth(textarea);
+  }, [textareaRef]);
 
   // Programmatic draft transitions to "/" must open the slash popup, since handleChange only fires on actual user input.
   const prevDraftRef = useRef(draft);
@@ -664,8 +720,11 @@ export function Composer({
   }, [modelMenuOpen, plusMenuOpen, modeMenuOpen]);
 
   const attachFile = async (filter?: "image") => {
+    imagePendingRef.current++;
+    setImagePending(imagePendingRef.current);
+    let picked: unknown;
     try {
-      const picked = await openFileDialog({
+      picked = await openFileDialog({
         multiple: false,
         directory: false,
         defaultPath: workspaceDir,
@@ -674,20 +733,21 @@ export function Composer({
             ? [
                 {
                   name: t("composer.imageFilterName"),
-                  extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"],
+                  extensions: ["png", "jpg", "jpeg", "gif", "webp"],
                 },
               ]
             : undefined,
       });
-      if (typeof picked !== "string" || !picked) return;
-      if (filter === "image" || isImagePath(picked)) {
-        addImageAttachment(picked);
-      } else {
-        addFileAttachments([picked]);
-      }
     } catch (err) {
       console.error("attach failed", err);
+      setImageError((err as Error).message);
+    } finally {
+      imagePendingRef.current--;
+      setImagePending(imagePendingRef.current);
     }
+    if (typeof picked !== "string" || !picked) return;
+    if (filter === "image" || isImagePath(picked)) await addImageAttachment(picked);
+    else addFileAttachments([picked]);
   };
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -715,7 +775,9 @@ export function Composer({
     if (shouldProbeDesktopFiles) {
       e.preventDefault();
       if (await tryAddDesktopClipboardPaths("clipboard file paste failed")) return;
-      if (!imageFile) {
+      const ordinaryFiles = files.filter((file) => !/^image\//i.test(file.type || ""));
+      if (ordinaryFiles.length > 0) await addClipboardFileAttachments(ordinaryFiles);
+      if (!imageFile && ordinaryFiles.length === 0) {
         insertPlainTextAtCursor(plainText);
         return;
       }
@@ -912,14 +974,15 @@ export function Composer({
 
   const submitNow = () => {
     const hiddenMentions = imageAttachments.map((attachment) => attachment.path);
-    const hasPayload = Boolean(draft.trim()) || hiddenMentions.length > 0;
-    if (disabled || !hasPayload || busy) return;
+    const hasPayload = Boolean(draft.trim()) || hiddenMentions.length > 0 || images.length > 0;
+    if (disabled || !hasPayload || busy || imagePending || (images.length > 0 && !supportsImages)) return;
     const ask = askArmed;
     recordSendAndReset();
     const payload: ComposerSendPayload = {};
     if (hiddenMentions.length > 0) payload.hiddenMentions = hiddenMentions;
     if (ask) payload.ask = true;
-    onSend(hiddenMentions.length > 0 || ask ? payload : undefined);
+    if (images.length) payload.attachments = images;
+    onSend(hiddenMentions.length > 0 || ask || images.length ? payload : undefined);
     if (ask) onAskArmedChange?.(false);
     setPickedChips(new Map());
     revokeImagePreviews(imageAttachments);
@@ -952,12 +1015,13 @@ export function Composer({
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
       const draftBeforePaste = draft;
       const attachmentCountBeforePaste = imageAttachmentsRef.current.length;
+      const imageCountBeforePaste = durableImagesRef.current.length;
       window.setTimeout(() => {
         const textarea = textareaRef.current;
         const textChanged = textarea ? textarea.value !== draftBeforePaste : false;
         const attachmentsChanged =
           imageAttachmentsRef.current.length !== attachmentCountBeforePaste;
-        if (textChanged || attachmentsChanged) return;
+        if (textChanged || attachmentsChanged || imagePendingRef.current || clipboardProbeRef.current || durableImagesRef.current.length !== imageCountBeforePaste) return;
         void (async () => {
           if (await tryAddDesktopClipboardPaths("keyboard clipboard file paste failed")) return;
           await tryAddNavigatorClipboardImage();
@@ -1052,8 +1116,9 @@ export function Composer({
       e.preventDefault();
       if (busy) {
         const text = draft.trim();
-        if (text && onQueueWhileBusy) {
-          onQueueWhileBusy(text);
+        if ((text || images.length) && onQueueWhileBusy && !imagePending && (!images.length || supportsImages)) {
+          onQueueWhileBusy(text, { attachments: images, hiddenMentions: imageAttachments.map((item) => item.path), ask: askArmed, plan: planArmed });
+          setImageAttachments([]);
           setPickedChips(new Map());
         }
       } else {
@@ -1070,7 +1135,7 @@ export function Composer({
             <div className="composer-queued-head">
               <span>{t("composer.queueCount", { n: queuedSends.length })}</span>
             </div>
-            {queuedSends.map((text, i) => (
+            {queuedSends.map((entry, i) => { const text = typeof entry === "string" ? entry : `${entry.text}${entry.payload?.attachments?.length ? ` [${entry.payload.attachments.length} ${getLang() === "zh-CN" ? "张图片" : "images"}]` : ""}`; return (
               <div key={`${i}-${text}`} className="composer-queue-row" title={text}>
                 <span className="composer-queue-corner" aria-hidden="true">
                   ↳
@@ -1100,11 +1165,14 @@ export function Composer({
                   </button>
                 ) : null}
               </div>
-            ))}
+            ); })}
           </div>
         ) : null}
 
         <div className="composer">
+          {images.length > 0 && <div className="image-attachments">{images.map((image) => <ImageAttachmentView key={image.id} image={image} onRemove={() => onImagesChange?.((current) => current.filter((item) => item.id !== image.id))} />)}</div>}
+          {imagePending > 0 && <div className="composer-image-status" role="status">{getLang() === "zh-CN" ? "正在处理附件…" : "Processing attachments..."}</div>}
+          {(imageError || (images.length > 0 && !supportsImages)) && <div className="composer-image-status" role="alert">{imageError || "Select a vision model to send images"}</div>}
           {imageAttachments.length > 0 ? (
             <div className="composer-attachments">
               {imageAttachments.map((attachment) => (
@@ -1144,6 +1212,9 @@ export function Composer({
                       setImageAttachments((prev) => {
                         const removed = prev.find((item) => item.id === attachment.id);
                         revokeImagePreview(removed);
+                        if (removed?.path.startsWith("jupiter-file:")) {
+                          void invoke("web_upload_remove", { path: removed.path }).catch(() => {});
+                        }
                         return prev.filter((item) => item.id !== attachment.id);
                       })
                     }
@@ -1417,7 +1488,7 @@ export function Composer({
               <button
                 type="button"
                 className="send-btn"
-                disabled={disabled || (!draft.trim() && imageAttachments.length === 0)}
+                disabled={disabled || !!imagePending || (images.length > 0 && !supportsImages) || (!draft.trim() && imageAttachments.length === 0 && images.length === 0)}
                 onClick={submitNow}
               >
                 <I.send size={14} />
@@ -1587,10 +1658,12 @@ function Popup({
   );
 }
 
-const KNOWN_MODELS: readonly string[] = ["deepseek-v4-flash", "deepseek-v4-pro"];
+const KNOWN_MODELS = DEEPSEEK_MODELS;
 const MODEL_HINTS: Record<string, string> = {
+  "deepseek-flash": "vision",
   "deepseek-v4-flash": "fast",
   "deepseek-v4-pro": "pro",
+  "deepseek-v4-flash-vision-exp": "vision",
 };
 
 function ModelEffortMenu({

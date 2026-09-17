@@ -47,7 +47,7 @@ function payloadBytes(value: unknown): number {
 
 function previewText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}\n\n[display preview truncated]`;
+  return `${value.slice(0, maxChars)}\n\n…`;
 }
 
 function collapseAssistant(

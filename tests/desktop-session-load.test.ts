@@ -16,6 +16,18 @@ type BuildLoadedMessages = (records: ChatMessage[]) => Array<{
 }>;
 
 describe("desktop session loading", () => {
+  it("does not mislabel configured initialization failures as missing API keys", () => {
+    expect(
+      desktopCommand.desktopRuntimeUnavailableMessage(
+        true,
+        "Session is already writable in another process.",
+      ),
+    ).toBe("Jupiter initialization failed: Session is already writable in another process.");
+    expect(desktopCommand.desktopRuntimeUnavailableMessage(false)).toBe(
+      "Not configured yet — paste your DeepSeek API key first.",
+    );
+  });
+
   it("elides old heavy assistant segments before sending $session_loaded", () => {
     const buildLoadedMessages = (desktopCommand as { buildLoadedMessages?: BuildLoadedMessages })
       .buildLoadedMessages;

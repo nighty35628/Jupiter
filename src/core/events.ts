@@ -1,5 +1,6 @@
 /** Event-log kernel types. Every transition is an appended Event; every view is a pure reducer projection (no I/O). */
 
+import type { ImageAttachment } from "../attachments/types.js";
 import type { PlanStep, PlanStepRisk, StepCompletion } from "../tools/plan-types.js";
 import type { ChatMessage, RawUsage, ToolCall } from "../types.js";
 
@@ -15,7 +16,7 @@ export interface UserMessageEvent extends EventBase {
   type: "user.message";
   text: string;
   clientId?: string;
-  attachments?: ReadonlyArray<{ kind: "file" | "url"; ref: string }>;
+  attachments?: ReadonlyArray<{ kind: "file" | "url"; ref: string } | ImageAttachment>;
 }
 
 export interface SlashInvokedEvent extends EventBase {
@@ -75,6 +76,7 @@ export interface ToolDeniedEvent extends EventBase {
 }
 
 export interface ToolResultEvent extends EventBase {
+  attachments?: ImageAttachment[];
   type: "tool.result";
   callId: string;
   ok: boolean;
@@ -212,6 +214,8 @@ export interface CapabilityRemovedEvent extends EventBase {
 export interface StatusEvent extends EventBase {
   type: "status";
   text: string;
+  activity?: "compaction";
+  activityState?: "running" | "complete";
 }
 
 export interface ErrorEvent extends EventBase {

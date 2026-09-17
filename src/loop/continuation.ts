@@ -1,4 +1,5 @@
 import { type ChatFinishReason, Usage } from "../client.js";
+import type { ProviderDialectPreference } from "../config.js";
 import { resolveModelCapability } from "../provider-capabilities.js";
 import type { ChatMessage, ToolCall } from "../types.js";
 
@@ -14,6 +15,7 @@ export interface PrefixContinuationPlan {
 export function planPrefixContinuation(opts: {
   enabled: boolean;
   baseUrl: string;
+  dialect?: ProviderDialectPreference;
   model: string;
   finishReason: ChatFinishReason;
   messages: ChatMessage[];
@@ -22,7 +24,7 @@ export function planPrefixContinuation(opts: {
   toolCalls: readonly ToolCall[];
   usage: Usage | null;
 }): PrefixContinuationPlan | null {
-  const capability = resolveModelCapability(opts.baseUrl, opts.model);
+  const capability = resolveModelCapability(opts.baseUrl, opts.model, opts.dialect);
   if (!opts.enabled || !capability.supportsPrefixContinuation) return null;
   if (opts.finishReason !== "length" || opts.toolCalls.length > 0 || !opts.usage) return null;
   if (!opts.assistantContent && !opts.reasoningContent) return null;

@@ -3,11 +3,10 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { DeepSeekClient, pickPrimaryBalance } from "../../client.js";
+import { type DeepSeekClient, pickPrimaryBalance } from "../../client.js";
 import {
   defaultConfigPath,
   inspectEndpointSources,
-  loadEndpoint,
   loadProxyConfig,
   normalizeMcpConfig,
   readConfig,
@@ -21,6 +20,7 @@ import { indexExists } from "../../index/semantic/builder.js";
 import { checkOllamaStatus } from "../../index/semantic/ollama-launcher.js";
 import { listSessions } from "../../memory/session.js";
 import { detectProxyUrl, matchesNoProxy, resolveNoProxy } from "../../net/proxy.js";
+import { createProviderClient, resolveProviderSnapshot } from "../../provider-runtime.js";
 import { resolveDataPath } from "../../tokenizer.js";
 import { VERSION } from "../../version.js";
 
@@ -273,8 +273,8 @@ async function checkConfig(): Promise<Check> {
 }
 
 async function checkApiReach(): Promise<Check> {
-  const endpoint = loadEndpoint();
-  const key = endpoint.apiKey;
+  const provider = resolveProviderSnapshot();
+  const key = provider.apiKey;
   if (!key) {
     return {
       id: "api-reach",
@@ -284,7 +284,7 @@ async function checkApiReach(): Promise<Check> {
     };
   }
   try {
-    const client = new DeepSeekClient({ apiKey: key, baseUrl: endpoint.baseUrl });
+    const client = createProviderClient(provider);
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 8_000);
     let models: Awaited<ReturnType<DeepSeekClient["listModels"]>>;

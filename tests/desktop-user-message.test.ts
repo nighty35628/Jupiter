@@ -163,7 +163,7 @@ describe("desktop incoming QQ/user message rendering", () => {
     ]);
   });
 
-  it("elides old heavy assistant segments during long live desktop sessions", () => {
+  it("retains live history until turn completion, then bounds old assistant payloads", () => {
     const big = "long-session-payload\n".repeat(500);
     const messages: ChatMessage[] = Array.from({ length: 250 }, (_, i) => ({
       kind: "assistant",
@@ -184,11 +184,14 @@ describe("desktop incoming QQ/user message rendering", () => {
       ],
     }));
 
-    const next = applyIncoming(makeState(messages), {
+    const live = applyIncoming(makeState(messages), {
       type: "model.turn.started",
       turn: 999,
       model: "deepseek-v4-flash",
     } as IncomingEvent);
+
+    expect(live.messages[0]).toBe(messages[0]);
+    const next = applyIncoming(live, { type: "$turn_complete" } as IncomingEvent);
 
     const oldest = next.messages[0];
     expect(oldest?.kind).toBe("assistant");
@@ -200,7 +203,7 @@ describe("desktop incoming QQ/user message rendering", () => {
       charCount: expect.any(Number),
     });
     expect(Buffer.byteLength(JSON.stringify(next.messages), "utf8")).toBeLessThanOrEqual(
-      256 * 1024,
+      4 * 1024 * 1024,
     );
 
     const recent = next.messages.find(

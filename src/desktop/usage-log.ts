@@ -10,6 +10,8 @@ export function appendDesktopAssistantFinalUsage(
   return appendUsage({
     session,
     model: ev.stats.model,
+    providerId: ev.stats.providerId,
+    costUsdOverride: ev.stats.cost,
     usage: ev.stats.usage,
     path: opts.path,
   });

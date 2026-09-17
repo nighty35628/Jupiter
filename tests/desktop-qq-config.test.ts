@@ -34,9 +34,8 @@ describe("desktop QQ settings helpers", () => {
       path,
     );
 
-    expect(loadDesktopQQState(path)).toMatchObject({
-      appId: "1234567890",
-      appSecret: "secret-value",
+    const state = loadDesktopQQState(path);
+    expect(state).toMatchObject({
       sandbox: true,
       enabled: true,
       configured: true,
@@ -44,6 +43,10 @@ describe("desktop QQ settings helpers", () => {
       appIdPreview: "123456...",
       access: "owner abcdef...mnop",
     });
+    expect(state).not.toHaveProperty("appId");
+    expect(state).not.toHaveProperty("appSecret");
+    expect(state).not.toHaveProperty("ownerOpenId");
+    expect(state).not.toHaveProperty("allowlist");
   });
 
   it("saves desktop QQ settings while preserving existing access controls", () => {
@@ -76,6 +79,35 @@ describe("desktop QQ settings helpers", () => {
       ownerOpenId: "owner-openid",
       allowlist: ["guest-a", "guest-b"],
     });
+  });
+
+  it("keeps existing QQ credentials when the update fields are blank", () => {
+    saveQQConfig(
+      {
+        appId: "existing-app-id",
+        appSecret: "existing-secret",
+        sandbox: false,
+        enabled: true,
+      },
+      path,
+    );
+
+    const state = saveDesktopQQSettings(
+      {
+        appId: "  ",
+        appSecret: "",
+        sandbox: true,
+      },
+      path,
+    );
+
+    expect(loadQQConfig(path)).toMatchObject({
+      appId: "existing-app-id",
+      appSecret: "existing-secret",
+      sandbox: true,
+    });
+    expect(state.configured).toBe(true);
+    expect(state).not.toHaveProperty("appSecret");
   });
 
   it("rejects enabling QQ when credentials are missing", () => {

@@ -20,12 +20,12 @@ let homeDir: string;
 
 beforeEach(() => {
   realHome = process.env.HOME;
-  homeDir = mkdtempSync(join(tmpdir(), "rx-cp-home-"));
+  homeDir = mkdtempSync(join(tmpdir(), "jupiter-cp-home-"));
   // checkpoints.ts uses `os.homedir()` which respects HOME on Unix and
   // USERPROFILE on Windows.
   process.env.HOME = homeDir;
   process.env.USERPROFILE = homeDir;
-  workspace = mkdtempSync(join(tmpdir(), "rx-cp-work-"));
+  workspace = mkdtempSync(join(tmpdir(), "jupiter-cp-work-"));
 });
 
 afterEach(() => {

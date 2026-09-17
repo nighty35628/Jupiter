@@ -5,17 +5,24 @@ import { resolve } from "node:path";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Toast } from "../CommandPalette";
 import { setLang } from "../i18n";
 import { Composer, clipboardFileMentionPaths, sanitizeComposerInput } from "./composer";
+import type { ImageAttachment } from "../../../src/attachments/types";
+
+vi.mock("./image-attachments", async (original) => {
+  const actual = await original<typeof import("./image-attachments")>();
+  return { ...actual, importImage: vi.fn(async (path: string) => ({ kind: "image", id: "a".repeat(64), name: path.split("/").pop(), mime: "image/png", width: 2, height: 1, bytes: 3 })) };
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `asset://${path}`,
   invoke: vi.fn(async (cmd: string) => {
     if (cmd === "save_clipboard_image") return "/tmp/jupiter-pasted-images/pasted.png";
     if (cmd === "read_clipboard_file_paths") return ["/repo/docs/paper.pdf"];
+    if (cmd === "image_attachment_path") return "/objects/thumbnail";
     return undefined;
   }),
 }));
@@ -57,8 +64,14 @@ afterEach(() => {
 });
 
 function renderComposer(props?: Partial<React.ComponentProps<typeof Composer>>) {
-  return render(
+  function Harness() {
+    const [images, setImages] = useState<ImageAttachment[]>([]);
+    return (
     <Composer
+      tabId="composer-test"
+      images={images}
+      onImagesChange={setImages}
+      supportsImages
       draft=""
       setDraft={vi.fn()}
       onSend={vi.fn()}
@@ -79,8 +92,10 @@ function renderComposer(props?: Partial<React.ComponentProps<typeof Composer>>) 
       mentionResults={null}
       workspaceDir="/repo"
       {...props}
-    />,
-  );
+    />
+    );
+  }
+  return render(<Harness />);
 }
 
 describe("desktop permission mode copy", () => {
@@ -248,6 +263,7 @@ describe("desktop permission mode copy", () => {
     const textarea = container.querySelector("textarea");
     if (!textarea) throw new Error("missing textarea");
     const imageFile = new File([new Uint8Array([1, 2, 3])], "paste.png", { type: "image/png" });
+    Object.defineProperty(imageFile, "arrayBuffer", { value: async () => new Uint8Array([1, 2, 3]).buffer });
 
     fireEvent.paste(textarea, {
       clipboardData: {
@@ -258,19 +274,19 @@ describe("desktop permission mode copy", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByAltText("pasted image")).toBeTruthy();
+      expect(screen.getByAltText("pasted.png")).toBeTruthy();
     });
-    expect((screen.getByAltText("pasted image") as HTMLImageElement).src).toBe(
-      "blob:jupiter-pasted-preview",
+    expect((screen.getByAltText("pasted.png") as HTMLImageElement).src).toBe(
+      "asset:///objects/thumbnail",
     );
     expect(textarea.value).toBe("");
     expect(document.body.textContent).not.toContain("@/tmp/jupiter-pasted-images");
-    expect(onMentionPicked).toHaveBeenCalledWith("/tmp/jupiter-pasted-images/pasted.png");
+    expect(onMentionPicked).not.toHaveBeenCalled();
 
     fireEvent.click(container.querySelector(".send-btn")!);
 
     expect(onSend).toHaveBeenCalledWith({
-      hiddenMentions: ["/tmp/jupiter-pasted-images/pasted.png"],
+      attachments: [expect.objectContaining({ id: "a".repeat(64), name: "pasted.png" })],
     });
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:jupiter-pasted-preview");
   });
@@ -283,6 +299,7 @@ describe("desktop permission mode copy", () => {
     const textarea = container.querySelector("textarea");
     if (!textarea) throw new Error("missing textarea");
     const imageFile = new File([new Uint8Array([1, 2, 3])], "paste.png", { type: "image/png" });
+    Object.defineProperty(imageFile, "arrayBuffer", { value: async () => new Uint8Array([1, 2, 3]).buffer });
 
     fireEvent.paste(textarea, {
       clipboardData: {
@@ -297,19 +314,45 @@ describe("desktop permission mode copy", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByAltText("pasted image")).toBeTruthy();
+      expect(screen.getByAltText("pasted.png")).toBeTruthy();
     });
-    expect((screen.getByAltText("pasted image") as HTMLImageElement).src).toBe(
-      "blob:jupiter-pasted-preview",
+    expect((screen.getByAltText("pasted.png") as HTMLImageElement).src).toBe(
+      "asset:///objects/thumbnail",
     );
     expect(textarea.value).toBe("");
-    expect(onMentionPicked).toHaveBeenCalledWith("/tmp/jupiter-pasted-images/pasted.png");
+    expect(onMentionPicked).not.toHaveBeenCalled();
 
     fireEvent.click(container.querySelector(".send-btn")!);
 
     expect(onSend).toHaveBeenCalledWith({
-      hiddenMentions: ["/tmp/jupiter-pasted-images/pasted.png"],
+      attachments: [expect.objectContaining({ id: "a".repeat(64), name: "pasted.png" })],
     });
+  });
+
+  it("keeps an ordinary clipboard file when the native path probe has no result", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce("/tmp/jupiter-pasted-images/jupiter-pasted-paper.zip");
+    const onSend = vi.fn();
+    const { container } = renderComposer({ onSend });
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("missing textarea");
+    const file = new File([new Uint8Array([80, 75, 3, 4])], "paper.zip", { type: "application/zip" });
+    Object.defineProperty(file, "arrayBuffer", { value: async () => new Uint8Array([80, 75, 3, 4]).buffer });
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: { length: 1, 0: file },
+        items: [{ kind: "file", type: "application/zip" }],
+        types: ["Files"],
+        getData: () => "",
+      },
+    });
+
+    await waitFor(() => expect(document.body.textContent).toContain("paper.zip"));
+    fireEvent.click(container.querySelector(".send-btn")!);
+
+    expect(onSend).toHaveBeenCalledWith({ hiddenMentions: ["/tmp/jupiter-pasted-images/jupiter-pasted-paper.zip"] });
   });
 
   it("shows pasted files as attachment cards without inserting @ paths into the textarea", () => {
@@ -599,19 +642,19 @@ describe("desktop permission mode copy", () => {
     fireEvent.click(screen.getByRole("button", { name: /添加文件/ }));
 
     await waitFor(() => {
-      expect(screen.getByAltText("pasted image")).toBeTruthy();
+      expect(screen.getByAltText("photo.png")).toBeTruthy();
     });
-    expect((screen.getByAltText("pasted image") as HTMLImageElement).src).toBe(
-      "asset:///repo/images/photo.png",
+    expect((screen.getByAltText("photo.png") as HTMLImageElement).src).toBe(
+      "asset:///objects/thumbnail",
     );
     expect(textarea.value).toBe("");
     expect(document.body.textContent).not.toContain("@images/photo.png");
-    expect(onMentionPicked).toHaveBeenCalledWith("images/photo.png");
+    expect(onMentionPicked).not.toHaveBeenCalled();
 
     fireEvent.click(container.querySelector(".send-btn")!);
 
     expect(onSend).toHaveBeenCalledWith({
-      hiddenMentions: ["images/photo.png"],
+      attachments: [expect.objectContaining({ id: "a".repeat(64), name: "photo.png" })],
     });
   });
 });

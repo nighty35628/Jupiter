@@ -181,8 +181,8 @@ describe("codeSystemPrompt", () => {
   describe("modelId interpolation (#582)", () => {
     it("defaults to flash when modelId is omitted (back-compat)", () => {
       const out = codeSystemPrompt(root);
-      expect(out).toContain("`deepseek-v4-flash`");
-      expect(out).toContain("If asked which model you are, answer `deepseek-v4-flash`");
+      expect(out).toContain("`deepseek-flash`");
+      expect(out).toContain("If asked which model you are, answer `deepseek-flash`");
     });
 
     it("interpolates the supplied modelId into the escalation contract", () => {
@@ -190,7 +190,7 @@ describe("codeSystemPrompt", () => {
       expect(out).toContain("`deepseek-v4-pro`");
       expect(out).toContain("escalation tier");
       expect(out).toContain("If asked which model you are, answer `deepseek-v4-pro`");
-      expect(out).not.toMatch(/running on `?deepseek-v4-flash`?/);
+      expect(out).not.toMatch(/running on `?deepseek-flash`?/);
     });
   });
 

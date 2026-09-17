@@ -14,6 +14,7 @@ import {
   rankPickerCandidates,
 } from "../../at-mentions.js";
 import { pickPrimaryBalance } from "../../client.js";
+import type { DeepSeekClient } from "../../client.js";
 import { prepareAutoGitRollbackForEditBlocks } from "../../code/auto-git-rollback.js";
 import { formatAllBlockDiffs } from "../../code/diff-preview.js";
 import {
@@ -32,9 +33,13 @@ import {
   type DesktopOpenTab,
   type EditMode,
   type LibraryRetrievalMode,
+  type LoadedDingTalkConfig,
+  type LoadedFeishuConfig,
+  type ProviderDialectPreference,
   bridgeEndpointEnv,
   clearApiKey,
   disableDesktopUpdatePrompts,
+  inspectEndpointSources,
   isPlausibleKey,
   isReasoningEffort,
   isWebSearchEngine,
@@ -48,7 +53,6 @@ import {
   loadDingTalkConfig,
   loadEditMode,
   loadEditor,
-  loadEndpoint,
   loadEngineeringLifecycleMode,
   loadExaApiKey,
   loadFeishuConfig,
@@ -78,7 +82,6 @@ import {
   webSearchEndpoint as readWebSearchEndpoint,
   webSearchEngine as readWebSearchEngine,
   saveApiKey,
-  saveBaseUrl,
   saveDesktopCloseBehavior,
   saveDesktopOpenTabs,
   saveDingTalkConfig,
@@ -91,6 +94,7 @@ import {
   saveModel,
   saveProcessCardsDefaultOpen,
   savePromptHistory,
+  saveProviderSettings,
   saveReasoningEffort,
   saveShowAiVisibleDetails,
   saveShowSystemEvents,
@@ -188,8 +192,8 @@ import {
 import {
   type StorageCleanupResult,
   type StorageScan,
-  cleanupJupiterStorage,
-  scanJupiterStorage,
+  cleanupJupiterStorageWithImages,
+  scanJupiterStorageWithImages,
 } from "../../desktop/storage-manager.js";
 import {
   type TranscriptDisplayTruncation,
@@ -209,14 +213,10 @@ import { loadDotenv } from "../../env.js";
 import { FeishuChannel } from "../../feishu/channel.js";
 import { type ResolvedHook, formatHookOutcomeMessage, loadHooks, runHooks } from "../../hooks.js";
 import { t } from "../../i18n/index.js";
-import {
-  CacheFirstLoop,
-  DeepSeekClient,
-  ImmutablePrefix,
-  type LoopAbortOptions,
-} from "../../index.js";
+import { CacheFirstLoop, ImmutablePrefix, type LoopAbortOptions } from "../../index.js";
 import { parseMcpSpec, specToRaw } from "../../mcp/spec.js";
 import { isProjectMemoryPath } from "../../memory/project.js";
+import { SessionWriterConflictError } from "../../memory/session-writer-lock.js";
 import {
   clearArchivedSessions,
   deleteArchivedSession,
@@ -230,6 +230,7 @@ import {
   markSessionUnread,
   migrateLegacyArchivedSessions,
   moveSessionToArchive,
+  patchArchivedSessionMeta,
   patchSessionMeta,
   patchSessionWorkspaceIfMissing,
   renameSession,
@@ -242,6 +243,11 @@ import {
   normalizeOfficialDeepSeekEffort,
   resolveModelCapability,
 } from "../../provider-capabilities.js";
+import {
+  createProviderClient,
+  providerSessionBinding,
+  resolveProviderSnapshot,
+} from "../../provider-runtime.js";
 import { QQChannel } from "../../qq/channel.js";
 import {
   type ExternalSessionSource,
@@ -298,6 +304,24 @@ export interface DesktopOptions {
   dir?: string;
 }
 
+export function desktopRuntimeUnavailableMessage(
+  hasApiKey: boolean,
+  initializationError?: string,
+): string {
+  if (!hasApiKey) return "Not configured yet — paste your DeepSeek API key first.";
+  if (initializationError) return `Jupiter initialization failed: ${initializationError}`;
+  return "Jupiter is still initializing — please wait a moment and try again.";
+}
+
+function isSessionWriterConflict(error: unknown): error is SessionWriterConflictError {
+  return (
+    error instanceof SessionWriterConflictError ||
+    (typeof error === "object" &&
+      error !== null &&
+      (error as { code?: unknown }).code === "SESSION_WRITER_CONFLICT")
+  );
+}
+
 export function desktopUserAbortLoopOptions(): LoopAbortOptions | undefined {
   // User-facing Abort stops generation; it must not erase a prompt that remains visible in chat.
   return undefined;
@@ -307,15 +331,29 @@ function isAbortSyntheticFinal(content: string | undefined, forcedSummary?: bool
   return forcedSummary === true && /^\[aborted by user \(Esc\) — /.test((content ?? "").trim());
 }
 
-type InMessage = { tabId?: string } & (
+import { attachments } from "../../attachments/store.js";
+import type { ImageAttachment, MessageDraft } from "../../attachments/types.js";
+
+type WebCommandMetadata = {
+  commandId: string;
+  deviceId: string;
+  leaseId: string;
+  fence: number;
+  runtimeEpoch: string;
+};
+
+type InMessage = { tabId?: string; __web?: WebCommandMetadata } & (
+  | { cmd: "attachment_import"; path: string; requestId: string }
+  | { cmd: "attachment_draft_refs"; owner: string; revision: number; ids: string[] }
   | {
       cmd: "user_input";
       text: string;
       clientId?: string;
       displayText?: string;
       planOneShot?: boolean;
+      imagePaths?: string[];
     }
-  | { cmd: "ask_light"; text: string; clientId?: string }
+  | { cmd: "ask_light"; text: string; clientId?: string; imagePaths?: string[] }
   | { cmd: "abort" }
   | { cmd: "confirm_response"; id: number; response: ConfirmationChoice }
   | { cmd: "choice_response"; id: number; response: ChoiceVerdict }
@@ -390,15 +428,27 @@ type InMessage = { tabId?: string } & (
   | { cmd: "setup_save_key"; key: string }
   | { cmd: "settings_sign_out" }
   | { cmd: "settings_get" }
+  | {
+      cmd: "provider_test";
+      requestId: string;
+      baseUrl: string;
+      apiKey?: string;
+      model: string;
+      providerDialect: ProviderDialectPreference;
+    }
   | { cmd: "context_diagnostics_get" }
   | {
       cmd: "settings_save";
+      vision?: boolean;
+      imageTransport?: "auto" | "inline";
       requestId?: string;
       reasoningEffort?: import("../../config.js").ReasoningEffort;
       thinkingEnabled?: boolean;
       editMode?: EditMode;
       budgetUsd?: number | null;
       baseUrl?: string;
+      apiKey?: string;
+      providerDialect?: ProviderDialectPreference;
       workspaceDir?: string;
       recentWorkspaces?: string[];
       model?: string;
@@ -490,10 +540,11 @@ type InMessage = { tabId?: string } & (
   | { cmd: "jobs_stop_all" }
   | { cmd: "compact_history" }
   | { cmd: "retry" }
+  | { cmd: "retry_api" }
   | { cmd: "rollback_to_turn"; turn: number; role: "user" | "assistant" }
   | { cmd: "slash"; text: string; clientId?: string }
   | { cmd: "btw"; text: string; clientId?: string }
-  | { cmd: "desktop_resync" }
+  | { cmd: "desktop_resync"; requestId?: string }
 );
 
 interface NeedsSetupEvent {
@@ -512,6 +563,13 @@ interface SettingsEvent {
   budgetUsd: number | null;
   baseUrl?: string;
   apiKeyPrefix?: string;
+  providerDialect: ProviderDialectPreference;
+  providerLabel: string;
+  providerId: string;
+  officialDeepSeek: boolean;
+  supportsImages?: boolean;
+  vision?: boolean;
+  imageTransport?: "auto" | "inline";
   workspaceDir: string;
   recentWorkspaces: string[];
   model: string;
@@ -564,10 +622,16 @@ interface SettingsEvent {
   version: string;
 }
 
-interface QQSettingsEvent {
+interface ProviderTestResultEvent {
+  type: "$provider_test_result";
+  requestId: string;
+  ok: boolean;
+  message: string;
+  models?: string[];
+}
+
+export interface QQSettingsEvent {
   type: "$qq_settings";
-  appId?: string;
-  appSecret?: string;
   sandbox: boolean;
   enabled: boolean;
   configured: boolean;
@@ -577,10 +641,8 @@ interface QQSettingsEvent {
   access: string;
 }
 
-interface FeishuSettingsEvent {
+export interface FeishuSettingsEvent {
   type: "$feishu_settings";
-  appId?: string;
-  appSecret?: string;
   enabled: boolean;
   configured: boolean;
   requireMentionInGroup: boolean;
@@ -589,16 +651,89 @@ interface FeishuSettingsEvent {
   appIdPreview?: string;
 }
 
-interface DingTalkSettingsEvent {
+export interface DingTalkSettingsEvent {
   type: "$dingtalk_settings";
-  clientId?: string;
-  clientSecret?: string;
   enabled: boolean;
   configured: boolean;
   requireMentionInGroup: boolean;
   runtimeState: "disconnected" | "connecting" | "connected" | "failed";
   lastError?: string;
   clientIdPreview?: string;
+}
+
+export type MessagingRuntimeSnapshot = {
+  runtimeState: "disconnected" | "connecting" | "connected" | "failed";
+  lastError?: string;
+};
+
+function credentialIdPreview(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value.length > 8 ? `${value.slice(0, 8)}...` : value;
+}
+
+export function buildFeishuSettingsEvent(
+  config: LoadedFeishuConfig,
+  runtime: MessagingRuntimeSnapshot,
+): FeishuSettingsEvent {
+  return {
+    type: "$feishu_settings",
+    enabled: config.enabled === true,
+    configured: Boolean(config.appId && config.appSecret),
+    requireMentionInGroup: config.requireMentionInGroup,
+    runtimeState: runtime.runtimeState,
+    lastError: runtime.lastError,
+    appIdPreview: credentialIdPreview(config.appId),
+  };
+}
+
+export function buildDingTalkSettingsEvent(
+  config: LoadedDingTalkConfig,
+  runtime: MessagingRuntimeSnapshot,
+): DingTalkSettingsEvent {
+  return {
+    type: "$dingtalk_settings",
+    enabled: config.enabled === true,
+    configured: Boolean(config.clientId && config.clientSecret),
+    requireMentionInGroup: config.requireMentionInGroup,
+    runtimeState: runtime.runtimeState,
+    lastError: runtime.lastError,
+    clientIdPreview: credentialIdPreview(config.clientId),
+  };
+}
+
+function preserveCredential(
+  current: string | undefined,
+  update: string | undefined,
+): string | undefined {
+  return update?.trim() || current;
+}
+
+export function mergeFeishuSettingsUpdate(
+  current: LoadedFeishuConfig,
+  update: Pick<LoadedFeishuConfig, "appId" | "appSecret"> & {
+    requireMentionInGroup?: boolean;
+  },
+): LoadedFeishuConfig {
+  return {
+    ...current,
+    appId: preserveCredential(current.appId, update.appId),
+    appSecret: preserveCredential(current.appSecret, update.appSecret),
+    requireMentionInGroup: update.requireMentionInGroup ?? current.requireMentionInGroup,
+  };
+}
+
+export function mergeDingTalkSettingsUpdate(
+  current: LoadedDingTalkConfig,
+  update: Pick<LoadedDingTalkConfig, "clientId" | "clientSecret"> & {
+    requireMentionInGroup?: boolean;
+  },
+): LoadedDingTalkConfig {
+  return {
+    ...current,
+    clientId: preserveCredential(current.clientId, update.clientId),
+    clientSecret: preserveCredential(current.clientSecret, update.clientSecret),
+    requireMentionInGroup: update.requireMentionInGroup ?? current.requireMentionInGroup,
+  };
 }
 
 interface BalanceInfoItem {
@@ -729,6 +864,7 @@ type LoadedSegment =
   | TranscriptElisionSegment
   | {
       kind: "tool";
+      attachments?: ImageAttachment[];
       callId: string;
       name: string;
       args: string;
@@ -739,6 +875,8 @@ type LoadedSegment =
 type LoadedMessage =
   | {
       kind: "user";
+      attachments?: ImageAttachment[];
+      clientId?: string;
       text: string;
       turn: number;
       messageId: string;
@@ -800,6 +938,7 @@ interface SessionActionResultEvent {
   action: "copy" | "export";
   ok: boolean;
   error?: string;
+  content?: string;
 }
 
 interface LoadedSessionFile {
@@ -1052,10 +1191,21 @@ type UpdateCheckEvent =
  *  block buffering) so every JSON line reaches Rust the moment it's
  *  produced, not whenever the next 8 KB flushes. */
 type EmittableEvent =
+  | { type: "$attachment_result"; requestId: string; attachment?: ImageAttachment; error?: string }
   | KernelEvent
   | { type: "$ready" }
   | { type: "$error"; message: string }
   | { type: "$turn_complete" }
+  | { type: "$resync_complete"; requestId?: string }
+  | { type: "$snapshot_begin"; snapshotId: string; requestId?: string }
+  | { type: "$snapshot_end"; snapshotId: string; requestId?: string }
+  | {
+      type: "$command_ack";
+      commandId: string;
+      phase: "accepted" | "completed" | "rejected";
+      duplicate?: boolean;
+      message?: string;
+    }
   | ConfirmRequiredEvent
   | PathAccessRequiredEvent
   | ChoiceRequiredEvent
@@ -1077,6 +1227,7 @@ type EmittableEvent =
   | SessionEmptyEvent
   | NeedsSetupEvent
   | SettingsEvent
+  | ProviderTestResultEvent
   | QQSettingsEvent
   | FeishuSettingsEvent
   | DingTalkSettingsEvent
@@ -1162,10 +1313,31 @@ function writeDesktopEvent(payload: OrderedWireEvent): void {
 }
 
 const desktopEventBatcher = new OrderedDeltaBatcher(writeDesktopEvent);
+const desktopSnapshotContext = new AsyncLocalStorage<boolean>();
+let desktopDeferredEvents: OrderedWireEvent[] | null = null;
 
 function emit(ev: EmittableEvent, tabId?: string): void {
   const payload = (tabId ? { ...ev, tabId } : ev) as OrderedWireEvent;
+  if (desktopDeferredEvents && desktopSnapshotContext.getStore() !== true) {
+    desktopDeferredEvents.push(payload);
+    return;
+  }
   desktopEventBatcher.push(payload);
+}
+
+async function emitAtomicDesktopSnapshot(run: () => Promise<void>): Promise<void> {
+  if (desktopDeferredEvents) {
+    await desktopSnapshotContext.run(true, run);
+    return;
+  }
+  const deferred: OrderedWireEvent[] = [];
+  desktopDeferredEvents = deferred;
+  try {
+    await desktopSnapshotContext.run(true, run);
+  } finally {
+    desktopDeferredEvents = null;
+    for (const event of deferred) desktopEventBatcher.push(event);
+  }
 }
 
 async function emitDesktopUpdateCheck(manual: boolean): Promise<void> {
@@ -1202,6 +1374,8 @@ export function buildLoadedMessages(
       out.push({
         kind: "user",
         text: rec.content ?? "",
+        ...(rec.attachments?.length ? { attachments: rec.attachments } : {}),
+        ...(rec.clientId ? { clientId: rec.clientId } : {}),
         turn: userTurn,
         messageId: `u-${userTurn}`,
       });
@@ -1254,6 +1428,7 @@ export function buildLoadedMessages(
       const seg = host.segments.find((s) => s.kind === "tool" && s.callId === callId);
       if (seg && seg.kind === "tool") {
         seg.result = rec.content ?? "";
+        if (rec.attachments?.length) seg.attachments = rec.attachments;
         seg.ok = !/error|failed/i.test(seg.result.slice(0, 200));
       }
     }
@@ -1335,13 +1510,22 @@ function rememberAcceptedClientMessage(name: string, clientId: string, turn: num
   const meta = loadSessionMeta(name);
   const recent = (meta.recentClientMessages ?? []).filter((item) => item.clientId !== clientId);
   recent.push({ clientId, turn });
-  patchSessionMeta(name, { recentClientMessages: recent.slice(-64) });
+  try {
+    patchSessionMeta(name, { recentClientMessages: recent.slice(-64) });
+  } catch {
+    /* The JSONL clientId is authoritative. */
+  }
 }
 
 function acceptedClientTurn(name: string, clientId: string | undefined): number | undefined {
   if (!clientId) return undefined;
-  return loadSessionMeta(name).recentClientMessages?.find((item) => item.clientId === clientId)
-    ?.turn;
+  let turn = 0;
+  for (const message of loadSessionMessages(name)) {
+    if (message.role !== "user") continue;
+    turn++;
+    if (message.clientId === clientId) return turn;
+  }
+  return undefined;
 }
 
 function sessionCarryover(name: string): SessionLoadedEvent["carryover"] {
@@ -1358,6 +1542,25 @@ function maskApiKey(key: string | undefined): string | undefined {
   if (!key) return undefined;
   if (key.length <= 7) return `${key.slice(0, 2)}…`;
   return `${key.slice(0, 6)}…${key.slice(-3)}`;
+}
+
+function bindLegacySessionsToCurrentProvider(): void {
+  const binding = providerSessionBinding(resolveProviderSnapshot());
+  for (const session of listSessions()) {
+    try {
+      const meta = loadSessionMeta(session.name);
+      if (!meta.provider) patchSessionMeta(session.name, { provider: binding });
+    } catch {
+      // A damaged or concurrently deleted legacy session must not block provider setup.
+    }
+  }
+  for (const session of listArchivedSessions()) {
+    try {
+      if (!session.meta.provider) patchArchivedSessionMeta(session.name, { provider: binding });
+    } catch {
+      // Same best-effort migration for archived legacy transcripts.
+    }
+  }
 }
 
 function collectWebSearchApiKeyPrefixes(): {
@@ -1385,8 +1588,8 @@ function collectWebSearchApiKeyPrefixes(): {
 let settingsRevision = 0;
 
 function emitSettings(tab: Tab, requestId?: string): void {
-  const ep = loadEndpoint();
-  const capability = resolveModelCapability(ep.baseUrl, tab.currentModel);
+  const provider = resolveProviderSnapshot();
+  const capability = provider.capability;
   const storedReasoningEffort = loadReasoningEffort();
   const displayedReasoningEffort = capability.officialDeepSeekV4
     ? normalizeOfficialDeepSeekEffort(storedReasoningEffort)
@@ -1409,13 +1612,23 @@ function emitSettings(tab: Tab, requestId?: string): void {
       reasoningEffort: displayedReasoningEffort,
       thinkingEnabled: loadThinkingEnabled(),
       reasoningChoices: [...capability.thinkingLevels],
+      supportsImages:
+        tab.runtime?.loop.client.supportsImages(tab.currentModel) ?? capability.supportsImages,
+      vision: capability.supportsImages,
+      imageTransport: provider.imageTransport,
       editMode,
       budgetUsd: tab.runtime?.loop.budgetUsd ?? null,
-      baseUrl: ep.baseUrl,
-      apiKeyPrefix: ep.apiKey ? `${ep.apiKey.slice(0, 6)}…${ep.apiKey.slice(-3)}` : undefined,
+      baseUrl: provider.baseUrl,
+      apiKeyPrefix: provider.apiKey
+        ? `${provider.apiKey.slice(0, 6)}…${provider.apiKey.slice(-3)}`
+        : undefined,
+      providerDialect: provider.dialectPreference,
+      providerLabel: provider.label,
+      providerId: provider.id,
+      officialDeepSeek: provider.officialDeepSeek,
       workspaceDir: tab.rootDir,
       recentWorkspaces: recent,
-      model: tab.currentModel,
+      model: provider.model,
       editor: loadEditor(),
       desktopCloseBehavior: loadDesktopCloseBehavior(),
       webSearchEngine: readWebSearchEngine(),
@@ -1452,7 +1665,12 @@ function emitSettingsToAll(tabs: ReadonlyMap<string, Tab>, requestId?: string): 
   for (const tab of tabs.values()) emitSettings(tab, requestId);
 }
 
-function loadDesktopEditMode(): Exclude<EditMode, "plan"> {
+function loadDesktopEditMode(): EditMode {
+  if (process.env.JUPITER_RUNTIME_SURFACE === "web-beta") {
+    const access = process.env.JUPITER_WEB_ACCESS_MODE ?? "local";
+    if (access === "public") return "plan";
+    if (access === "lan" && process.env.JUPITER_WEB_HIGH_RISK !== "1") return "review";
+  }
   const editMode = loadEditMode();
   return editMode === "plan" ? "review" : editMode;
 }
@@ -1564,14 +1782,22 @@ function loadSessionIntoTab(
   tab.turnAdmission.invalidate();
   tab.switching = false;
   actions.cancelPendingGates(tab);
+  const nextSessionId = ensureSessionId(name);
+  const previousRuntime = tab.runtime;
+  const nextRuntime = previousRuntime
+    ? buildRuntimeFor(tab, { session: name, sessionId: nextSessionId })
+    : null;
   tab.currentSession = name;
-  tab.sessionId = ensureSessionId(name);
+  tab.sessionId = nextSessionId;
   tab.bindingId += 1;
   tab.editHistory = [];
   tab.nextEditHistoryId = 1;
   tab.currentTurnEditEntry = null;
+  if (nextRuntime) {
+    tab.runtime = nextRuntime;
+    previousRuntime?.loop.dispose();
+  }
   actions.persistOpenTabs();
-  if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
   const loadedMessages = buildLoadedMessages(records);
   tab.sessionFiles = collectSessionFiles(records);
   if (loadedMessages.length === 0) {
@@ -1808,10 +2034,10 @@ function emitLibrary(tab: Tab): void {
   }
 }
 
-function emitStorageScan(tab: Tab): void {
+async function emitStorageScan(tab: Tab): Promise<void> {
   try {
     emit(
-      scanJupiterStorage({
+      await scanJupiterStorageWithImages({
         workspaceDir: tab.rootDir,
         recentWorkspaces: loadRecentWorkspaces(),
       }),
@@ -2165,6 +2391,13 @@ function desktopUnifiedBlockDiff(block: EditBlock): string[] {
 }
 
 interface Tab {
+  failedLightAsk?: {
+    draft: MessageDraft;
+    turn: number;
+    model: string;
+    runtime: RuntimeState;
+    session: string;
+  };
   readonly id: string;
   rootDir: string;
   currentSession: string;
@@ -2178,6 +2411,7 @@ interface Tab {
   /** Empty while bootstrapping; populated together with `toolset`. */
   system: string;
   runtime: RuntimeState | null;
+  runtimeInitializationError?: string;
   aborter: AbortController | null;
   fileIndex: FileWithStats[] | null;
   fileIndexBuilding: Promise<FileWithStats[]> | null;
@@ -2331,12 +2565,15 @@ function emitDesktopSubagentEvent(tab: Tab, ev: SubagentEvent): void {
   if (ev.kind === "end") tab.subagentParentSessions.delete(ev.runId);
 }
 
-function buildRuntimeFor(tab: Tab): RuntimeState {
+function buildRuntimeFor(
+  tab: Tab,
+  binding: { session?: string; sessionId?: string } = {},
+): RuntimeState {
   if (!tab.toolset) throw new Error("buildRuntimeFor called before initTabToolset finished");
   const toolset = tab.toolset;
   applyPlanMode(toolset.tools, loadDesktopEditMode());
-  const ep = loadEndpoint();
-  const client = new DeepSeekClient({ apiKey: ep.apiKey, baseUrl: ep.baseUrl });
+  const provider = resolveProviderSnapshot({ model: tab.currentModel });
+  const client = createProviderClient(provider);
   const prefix = new ImmutablePrefix({
     system: tab.system,
     toolSpecs: toolset.tools.specs(),
@@ -2348,7 +2585,10 @@ function buildRuntimeFor(tab: Tab): RuntimeState {
     tools: toolset.tools,
     model: tab.currentModel,
     budgetUsd: tab.budgetUsd,
-    session: tab.currentSession,
+    session: binding.session ?? tab.currentSession,
+    providerBinding: providerSessionBinding(provider),
+    sessionWriterKey: binding.sessionId ?? tab.sessionId,
+    sessionWriterOwnerId: tab.id,
     thinkingEnabled: loadThinkingEnabled(),
     autoContinueDeepSeek: loadDeepSeekAutoContinue(),
     reasoningEffort,
@@ -2362,6 +2602,13 @@ function buildRuntimeFor(tab: Tab): RuntimeState {
     reasoningEffort,
   };
   return { loop, eventizer, ctx };
+}
+
+function replaceRuntimeFor(tab: Tab): void {
+  const previous = tab.runtime;
+  const next = buildRuntimeFor(tab);
+  tab.runtime = next;
+  previous?.loop.dispose();
 }
 
 function installDesktopEditInterceptor(tab: Tab): void {
@@ -2492,6 +2739,12 @@ export function installDesktopCrashGuards(
 }
 
 export async function desktopCommand(opts: DesktopOptions): Promise<void> {
+  const runtimeSurface = process.env.JUPITER_RUNTIME_SURFACE ?? "desktop";
+  const isWebSurface = runtimeSurface === "web-beta";
+  const webRuntimeEpoch = process.env.JUPITER_WEB_RUNTIME_EPOCH ?? "";
+  let activeWebFence = 0;
+  const recentWebCommands = new Map<string, "running" | "completed" | "rejected">();
+
   function defaultDesktopRoot(): string {
     const configured = opts.dir ?? loadWorkspaceDir();
     const candidate = configured ? resolve(configured) : resolve(process.cwd());
@@ -2560,41 +2813,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   }
 
   function currentFeishuSettings(): FeishuSettingsEvent {
-    const config = loadFeishuConfig();
-    return {
-      type: "$feishu_settings",
-      appId: config.appId,
-      appSecret: config.appSecret,
-      enabled: config.enabled === true,
-      configured: Boolean(config.appId && config.appSecret),
-      requireMentionInGroup: config.requireMentionInGroup,
-      runtimeState: feishuRuntime.runtimeState,
-      lastError: feishuRuntime.lastError,
-      appIdPreview: config.appId
-        ? config.appId.length > 8
-          ? `${config.appId.slice(0, 8)}...`
-          : config.appId
-        : undefined,
-    };
+    return buildFeishuSettingsEvent(loadFeishuConfig(), feishuRuntime);
   }
 
   function currentDingTalkSettings(): DingTalkSettingsEvent {
-    const config = loadDingTalkConfig();
-    return {
-      type: "$dingtalk_settings",
-      clientId: config.clientId,
-      clientSecret: config.clientSecret,
-      enabled: config.enabled === true,
-      configured: Boolean(config.clientId && config.clientSecret),
-      requireMentionInGroup: config.requireMentionInGroup,
-      runtimeState: dingtalkRuntime.runtimeState,
-      lastError: dingtalkRuntime.lastError,
-      clientIdPreview: config.clientId
-        ? config.clientId.length > 8
-          ? `${config.clientId.slice(0, 8)}...`
-          : config.clientId
-        : undefined,
-    };
+    return buildDingTalkSettingsEvent(loadDingTalkConfig(), dingtalkRuntime);
   }
 
   function activeDesktopTab(): Tab | undefined {
@@ -2782,6 +3005,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.switching = false;
     cancelPendingGates(tab);
     tab.currentSession = mintSessionFor(tab.rootDir);
+    tab.currentModel = loadModel();
     tab.sessionId = ensureSessionId(tab.currentSession);
     tab.bindingId += 1;
     tab.sessionFiles = [];
@@ -2789,7 +3013,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.nextEditHistoryId = 1;
     tab.currentTurnEditEntry = null;
     persistOpenTabs();
-    if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
+    if (tab.runtime) replaceRuntimeFor(tab);
     emit(emptySessionLoadedEvent(tab), tab.id);
     emitCtxBreakdown(tab);
     emitSessions(tab);
@@ -2869,10 +3093,16 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     })();
   }
 
-  function runLightAskOnTab(tab: Tab, text: string, clientId?: string): void {
+  function runLightAskOnTab(
+    tab: Tab,
+    text: string,
+    clientId?: string,
+    imagePaths: string[] = [],
+    retry = false,
+  ): void {
     if (!tab.runtime) return;
     const askText = text.trim();
-    if (!askText) return;
+    if (!askText && !imagePaths.length && !retry) return;
     const duplicateTurn = acceptedClientTurn(tab.currentSession, clientId);
     if (duplicateTurn !== undefined) {
       const accepted = tab.runtime.eventizer.emitUserMessage(duplicateTurn, askText);
@@ -2887,29 +3117,55 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     const rt = tab.runtime;
     tab.aborter = new AbortController();
-    const started = rt.loop.beginLightAsk(askText);
-    const turn = started.turn;
-    if (started.persisted) {
-      if (clientId) rememberAcceptedClientMessage(tab.currentSession, clientId, turn);
-      const accepted = rt.eventizer.emitUserMessage(turn, askText);
-      emit(clientId ? { ...accepted, clientId } : accepted, tab.id);
-    } else {
-      emit(
-        {
-          type: "$error",
-          message: "The message is running but could not be saved to the session log.",
-        },
-        tab.id,
-      );
-    }
+    const model = tab.currentModel;
+    const session = tab.currentSession;
     void tabContext.run(tab.id, async () => {
       try {
+        if (imagePaths.length && !rt.loop.client.supportsImages(model))
+          throw new Error("This model does not support images. Select a vision model first.");
+        const previous = retry ? tab.failedLightAsk : undefined;
+        if (
+          retry &&
+          (!previous ||
+            previous.runtime !== rt ||
+            previous.session !== session ||
+            previous.model !== model)
+        )
+          throw new Error("The failed Ask request no longer belongs to this session/model.");
+        const images =
+          previous?.draft.attachments ??
+          (await attachments.resolveAll(imagePaths, tab.rootDir, tab.aborter?.signal));
+        if (
+          !tab.turnAdmission.isCurrent(generation) ||
+          tab.runtime !== rt ||
+          tab.currentSession !== session ||
+          tab.currentModel !== model
+        )
+          return;
+        tab.aborter?.signal.throwIfAborted();
+        const started = previous
+          ? { turn: previous.turn, persisted: true }
+          : rt.loop.beginLightAsk(askText, { attachments: images, clientId });
+        const turn = started.turn;
+        if (started.persisted && !previous) {
+          if (clientId) rememberAcceptedClientMessage(session, clientId, turn);
+          const accepted = rt.eventizer.emitUserMessage(turn, askText, images);
+          emit(clientId ? { ...accepted, clientId } : accepted, tab.id);
+        }
+        tab.failedLightAsk = {
+          draft: { text: askText, attachments: images },
+          turn,
+          model,
+          runtime: rt,
+          session,
+        };
         const result = await runDesktopLightAsk({
           client: rt.loop.client,
-          model: tab.currentModel,
+          model,
           reasoningEffort: rt.loop.reasoningEffort,
           prefixHash: rt.ctx.prefixHash,
           text: askText,
+          attachments: images,
           turn,
           clientId,
           emitUserMessage: false,
@@ -2929,6 +3185,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             emit(event, tab.id);
           },
         });
+        tab.failedLightAsk = undefined;
         tab.aborter = null;
         const sessionName = tab.currentSession;
         if (sessionName) {
@@ -2949,7 +3206,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               bindingId: tab.bindingId,
               client: rt.loop.client,
               model: rt.loop.model,
-              userText: text,
+              userText: text.trim() || images.map((image) => image.name).join(", "),
               assistantText: result.content,
             });
           }
@@ -2960,7 +3217,25 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         void emitBalance(tab);
       } catch (err) {
         if (tab.turnAdmission.isCurrent(generation)) {
-          emit({ type: "$error", message: `/ask failed: ${(err as Error).message}` }, tab.id);
+          const status = (err as { status?: number }).status;
+          const retryable =
+            (err as Error).name !== "AbortError" &&
+            (!status || status >= 500 || status === 408 || status === 429) &&
+            !!tab.failedLightAsk;
+          if (!retryable) tab.failedLightAsk = undefined;
+          emit(
+            {
+              type: "error",
+              id: Date.now(),
+              ts: new Date().toISOString(),
+              turn: rt.loop.currentTurn,
+              message: `/ask failed: ${(err as Error).message}`,
+              recoverable: false,
+              retryable,
+              phase: "request",
+            },
+            tab.id,
+          );
         }
       } finally {
         if (tab.turnAdmission.isCurrent(generation)) {
@@ -2983,7 +3258,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       emit(
         {
           type: "$error",
-          message: "Not configured yet — paste your DeepSeek API key first.",
+          message: desktopRuntimeUnavailableMessage(
+            Boolean(loadApiKey()),
+            tab.runtimeInitializationError,
+          ),
         },
         tab.id,
       );
@@ -3124,7 +3402,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       emit(
         {
           type: "$error",
-          message: "Not configured yet — paste your DeepSeek API key first.",
+          message: desktopRuntimeUnavailableMessage(
+            Boolean(loadApiKey()),
+            tab.runtimeInitializationError,
+          ),
         },
         tab.id,
       );
@@ -3288,7 +3569,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       case "model": {
         if (!cmd.value) {
           sendQQInfo(
-            `Current model: ${tab.currentModel}. Use /model flash, /model pro, /model deepseek-v4-flash, or /model deepseek-v4-pro.`,
+            `Current model: ${tab.currentModel}. Use /model flash, /model pro, /model deepseek-flash, or /model deepseek-v4-pro.`,
             tab,
           );
           return true;
@@ -3296,7 +3577,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         const next = normalizeQQRemoteModel(cmd.value);
         if (!next) {
           sendQQInfo(
-            "Unsupported desktop model. Use /model flash, /model pro, /model deepseek-v4-flash, or /model deepseek-v4-pro.",
+            "Unsupported desktop model. Use /model flash, /model pro, /model deepseek-flash, or /model deepseek-v4-pro.",
             tab,
           );
           return true;
@@ -3306,10 +3587,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         return true;
       }
       case "effort": {
-        const choices = resolveModelCapability(
-          tab.runtime?.loop.client.baseUrl ?? loadEndpoint().baseUrl,
-          tab.runtime?.loop.model ?? loadModel(),
-        ).thinkingLevels;
+        const runtimeClient = tab.runtime?.loop.client;
+        const choices = runtimeClient
+          ? resolveModelCapability(
+              runtimeClient.baseUrl,
+              tab.runtime?.loop.model ?? loadModel(),
+              runtimeClient.dialect === "deepseek" ? "deepseek" : "openai-compatible",
+            ).thinkingLevels
+          : resolveProviderSnapshot().capability.thinkingLevels;
         if (!cmd.value) {
           sendQQInfo(
             `Current reasoning effort: ${
@@ -3388,9 +3673,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   function normalizeQQRemoteModel(value: string): string | null {
     const lower = value.trim().toLowerCase();
     if (!lower) return null;
-    if (lower === "flash") return "deepseek-v4-flash";
+    if (lower === "flash") return "deepseek-flash";
     if (lower === "pro") return "deepseek-v4-pro";
-    if (lower === "deepseek-v4-flash" || lower === "deepseek-v4-pro") return lower;
+    if (lower === "deepseek-v4-flash" || lower === "deepseek-v4-flash-vision-exp")
+      return "deepseek-flash";
+    if (lower === "deepseek-flash" || lower === "deepseek-v4-pro") return lower;
     return null;
   }
 
@@ -3404,7 +3691,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         libraryRetrievalMode: loadLibraryRetrievalMode(),
         modelId: tab.currentModel,
       });
-      if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
+      if (tab.runtime) replaceRuntimeFor(tab);
     }
     emitSettings(tab);
   }
@@ -3931,7 +4218,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       case "model": {
         if (!cmd.value) {
           sendDingTalkInfo(
-            `Current model: ${tab.currentModel}. Use /model flash, /model pro, /model deepseek-v4-flash, or /model deepseek-v4-pro.`,
+            `Current model: ${tab.currentModel}. Use /model flash, /model pro, /model deepseek-flash, or /model deepseek-v4-pro.`,
             tab,
           );
           return true;
@@ -3939,7 +4226,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         const next = normalizeQQRemoteModel(cmd.value);
         if (!next) {
           sendDingTalkInfo(
-            "Unsupported desktop model. Use /model flash, /model pro, /model deepseek-v4-flash, or /model deepseek-v4-pro.",
+            "Unsupported desktop model. Use /model flash, /model pro, /model deepseek-flash, or /model deepseek-v4-pro.",
             tab,
           );
           return true;
@@ -3949,10 +4236,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         return true;
       }
       case "effort": {
-        const choices = resolveModelCapability(
-          tab.runtime?.loop.client.baseUrl ?? loadEndpoint().baseUrl,
-          tab.runtime?.loop.model ?? loadModel(),
-        ).thinkingLevels;
+        const runtimeClient = tab.runtime?.loop.client;
+        const choices = runtimeClient
+          ? resolveModelCapability(
+              runtimeClient.baseUrl,
+              tab.runtime?.loop.model ?? loadModel(),
+              runtimeClient.dialect === "deepseek" ? "deepseek" : "openai-compatible",
+            ).thinkingLevels
+          : resolveProviderSnapshot().capability.thinkingLevels;
         if (!cmd.value) {
           sendDingTalkInfo(
             `Current reasoning effort: ${
@@ -4352,9 +4643,26 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     });
     if (loadApiKey()) {
       bridgeEndpointEnv();
-      tab.runtime = buildRuntimeFor(tab);
+      replaceRuntimeFor(tab);
+      tab.runtimeInitializationError = undefined;
       void bridgeTabMcp(tab);
     }
+  }
+
+  function rotateTabToFreshSession(tab: Tab): string {
+    const previousSession = tab.currentSession;
+    tab.currentSession = mintSessionFor(tab.rootDir);
+    tab.sessionId = ensureSessionId(tab.currentSession);
+    tab.bindingId += 1;
+    tab.sessionFiles = [];
+    tab.editHistory = [];
+    tab.nextEditHistoryId = 1;
+    tab.currentTurnEditEntry = null;
+    tab.runtimeInitializationError = undefined;
+    persistOpenTabs();
+    emit(emptySessionLoadedEvent(tab), tab.id);
+    emitSessions(tab);
+    return previousSession;
   }
 
   function bridgeTabMcp(tab: Tab): Promise<void> {
@@ -4429,6 +4737,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
 
   /** Snapshot of every open tab — workspace dir, loaded session and focus, in tab order. Persisted after open/close/switch so a restart restores the full tab set and each conversation (issues #933, #1244). */
   function persistOpenTabs(): void {
+    if (isWebSurface) return;
     try {
       saveDesktopOpenTabs(
         Array.from(tabs.values()).map((t) => ({
@@ -4491,6 +4800,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   async function closeTab(tab: Tab): Promise<void> {
     abortTurn(tab);
     tab.turnAdmission.invalidate();
+    tab.runtime?.loop.dispose();
+    tab.runtime = null;
     try {
       await tab.toolset?.jobs.shutdown();
     } catch {
@@ -4522,6 +4833,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       planOneShot?: boolean;
       fromFeishu?: boolean;
       fromDingTalk?: boolean;
+      resumeApiFailure?: boolean;
+      imagePaths?: string[];
     } = {},
   ): Promise<void> {
     if (!tab.runtime) return;
@@ -4545,9 +4858,27 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     let acceptedTurn = 0;
     try {
       const rt = tab.runtime;
+      const preparationSession = tab.currentSession;
+      const preparationModel = tab.currentModel;
       const modelText = opts.planOneShot ? buildOneShotPlanPrompt(text) : text;
       tab.currentTurnEditEntry = null;
       tab.aborter = new AbortController();
+      tab.failedLightAsk = undefined;
+      if (opts.imagePaths?.length && !rt.loop.client.supportsImages(tab.currentModel))
+        throw new Error("This model does not support images. Select a vision model first.");
+      const images = await attachments.resolveAll(
+        opts.imagePaths ?? [],
+        tab.rootDir,
+        tab.aborter.signal,
+      );
+      if (
+        !tab.turnAdmission.isCurrent(generation) ||
+        tab.runtime !== rt ||
+        tab.currentSession !== preparationSession ||
+        tab.currentModel !== preparationModel
+      )
+        return;
+      tab.aborter.signal.throwIfAborted();
       if (opts.planOneShot) beginOneShotPlanGuard(tab);
       if (fromQQ) markQQTurnStarted(qqRuntime.routing, tab.id);
       if (fromFeishu) markQQTurnStarted(feishuRuntime.routing, tab.id);
@@ -4596,7 +4927,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       let lastAssistantText = "";
       const sessionAtTurnStart = tab.currentSession;
       const sessionMetaBeforeTurn = sessionAtTurnStart ? loadSessionMeta(sessionAtTurnStart) : {};
-      if (tab.hooks.some((h) => h.event === "UserPromptSubmit")) {
+      if (!opts.resumeApiFailure && tab.hooks.some((h) => h.event === "UserPromptSubmit")) {
         const report = await runHooks({
           hooks: tab.hooks,
           payload: { event: "UserPromptSubmit", cwd: tab.rootDir, prompt: text },
@@ -4611,24 +4942,41 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       }
       await tabContext.run(tab.id, async () => {
         try {
+          if (
+            !tab.turnAdmission.isCurrent(generation) ||
+            tab.runtime !== rt ||
+            tab.currentSession !== preparationSession
+          )
+            return;
           let emittedTurnContext = false;
-          for await (const ev of rt.loop.step(modelText, {
-            onUserPersisted: (turn) => {
-              acceptedTurn = turn;
-              if (clientId) rememberAcceptedClientMessage(sessionAtTurnStart, clientId, turn);
-              const accepted = rt.eventizer.emitUserMessage(turn, opts.displayText ?? text);
-              emit(clientId ? { ...accepted, clientId } : accepted, tab.id);
-            },
-            onUserPersistFailed: () => {
-              emit(
-                {
-                  type: "$error",
-                  message: "The message is running but could not be saved to the session log.",
+          const loopEvents = opts.resumeApiFailure
+            ? rt.loop.retryFailedModelRequest()
+            : rt.loop.step(modelText, {
+                attachments: images,
+                clientId,
+                onUserPersisted: (turn) => {
+                  acceptedTurn = turn;
+                  if (clientId) rememberAcceptedClientMessage(sessionAtTurnStart, clientId, turn);
+                  const accepted = rt.eventizer.emitUserMessage(
+                    turn,
+                    opts.displayText ?? text,
+                    images,
+                  );
+                  emit(clientId ? { ...accepted, clientId } : accepted, tab.id);
                 },
-                tab.id,
-              );
-            },
-          })) {
+                onUserPersistFailed: () => {
+                  emit(
+                    {
+                      type: "$error",
+                      message: images.length
+                        ? "Image message could not be saved; no model request was sent."
+                        : "The message is running but could not be saved to the session log.",
+                    },
+                    tab.id,
+                  );
+                },
+              });
+          for await (const ev of loopEvents) {
             if (!emittedTurnContext) {
               emittedTurnContext = true;
               emitCtxBreakdown(tab);
@@ -4743,7 +5091,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
                   bindingId: tab.bindingId,
                   client: rt.loop.client,
                   model: rt.loop.model,
-                  userText: text,
+                  userText: text.trim() || images.map((image) => image.name).join(", "),
                   assistantText: lastAssistantText,
                 });
               }
@@ -4840,7 +5188,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       libraryRetrievalMode: loadLibraryRetrievalMode(),
       modelId: tab.currentModel,
     });
-    if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
+    if (tab.runtime) replaceRuntimeFor(tab);
     emitSessions(tab);
     emitSettings(tab);
     emit(emptySessionLoadedEvent(tab), tab.id);
@@ -4980,6 +5328,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     await Promise.allSettled(
       [...tabs.values()].map((t) => t.toolset?.jobs.shutdown(1500) ?? Promise.resolve()),
     );
+    for (const tab of tabs.values()) tab.runtime?.loop.dispose();
     process.exit(0);
   }
   process.on("SIGTERM", () => {
@@ -4995,7 +5344,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     // Shared auto-resolve policy (e.g. plan_checkpoint in auto/yolo) — must
     // still run BEFORE we emit any UI event, otherwise the surface flickers
     // a card that we'd immediately tear down.
-    const auto = autoResolveVerdict(req, loadEditMode());
+    const auto = autoResolveVerdict(req, loadDesktopEditMode());
     if (auto !== null) {
       // plan_checkpoint specifically needs the step-completed signal to flow
       // through so the rail progress ticks. Emit it before resolving.
@@ -5310,7 +5659,44 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emitCtxBreakdown(tab);
       })
       .catch((err) => {
-        emit({ type: "$error", message: `init failed: ${(err as Error).message}` }, tab.id);
+        const message = err instanceof Error ? err.message : String(err);
+        if (isSessionWriterConflict(err)) {
+          const previousSession = rotateTabToFreshSession(tab);
+          try {
+            replaceRuntimeFor(tab);
+            void bridgeTabMcp(tab);
+            emit(
+              {
+                type: "$error",
+                message: `Session "${previousSession}" is already open in another Jupiter process. Started a new session here; the original session was left unchanged.`,
+              },
+              tab.id,
+            );
+            emit({ type: "$ready" }, tab.id);
+            void emitBalance(tab);
+            emitCtxBreakdown(tab);
+          } catch (fallbackError) {
+            const fallbackMessage =
+              fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            tab.runtimeInitializationError = fallbackMessage;
+            emit(
+              {
+                type: "$error",
+                message: desktopRuntimeUnavailableMessage(true, fallbackMessage),
+              },
+              tab.id,
+            );
+          }
+          return;
+        }
+        tab.runtimeInitializationError = message;
+        emit(
+          {
+            type: "$error",
+            message: desktopRuntimeUnavailableMessage(Boolean(loadApiKey()), message),
+          },
+          tab.id,
+        );
       });
     return tab;
   }
@@ -5367,7 +5753,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   // Restore the full tab set from the previous session — workspace dir,
   // loaded session and focused tab (issues #933, #1244). Missing dirs
   // are silently skipped — a deleted workspace shouldn't break boot.
-  const savedTabs = loadDesktopOpenTabs()
+  const savedTabs = (isWebSurface ? [] : loadDesktopOpenTabs())
     .map((t) => ({ ...t, dir: resolveDesktopRoot(t.dir) }))
     .filter((t) => {
       try {
@@ -5390,27 +5776,42 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   lastActiveTabId = ((activeIdx >= 0 ? restored[activeIdx] : first) ?? first).id;
   persistOpenTabs();
   const qqConfig = loadQQConfig();
-  if (qqConfig.enabled && qqConfig.appId && qqConfig.appSecret) {
+  if (!isWebSurface && qqConfig.enabled && qqConfig.appId && qqConfig.appSecret) {
     void startDesktopQQ(false).catch(() => undefined);
   } else {
     broadcastQQSettings();
   }
   const feishuConfig = loadFeishuConfig();
-  if (feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
+  if (!isWebSurface && feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
     void startDesktopFeishu(false).catch(() => undefined);
   } else {
     broadcastFeishuSettings();
   }
   const dingtalkConfig = loadDingTalkConfig();
-  if (dingtalkConfig.enabled && dingtalkConfig.clientId && dingtalkConfig.clientSecret) {
+  if (
+    !isWebSurface &&
+    dingtalkConfig.enabled &&
+    dingtalkConfig.clientId &&
+    dingtalkConfig.clientSecret
+  ) {
     void startDesktopDingTalk(false).catch(() => undefined);
   } else {
     broadcastDingTalkSettings();
   }
-  void emitDesktopUpdateCheck(false).catch(() => undefined);
+  if (!isWebSurface) void emitDesktopUpdateCheck(false).catch(() => undefined);
 
   const rl = createInterface({ input: stdin });
-  rl.on("line", async (line) => {
+  let rpcDispatchChain = Promise.resolve();
+  const immediateCommands = new Set<InMessage["cmd"]>([
+    "abort",
+    "confirm_response",
+    "choice_response",
+    "plan_response",
+    "checkpoint_response",
+    "revision_response",
+  ]);
+
+  rl.on("line", (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
     let msg: InMessage;
@@ -5424,6 +5825,79 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
 
+    const dispatch = () => dispatchRpcMessage(msg);
+    if (immediateCommands.has(msg.cmd)) {
+      void dispatch();
+      return;
+    }
+    rpcDispatchChain = rpcDispatchChain.then(dispatch, dispatch);
+  });
+
+  async function dispatchRpcMessage(msg: InMessage): Promise<void> {
+    const metadata = msg.__web;
+    if (metadata) {
+      const reject = (message: string) => {
+        emit(
+          {
+            type: "$command_ack",
+            commandId: metadata.commandId,
+            phase: "rejected",
+            message,
+          },
+          msg.tabId,
+        );
+      };
+      if (
+        !metadata.commandId ||
+        !Number.isSafeInteger(metadata.fence) ||
+        metadata.fence < 1 ||
+        (webRuntimeEpoch && metadata.runtimeEpoch !== webRuntimeEpoch)
+      ) {
+        reject("invalid or stale Web command metadata");
+        return;
+      }
+      if (metadata.fence < activeWebFence) {
+        reject("writer lease has been superseded");
+        return;
+      }
+      if (metadata.fence > activeWebFence) activeWebFence = metadata.fence;
+      const previous = recentWebCommands.get(metadata.commandId);
+      if (previous) {
+        emit(
+          {
+            type: "$command_ack",
+            commandId: metadata.commandId,
+            phase: previous === "running" ? "accepted" : previous,
+            duplicate: true,
+          },
+          msg.tabId,
+        );
+        return;
+      }
+      recentWebCommands.set(metadata.commandId, "running");
+      while (recentWebCommands.size > 4096) {
+        const oldest = recentWebCommands.keys().next().value;
+        if (typeof oldest !== "string") break;
+        recentWebCommands.delete(oldest);
+      }
+      emit({ type: "$command_ack", commandId: metadata.commandId, phase: "accepted" }, msg.tabId);
+      try {
+        await handleRpcMessage(msg);
+        recentWebCommands.set(metadata.commandId, "completed");
+        emit(
+          { type: "$command_ack", commandId: metadata.commandId, phase: "completed" },
+          msg.tabId,
+        );
+      } catch (error) {
+        recentWebCommands.set(metadata.commandId, "rejected");
+        reject(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+    await handleRpcMessage(msg);
+  }
+
+  async function handleRpcMessage(msg: InMessage): Promise<void> {
     if (msg.cmd === "tab_open") {
       try {
         // A user-opened tab takes focus.
@@ -5502,7 +5976,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             void emitBalance(tab);
             continue;
           }
-          tab.runtime = buildRuntimeFor(tab);
+          replaceRuntimeFor(tab);
           emit({ type: "$ready" }, tab.id);
           emitSettings(tab);
           void emitBalance(tab);
@@ -5522,6 +5996,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         for (const t of tabs.values()) {
           t.aborter?.abort();
           t.aborter = null;
+          t.runtime?.loop.dispose();
           t.runtime = null;
           emitSettings(t);
           emit({ type: "$needs_setup", reason: "no_api_key" }, t.id);
@@ -5542,41 +6017,47 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       // WebView reloads (DevTools F5, host-side respawn) leave the Node child
       // alive but the React app starts blank. Re-fire the bootstrap events
       // so it can rehydrate without restarting the agent.
-      const hasKey = !!loadApiKey();
-      for (const t of tabs.values()) {
-        emit(
-          {
-            type: "$tab_opened",
-            workspaceDir: t.rootDir,
-            active: t.id === lastActiveTabId,
-            busy: Boolean(t.aborter),
-          },
-          t.id,
-        );
-        emitSessions(t);
-        emitSettings(t);
-        emitMcpSpecs(t);
-        emitSkills(t);
-        emitMemory(t);
-        emitLibrary(t);
-        emitQQSettings(t);
-        emitUsageHistory(t);
-        if (!hasKey) emit({ type: "$needs_setup", reason: "no_api_key" }, t.id);
-        else if (t.toolset) emit({ type: "$ready" }, t.id);
-        void emitBalance(t);
-        // Re-emit session_loaded so the resumed session's messages and
-        // usage stats (cost, tokens, cache%) are restored on the frontend.
-        if (t.currentSession) {
-          try {
-            emit(currentSessionSnapshot(t, "$session_loaded", "resync"), t.id);
-            emitPendingGateEvents(t);
-          } catch {
-            // unreadable jsonl — skip re-emit
+      const snapshotId = randomUUID();
+      await emitAtomicDesktopSnapshot(async () => {
+        emit({ type: "$snapshot_begin", snapshotId, requestId: msg.requestId });
+        const hasKey = !!loadApiKey();
+        const balanceOps: Promise<void>[] = [];
+        for (const t of tabs.values()) {
+          emit(
+            {
+              type: "$tab_opened",
+              workspaceDir: t.rootDir,
+              active: t.id === lastActiveTabId,
+              busy: Boolean(t.aborter),
+            },
+            t.id,
+          );
+          emitSessions(t);
+          emitSettings(t);
+          emitMcpSpecs(t);
+          emitSkills(t);
+          emitMemory(t);
+          emitLibrary(t);
+          emitQQSettings(t);
+          emitUsageHistory(t);
+          if (!hasKey) emit({ type: "$needs_setup", reason: "no_api_key" }, t.id);
+          else if (t.toolset) emit({ type: "$ready" }, t.id);
+          balanceOps.push(emitBalance(t));
+          if (t.currentSession) {
+            try {
+              emit(currentSessionSnapshot(t, "$session_loaded", "resync"), t.id);
+              emitPendingGateEvents(t);
+            } catch {
+              // unreadable jsonl — skip re-emit
+            }
           }
+          emitCtxBreakdown(t);
         }
-        emitCtxBreakdown(t);
-      }
-      void emitDesktopUpdateCheck(false).catch(() => undefined);
+        await Promise.allSettled(balanceOps);
+        if (!isWebSurface) await emitDesktopUpdateCheck(false).catch(() => undefined);
+        emit({ type: "$snapshot_end", snapshotId, requestId: msg.requestId });
+        emit({ type: "$resync_complete", requestId: msg.requestId });
+      });
       return;
     }
     if (msg.cmd === "update_check") {
@@ -5786,7 +6267,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emit(
           {
             type: "$error",
-            message: "Not configured yet — paste your DeepSeek API key first.",
+            message: desktopRuntimeUnavailableMessage(
+              Boolean(loadApiKey()),
+              tab.runtimeInitializationError,
+            ),
           },
           tab.id,
         );
@@ -6048,6 +6532,35 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         );
       } catch (err) {
         process.stderr.write(`session_load: "${msg.name}" threw — ${(err as Error).message}\n`);
+        if (isSessionWriterConflict(err)) {
+          const previousSession = rotateTabToFreshSession(tab);
+          try {
+            if (tab.runtime) replaceRuntimeFor(tab);
+            void bridgeTabMcp(tab);
+            emit(
+              {
+                type: "$error",
+                message: `Session "${msg.name}" is already open in another Jupiter process. Started a new session here; the original session was left unchanged.`,
+              },
+              tab.id,
+            );
+            emit({ type: "$ready" }, tab.id);
+            void emitBalance(tab);
+            emitCtxBreakdown(tab);
+          } catch (fallbackError) {
+            const fallbackMessage =
+              fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            tab.runtimeInitializationError = fallbackMessage;
+            emit(
+              {
+                type: "$error",
+                message: desktopRuntimeUnavailableMessage(true, fallbackMessage),
+              },
+              tab.id,
+            );
+          }
+          return;
+        }
         emit(
           {
             type: "$error",
@@ -6092,10 +6605,19 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             ? assistantTextForTurn(messages, msg.turn)
             : formatSessionMarkdown(messages, msg.labels);
         if (!content.trim()) throw new Error("session has no exportable content");
-        if (msg.cmd === "session_copy") await writeClipboardText(content);
-        else await writeFile(msg.path, content, "utf8");
+        if (msg.cmd === "session_copy") {
+          if (!isWebSurface) await writeClipboardText(content);
+        } else {
+          await writeFile(msg.path, content, "utf8");
+        }
         emit(
-          { type: "$session_action_result", requestId: msg.requestId, action, ok: true },
+          {
+            type: "$session_action_result",
+            requestId: msg.requestId,
+            action,
+            ok: true,
+            ...(isWebSurface ? { content } : {}),
+          },
           tab.id,
         );
       } catch (err) {
@@ -6264,12 +6786,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
     if (msg.cmd === "storage_scan") {
-      emitStorageScan(tab);
+      await emitStorageScan(tab);
       return;
     }
     if (msg.cmd === "storage_cleanup") {
       try {
-        const result = cleanupJupiterStorage({
+        const result = await cleanupJupiterStorageWithImages({
           workspaceDir: tab.rootDir,
           recentWorkspaces: loadRecentWorkspaces(),
           itemIds: Array.isArray(msg.itemIds) ? msg.itemIds : [],
@@ -6426,12 +6948,124 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       emitCtxBreakdown(tab);
       return;
     }
+    if (msg.cmd === "provider_test") {
+      try {
+        const current = resolveProviderSnapshot();
+        const targetWithoutKey = resolveProviderSnapshot({
+          baseUrl: msg.baseUrl,
+          model: msg.model,
+          dialect: msg.providerDialect,
+        });
+        const draftKey = msg.apiKey?.trim();
+        const apiKey =
+          draftKey ||
+          (targetWithoutKey.endpointIdentity === current.endpointIdentity
+            ? current.apiKey
+            : undefined);
+        if (!apiKey) throw new Error("Enter an API key for this endpoint before testing.");
+        const target = resolveProviderSnapshot({
+          baseUrl: msg.baseUrl,
+          apiKey,
+          model: msg.model,
+          dialect: msg.providerDialect,
+        });
+        const client = createProviderClient(target);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20_000);
+        try {
+          const listed = await client.listModels({ signal: controller.signal });
+          const models = listed?.data
+            .map((entry) => entry.id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0);
+          if (!models?.length) {
+            await client.chat({
+              model: target.model,
+              messages: [{ role: "user", content: "Reply with OK." }],
+              thinking: "disabled",
+              maxTokens: 8,
+              signal: controller.signal,
+              disableRetry: true,
+            });
+          }
+          emit(
+            {
+              type: "$provider_test_result",
+              requestId: msg.requestId,
+              ok: true,
+              message: `Connected to ${target.label}.`,
+              models,
+            },
+            tab.id,
+          );
+        } finally {
+          clearTimeout(timeout);
+        }
+      } catch (err) {
+        emit(
+          {
+            type: "$provider_test_result",
+            requestId: msg.requestId,
+            ok: false,
+            message: err instanceof Error ? err.message : String(err),
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
     if (msg.cmd === "qq_status_get") {
       emitQQSettings(tab);
       return;
     }
     if (msg.cmd === "settings_save") {
       try {
+        const providerSettingsChanged =
+          msg.baseUrl !== undefined ||
+          msg.apiKey !== undefined ||
+          msg.providerDialect !== undefined ||
+          msg.vision !== undefined ||
+          msg.imageTransport !== undefined;
+        if (providerSettingsChanged) {
+          const sources = inspectEndpointSources();
+          if (sources.baseUrlSource.startsWith("env:")) {
+            throw new Error(
+              `Provider settings are managed by ${sources.baseUrlSource}; remove that environment variable before editing them here.`,
+            );
+          }
+          const current = resolveProviderSnapshot();
+          const targetWithoutKey = resolveProviderSnapshot({
+            baseUrl: msg.baseUrl ?? current.baseUrl,
+            model: msg.model ?? current.model,
+            dialect: msg.providerDialect ?? current.dialectPreference,
+          });
+          const draftKey = msg.apiKey?.trim();
+          const apiKey =
+            draftKey ||
+            (targetWithoutKey.endpointIdentity === current.endpointIdentity
+              ? current.apiKey
+              : undefined);
+          if (!apiKey) throw new Error("A new endpoint requires its own API key.");
+          if (
+            targetWithoutKey.officialDeepSeek &&
+            sources.apiKeySource.startsWith("env:") &&
+            draftKey &&
+            draftKey !== current.apiKey
+          ) {
+            throw new Error(
+              `${sources.apiKeySource} overrides the saved key for the official endpoint.`,
+            );
+          }
+          bindLegacySessionsToCurrentProvider();
+          saveProviderSettings({
+            baseUrl: targetWithoutKey.baseUrl,
+            apiKey,
+            model: targetWithoutKey.model,
+            dialect: targetWithoutKey.dialectPreference,
+            vision: msg.vision,
+            imageTransport: msg.imageTransport,
+          });
+          emitStatus(tab, "Provider saved. It will be used by new conversations.");
+        }
         if (msg.reasoningEffort !== undefined && isReasoningEffort(msg.reasoningEffort)) {
           saveReasoningEffort(msg.reasoningEffort);
           tab.runtime?.loop.configure({ reasoningEffort: msg.reasoningEffort });
@@ -6449,7 +7083,6 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           tab.budgetUsd = msg.budgetUsd ?? undefined;
           tab.runtime?.loop.setBudget(msg.budgetUsd);
         }
-        if (msg.baseUrl !== undefined) saveBaseUrl(msg.baseUrl);
         if (msg.workspaceDir !== undefined) {
           void switchWorkspace(tab, msg.workspaceDir);
           return;
@@ -6557,12 +7190,23 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
               libraryRetrievalMode: loadLibraryRetrievalMode(),
               modelId: tab.currentModel,
             });
-            if (tab.runtime) tab.runtime = buildRuntimeFor(tab);
+            if (tab.runtime) replaceRuntimeFor(tab);
           }
         }
-        if (msg.model !== undefined) {
+        if (msg.model !== undefined && !providerSettingsChanged) {
           const next = msg.model.trim();
           if (next) {
+            const configured = resolveProviderSnapshot({ model: next });
+            const runtimeClient = tab.runtime?.loop.client;
+            if (
+              runtimeClient &&
+              (runtimeClient.baseUrl !== configured.baseUrl ||
+                runtimeClient.dialect !== configured.dialect)
+            ) {
+              throw new Error(
+                "This conversation is bound to the previous provider. Start a new conversation before changing its model.",
+              );
+            }
             applyDesktopModel(tab, next);
           }
         }
@@ -6694,12 +7338,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     if (msg.cmd === "feishu_config_save") {
       try {
         const current = loadFeishuConfig();
-        saveFeishuConfig({
-          ...current,
-          appId: msg.appId?.trim() || undefined,
-          appSecret: msg.appSecret?.trim() || undefined,
-          requireMentionInGroup: msg.requireMentionInGroup ?? current.requireMentionInGroup,
-        });
+        saveFeishuConfig(mergeFeishuSettingsUpdate(current, msg));
         emitFeishuSettings(tab);
         emitStatus(tab, "Feishu settings saved");
       } catch (err) {
@@ -6779,12 +7418,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     if (msg.cmd === "dingtalk_config_save") {
       try {
         const current = loadDingTalkConfig();
-        saveDingTalkConfig({
-          ...current,
-          clientId: msg.clientId?.trim() || undefined,
-          clientSecret: msg.clientSecret?.trim() || undefined,
-          requireMentionInGroup: msg.requireMentionInGroup ?? current.requireMentionInGroup,
-        });
+        saveDingTalkConfig(mergeDingTalkSettingsUpdate(current, msg));
         emitDingTalkSettings(tab);
         emitStatus(tab, "DingTalk settings saved");
       } catch (err) {
@@ -6991,10 +7625,49 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     if (msg.cmd === "retry") {
       if (!tab.runtime) return;
-      const prev = tab.runtime.loop.retryLastUser();
-      if (prev) {
-        emit({ type: "$retry_result", text: prev }, tab.id);
+      const prev = tab.runtime.loop.retryLastDraft();
+      tab.failedLightAsk = undefined;
+      if (prev !== null) {
+        emit({ type: "$retry_result", ...prev }, tab.id);
       }
+      return;
+    }
+    if (msg.cmd === "retry_api") {
+      if (!tab.runtime) {
+        emit(
+          {
+            type: "$error",
+            message: desktopRuntimeUnavailableMessage(
+              Boolean(loadApiKey()),
+              tab.runtimeInitializationError,
+            ),
+          },
+          tab.id,
+        );
+        finishDesktopCommand(tab);
+        return;
+      }
+      if (tab.turnAdmission.running) {
+        emit({ type: "$error", message: "This tab already has a turn in progress." }, tab.id);
+        finishDesktopCommand(tab);
+        return;
+      }
+      if (tab.failedLightAsk) {
+        runLightAskOnTab(tab, tab.failedLightAsk.draft.text, undefined, [], true);
+        return;
+      }
+      if (!tab.runtime.loop.canRetryFailedModelRequest()) {
+        emit({ type: "$error", message: "There is no failed API request left to retry." }, tab.id);
+        finishDesktopCommand(tab);
+        return;
+      }
+      const previousUserText = tab.runtime.loop.lastUserText();
+      if (previousUserText === null) {
+        emit({ type: "$error", message: "There is no previous user message to continue." }, tab.id);
+        finishDesktopCommand(tab);
+        return;
+      }
+      void runTurn(tab, previousUserText, false, undefined, { resumeApiFailure: true });
       return;
     }
     if (msg.cmd === "rollback_to_turn") {
@@ -7033,7 +7706,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emit(
           {
             type: "$error",
-            message: "Not configured yet — paste your DeepSeek API key first.",
+            message: desktopRuntimeUnavailableMessage(
+              Boolean(loadApiKey()),
+              tab.runtimeInitializationError,
+            ),
           },
           tab.id,
         );
@@ -7041,11 +7717,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         return;
       }
       const question = msg.text.trim();
-      if (!question) {
+      if (!question && !msg.imagePaths?.length) {
         finishDesktopCommand(tab);
         return;
       }
-      runLightAskOnTab(tab, question, msg.clientId);
+      runLightAskOnTab(tab, question, msg.clientId, msg.imagePaths);
       return;
     }
     if (msg.cmd === "user_input") {
@@ -7053,7 +7729,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emit(
           {
             type: "$error",
-            message: "Not configured yet — paste your DeepSeek API key first.",
+            message: desktopRuntimeUnavailableMessage(
+              Boolean(loadApiKey()),
+              tab.runtimeInitializationError,
+            ),
           },
           tab.id,
         );
@@ -7065,10 +7744,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           planOneShot: msg.planOneShot === true,
         })
       ) {
-        runLightAskOnTab(tab, msg.text, msg.clientId);
+        runLightAskOnTab(tab, msg.text, msg.clientId, msg.imagePaths);
         return;
       }
-      if (!msg.planOneShot && !msg.text.trim().startsWith("/")) {
+      if (!msg.imagePaths?.length && !msg.planOneShot && !msg.text.trim().startsWith("/")) {
         const intent = await classifyDesktopNaturalCommandIntent(tab.runtime.loop.client, {
           model: tab.runtime.loop.model,
           text: msg.text,
@@ -7095,9 +7774,31 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       void runTurn(tab, msg.text, false, msg.clientId, {
         displayText: msg.displayText,
         planOneShot: msg.planOneShot === true,
+        imagePaths: msg.imagePaths,
       });
     }
-  });
+    if (msg.cmd === "attachment_import") {
+      try {
+        const image = (await attachments.resolveAll([msg.path], tab.rootDir))[0]!;
+        emit({ type: "$attachment_result", requestId: msg.requestId, attachment: image }, tab.id);
+      } catch (error) {
+        emit(
+          { type: "$attachment_result", requestId: msg.requestId, error: (error as Error).message },
+          tab.id,
+        );
+      }
+    }
+    if (msg.cmd === "attachment_draft_refs") {
+      try {
+        await attachments.saveDraftReferences(msg.owner, msg.revision, msg.ids);
+      } catch (error) {
+        emit(
+          { type: "$error", message: `Image draft retention failed: ${(error as Error).message}` },
+          tab.id,
+        );
+      }
+    }
+  }
 
   await new Promise<void>((resolve) => {
     rl.on("close", () => {

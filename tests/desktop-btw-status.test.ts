@@ -149,7 +149,7 @@ describe("desktop dismiss_error reducer (recoverable / hard error parity)", () =
 });
 
 describe("desktop error events carry recoverable flag from kernel events (#1456-followup)", () => {
-  it("kernel error with recoverable=true produces a recoverable=true chat message", () => {
+  it("preserves recoverable and retryable metadata from a kernel error", () => {
     const state = makeState();
     const next = reduce(state, {
       t: "incoming",
@@ -160,12 +160,15 @@ describe("desktop error events carry recoverable flag from kernel events (#1456-
         turn: 1,
         message: "repeat-loop guard tripped",
         recoverable: true,
+        retryable: true,
       },
     });
     const last = next.messages.at(-1);
     expect(last?.kind).toBe("error");
     if (last?.kind === "error") {
       expect(last.recoverable).toBe(true);
+      expect(last.retryable).toBe(true);
+      expect(last.turn).toBe(1);
       expect(typeof last.id).toBe("string");
     }
   });
@@ -181,6 +184,34 @@ describe("desktop error events carry recoverable flag from kernel events (#1456-
     if (last?.kind === "error") {
       expect(last.recoverable).toBe(false);
     }
+  });
+
+  it("starts a manual API retry without duplicating the user message", () => {
+    const state: AppState = {
+      ...makeState(),
+      messages: [
+        { kind: "user", text: "hello", turn: 1 },
+        {
+          kind: "error",
+          id: "retry-me",
+          message: "connection refused",
+          turn: 1,
+          retryable: true,
+        },
+      ],
+    };
+
+    const next = reduce(state, { t: "begin_error_retry", id: "retry-me", turn: 1 });
+
+    expect(next.busy).toBe(true);
+    expect(next.messages.filter((message) => message.kind === "user")).toHaveLength(1);
+    expect(next.messages.some((message) => message.kind === "error")).toBe(false);
+    expect(next.messages.at(-1)).toMatchObject({
+      kind: "assistant",
+      turn: 1,
+      pending: true,
+      segments: [],
+    });
   });
 });
 

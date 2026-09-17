@@ -1,15 +1,12 @@
 import { type ReactElement, createElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { extractFencedLang as dashboardExtract } from "../dashboard/src/Markdown";
 import { extractFencedLang as desktopExtract } from "../desktop/src/Markdown";
 
 const stub = (className: string): ReactElement => createElement("code", { className });
 
-describe.each([
-  { surface: "desktop", extract: desktopExtract },
-  { surface: "dashboard", extract: dashboardExtract },
-])("$surface extractFencedLang", ({ extract }) => {
+describe("desktop extractFencedLang", () => {
+  const extract = desktopExtract;
   it("reads language- class from a child element", () => {
     expect(extract(stub("language-ts"))).toBe("ts");
     expect(extract(stub("language-python"))).toBe("python");

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
+import { AttachmentStore } from "../attachments/store.js";
 
 export type StorageCleanupTier = "safe" | "optional" | "review";
 export type StorageCleanupKind = "cache" | "conversation" | "library" | "workspace" | "config";
@@ -112,6 +113,16 @@ function sumTier(items: readonly StorageItem[], tier: StorageCleanupTier): numbe
 export function scanJupiterStorage(opts: StorageScanOptions = {}): StorageScan {
   const jupiterHome = resolve(opts.jupiterHome ?? defaultJupiterHome());
   const items: StorageItem[] = [];
+  pushIfPresent(items, {
+    id: "review:image-attachments",
+    tier: "review",
+    kind: "conversation",
+    title: "Image attachments",
+    description: "Images retained by conversations, recoverable history, and drafts.",
+    path: join(jupiterHome, "attachments"),
+    sizeBytes: pathSizeBytes(join(jupiterHome, "attachments")),
+    cleanup: "none",
+  });
 
   pushIfPresent(items, {
     id: "safe:jupiter-cache",
@@ -266,4 +277,57 @@ export function cleanupJupiterStorage(opts: StorageCleanupOptions): StorageClean
     results,
     scan: scanJupiterStorage(opts),
   };
+}
+
+export async function scanJupiterStorageWithImages(
+  opts: StorageScanOptions = {},
+): Promise<StorageScan> {
+  const scan = scanJupiterStorage(opts);
+  const home = resolve(opts.jupiterHome ?? defaultJupiterHome());
+  if (!existsSync(join(home, "attachments", "v1", "objects"))) return scan;
+  const garbage = await new AttachmentStore(join(home, "attachments", "v1")).inspectGarbage(
+    join(home, "sessions"),
+  );
+  if (garbage.bytes) {
+    const retained = scan.items.find((item) => item.id === "review:image-attachments");
+    if (retained) retained.sizeBytes = Math.max(0, retained.sizeBytes - garbage.bytes);
+    scan.items.push({
+      id: "safe:orphan-images",
+      tier: "safe",
+      kind: "cache",
+      title: "Unused images",
+      description:
+        "Unreferenced for at least 30 days. Keeps archived history, backups, and offline drafts.",
+      sizeBytes: garbage.bytes,
+      cleanup: "delete",
+    });
+    scan.safeBytes += garbage.bytes;
+    scan.reviewBytes = Math.max(0, scan.reviewBytes - garbage.bytes);
+  }
+  return scan;
+}
+
+export async function cleanupJupiterStorageWithImages(
+  opts: StorageCleanupOptions,
+): Promise<StorageCleanupResult> {
+  const result = cleanupJupiterStorage({
+    ...opts,
+    itemIds: opts.itemIds.filter((id) => id !== "safe:orphan-images"),
+  });
+  if (opts.itemIds.includes("safe:orphan-images")) {
+    const home = resolve(opts.jupiterHome ?? defaultJupiterHome());
+    const garbage = await new AttachmentStore(join(home, "attachments", "v1")).inspectGarbage(
+      join(home, "sessions"),
+      new Set(),
+      true,
+    );
+    result.freedBytes += garbage.bytes;
+    result.results.push({
+      id: "safe:orphan-images",
+      status: garbage.count ? "cleaned" : "skipped",
+      sizeBytes: garbage.bytes,
+    });
+  }
+  result.scan = await scanJupiterStorageWithImages(opts);
+  return result;
 }
