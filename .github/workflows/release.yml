@@ -208,11 +208,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: desktop
-          tagName: ${{ steps.tag.outputs.name }}
-          releaseName: Jupiter ${{ steps.tag.outputs.name }}
-          assetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
-          releaseDraft: false
-          prerelease: false
           args: ${{ matrix.target.args }}
 
       - name: Build Tauri bundle (macOS, signed + notarized)
@@ -230,19 +225,16 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: desktop
-          tagName: ${{ steps.tag.outputs.name }}
-          releaseName: Jupiter ${{ steps.tag.outputs.name }}
-          assetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]
-          releaseDraft: false
-          prerelease: false
           args: ${{ matrix.target.args }}
 
-      - name: Verify requested installer exists
+      - name: Verify and upload requested installer
         working-directory: desktop
         shell: bash
         env:
           LABEL: ${{ matrix.target.label }}
           TARGET: ${{ matrix.target.verifyTarget }}
+          TAG: ${{ steps.tag.outputs.name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "$TARGET" ]; then
             release_dir="src-tauri/target/$TARGET/release"
@@ -251,9 +243,9 @@ jobs:
           fi
 
           case "$LABEL" in
-            linux-*) pattern="$release_dir/bundle/deb/*.deb" ;;
-            macos-*) pattern="$release_dir/bundle/dmg/*.dmg" ;;
-            windows-*) pattern="$release_dir/bundle/nsis/*.exe" ;;
+            linux-*) pattern="$release_dir/bundle/deb/*.deb"; extension=deb ;;
+            macos-*) pattern="$release_dir/bundle/dmg/*.dmg"; extension=dmg ;;
+            windows-*) pattern="$release_dir/bundle/nsis/*.exe"; extension=exe ;;
             *) echo "unknown label: $LABEL" >&2; exit 1 ;;
           esac
           shopt -s nullglob
@@ -265,6 +257,28 @@ jobs:
           fi
           printf 'Installer assets for %s:\n' "$LABEL"
           printf '  %s\n' "${files[@]}"
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "Expected exactly one installer for $LABEL" >&2
+            exit 1
+          fi
+
+          notes="../.github/release-notes/${TAG}.md"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null || \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Jupiter $TAG" --notes-file "$notes" || \
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          asset_dir="$(mktemp -d)"
+          asset="$asset_dir/Jupiter_${TAG}_${LABEL}.${extension}"
+          cp "${files[0]}" "$asset"
+          # Retry transient asset-storage failures without recompiling the app.
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" "$asset" --repo "$GITHUB_REPOSITORY" --clobber; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then sleep "$((attempt * 10))"; fi
+          done
+          echo "Installer upload failed after five attempts" >&2
+          exit 1
 
       - name: Verify app Node inherits TCC grants (macOS)
         if: startsWith(matrix.target.os, 'macos-') && env.HAS_APPLE_SIGNING == 'true'

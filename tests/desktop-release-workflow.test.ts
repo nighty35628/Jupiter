@@ -8,9 +8,11 @@ const desktopReleaseNotesPath = ".github/release-notes/desktop-v1.0.0.md";
 
 describe("desktop release packaging", () => {
   it("publishes platform installers for the Jupiter desktop release", () => {
-    expect(releaseWorkflow).toContain("tagName: ${{ steps.tag.outputs.name }}");
-    expect(releaseWorkflow).toContain("releaseName: Jupiter");
-    expect(releaseWorkflow).toContain("releaseDraft: false");
+    expect(releaseWorkflow).toContain("TAG: ${{ steps.tag.outputs.name }}");
+    expect(releaseWorkflow).toContain('gh release create "$TAG"');
+    expect(releaseWorkflow).toContain('--title "Jupiter $TAG"');
+    expect(releaseWorkflow).toContain("--verify-tag");
+    expect(releaseWorkflow).not.toContain("--draft");
     expect(releaseWorkflow).toContain('"label":"linux-x64"');
     expect(releaseWorkflow).toContain('"label":"linux-arm64"');
     expect(releaseWorkflow).toContain('"label":"windows-arm64"');
@@ -22,10 +24,17 @@ describe("desktop release packaging", () => {
     expect(releaseWorkflow).toContain('"bundles":"--bundles deb"');
     expect(releaseWorkflow).toContain('"bundles":"--bundles dmg"');
     expect(releaseWorkflow).toContain('"bundles":"--bundles nsis"');
-    expect(releaseWorkflow).toContain(
-      "assetNamePattern: Jupiter_${{ steps.tag.outputs.name }}_${{ matrix.target.label }}[ext]",
-    );
+    expect(releaseWorkflow).toContain('asset="$asset_dir/Jupiter_${TAG}_${LABEL}.${extension}"');
     expect(releaseWorkflow).not.toContain("releaseAssetNamePattern");
+  });
+
+  it("retries installer uploads without rebuilding and keeps Tauri build-only", () => {
+    expect(releaseWorkflow).not.toContain("tagName:");
+    expect(releaseWorkflow).toContain("for attempt in 1 2 3 4 5; do");
+    expect(releaseWorkflow).toContain('gh release upload "$TAG" "$asset"');
+    expect(releaseWorkflow).toContain("--clobber");
+    expect(releaseWorkflow).toContain('sleep "$((attempt * 10))"');
+    expect(releaseWorkflow).toContain("Installer upload failed after five attempts");
   });
 
   it("supports single-target manual dispatches for release asset backfills", () => {
