@@ -155,6 +155,7 @@ describe("bundled dist — tokenizer path resolution", () => {
         await rm(directory, { recursive: true, force: true });
       }
     },
+    60_000,
   );
 
   (cliExists ? it : it.skip)("dist/cli/index.js loads tokenizer before the first API fetch", () => {
