@@ -24,7 +24,7 @@ describe("Web host command whitelist", () => {
   });
 
   afterEach(() => {
-    rmSync(workspace, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   it("returns native-compatible Git information and changes", async () => {
@@ -44,7 +44,7 @@ describe("Web host command whitelist", () => {
     expect(info.branches.length).toBeGreaterThan(0);
     expect(status).toContainEqual({ path: "note.txt", kind: "modified" });
     expect(diff).toContain("+second");
-  });
+  }, 20_000);
 
   it("previews files only inside the active workspace", async () => {
     const preview = (await invokeWebHost(

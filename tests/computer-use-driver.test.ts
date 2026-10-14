@@ -66,14 +66,18 @@ describe("Computer Use driver process", () => {
         command: process.execPath,
         args: [
           "-e",
-          "const rl = require('node:readline').createInterface({input:process.stdin}); rl.on('line', line => { const r=JSON.parse(line); if(r.method==='initialize') process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result:{capabilities:{tools:{}},serverInfo:{name:'fake',version:'1'}}})+'\\n'); if(r.method==='notifications/initialized') { if(process.platform==='win32') require('node:fs').closeSync(1); else process.stdout.end(); } }); setInterval(()=>{},1000);",
+          "const rl = require('node:readline').createInterface({input:process.stdin}); rl.on('line', line => { const r=JSON.parse(line); if(r.method==='initialize') process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result:{capabilities:{tools:{}},serverInfo:{name:'fake',version:'1'}}})+'\\n'); if(r.method==='notifications/initialized' && process.platform!=='win32') process.stdout.end(); }); setInterval(()=>{},1000);",
         ],
         onDisconnect: disconnected,
       },
       new ComputerUseController(new ComputerUseLease({ path: join(root, "lock") })),
     );
     try {
-      await runtime.start("test");
+      const client = await runtime.start("test");
+      if (process.platform === "win32") {
+        const { transport } = client as unknown as { transport: { child: ChildProcess } };
+        transport.child.stdout!.destroy();
+      }
       await fault;
       expect(runtime.driver.running).toBe(false);
       expect(runtime.controller.active).toBe(false);
@@ -154,3 +158,4 @@ describe("Computer Use driver process", () => {
     }
   });
 });
+import type { ChildProcess } from "node:child_process";

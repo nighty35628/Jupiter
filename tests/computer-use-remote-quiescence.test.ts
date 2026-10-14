@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import type { ChildProcess } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -301,6 +302,7 @@ describe("Computer Use shared-daemon quiescence", () => {
 
   it("retains ownership on actual fake-proxy EOF after input dispatch", async () => {
     const root = await mkdtemp(join(tmpdir(), "jupiter-cua-proxy-eof-"));
+    const marker = join(root, "input-dispatched");
     roots.push(root);
     const lease = new ComputerUseLease({ path: join(root, "lock") });
     const controller = new ComputerUseController(lease);
@@ -309,21 +311,30 @@ describe("Computer Use shared-daemon quiescence", () => {
         command: process.execPath,
         args: [
           "-e",
-          "const rl=require('node:readline').createInterface({input:process.stdin}); rl.on('line',line=>{const r=JSON.parse(line);if(r.method==='initialize')process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result:{capabilities:{tools:{}},serverInfo:{name:'fake-proxy',version:'1'}}})+'\\n');if(r.method==='tools/call'){if(process.platform==='win32')require('node:fs').closeSync(1);else process.stdout.end();}});setInterval(()=>{},1000);",
+          `const rl=require('node:readline').createInterface({input:process.stdin}); rl.on('line',line=>{const r=JSON.parse(line);if(r.method==='initialize')process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result:{capabilities:{tools:{}},serverInfo:{name:'fake-proxy',version:'1'}}})+'\\n');if(r.method==='tools/call'){require('node:fs').writeFileSync(${JSON.stringify(marker)},'sent');if(process.platform!=='win32')process.stdout.end();}});setInterval(()=>{},1000);`,
         ],
         shutdownTimeoutMs: 30,
       },
       controller,
     );
     runtimes.push(runtime);
-    const adapter = new ComputerUseToolAdapter(await runtime.start("owner"), controller);
+    const client = await runtime.start("owner");
+    const adapter = new ComputerUseToolAdapter(client, controller);
     const observation = controller.recordObservation({
       capturedAt: Date.now(),
       imageWidth: 100,
       imageHeight: 100,
       screen: { left: 0, top: 0, width: 100, height: 100 },
     });
-    const result = JSON.parse(await adapter.type({ observationId: observation.id, text: "test" }));
+    const action = adapter.type({ observationId: observation.id, text: "test" });
+    if (process.platform === "win32") {
+      await vi.waitFor(async () => expect(await readFile(marker, "utf8")).toBe("sent"), {
+        timeout: 5000,
+      });
+      const { transport } = client as unknown as { transport: { child: ChildProcess } };
+      transport.child.stdout!.destroy();
+    }
+    const result = JSON.parse(await action);
     expect(result.executionOutcome).toBe("unknown_after_transport");
     await expect(runtime.stop()).rejects.toThrow("manual recovery");
     expect(runtime.driver.running).toBe(false);

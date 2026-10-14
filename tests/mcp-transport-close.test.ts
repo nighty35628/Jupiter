@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { McpClient } from "../src/mcp/client.js";
 import { type McpTransport, StdioTransport } from "../src/mcp/stdio.js";
@@ -94,19 +95,23 @@ describe("MCP bounded process shutdown", () => {
     }
   });
 
-  it("detects stdout EOF even while the child is still alive, then waits for exit on close", async () => {
+  it("detects output disconnection while the child is alive, then waits for exit on close", async () => {
     const transport = new StdioTransport({
       command: process.execPath,
       args: [
         "-e",
-        "if (process.platform === 'win32') require('node:fs').closeSync(1); else process.stdout.end(); setInterval(() => {}, 1000);",
+        'process.stdout.write(\'{"jsonrpc":"2.0","method":"ready"}\\n\'); if (process.platform !== "win32") process.stdout.end(); setInterval(() => {}, 1000);',
       ],
       shell: false,
       shutdownTimeoutMs: 30,
     });
     const child = (transport as unknown as { child: ChildProcess }).child;
     try {
-      expect(await transport.messages().next()).toEqual({ done: true, value: undefined });
+      const messages = transport.messages();
+      expect((await messages.next()).value).toMatchObject({ method: "ready" });
+      // Windows keeps inherited stdout handles open while the child lives.
+      if (process.platform === "win32") child.stdout!.destroy();
+      expect(await messages.next()).toEqual({ done: true, value: undefined });
       expect(child.exitCode).toBeNull();
       expect(child.signalCode).toBeNull();
       await transport.close();
@@ -137,7 +142,9 @@ describe("MCP bounded process shutdown", () => {
       expect(child.signalCode).toBeNull();
     } finally {
       kill.mockRestore();
+      const exited = once(child, "exit");
       originalKill("SIGKILL");
+      await exited;
       await transport.close();
     }
   });
