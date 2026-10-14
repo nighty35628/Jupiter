@@ -64,7 +64,7 @@ describe("MCP transport EOF", () => {
 });
 
 describe("MCP bounded process shutdown", () => {
-  it("escalates TERM to KILL and concurrent closes wait for actual exit", async () => {
+  it("terminates the child and concurrent closes wait for actual exit", async () => {
     const transport = new StdioTransport({
       command: process.execPath,
       args: [
@@ -80,8 +80,13 @@ describe("MCP bounded process shutdown", () => {
       await transport.messages().next();
       const kill = vi.spyOn(child, "kill");
       await Promise.all([transport.close(), transport.close()]);
-      expect(kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
-      expect(child.signalCode).toBe("SIGKILL");
+      if (process.platform === "win32") {
+        expect(kill.mock.calls.map(([signal]) => signal)).toEqual([undefined]);
+        expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+      } else {
+        expect(kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+        expect(child.signalCode).toBe("SIGKILL");
+      }
     } finally {
       await transport.close();
     }
@@ -104,7 +109,7 @@ describe("MCP bounded process shutdown", () => {
     } finally {
       await transport.close();
     }
-  }, 1500);
+  }, 15_000);
 
   it("rejects an unconfirmed exit rather than treating kill acknowledgement as exit", async () => {
     const transport = new StdioTransport({

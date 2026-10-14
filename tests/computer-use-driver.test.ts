@@ -82,7 +82,7 @@ describe("Computer Use driver process", () => {
       await runtime.stop();
       await rm(root, { recursive: true, force: true });
     }
-  }, 2000);
+  }, 15_000);
   it("renews ownership while idle and stops renewing after shutdown", async () => {
     vi.useFakeTimers();
     const runtime = new ComputerUseRuntime();

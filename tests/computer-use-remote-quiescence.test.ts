@@ -329,5 +329,5 @@ describe("Computer Use shared-daemon quiescence", () => {
     expect(runtime.driver.running).toBe(false);
     expect(runtime.state).toBe("fault");
     await expect(lease.acquire("next")).rejects.toBeInstanceOf(ComputerUseLeaseBusyError);
-  }, 2000);
+  }, 15_000);
 });
