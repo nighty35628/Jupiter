@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILTIN_PETS } from "./catalog";
 import { PET_NATIVE_MENU_IDS } from "./native-context-menu";
 import { PetOverlayApp, clampPetContextMenuPosition } from "./overlay";
+import { usePetOverlayInput } from "./overlay-input";
 import {
   PET_OVERLAY_ACTION_EVENT,
   PET_OVERLAY_OPEN_TASK_EVENT,
@@ -19,6 +20,7 @@ const eventMocks = eventApi as unknown as typeof eventApi & {
   emitMockEvent: (event: string, payload: unknown) => void;
   resetMockEvents: () => void;
 };
+vi.mock("./overlay-input", () => ({ usePetOverlayInput: vi.fn(() => () => true) }));
 const menuMocks = menuApi as unknown as {
   menuMockState: { items: Array<{ id: string; trigger(): void }> };
   popupMock: ReturnType<typeof vi.fn>;
@@ -69,6 +71,7 @@ beforeEach(() => {
   eventMocks.resetMockEvents();
   resetMenuMocks();
   vi.clearAllMocks();
+  vi.mocked(usePetOverlayInput).mockReturnValue(() => true);
   vi.stubGlobal("Image", LoadedImage);
   vi.stubGlobal(
     "matchMedia",
@@ -86,7 +89,7 @@ afterEach(() => {
 });
 
 describe("PetOverlayApp", () => {
-  it("shows linked conversation status and opens that tab", async () => {
+  it("expands status before an explicit task selection opens that tab", async () => {
     render(<PetOverlayApp />);
     act(() => eventMocks.emitMockEvent(PET_OVERLAY_SNAPSHOT_EVENT, snapshot()));
 
@@ -95,9 +98,47 @@ describe("PetOverlayApp", () => {
     await waitFor(() => expect(windowMocks.currentWindow.show).toHaveBeenCalled());
 
     fireEvent.click(screen.getByText("Fix the desktop overlay"));
+    expect(eventApi.emitTo).not.toHaveBeenCalledWith(
+      "main",
+      PET_OVERLAY_OPEN_TASK_EVENT,
+      expect.anything(),
+    );
+    fireEvent.click(screen.getAllByText("Fix the desktop overlay")[1]!);
     expect(eventApi.emitTo).toHaveBeenCalledWith("main", PET_OVERLAY_OPEN_TASK_EVENT, {
       tabId: "tab-main",
     });
+  });
+
+  it("only interacts on a single click or keyboard activation, without opening Jupiter", async () => {
+    const view = render(<PetOverlayApp />);
+    act(() => eventMocks.emitMockEvent(PET_OVERLAY_SNAPSHOT_EVENT, snapshot()));
+    const actor = await screen.findByRole("button", { name: "Say hello" });
+    await waitFor(() => expect(windowMocks.currentWindow.outerPosition).toHaveBeenCalled());
+    fireEvent.pointerDown(actor, { button: 0, pointerId: 1, screenX: 120, screenY: 120 });
+    fireEvent.pointerUp(actor, { pointerId: 1, screenX: 120, screenY: 120 });
+    expect(view.container.querySelector(".pet-overlay-root")?.getAttribute("data-activity")).toBe(
+      "waving",
+    );
+    fireEvent.click(actor, { detail: 0 });
+    expect(eventApi.emitTo).not.toHaveBeenCalledWith(
+      "main",
+      PET_OVERLAY_OPEN_TASK_EVENT,
+      expect.anything(),
+    );
+  });
+
+  it("ignores pointer presses and context menus in transparent sprite padding", async () => {
+    vi.mocked(usePetOverlayInput).mockReturnValue(() => false);
+    render(<PetOverlayApp />);
+    act(() => eventMocks.emitMockEvent(PET_OVERLAY_SNAPSHOT_EVENT, snapshot()));
+    const actor = await screen.findByRole("button", { name: "Say hello" });
+    await waitFor(() => expect(windowMocks.currentWindow.outerPosition).toHaveBeenCalled());
+    fireEvent.pointerDown(actor, { button: 0, pointerId: 1, screenX: 120, screenY: 120 });
+    fireEvent.pointerMove(actor, { pointerId: 1, screenX: 160, screenY: 120 });
+    fireEvent.pointerUp(actor, { pointerId: 1, screenX: 160, screenY: 120 });
+    fireEvent.contextMenu(actor, { clientX: 0, clientY: 0 });
+    expect(windowMocks.currentWindow.setPosition).not.toHaveBeenCalled();
+    expect(popupMock).not.toHaveBeenCalled();
   });
 
   it("only changes native visibility when the enabled state changes", async () => {
@@ -135,7 +176,7 @@ describe("PetOverlayApp", () => {
     const view = render(<PetOverlayApp />);
     act(() => eventMocks.emitMockEvent(PET_OVERLAY_SNAPSHOT_EVENT, snapshot("thinking")));
     const actor = await screen.findByRole("button", {
-      name: "Open the conversation linked to this pet",
+      name: "Say hello",
     });
     await waitFor(() => expect(windowMocks.currentWindow.outerPosition).toHaveBeenCalled());
 
@@ -190,7 +231,7 @@ describe("PetOverlayApp", () => {
     const view = render(<PetOverlayApp />);
     act(() => eventMocks.emitMockEvent(PET_OVERLAY_SNAPSHOT_EVENT, snapshot("thinking")));
     const actor = await screen.findByRole("button", {
-      name: "Open the conversation linked to this pet",
+      name: "Say hello",
     });
 
     fireEvent.contextMenu(actor, { clientX: 230, clientY: 210 });
@@ -263,7 +304,7 @@ describe("PetOverlayApp", () => {
     ];
     act(() => eventMocks.emitMockEvent(PET_OVERLAY_SNAPSHOT_EVENT, current));
     const actor = await screen.findByRole("button", {
-      name: "Open the conversation linked to this pet",
+      name: "Say hello",
     });
 
     fireEvent.contextMenu(actor, { clientX: 100, clientY: 100 });
@@ -280,7 +321,7 @@ describe("PetOverlayApp", () => {
     render(<PetOverlayApp />);
     act(() => eventMocks.emitMockEvent(PET_OVERLAY_SNAPSHOT_EVENT, snapshot()));
     const actor = await screen.findByRole("button", {
-      name: "Open the conversation linked to this pet",
+      name: "Say hello",
     });
 
     fireEvent.contextMenu(actor, { clientX: 100, clientY: 100 });
@@ -303,7 +344,7 @@ describe("PetOverlayApp", () => {
     render(<PetOverlayApp />);
     act(() => eventMocks.emitMockEvent(PET_OVERLAY_SNAPSHOT_EVENT, snapshot()));
     const actor = await screen.findByRole("button", {
-      name: "Open the conversation linked to this pet",
+      name: "Say hello",
     });
 
     fireEvent.contextMenu(actor, { clientX: 100, clientY: 100 });

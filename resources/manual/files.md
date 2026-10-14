@@ -1,0 +1,4 @@
+# Files, External Paths and Attachments
+The workspace is the default project context, not a universal ban on external files. Native filesystem tools accept relative paths, workspace-root absolute paths, OS-absolute paths and ~/ paths. External access remains subject to the tool's normal authorization and the effective surface's permission mode; do not promise access before the gate succeeds.
+Use actual attachment metadata or the user's supplied path. An uploaded image is not a live screen; file attachments and image support are distinct. Image-capable models/providers are required to interpret images. Do not invent an attachment path or imply every file type is decoded as an image.
+Read before editing; use the supported edit tools and respect permissions, exclusions and user restrictions. Commands default to the workspace root; pass explicit cwd/data paths when needed. A pasted external path alone is not proof that the file was read.

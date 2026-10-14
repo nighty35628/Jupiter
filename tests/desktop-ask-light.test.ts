@@ -1,9 +1,43 @@
 import { describe, expect, it, vi } from "vitest";
 import { Usage } from "../src/client.js";
-import { runDesktopLightAsk } from "../src/desktop/ask-light.js";
+import { LIGHT_ASK_SYSTEM_PROMPT, runDesktopLightAsk } from "../src/desktop/ask-light.js";
 import type { ChatMessage } from "../src/types.js";
 
 describe("desktop lightweight ask", () => {
+  it("injects host help with runtime capabilities, tools empty, and persists no help", async () => {
+    const requests: Array<{ messages: ChatMessage[]; tools: [] }> = [];
+    const persisted: ChatMessage[] = [];
+    const onHelpTopic = vi.fn();
+    await runDesktopLightAsk({
+      client: {
+        chat: async (request) => {
+          requests.push(request);
+          return { content: "answer", usage: new Usage(2, 1, 3, 0, 2) };
+        },
+      },
+      model: "fake-model",
+      text: "你是谁？",
+      turn: 1,
+      emit: () => {},
+      helpContext: () => ({ surface: "desktop", model: "fake-model", provider: "third-party" }),
+      onHelpTopic,
+      appendAndPersist: (message) => persisted.push(message),
+    });
+    expect(requests[0]?.tools).toEqual([]);
+    expect(JSON.stringify(requests[0]?.messages)).toContain("third-party");
+    expect(JSON.stringify(requests[0]?.messages)).toContain("nightytech");
+    expect(requests[0]?.messages.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "system",
+    ]);
+    expect(requests[0]?.messages[0]?.content).toBe(LIGHT_ASK_SYSTEM_PROMPT);
+    expect(onHelpTopic).toHaveBeenCalledWith("identity");
+    expect(persisted).toEqual([
+      { role: "user", content: "你是谁？" },
+      { role: "assistant", content: "answer" },
+    ]);
+  });
   it("uses a minimal no-tool request, persists the visible exchange, and emits transcript events", async () => {
     const persisted: ChatMessage[] = [];
     const events: unknown[] = [];

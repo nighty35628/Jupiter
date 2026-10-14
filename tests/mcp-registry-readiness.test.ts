@@ -24,6 +24,52 @@ const TOOL: McpTool = {
 };
 
 describe("MCP bridge readiness gate", () => {
+  it("marks a transport failure as an unknown outcome instead of a replayable error", async () => {
+    const host = makeFakeHost(async () => {
+      throw new Error("MCP request tools/call timed out after 60000ms");
+    });
+    const registry = new ToolRegistry();
+    const env: BridgeEnv = {
+      registry,
+      host,
+      prefix: "computer_",
+      maxResultChars: 32_000,
+      tracker: null,
+      serverName: "computer",
+    };
+    const name = registerSingleMcpTool(TOOL, env);
+    const out = await registry.dispatch(name, JSON.stringify({ msg: "click" }));
+    const parsed = JSON.parse(out) as Record<string, unknown>;
+    expect(parsed.executionOutcome).toBe("unknown_after_transport");
+    expect(parsed.recovery).toBe("unknown");
+    expect(parsed.retry).toBe("inspect_current_state_before_repeating");
+  });
+
+  it("marks a cancellation after dispatch as unknown", async () => {
+    const controller = new AbortController();
+    const host = makeFakeHost(async () => {
+      controller.abort();
+      throw new Error("MCP request tools/call aborted by user");
+    });
+    const registry = new ToolRegistry();
+    const env: BridgeEnv = {
+      registry,
+      host,
+      prefix: "computer_",
+      maxResultChars: 32_000,
+      tracker: null,
+      serverName: "computer",
+    };
+    const name = registerSingleMcpTool(TOOL, env);
+    const out = await registry.dispatch(name, JSON.stringify({ msg: "type" }), {
+      signal: controller.signal,
+    });
+    expect(JSON.parse(out)).toMatchObject({
+      executionOutcome: "unknown_after_cancel",
+      recovery: "unknown",
+    });
+  });
+
   it("dispatch fired mid-handshake waits for the ready deferred and then resolves", async () => {
     let resolveReady!: () => void;
     const ready = new Promise<void>((r) => {

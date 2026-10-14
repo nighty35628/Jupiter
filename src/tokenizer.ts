@@ -3,6 +3,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { type ImageAttachment, messageImageTokens } from "./attachments/types.js";
@@ -291,6 +292,132 @@ export function countTokens(text: string): number {
   } else {
     process(text);
   }
+  return count;
+}
+
+function* splitPreTokens(text: string, rules: RegExp[], stage = 0): Generator<string> {
+  if (stage === rules.length) {
+    if (text) yield text;
+    return;
+  }
+  const rule = rules[stage]!;
+  rule.lastIndex = 0;
+  let last = 0;
+  for (const match of text.matchAll(rule)) {
+    const index = match.index!;
+    if (index > last) yield* splitPreTokens(text.slice(last, index), rules, stage + 1);
+    if (match[0]) yield* splitPreTokens(match[0], rules, stage + 1);
+    last = index + match[0].length;
+  }
+  if (last < text.length) yield* splitPreTokens(text.slice(last), rules, stage + 1);
+}
+
+/** Full-text count, yielding between bounded batches without cutting a BPE pre-token. */
+export async function countTokensAsync(text: string, signal?: AbortSignal): Promise<number> {
+  signal?.throwIfAborted();
+  if (!text) return 0;
+  const tokenizer = loadTokenizer();
+  let work = 0;
+  const checkpoint = async () => {
+    signal?.throwIfAborted();
+    work = 0;
+    await yieldToEventLoop(undefined, { signal });
+    signal?.throwIfAborted();
+  };
+  const batchSize = 2048;
+
+  const countSegment = async (segment: string): Promise<number> => {
+    let count = 0;
+    for (const preToken of splitPreTokens(segment, tokenizer.splitRegexes)) {
+      work += preToken.length;
+      if (work >= batchSize) await checkpoint();
+      let piece = "";
+      const word: string[] = [];
+      for (let start = 0; start < preToken.length; ) {
+        let end = Math.min(start + batchSize / 4, preToken.length);
+        const lastChar = preToken.charCodeAt(end - 1);
+        const nextChar = preToken.charCodeAt(end);
+        // Do not turn a surrogate pair into two replacement characters at a batch boundary.
+        if (lastChar >= 0xd800 && lastChar <= 0xdbff && nextChar >= 0xdc00 && nextChar <= 0xdfff)
+          end--;
+        const encoded = byteLevelEncode(preToken.slice(start, end), tokenizer.byteToChar);
+        piece += encoded;
+        word.push(...encoded);
+        start = end;
+        work += encoded.length;
+        if (work >= batchSize) await checkpoint();
+      }
+      const cachedPieces = bpeCache.get(piece);
+      if (cachedPieces) {
+        for (const token of cachedPieces) {
+          if (tokenizer.vocab[token] !== undefined) count++;
+          if (++work >= batchSize) await checkpoint();
+        }
+        continue;
+      }
+      while (word.length > 1) {
+        let bestRank = Number.POSITIVE_INFINITY;
+        let left = "";
+        let right = "";
+        for (let i = 0; i < word.length - 1; i++) {
+          const rank = tokenizer.mergeRank.get(`${word[i]} ${word[i + 1]}`);
+          if (rank !== undefined && rank < bestRank) {
+            bestRank = rank;
+            left = word[i]!;
+            right = word[i + 1]!;
+          }
+          if (++work >= batchSize) await checkpoint();
+        }
+        if (!Number.isFinite(bestRank)) break;
+
+        // Equal-rank occurrences merge left-to-right. Stop batching if a new
+        // lower-rank neighbor appears, preserving the synchronous BPE order.
+        let read = 0;
+        let write = 0;
+        let preempted = false;
+        while (read < word.length) {
+          if (!preempted && word[read] === left && word[read + 1] === right) {
+            const merged = left + right;
+            read += 2;
+            word[write++] = merged;
+            const before =
+              write > 1 ? tokenizer.mergeRank.get(`${word[write - 2]} ${merged}`) : undefined;
+            const after =
+              read < word.length ? tokenizer.mergeRank.get(`${merged} ${word[read]}`) : undefined;
+            preempted =
+              (before !== undefined && before < bestRank) ||
+              (after !== undefined && after < bestRank);
+          } else {
+            word[write++] = word[read++]!;
+          }
+          if (++work >= batchSize) await checkpoint();
+        }
+        word.length = write;
+      }
+      if (piece.length <= batchSize) bpeCache.set(piece, word);
+      for (const token of word) {
+        if (tokenizer.vocab[token] !== undefined) count++;
+        if (++work >= batchSize) await checkpoint();
+      }
+    }
+    return count;
+  };
+
+  let count = 0;
+  let last = 0;
+  if (tokenizer.addedPattern) {
+    tokenizer.addedPattern.lastIndex = 0;
+    for (const match of text.matchAll(tokenizer.addedPattern)) {
+      const index = match.index!;
+      if (index > last) count += await countSegment(text.slice(last, index));
+      if (tokenizer.addedMap.has(match[0])) count++;
+      work += match[0].length;
+      if (work >= batchSize) await checkpoint();
+      last = index + match[0].length;
+    }
+  }
+  if (last < text.length) count += await countSegment(text.slice(last));
+  signal?.throwIfAborted();
   return count;
 }
 
@@ -628,6 +755,29 @@ export function estimateRequestTokens(
     total += countTokensBounded(renderTools(toolSpecs));
   }
   return total;
+}
+
+/** Exact local V4 template count for the wire guard; UI estimates remain sampled. */
+export async function countRequestTokens(
+  messages: Parameters<typeof formatDeepSeekPrompt>[0],
+  toolSpecs?: ReadonlyArray<unknown> | null,
+  dropThinking = false,
+  signal?: AbortSignal,
+): Promise<number> {
+  signal?.throwIfAborted();
+  const visible = (dropThinking ? dropThinkingMessages(messages as V4Message[]) : messages).map(
+    (message) => (message.role === "developer" ? { ...message, role: "system" } : { ...message }),
+  );
+  if (toolSpecs?.length) {
+    // A caller can mutate its tools array between requests; render the current wire schema.
+    const tools = renderTools([...toolSpecs]);
+    if (visible[0]?.role === "system") {
+      visible[0] = { ...visible[0], content: `${visible[0].content ?? ""}\n\n${tools}` };
+    } else {
+      visible.unshift({ role: "system", content: tools });
+    }
+  }
+  return countTokensAsync(formatDeepSeekPrompt(visible), signal);
 }
 
 /** Exposed for tests — resets the lazy-load singleton. */

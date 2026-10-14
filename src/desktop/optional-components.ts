@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, join, win32 as win32Path } from "node:path";
 
 export type OptionalComponentId =
   | "browser-chrome"
@@ -9,14 +9,16 @@ export type OptionalComponentId =
   | "libreoffice"
   | "ffmpeg"
   | "tesseract"
-  | "pandoc";
+  | "pandoc"
+  | "cua-driver";
 
 export type OptionalComponentCapability =
   | "browser-automation"
   | "office-preview"
   | "media-processing"
   | "ocr"
-  | "document-conversion";
+  | "document-conversion"
+  | "computer-use";
 
 export type OptionalComponentStatus = {
   id: OptionalComponentId;
@@ -57,12 +59,21 @@ function pathWhich(
   command: string,
   env: NodeJS.ProcessEnv,
   exists: (path: string) => boolean,
+  platform: NodeJS.Platform = process.platform,
 ): string | null {
   const pathVar = env.PATH || env.Path || "";
-  for (const dir of pathVar.split(delimiter)) {
+  const candidates =
+    platform === "win32"
+      ? [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`]
+      : [command];
+  const pathDelimiter = platform === "win32" ? ";" : delimiter;
+  const pathJoin = platform === "win32" ? win32Path.join : join;
+  for (const dir of pathVar.split(pathDelimiter)) {
     if (!dir) continue;
-    const full = join(dir, command);
-    if (exists(full)) return full;
+    for (const candidate of candidates) {
+      const full = pathJoin(dir, candidate);
+      if (exists(full)) return full;
+    }
   }
   return null;
 }
@@ -178,6 +189,14 @@ function specsFor(platform: NodeJS.Platform): ComponentSpec[] {
       commands: ["pandoc"],
       homepageUrl: "https://pandoc.org/installing.html",
     },
+    {
+      id: "cua-driver",
+      name: "Cua Driver",
+      capability: "computer-use",
+      commands: ["cua-driver"],
+      homepageUrl: "https://github.com/trycua/cua",
+      recommended: true,
+    },
   ];
 }
 
@@ -221,6 +240,11 @@ export function installHintFor(
       win32: "winget install JohnMacFarlane.Pandoc",
       linux: "sudo apt install pandoc",
     },
+    "cua-driver": {
+      darwin: "Install the pinned Cua Driver release and make cua-driver available on PATH.",
+      win32: "Install the pinned Cua Driver release and add cua-driver.exe to PATH.",
+      linux: "Install the pinned Cua Driver release and make cua-driver available on PATH.",
+    },
   };
   return hints[id][platform] ?? hints[id].linux ?? "";
 }
@@ -250,7 +274,7 @@ export function detectOptionalComponents(options: DetectorOptions = {}): Optiona
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const exists = options.exists ?? existsSync;
-  const which = options.which ?? ((command: string) => pathWhich(command, env, exists));
+  const which = options.which ?? ((command: string) => pathWhich(command, env, exists, platform));
   const runVersion = options.runVersion ?? defaultRunVersion;
 
   return specsFor(platform).map((spec) => {

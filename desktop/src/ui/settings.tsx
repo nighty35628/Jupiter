@@ -1,7 +1,10 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { isolateOverlay, restoreVisibleFocus } from "./overlay-focus";
+import {
+  acknowledgeProviderDraft, createProviderDraft, editProviderDraft, refreshProviderDraft,
+  type ProviderDraft, type ProviderDraftValues, type ProviderRequestStatus,
+} from "../../../src/desktop/provider-settings-state";
 import type { Balance, SessionInfo, Settings as SettingsType, UsageStats } from "../App";
 import {
   type DingTalkDesktopSettingsState,
@@ -20,12 +23,14 @@ import { I } from "../icons";
 import { PagePets } from "../pets/settings-page";
 import type { DesktopPetUi } from "../pets/types";
 import type {
+  ComputerUseStatus,
   McpSpecInfo,
   MemoryDetail,
   MemoryEntryInfo,
   MemoryWriteInput,
   OptionalComponentStatus,
   ProviderTestResultEvent,
+  SettingsSaveResultEvent,
   SettingsPatch,
   SkillInfo,
   SkillPackSourceInfo,
@@ -56,10 +61,15 @@ import {
   themeForStyle,
 } from "../theme";
 import { displayWorkspacePath } from "../workspace-display";
+import { isolateOverlay, restoreVisibleFocus } from "./overlay-focus";
 import { Shortcut, type ShortcutKey } from "./shortcut";
 
 const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
 const EDGE_DOWNLOAD_URL = "https://www.microsoft.com/edge/download";
+
+function pageI18nName(id: PageId): string {
+  return id === "computer-use" ? "ComputerUse" : `${id[0]!.toUpperCase()}${id.slice(1)}`;
+}
 
 export type PageId =
   | "general"
@@ -67,6 +77,7 @@ export type PageId =
   | "rules"
   | "mcp"
   | "components"
+  | "computer-use"
   | "skills"
   | "memory"
   | "archives"
@@ -82,6 +93,7 @@ const PAGE_META: ReadonlyArray<{ id: PageId; icon: keyof typeof I }> = [
   { id: "rules", icon: "shield" },
   { id: "mcp", icon: "wrench" },
   { id: "components", icon: "download" },
+  { id: "computer-use", icon: "bot" },
   { id: "skills", icon: "zap" },
   { id: "memory", icon: "bookmark" },
   { id: "archives", icon: "archive" },
@@ -148,6 +160,7 @@ export function SettingsModal({
   onSave,
   onTestProvider = () => undefined,
   providerTestResult,
+  providerDraft,
   onSignOutApiKey,
   onLoadQQ,
   onConnectQQ,
@@ -218,7 +231,7 @@ export function SettingsModal({
   feishu: FeishuDesktopSettingsState | null;
   dingtalk: DingTalkDesktopSettingsState | null;
   onClose: () => void;
-  onSave: (patch: SettingsPatch) => void;
+  onSave: (patch: SettingsPatch) => string | void;
   /** @deprecated Provider credentials are now saved atomically from the Models page. */
   onSaveApiKey?: (key: string) => void;
   onTestProvider?: (input: {
@@ -226,8 +239,10 @@ export function SettingsModal({
     apiKey?: string;
     model: string;
     providerDialect: "auto" | "deepseek" | "openai-compatible";
-  }) => void;
+    expectedProviderVersion?: string;
+  }) => string | void;
   providerTestResult?: ProviderTestResultEvent | null;
+  providerDraft?: ProviderDraftController;
   onSignOutApiKey: () => void;
   onLoadQQ: () => void;
   onConnectQQ: () => void;
@@ -325,12 +340,15 @@ export function SettingsModal({
     if (page === "storage") onScanStorage();
   }, [onScanStorage, page]);
   useEffect(() => {
-    if (page === "components") onRefreshOptionalComponents();
+    if (page === "components" || page === "computer-use") onRefreshOptionalComponents();
   }, [onRefreshOptionalComponents, page]);
   useEffect(() => {
     restoreFocusRef.current =
-      returnFocus?.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
-    const release = dialogRef.current ? isolateOverlay(dialogRef.current.parentElement ?? dialogRef.current) : () => {};
+      returnFocus?.current ??
+      (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    const release = dialogRef.current
+      ? isolateOverlay(dialogRef.current.parentElement ?? dialogRef.current)
+      : () => {};
     const frame = window.requestAnimationFrame(() => {
       dialogRef.current
         ?.querySelector<HTMLElement>('.settings-side .row[data-active="true"]')
@@ -396,7 +414,7 @@ export function SettingsModal({
               onClick={() => setPage(p.id)}
             >
               <span className="ico">{I[p.icon]({ size: 13 })}</span>
-              <span>{t(`settings.page${p.id[0]!.toUpperCase()}${p.id.slice(1)}Label` as any)}</span>
+              <span>{t(`settings.page${pageI18nName(p.id)}Label` as any)}</span>
             </button>
           ))}
         </nav>
@@ -405,12 +423,12 @@ export function SettingsModal({
             <div>
               <h2 id="settings-dialog-title">
                 {t(
-                  `settings.page${currentMeta.id[0]!.toUpperCase()}${currentMeta.id.slice(1)}Label` as any,
+                  `settings.page${pageI18nName(currentMeta.id)}Label` as any,
                 )}
               </h2>
               <div className="desc">
                 {t(
-                  `settings.page${currentMeta.id[0]!.toUpperCase()}${currentMeta.id.slice(1)}Desc` as any,
+                  `settings.page${pageI18nName(currentMeta.id)}Desc` as any,
                 )}
               </div>
             </div>
@@ -443,6 +461,7 @@ export function SettingsModal({
                 onSave={onSave}
                 onTestProvider={onTestProvider}
                 providerTestResult={providerTestResult}
+                providerDraft={providerDraft}
                 onSignOutApiKey={onSignOutApiKey}
               />
             )}
@@ -513,6 +532,13 @@ export function SettingsModal({
             )}
             {page === "components" && (
               <PageComponents settings={settings} onRefresh={onRefreshOptionalComponents} />
+            )}
+            {page === "computer-use" && (
+              <PageComputerUse
+                settings={settings}
+                onSave={onSave}
+                onRefresh={onRefreshOptionalComponents}
+              />
             )}
             {page === "skills" && (
               <PageSkills
@@ -1287,6 +1313,23 @@ function PageGeneral({
 
       <section className="section">
         <div className="stitle">{t("settings.behaviorSection")}</div>
+        <div className="setting-row switch-row">
+          <div className="l">
+            <div className="n">{t("settings.promptPredictions")}</div>
+            <div className="h">{t("settings.promptPredictionsHint")}</div>
+          </div>
+          <button
+            type="button"
+            className="pet-toggle"
+            role="switch"
+            aria-label={t("settings.promptPredictions")}
+            aria-checked={settings.promptPredictionsEnabled !== false}
+            data-on={settings.promptPredictionsEnabled !== false}
+            onClick={() => onSave({ promptPredictionsEnabled: settings.promptPredictionsEnabled === false })}
+          >
+            <span className="pet-toggle-track" aria-hidden="true"><span /></span>
+          </button>
+        </div>
         <div className="setting-row">
           <div className="l">
             <div className="n">{t("settings.showSystemEvents")}</div>
@@ -1577,6 +1620,8 @@ function optionalCapabilityLabel(capability: OptionalComponentStatus["capability
       return t("settings.optionalCapabilityOcr");
     case "document-conversion":
       return t("settings.optionalCapabilityDocumentConversion");
+    case "computer-use":
+      return t("settings.optionalCapabilityComputerUse");
   }
 }
 
@@ -1640,6 +1685,184 @@ export function OptionalComponentsList({
         </div>
       ))}
     </div>
+  );
+}
+
+const COMPUTER_USE_STATE_KEYS = {
+  disabled: "settings.computerUseStateDisabled",
+  "unsupported-surface": "settings.computerUseStateUnsupportedSurface",
+  "unsupported-model": "settings.computerUseStateUnsupportedModel",
+  "driver-missing": "settings.computerUseStateDriverMissing",
+  idle: "settings.computerUseStateIdle",
+  starting: "settings.computerUseStateStarting",
+  ready: "settings.computerUseStateReady",
+  busy: "settings.computerUseStateBusy",
+  fault: "settings.computerUseStateFault",
+} as const satisfies Record<ComputerUseStatus["state"], string>;
+
+const COMPUTER_USE_PERMISSION_KEYS = {
+  unknown: "settings.computerUsePermissionUnknown",
+  verified: "settings.computerUsePermissionVerified",
+  denied: "settings.computerUsePermissionDenied",
+} as const;
+
+function PageComputerUse({
+  settings,
+  onSave,
+  onRefresh,
+}: {
+  settings: SettingsType;
+  onSave: (patch: SettingsPatch) => void;
+  onRefresh: () => void;
+}) {
+  const enabled = settings.computerUseEnabled === true;
+  const mode = settings.computerUsePermissionMode ?? "standard";
+  const driver = settings.optionalComponents?.find((component) => component.id === "cua-driver");
+  const isWeb = document.documentElement.dataset.runtime === "web";
+  const status: ComputerUseStatus = isWeb
+    ? { state: "unsupported-surface", permissions: { screen: "unknown", input: "unknown" } }
+    : settings.computerUseStatus ?? {
+        state: enabled ? "idle" : "disabled",
+        permissions: { screen: "unknown", input: "unknown" },
+      };
+  const surfaceUnsupported = status.state === "unsupported-surface";
+  const statusTone =
+    status.state === "ready"
+      ? "connected"
+      : status.state === "fault" || status.state === "driver-missing"
+        ? "failed"
+        : status.state === "starting" || status.state === "busy"
+          ? "configured"
+          : "disabled";
+  return (
+    <>
+      <section className="section">
+        <div className="stitle">{t("settings.computerUseSection")}</div>
+        <div className="setting-row">
+          <div className="l">
+            <div className="n">{t("settings.computerUseEnabled")}</div>
+            <div className="h">{t("settings.computerUseEnabledHint")}</div>
+          </div>
+          <div className="seg-ctrl" role="group" aria-label={t("settings.computerUseEnabled")}>
+            <button
+              type="button"
+              data-on={enabled}
+              aria-pressed={enabled}
+              onClick={() => onSave({ computerUseEnabled: true })}
+            >
+              {t("settings.on")}
+            </button>
+            <button
+              type="button"
+              data-on={!enabled}
+              aria-pressed={!enabled}
+              onClick={() => onSave({ computerUseEnabled: false })}
+            >
+              {t("settings.off")}
+            </button>
+          </div>
+        </div>
+        <div className="setting-row" role="status" aria-atomic="true">
+          <div className="l" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+            <div className="n">{t("settings.computerUseCurrentTab")}</div>
+            {surfaceUnsupported ? (
+              <div className="h">{t("settings.computerUseWebUnsupported")}</div>
+            ) : null}
+            {status.reason ? <div className="h">{status.reason}</div> : null}
+            {status.owner ? (
+              <div className="h">{t("settings.computerUseOwner", { owner: status.owner })}</div>
+            ) : null}
+          </div>
+          <span
+            className="status-pill"
+            data-status={statusTone}
+            style={{ height: "auto", minHeight: 22, maxWidth: "100%", overflowWrap: "anywhere" }}
+          >
+            {t(COMPUTER_USE_STATE_KEYS[status.state])}
+          </span>
+        </div>
+        <div className="setting-row">
+          <div className="l">
+            <div className="n">{t("settings.computerUsePermissionMode")}</div>
+            <div className="h">{t("settings.computerUsePermissionModeHint")}</div>
+          </div>
+          <div
+            className="seg-ctrl"
+            role="group"
+            aria-label={t("settings.computerUsePermissionMode")}
+          >
+            {(["standard", "bounded", "unrestricted"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                data-on={mode === value}
+                aria-pressed={mode === value}
+                disabled={!enabled || surfaceUnsupported}
+                onClick={() => onSave({ computerUsePermissionMode: value })}
+              >
+                {t(`settings.computerUseMode${value[0]!.toUpperCase()}${value.slice(1)}` as any)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+      <section className="section">
+        {(["screen", "input"] as const).map((permission) => (
+          <div className="setting-row" key={permission}>
+            <div className="l">
+              <div className="n">
+                {t(permission === "screen"
+                  ? "settings.computerUseScreenPermission"
+                  : "settings.computerUseInputPermission")}
+              </div>
+            </div>
+            <span
+              className="status-pill"
+              data-status={status.permissions[permission] === "verified"
+                ? "connected"
+                : status.permissions[permission] === "denied" ? "failed" : "disabled"}
+            >
+              {t(COMPUTER_USE_PERMISSION_KEYS[status.permissions[permission]])}
+            </span>
+          </div>
+        ))}
+        <div className="setting-row">
+          <div className="l">
+            <div className="n">{t("settings.computerUseDriver")}</div>
+            <div className="h">
+              {driver?.state === "available"
+                ? t("settings.computerUseDriverAvailable")
+                : driver
+                  ? driver.state === "unsupported"
+                    ? t("settings.optionalComponentUnsupported")
+                    : t("settings.computerUseDriverMissing")
+                  : t("settings.computerUseDriverUnknown")}
+            </div>
+            {driver?.executablePath ? <code>{driver.executablePath}</code> : null}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {driver?.version ? <span className="muted">{driver.version}</span> : null}
+            <span
+              className="status-pill"
+              data-status={driver?.state === "available"
+                ? "configured"
+                : driver ? optionalComponentStatus(driver.state) : "disabled"}
+            >
+              {driver?.state === "available"
+                ? t("settings.computerUseDriverDetected")
+                : driver
+                  ? optionalComponentStateLabel(driver.state)
+                  : t("settings.computerUseDriverUnknown")}
+            </span>
+            <button type="button" className="btn" onClick={onRefresh}>
+              <I.refresh size={13} />
+              <span>{t("settings.optionalComponentsRefresh")}</span>
+            </button>
+          </div>
+        </div>
+        <div className="muted-card">{t("settings.computerUsePermissionNote")}</div>
+      </section>
+    </>
   );
 }
 
@@ -2100,39 +2323,173 @@ function WebSearchApiKeyRow({
   );
 }
 
-function ProviderSection({
+function savedProviderValues(settings: SettingsType | null): Omit<ProviderDraftValues, "apiKey"> {
+  return { baseUrl: settings?.baseUrl ?? "https://api.deepseek.com", model: settings?.model ?? "",
+    providerDialect: settings?.providerDialect ?? "auto", vision: settings?.vision ?? false,
+    imageTransport: settings?.imageTransport ?? "auto" };
+}
+
+type ProviderTestCallback = (input: Omit<ProviderDraftValues, "apiKey"> & { apiKey?: string; expectedProviderVersion?: string }) => string | void;
+export type ProviderDraftController = ReturnType<typeof useProviderSettingsDraft>;
+
+export function useProviderSettingsDraft(settings: SettingsType | null,
+  saveResult?: SettingsSaveResultEvent | null, testResult?: ProviderTestResultEvent | null,
+  results?: { saves?: Record<string, SettingsSaveResultEvent>; probes?: Record<string, ProviderTestResultEvent>; disconnected?: boolean }) {
+  const [draft, setDraft] = useState(() => createProviderDraft(savedProviderValues(settings)));
+  const draftRef = useRef(draft);
+  const versionRef = useRef(settings?.providerVersion);
+  const instanceRef = useRef(settings?.serverInstanceId);
+  const saveRef = useRef<{ requestId: string; submitted: ProviderDraft; instance?: string; snapshotVersion?: string } | null>(null);
+  const testRef = useRef<{ requestId: string; submitted: ProviderDraft; version?: string; instance?: string } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<ProviderRequestStatus | null>(null);
+  const [probeStatus, setProbeStatus] = useState<ProviderRequestStatus | null>(null);
+  const [probeResult, setProbeResult] = useState<ProviderTestResultEvent | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const testTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const ownSaveResult = results?.saves?.[saveRef.current?.requestId ?? ""] ?? saveResult;
+  const ownTestResult = results?.probes?.[testRef.current?.requestId ?? ""] ?? testResult;
+  const updateDraft = (next: ProviderDraft) => { draftRef.current = next; setDraft(next); };
+  const invalidateProbe = () => {
+    testRef.current = null;
+    clearTimeout(testTimer.current);
+    setProbeResult(null);
+    setProbeStatus(null);
+  };
+  useEffect(() => () => { clearTimeout(saveTimer.current); clearTimeout(testTimer.current); }, []);
+  useEffect(() => {
+    if (!results?.disconnected) return;
+    invalidateProbe();
+    if (saveRef.current) setSaveStatus("unknown");
+    saveRef.current = null;
+    clearTimeout(saveTimer.current);
+  }, [results?.disconnected]);
+  useEffect(() => {
+    if (!settings) return;
+    const restarted = instanceRef.current !== undefined && instanceRef.current !== settings.serverInstanceId;
+    if (restarted) {
+      if (saveRef.current) setSaveStatus("unknown");
+      saveRef.current = null;
+      clearTimeout(saveTimer.current);
+    }
+    if (restarted || (testRef.current && testRef.current.version !== settings.providerVersion)) invalidateProbe();
+    instanceRef.current = settings.serverInstanceId;
+    if (!Object.keys(draftRef.current.dirty).length) versionRef.current = settings.providerVersion;
+    updateDraft(refreshProviderDraft(draftRef.current, savedProviderValues(settings)));
+  }, [settings?.baseUrl, settings?.model, settings?.providerDialect, settings?.vision,
+    settings?.imageTransport, settings?.providerVersion, settings?.serverInstanceId]);
+  useEffect(() => {
+    const pending = saveRef.current;
+    if (!ownSaveResult || !pending || ownSaveResult.requestId !== pending.requestId || ownSaveResult.serverInstanceId !== pending.instance) return;
+    const status = ownSaveResult.provider?.status ?? "unknown";
+    setSaveStatus(status);
+    if (status === "pending") return;
+    clearTimeout(saveTimer.current);
+    const acknowledgedVersion = ownSaveResult.provider?.providerVersion ?? ownSaveResult.providerVersion;
+    // A snapshot received since submission may already include another tab's later save.
+    const hasCurrentSnapshot = settings && (settings.providerVersion === acknowledgedVersion ||
+      settings.providerVersion !== pending.snapshotVersion);
+    if (status === "success") {
+      const next = acknowledgeProviderDraft(draftRef.current, pending.submitted, status);
+      updateDraft(hasCurrentSnapshot
+        ? refreshProviderDraft(next, savedProviderValues(settings)) : next);
+    }
+    if (status === "success" || status === "conflict") versionRef.current = hasCurrentSnapshot
+      ? settings.providerVersion : acknowledgedVersion;
+    saveRef.current = null;
+  }, [ownSaveResult]);
+  useEffect(() => {
+    const pending = testRef.current;
+    const testResult = ownTestResult;
+    if (!testResult || !pending || testResult.requestId !== pending.requestId ||
+      testResult.serverInstanceId !== pending.instance ||
+      pending.submitted.revision !== draftRef.current.revision) return;
+    if (testResult.status === "success") {
+      if (testResult.providerVersion !== pending.version) return;
+      const values = pending.submitted.values;
+      const url = (value: string) => { try { return new URL(value).href.replace(/\/+$/, ""); } catch { return value; } };
+      const source = values.apiKey.trim() ? "draft" : "saved";
+      if (testResult.credentialSource !== source || testResult.credentialVersion !== (source === "draft" ? pending.requestId : pending.version) ||
+        !testResult.config || url(testResult.config.baseUrl) !== url(values.baseUrl.trim()) ||
+        testResult.config.model !== values.model.trim() || testResult.config.providerDialect !== values.providerDialect ||
+        (testResult.validation !== "models" && testResult.validation !== "chat")) return;
+    }
+    setProbeStatus(testResult.status);
+    setProbeResult(testResult);
+    if (testResult.status !== "pending") {
+      clearTimeout(testTimer.current);
+      // Successful probes retain their identity for saved-credential change invalidation.
+      if (testResult.status !== "success") testRef.current = null;
+    }
+  }, [ownTestResult]);
+  const payload = () => {
+    const values = draftRef.current.values;
+    return { baseUrl: values.baseUrl.trim(), model: values.model.trim(), providerDialect: values.providerDialect,
+      vision: values.vision, imageTransport: values.imageTransport,
+      ...(values.apiKey.trim() ? { apiKey: values.apiKey.trim() } : {}) };
+  };
+  return {
+    draft, saveStatus, probeStatus, probeResult,
+    edit<K extends keyof ProviderDraftValues>(field: K, value: ProviderDraftValues[K]) {
+      invalidateProbe();
+      if (saveStatus !== "pending") setSaveStatus(null);
+      updateDraft(editProviderDraft(draftRef.current, field, value));
+    },
+    save(onSave: (patch: SettingsPatch) => string | void) {
+      clearTimeout(saveTimer.current);
+      const submitted = draftRef.current;
+      const requestId = onSave({ ...payload(), ...(versionRef.current ? { expectedProviderVersion: versionRef.current } : {}) }) || crypto.randomUUID();
+      saveRef.current = { requestId, submitted, instance: settings?.serverInstanceId, snapshotVersion: settings?.providerVersion };
+      setSaveStatus("pending");
+      saveTimer.current = setTimeout(() => setSaveStatus("unknown"), 30_000);
+    },
+    test(onTest: ProviderTestCallback) {
+      invalidateProbe();
+      const requestId = onTest({ ...payload(), ...(settings?.providerVersion ? { expectedProviderVersion: settings.providerVersion } : {}) }) || crypto.randomUUID();
+      testRef.current = { requestId, submitted: draftRef.current, version: settings?.providerVersion, instance: settings?.serverInstanceId };
+      setProbeStatus("pending");
+      testTimer.current = setTimeout(() => {
+        testRef.current = null;
+        setProbeStatus("unknown");
+        setProbeResult(null);
+      }, 30_000);
+    },
+    signOut(onSignOut: () => void) {
+      invalidateProbe();
+      if (saveRef.current) setSaveStatus("unknown");
+      saveRef.current = null;
+      clearTimeout(saveTimer.current);
+      updateDraft(editProviderDraft(draftRef.current, "apiKey", ""));
+      onSignOut();
+    },
+  };
+}
+
+export function ProviderSection({
   settings,
   onSave,
   onTestProvider,
   providerTestResult,
+  providerDraft,
   onSignOutApiKey,
 }: {
   settings: SettingsType;
-  onSave: (patch: SettingsPatch) => void;
-  onTestProvider: (input: {
-    baseUrl: string;
-    apiKey?: string;
-    model: string;
-    providerDialect: "auto" | "deepseek" | "openai-compatible";
-  }) => void;
+  onSave: (patch: SettingsPatch) => string | void;
+  onTestProvider: ProviderTestCallback;
   providerTestResult?: ProviderTestResultEvent | null;
+  providerDraft?: ProviderDraftController;
   onSignOutApiKey: () => void;
 }) {
-  const [key, setKey] = useState("");
-  const [urlDraft, setUrlDraft] = useState(settings.baseUrl ?? "https://api.deepseek.com");
-  const [modelDraft, setModelDraft] = useState(settings.model);
-  const [dialect, setDialect] = useState(settings.providerDialect ?? "auto");
-  const [vision, setVision] = useState(settings.vision ?? false);
-  const [imageTransport, setImageTransport] = useState<"auto" | "inline">(settings.imageTransport ?? "auto");
-  useEffect(() => {
-    setUrlDraft(settings.baseUrl ?? "https://api.deepseek.com");
-    setModelDraft(settings.model);
-    setDialect(settings.providerDialect ?? "auto");
-    setVision(settings.vision ?? false);
-    setImageTransport(settings.imageTransport ?? "auto");
-    setKey("");
-  }, [settings.baseUrl, settings.model, settings.providerDialect, settings.vision, settings.imageTransport]);
-  if (!settings.providerId) {
+  const localDraft = useProviderSettingsDraft(settings, null, providerTestResult);
+  const controller = providerDraft ?? localDraft;
+  const { apiKey: key, baseUrl: urlDraft, model: modelDraft, providerDialect: dialect, vision, imageTransport } = controller.draft.values;
+  const setKey = (value: string) => controller.edit("apiKey", value);
+  const setUrlDraft = (value: string) => controller.edit("baseUrl", value);
+  const setModelDraft = (value: string) => controller.edit("model", value);
+  const setDialect = (value: ProviderDraftValues["providerDialect"]) => controller.edit("providerDialect", value);
+  const setVision = (value: boolean) => controller.edit("vision", value);
+  const setImageTransport = (value: "auto" | "inline") => controller.edit("imageTransport", value);
+  const visibleResult = controller.probeResult;
+  if (!settings.providerId || document.documentElement.dataset.runtime === "web") {
     return (
       <section className="section">
         <div className="stitle">{t("settings.providerSection")}</div>
@@ -2197,8 +2554,7 @@ function ProviderSection({
               type="button"
               className="btn"
               onClick={() => {
-                setKey("");
-                onSignOutApiKey();
+                controller.signOut(onSignOutApiKey);
               }}
             >
               {t("settings.apiKeySignOut")}
@@ -2215,7 +2571,10 @@ function ProviderSection({
           className="field mono"
           aria-label={t("settings.baseUrl")}
           value={urlDraft}
-          onChange={(e) => { setUrlDraft(e.target.value); setVision(false); }}
+          onChange={(e) => {
+            setUrlDraft(e.target.value);
+            setVision(false);
+          }}
         />
       </div>
       <div className="setting-row">
@@ -2228,25 +2587,41 @@ function ProviderSection({
           aria-label={t("settings.modelCustom")}
           list="provider-model-options"
           value={modelDraft}
-          onChange={(event) => { setModelDraft(event.target.value); setVision(false); }}
+          onChange={(event) => {
+            setModelDraft(event.target.value);
+            setVision(false);
+          }}
           placeholder="deepseek-flash"
         />
         <datalist id="provider-model-options">
           <option value="deepseek-flash" />
           <option value="deepseek-v4-pro" />
-          {providerTestResult?.models?.map((model) => (
+          {visibleResult?.status === "success" && visibleResult.models?.map((model) => (
             <option key={model} value={model} />
           ))}
         </datalist>
       </div>
-      {!/^https:\/\/api\.deepseek\.com\/?(?:v1\/?)?$/.test(urlDraft.trim()) && <div className="setting-row">
-        <label htmlFor="provider-vision">{t("settings.modelVision")}</label>
-        <input id="provider-vision" type="checkbox" checked={vision} onChange={(event) => setVision(event.target.checked)} />
-      </div>}
+      {!/^https:\/\/api\.deepseek\.com\/?(?:v1\/?)?$/.test(urlDraft.trim()) && (
+        <div className="setting-row">
+          <label htmlFor="provider-vision">{t("settings.modelVision")}</label>
+          <input
+            id="provider-vision"
+            type="checkbox"
+            checked={vision}
+            onChange={(event) => setVision(event.target.checked)}
+          />
+        </div>
+      )}
       <div className="setting-row">
         <label htmlFor="image-transport">{t("settings.imageTransport")}</label>
-        <select id="image-transport" className="field" value={imageTransport} onChange={(event) => setImageTransport(event.target.value as "auto" | "inline")}>
-          <option value="auto">{t("settings.imageTransportAuto")}</option><option value="inline">{t("settings.imageTransportInline")}</option>
+        <select
+          id="image-transport"
+          className="field"
+          value={imageTransport}
+          onChange={(event) => setImageTransport(event.target.value as "auto" | "inline")}
+        >
+          <option value="auto">{t("settings.imageTransportAuto")}</option>
+          <option value="inline">{t("settings.imageTransportInline")}</option>
         </select>
       </div>
       <div className="setting-row">
@@ -2262,26 +2637,33 @@ function ProviderSection({
           <button
             type="button"
             className="btn"
-            disabled={!draft.baseUrl || !draft.model}
-            onClick={() => onTestProvider(draft)}
+            disabled={!draft.baseUrl || !draft.model || controller.probeStatus === "pending"}
+            aria-busy={controller.probeStatus === "pending"}
+            onClick={() => controller.test(onTestProvider)}
           >
             {t("settings.providerTest")}
           </button>
           <button
             type="button"
             className="btn primary"
-            disabled={!draft.baseUrl || !draft.model}
-            onClick={() => {
-              onSave(draft);
-              setKey("");
-            }}
+            disabled={!draft.baseUrl || !draft.model || controller.saveStatus === "pending"}
+            aria-busy={controller.saveStatus === "pending"}
+            onClick={() => controller.save(onSave)}
           >
             {t("settings.apiKeySave")}
           </button>
         </div>
       </div>
-      {providerTestResult ? (
-        <div className={providerTestResult.ok ? "h" : "h warn"}>{providerTestResult.message}</div>
+      {controller.saveStatus ? (
+        <div className="h" role="status" aria-live="polite">{controller.saveStatus === "success" && Object.keys(controller.draft.dirty).length
+          ? t("settings.providerSave_dirty") : t(`settings.providerSave_${controller.saveStatus}`)}</div>
+      ) : null}
+      {controller.probeStatus ? (
+        <div className={visibleResult?.ok ? "h" : "h warn"} role="status" aria-live="polite">
+          {visibleResult?.status === "success"
+            ? t(visibleResult.validation === "models" ? "settings.providerTestModels" : "settings.providerTestChat")
+            : t(`settings.providerProbe_${controller.probeStatus}`)}
+        </div>
       ) : null}
     </section>
   );
@@ -2292,17 +2674,14 @@ function PageModels({
   onSave,
   onTestProvider,
   providerTestResult,
+  providerDraft,
   onSignOutApiKey,
 }: {
   settings: SettingsType;
-  onSave: (patch: SettingsPatch) => void;
-  onTestProvider: (input: {
-    baseUrl: string;
-    apiKey?: string;
-    model: string;
-    providerDialect: "auto" | "deepseek" | "openai-compatible";
-  }) => void;
+  onSave: (patch: SettingsPatch) => string | void;
+  onTestProvider: ProviderTestCallback;
   providerTestResult?: ProviderTestResultEvent | null;
+  providerDraft?: ProviderDraftController;
   onSignOutApiKey: () => void;
 }) {
   return (
@@ -2312,6 +2691,7 @@ function PageModels({
         onSave={onSave}
         onTestProvider={onTestProvider}
         providerTestResult={providerTestResult}
+        providerDraft={providerDraft}
         onSignOutApiKey={onSignOutApiKey}
       />
       <section className="section">

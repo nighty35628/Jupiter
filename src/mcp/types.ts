@@ -140,6 +140,8 @@ export interface CallToolResult {
   content: McpContentBlock[];
   /** True = tool raised an error; the content describes it. */
   isError?: boolean;
+  /** Optional machine-readable result defined by newer MCP servers. */
+  structuredContent?: unknown;
 }
 
 export interface McpResource {

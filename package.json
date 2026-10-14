@@ -1,6 +1,6 @@
 {
   "name": "jupiter",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Jupiter: a cache-first AI workbench with full coding-agent workflows, workspace libraries, and tabbed desktop sessions.",
   "type": "module",
   "bin": {
@@ -34,7 +34,7 @@
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
     "build:dashboard": "npm --prefix dashboard run build",
-    "build": "npm run build:dashboard && tsup && node scripts/write-cli-package-marker.mjs && node scripts/copy-tree-sitter-grammars.mjs && node scripts/copy-image-runtime.mjs",
+    "build": "npm run build:dashboard && tsup && node scripts/write-cli-package-marker.mjs && node scripts/copy-tree-sitter-grammars.mjs && node scripts/copy-image-runtime.mjs && node scripts/copy-manual.mjs",
     "dev": "tsx src/cli/index.ts",
     "chat": "tsx src/cli/index.ts chat",
     "test": "vitest run",

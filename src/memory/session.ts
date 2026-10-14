@@ -357,6 +357,9 @@ function listSessionsInDir(
         }
         const stat = statSync(path);
         const messageCount = countLines(path);
+        // A freshly-created desktop tab has no transcript yet. Do not expose
+        // these empty placeholders as saved sessions in the sidebar or APIs.
+        if (messageCount === 0) return [];
         return [
           { name, path, size: stat.size, messageCount, mtime: stat.mtime, meta, workspaceStatus },
         ];
@@ -573,20 +576,19 @@ function moveSessionFiles(oldJsonl: string, newJsonl: string): void {
 }
 
 function deleteSessionFiles(path: string): boolean {
-  try {
-    unlinkSync(path);
-    for (const ext of SESSION_SIDECAR_EXTS) {
-      const sidecar = path.replace(/\.jsonl$/, ext);
-      try {
-        unlinkSync(sidecar);
-      } catch {
-        /* expected when the sidecar doesn't exist */
-      }
+  let deleted = false;
+  for (const candidate of [
+    path,
+    ...SESSION_SIDECAR_EXTS.map((ext) => path.replace(/\.jsonl$/, ext)),
+  ]) {
+    try {
+      unlinkSync(candidate);
+      deleted = true;
+    } catch {
+      /* expected when the transcript or a sidecar doesn't exist */
     }
-    return true;
-  } catch {
-    return false;
   }
+  return deleted;
 }
 
 /** Crash-safe rewrite: snapshot the previous live log, write a sibling tmp file, then atomically swap it in. */

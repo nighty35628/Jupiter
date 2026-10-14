@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { shouldUseLightAskForDesktopInput } from "../src/desktop/light-ask-router.js";
 
 describe("desktop light ask router", () => {
+  it("keeps settings and computer observation/actions on Agent", () => {
+    for (const text of [
+      "系统设置给我看看？",
+      "看看我的屏幕？",
+      "点击这个按钮？",
+      "截图看看？",
+      "Can you inspect my screen?",
+      "Jupiter打开系统设置给我看看？",
+      "给我看看系统设置？",
+      "show me settings?",
+      "截个图？",
+      "现在屏幕上有什么？",
+      "你看到我的桌面了吗？",
+      "帮我截图？",
+      "Jupiter帮我创建文件？",
+    ]) {
+      expect(shouldUseLightAskForDesktopInput(text)).toBe(false);
+    }
+    expect(shouldUseLightAskForDesktopInput("Jupiter的Computer Use怎么开启？")).toBe(true);
+    expect(shouldUseLightAskForDesktopInput("那怎么开？", { recentTopic: "computer-use" })).toBe(
+      true,
+    );
+  });
   it("routes obvious short casual chat to lightweight ask", () => {
     expect(shouldUseLightAskForDesktopInput("你好")).toBe(true);
     expect(shouldUseLightAskForDesktopInput("谢谢")).toBe(true);

@@ -590,6 +590,16 @@ describe("flattenMcpResult", () => {
     const out = flattenMcpResult({ content: [{ type: "text", text: small }] }, { maxChars: 1000 });
     expect(out).toBe("hello world");
   });
+
+  it("keeps structured content alongside the human-readable text", () => {
+    const out = flattenMcpResult({
+      content: [{ type: "text", text: "clicked" }],
+      structuredContent: { action: "click", confirmed: true, observationId: "obs-1" },
+    });
+    expect(out).toContain("clicked");
+    expect(out).toContain('"confirmed":true');
+    expect(out).toContain('"observationId":"obs-1"');
+  });
 });
 
 describe("flattenMcpResult: schema validation", () => {
@@ -663,6 +673,15 @@ describe("flattenMcpResult: schema validation", () => {
     });
     expect(out).toContain("hello");
     expect(out).toContain("[image image/png");
+  });
+
+  it("rejects malformed isError values", () => {
+    expect(() =>
+      flattenMcpResult({
+        content: [{ type: "text", text: "ok" }],
+        isError: "no",
+      } as unknown as CallToolResult),
+    ).toThrow("isError");
   });
 });
 

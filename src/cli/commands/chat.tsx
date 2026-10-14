@@ -27,6 +27,7 @@ import { QQChannel } from "../../qq/channel.js";
 import { TelegramChannel } from "../../telegram/channel.js";
 import { ToolRegistry } from "../../tools.js";
 import { registerChoiceTool } from "../../tools/choice.js";
+import { registerHelpTool } from "../../tools/help.js";
 import { registerMemoryTools } from "../../tools/memory.js";
 import { registerWebTools } from "../../tools/web.js";
 import { stopAndSaveCpuProfile } from "../cpu-prof.js";
@@ -360,6 +361,9 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
     // mode, which chat doesn't have anyway.
     registerChoiceTool(tools);
   }
+
+  tools ??= new ToolRegistry({ rateLimit: loadToolRateLimit() });
+  registerHelpTool(tools, { getRuntimeState: () => ({ surface: "cli", model: opts.model }) });
 
   // resolveSession handles --new (timestamped name, old session preserved)
   // and --resume (latest prefixed). Default falls through to the latest

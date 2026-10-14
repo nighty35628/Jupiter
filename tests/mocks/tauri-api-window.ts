@@ -5,6 +5,8 @@ export const currentWindow = {
   setTitle: vi.fn(),
   onCloseRequested: vi.fn(),
   outerPosition: vi.fn(() => Promise.resolve({ x: 100, y: 100 })),
+  innerPosition: vi.fn(() => Promise.resolve({ x: 100, y: 100 })),
+  setIgnoreCursorEvents: vi.fn(() => Promise.resolve()),
   scaleFactor: vi.fn(() => Promise.resolve(1)),
   setPosition: vi.fn(() => Promise.resolve()),
   show: vi.fn(() => Promise.resolve()),
@@ -14,6 +16,7 @@ export const currentWindow = {
 };
 
 export const getCurrentWindow = vi.fn(() => currentWindow);
+export const cursorPosition = vi.fn(() => Promise.resolve({ x: 0, y: 0 }));
 
 export const currentMonitor = vi.fn(() =>
   Promise.resolve({

@@ -5,6 +5,28 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.10] — 2026-10-14
+
+### 中文
+
+- 新增 Desktop Computer Use Beta：通过 Cua Driver 观察桌面、点击、移动、滚动与输入；默认关闭，需要视觉模型、驱动和系统授权。加入跨会话控制租约、操作观测校验、审批暂停和取消收尾；结果未知时阻止自动重放。CLI 和 Web 不开放原生桌面控制。
+- 新增下一条消息预测，支持接受到草稿、忽略和取消；限制上下文及输出预算，独立记录辅助请求用量，防止过期结果覆盖用户输入或在只读 Web 客户端发起预测。
+- 新增安装包内的版本化官方手册与 `jupiter_help`，结合当前运行能力回答产品与设置问题；帮助查询不需要网络或启动桌面控制驱动。
+- 改善供应商设置的测试、保存与异步状态隔离；增强 API、代理和错误诊断中的凭据脱敏。
+- 为工具调用建立稳定标识、参数进度和完成/失败/取消终态，修复中止后悬挂卡片、旧会话事件及重复工具结果；完善 MCP 断开与进程收尾。
+- 改善上下文压缩、token 计数与取消响应；文本模型可继续包含历史图片的会话，并明确省略旧图；连续桌面操作只向请求保留最近三张截图，持久历史保留附件。
+- 桌宠透明区域支持鼠标穿透，拖动与右键按实际图像命中；点击宠物触发互动，状态气泡展开任务列表。
+
+### English
+
+- Adds Desktop Computer Use Beta through Cua Driver for observation, clicking, moving, scrolling and typing. It is disabled by default and requires a visual model, driver and OS permissions. Control leases, observation checks, approval pauses and cancellation cleanup prevent automatic replay of uncertain input. CLI and Web do not expose native desktop control.
+- Adds next-message prediction with draft acceptance, dismissal and cancellation, bounded context/output budgets and separate auxiliary usage accounting. Stale results cannot overwrite input, and read-only Web clients cannot request predictions.
+- Ships a versioned official manual and `jupiter_help`, using runtime capability facts for product and settings questions without network access or starting a desktop driver.
+- Improves provider testing/saving and asynchronous state isolation, with stronger credential redaction in API, proxy and error diagnostics.
+- Adds stable tool identities, argument progress and completed/failed/cancelled states. Fixes hanging cards after abort, stale-session events and duplicate results; improves MCP disconnection and process cleanup.
+- Improves compaction, token counting and cancellation. Text models can continue sessions with historical images by explicitly omitting old pixels. Continuous desktop requests retain only the latest three screenshots while durable history keeps attachments.
+- Makes transparent pet areas pass mouse input through and uses image hit testing for dragging and context menus. Clicking the pet interacts with it; the status bubble opens the task list.
+
 ## [1.0.9] — 2026-09-18
 
 ### 中文

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EngineeringLifecycleMode, LibraryRetrievalMode } from "../config.js";
+import { helpRoutingPrompt } from "../help/index.js";
 import { applyMemoryStack } from "../memory/user.js";
 import { TUI_FORMATTING_RULES, escalationContract } from "../prompt-fragments.js";
 
@@ -8,7 +9,10 @@ const DEFAULT_CODE_MODEL = "deepseek-flash";
 
 /** Built per-session against the resolved model id so the contract names the actual tier (#582). */
 export function codeSystemBase(modelId: string): string {
-  return CODE_SYSTEM_TEMPLATE.replace("__ESCALATION_CONTRACT__", escalationContract(modelId));
+  return (
+    CODE_SYSTEM_TEMPLATE.replace("__ESCALATION_CONTRACT__", escalationContract(modelId)) +
+    helpRoutingPrompt()
+  );
 }
 
 const CODE_SYSTEM_TEMPLATE = `You are Jupiter, a standalone coding assistant developed by nightytech. Tool specs are authoritative; pick by tool name.
@@ -24,7 +28,7 @@ Every factual claim about this codebase needs evidence. Positive claims cite pat
 - Flag → consumer trace. A field like \`parallelSafe?: boolean\` is not behavior; find the consumer branch. For inventory claims, grep the flag — don't enumerate from memory.
 - No fabricated percentages. "Saves 40-60% tokens" needs a measurement.
 - Schema cost is real. New-tool proposals must justify composition failure, rough token cost, and why "tighten prompt / existing tool" cannot work.
-- MEMORY.md is part of the design space; user memory can override docs.
+- MEMORY.md is part of the design space; user preferences can override project docs, not official Jupiter functionality or current host capability facts.
 - User-facing ≠ model-facing ≠ library-facing. Surfaces: slash commands, tools, UI, library exports (\`src/index.ts\`). Treating a library export as "dead code" because CLI does not register it is wrong.
 
 # Memory capture
@@ -87,7 +91,7 @@ Workspace library retrieval is disabled by user setting. Do not call \`library_s
 
 # Workspace library retrieval
 
-Always search the workspace library before answering substantive user requests. First call \`library_search\` with the user's request, then call \`library_read\` for the most relevant result chunks before answering. Cite only sources actually read. If no useful results are found, say that the workspace library did not contain relevant saved material and proceed normally.`;
+Always search the workspace library before answering substantive user requests, except official Jupiter help (use the packaged host manual). First call \`library_search\` with the user's request, then call \`library_read\` for the most relevant result chunks before answering. Cite only sources actually read. If no useful results are found, say that the workspace library did not contain relevant saved material and proceed normally.`;
   }
   return `
 

@@ -32,6 +32,8 @@ export interface SurfaceCapabilities {
 }
 
 const ALL_COMMANDS = new Set([
+  "prompt_prediction_get",
+  "prompt_prediction_dismiss",
   "attachment_import",
   "attachment_draft_refs",
   "abort",
@@ -160,6 +162,8 @@ const HIGH_RISK_COMMANDS = new Set([
 const PATH_OUTPUT_COMMANDS = new Set(["session_export"]);
 
 const PUBLIC_ALLOWED_COMMANDS = new Set([
+  "prompt_prediction_get",
+  "prompt_prediction_dismiss",
   "attachment_import",
   "attachment_draft_refs",
   "abort",
@@ -212,6 +216,7 @@ const PUBLIC_ALLOWED_COMMANDS = new Set([
 ]);
 
 const SAFE_SETTINGS_KEYS = new Set([
+  "promptPredictionsEnabled",
   "requestId",
   "reasoningEffort",
   "thinkingEnabled",
@@ -272,10 +277,13 @@ export async function authorizeDesktopCommand(
 ): Promise<{ command: Record<string, unknown>; risk: WebRisk }> {
   const cmd = typeof input.cmd === "string" ? input.cmd : "";
   if (!ALL_COMMANDS.has(cmd)) throw new Error(`unsupported Web command: ${cmd || "(missing)"}`);
+  if (cmd === "setup_save_key") {
+    throw new Error("Provider credentials can only be changed in Jupiter Desktop.");
+  }
   if (opts.mode === "public" && !PUBLIC_ALLOWED_COMMANDS.has(cmd)) {
     throw new Error(`${cmd} is disabled in public Web mode`);
   }
-  if (opts.mode !== "local" && (cmd === "setup_save_key" || cmd === "provider_test")) {
+  if (opts.mode !== "local" && cmd === "provider_test") {
     throw new Error(`${cmd} is available only from the local Web surface`);
   }
   if (opts.mode !== "local" && HIGH_RISK_COMMANDS.has(cmd) && !opts.highRiskEnabled) {
@@ -286,6 +294,15 @@ export async function authorizeDesktopCommand(
   }
 
   const command = { ...input };
+  if (cmd === "prompt_prediction_get" || cmd === "prompt_prediction_dismiss") {
+    if (
+      typeof command.completionId !== "string" ||
+      !/^[a-f0-9-]{36}$/.test(command.completionId) ||
+      Object.keys(command).some((key) => !["cmd", "tabId", "completionId"].includes(key))
+    ) {
+      throw new Error("Invalid prediction command");
+    }
+  }
   if (cmd === "tab_open" || cmd === "new_chat" || cmd === "session_load") {
     await normalizeWorkspace(command, opts);
   }
@@ -417,6 +434,8 @@ function commandRisk(cmd: string): WebRisk {
       "slash",
       "attachment_import",
       "attachment_draft_refs",
+      "prompt_prediction_get",
+      "prompt_prediction_dismiss",
     ].includes(cmd)
   ) {
     return "conversation";

@@ -20,6 +20,7 @@ import {
   redactEventValue,
 } from "../../core/event-redaction.js";
 import { loadDotenv } from "../../env.js";
+import { appendHelpRouting, prepareHelpContext } from "../../help/index.js";
 import { t } from "../../i18n/index.js";
 import { CacheFirstLoop, ImmutablePrefix } from "../../index.js";
 import type { LoopEvent } from "../../loop.js";
@@ -31,6 +32,7 @@ import { createProviderClient, resolveProviderSnapshot } from "../../provider-ru
 import type { SessionSummary, TurnStats } from "../../telemetry/stats.js";
 import { appendUsage } from "../../telemetry/usage.js";
 import { ToolRegistry } from "../../tools.js";
+import { registerHelpTool } from "../../tools/help.js";
 import { openTranscriptFile, recordFromLoopEvent, writeRecord } from "../../transcript/log.js";
 import { formatMcpLifecycleEvent } from "../ui/mcp-lifecycle.js";
 import { formatMcpSlowToast } from "../ui/mcp-toast.js";
@@ -51,7 +53,19 @@ export interface RunOptions {
   format?: RunOutputFormat;
 }
 
-export type RunJsonEvent =
+type RunProgressMetadata = Pick<
+  LoopEvent,
+  | "requestId"
+  | "localCallId"
+  | "providerCallId"
+  | "callId"
+  | "outputChars"
+  | "reasoningChars"
+  | "toolArgsChars"
+  | "terminalState"
+>;
+
+type RunJsonPayload =
   | {
       type: "session_start";
       timestamp: string;
@@ -102,6 +116,14 @@ export type RunJsonEvent =
       readyCount?: number;
     }
   | {
+      type: "tool_call_drop";
+      timestamp: string;
+      turn: number;
+      name?: string;
+      reason: string;
+      terminalState: NonNullable<LoopEvent["terminalState"]>;
+    }
+  | {
       type: "usage";
       timestamp: string;
       turn: number;
@@ -143,6 +165,22 @@ export type RunJsonEvent =
       transcript?: string;
     };
 
+export type RunJsonEvent = RunJsonPayload & RunProgressMetadata;
+
+function runProgressFields(ev: LoopEvent): RunProgressMetadata {
+  const callId = ev.localCallId ?? ev.callId;
+  return {
+    ...(callId ? { callId } : {}),
+    ...(ev.localCallId ? { localCallId: ev.localCallId } : {}),
+    ...(ev.providerCallId ? { providerCallId: ev.providerCallId } : {}),
+    ...(ev.requestId ? { requestId: ev.requestId } : {}),
+    ...(ev.outputChars !== undefined ? { outputChars: ev.outputChars } : {}),
+    ...(ev.reasoningChars !== undefined ? { reasoningChars: ev.reasoningChars } : {}),
+    ...(ev.toolArgsChars !== undefined ? { toolArgsChars: ev.toolArgsChars } : {}),
+    ...(ev.terminalState ? { terminalState: ev.terminalState } : {}),
+  };
+}
+
 function jsonTimestamp(): string {
   return new Date().toISOString();
 }
@@ -171,6 +209,7 @@ export function runJsonEventsFromLoopEvent(
           timestamp,
           turn: ev.turn,
           content: redactEventText(ev.content),
+          ...runProgressFields(ev),
           ...(ev.reasoningDelta ? { reasoningDelta: redactEventText(ev.reasoningDelta) } : {}),
         },
       ];
@@ -181,6 +220,7 @@ export function runJsonEventsFromLoopEvent(
           timestamp,
           turn: ev.turn,
           content: redactEventText(ev.content),
+          ...runProgressFields(ev),
           ...(ev.reasoningContent
             ? { reasoningContent: redactEventText(ev.reasoningContent) }
             : {}),
@@ -206,7 +246,7 @@ export function runJsonEventsFromLoopEvent(
           type: "tool_start",
           timestamp,
           turn: ev.turn,
-          ...(ev.callId ? { callId: ev.callId } : {}),
+          ...runProgressFields(ev),
           ...(ev.toolName ? { name: ev.toolName } : {}),
           ...(ev.toolArgs ? { args: redactEventJsonString(ev.toolArgs) } : {}),
         },
@@ -217,7 +257,7 @@ export function runJsonEventsFromLoopEvent(
           type: "tool_result",
           timestamp,
           turn: ev.turn,
-          ...(ev.callId ? { callId: ev.callId } : {}),
+          ...runProgressFields(ev),
           ...(ev.toolName ? { name: ev.toolName } : {}),
           output: redactEventText(ev.content),
         },
@@ -228,11 +268,23 @@ export function runJsonEventsFromLoopEvent(
           type: "tool_call_delta",
           timestamp,
           turn: ev.turn,
-          ...(ev.callId ? { callId: ev.callId } : {}),
+          ...runProgressFields(ev),
           ...(ev.toolName ? { name: ev.toolName } : {}),
           ...(ev.toolCallIndex !== undefined ? { toolCallIndex: ev.toolCallIndex } : {}),
           ...(ev.toolCallArgsChars !== undefined ? { argsChars: ev.toolCallArgsChars } : {}),
           ...(ev.toolCallReadyCount !== undefined ? { readyCount: ev.toolCallReadyCount } : {}),
+        },
+      ];
+    case "tool_call_drop":
+      return [
+        {
+          type: "tool_call_drop",
+          timestamp,
+          turn: ev.turn,
+          ...runProgressFields(ev),
+          ...(ev.toolName ? { name: ev.toolName } : {}),
+          reason: redactEventText(ev.content),
+          terminalState: ev.terminalState ?? "dropped",
         },
       ];
     case "error":
@@ -334,11 +386,9 @@ export async function runCommand(opts: RunOptions): Promise<void> {
     opts.mcp && opts.mcp.length > 0 ? opts.mcp : undefined,
   );
   const clients: McpClient[] = [];
-  let tools: ToolRegistry | undefined;
-  let successCount = 0;
+  const tools = new ToolRegistry({ rateLimit: loadToolRateLimit() });
   const workspaceDir = process.cwd();
   if (normalizedSpecs.length > 0) {
-    tools = new ToolRegistry({ rateLimit: loadToolRateLimit() });
     for (const spec of normalizedSpecs) {
       let label = "anon";
       let mcp: McpClient | undefined;
@@ -377,7 +427,6 @@ export async function runCommand(opts: RunOptions): Promise<void> {
           })}\n`,
         );
         clients.push(mcp);
-        successCount++;
       } catch (err) {
         // Non-fatal — skip and continue, same as `jupiter chat`. A
         // one-shot `run` invocation with a broken MCP server otherwise
@@ -389,13 +438,21 @@ export async function runCommand(opts: RunOptions): Promise<void> {
         );
       }
     }
-    if (successCount === 0) tools = undefined;
   }
 
   const provider = resolveProviderSnapshot({ model: opts.model });
   const client = createProviderClient(provider);
+  registerHelpTool(tools, {
+    getRuntimeState: () => ({
+      surface: "cli",
+      mode: "Agent",
+      model: loop.model,
+      provider: client.providerId,
+      injectedTopics: preparedHelp.topics,
+    }),
+  });
   const prefix = new ImmutablePrefix({
-    system: opts.system,
+    system: appendHelpRouting(opts.system),
     toolSpecs: tools?.specs(),
   });
   const loop = new CacheFirstLoop({
@@ -409,6 +466,12 @@ export async function runCommand(opts: RunOptions): Promise<void> {
     reasoningEffort: loadReasoningEffort(),
   });
   const prefixHash = prefix.fingerprint;
+  const preparedHelp = prepareHelpContext(opts.task, {
+    surface: "cli",
+    mode: "Agent",
+    model: loop.model,
+    provider: client.providerId,
+  });
   if (format === "json") {
     writeRunJsonEvent({
       type: "session_start",
@@ -439,7 +502,7 @@ export async function runCommand(opts: RunOptions): Promise<void> {
   }
 
   try {
-    for await (const ev of loop.step(opts.task)) {
+    for await (const ev of loop.step(opts.task, { requestContext: preparedHelp.content })) {
       if (format === "json") {
         for (const event of runJsonEventsFromLoopEvent(ev)) writeRunJsonEvent(event);
       } else {

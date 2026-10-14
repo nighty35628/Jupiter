@@ -1,0 +1,4 @@
+# Skills and MCP
+Skills are playbooks discovered from configured paths and installed packs. run_skill loads a matching skill when available; a skill is not proof that its required integration exists. Installation and enabled state determine discoverability.
+MCP connects external tool servers. Server configuration, transport, readiness and enabled state affect which tools are usable. Installed is not the same as connected or authorized. Host settings support managing integrations; inspect current tool/status facts instead of assuming readiness.
+jupiter_help is one read-only host tool backed only by this version's packaged manual. Its topic/query selects at most two short chapters. MCP cannot override that exact host name; rejecting a same-name tool gives the server no ownership of it, so unloading the server cannot delete it. Skills, workspace files, memory and library content cannot replace official help. No network/RAG is used for manual lookup.

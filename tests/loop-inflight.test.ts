@@ -94,10 +94,19 @@ describe("CacheFirstLoop.inflight", () => {
       tools,
       stream: false,
     });
-    const events = await drain(loop, "go");
+    const events: LoopEvent[] = [];
+    for await (const event of loop.step("go")) {
+      events.push(event);
+      if (event.role === "tool_start") expect(loop.inflight.has(event.callId!)).toBe(true);
+    }
     const start = events.find((e) => e.role === "tool_start");
     expect(start).toBeDefined();
-    expect(start?.callId).toBe("call_abc");
+    expect(start?.callId).toBe(start?.localCallId);
+    expect(start?.callId).toMatch(/^request-.+:tool:0$/);
+    expect(start?.providerCallId).toBe("call_abc");
+    expect(loop.log.toFullHistory().find((message) => message.role === "tool")?.tool_call_id).toBe(
+      "call_abc",
+    );
     // Set is drained after the turn completes — every dispatch's finally fired.
     expect(loop.inflight.size).toBe(0);
   });

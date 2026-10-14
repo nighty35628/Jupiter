@@ -1,13 +1,150 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { DeepSeekClient } from "../src/client.js";
+import { DEEPSEEK_CONTEXT_TOKENS } from "../src/telemetry/stats.js";
 import {
   DEFAULT_BOUNDED_TOKENIZE_CHARS,
+  countRequestTokens,
   countTokens,
+  countTokensAsync,
   countTokensBounded,
   encode,
   estimateConversationTokens,
   estimateRequestTokens,
   formatDeepSeekPrompt,
 } from "../src/tokenizer.js";
+
+describe("full wire token counting", { retry: 0 }, () => {
+  it.each([
+    "",
+    "Hello, world!",
+    "你好，世界！",
+    "12345678901234567890",
+    "🎉🚀💻🔥",
+    "<think>你好</think><｜User｜>Hello",
+    `${"hello ".repeat(500)}<think>${"汉 ".repeat(500)}`,
+  ])("matches exact encoding across pre-token and added-token boundaries: %s", async (text) => {
+    expect(await countTokensAsync(text)).toBe(encode(text).length);
+  });
+
+  it.each([
+    "A".repeat(2053),
+    "a".repeat(2071),
+    "汉".repeat(1031),
+    `${"!".repeat(511)}🎉${"!".repeat(2053)}`,
+  ])("preserves merges inside an oversized pre-token", async (text) => {
+    const count = await countTokensAsync(text);
+    expect(count).toBe(countTokens(text));
+  });
+
+  it("matches independent golden counts without warming the shared BPE cache", async () => {
+    expect(await countTokensAsync("Hello!")).toBe(2);
+    expect(await countTokensAsync("你好")).toBe(1);
+    expect(await countTokensAsync("mixed 中文 and english 混合")).toBe(7);
+    expect(await countTokensAsync("<think>reasoning here</think>")).toBe(5);
+  });
+
+  it("keeps concurrent counts independent across yields", async () => {
+    const texts = [
+      `${"left ".repeat(1000)}<think>${"右 ".repeat(1000)}`,
+      `${"右 ".repeat(1000)}</think>${"left ".repeat(1000)}`,
+    ];
+    const first = countTokensAsync(texts[0]!);
+    const second = countTokensAsync(texts[1]!);
+    expect(await first).toBe(countTokens(texts[0]!));
+    expect(await second).toBe(countTokens(texts[1]!));
+  });
+
+  it("lets timers run while counting a large unbroken pre-token", async () => {
+    let timerRan = false;
+    const timer = setTimeout(() => {
+      timerRan = true;
+    }, 0);
+    try {
+      expect(await countTokensAsync("A".repeat(100_000))).toBeGreaterThan(0);
+      expect(timerRan).toBe(true);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  it("cancels a long count before contacting the provider", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn();
+    const client = new DeepSeekClient({ apiKey: "synthetic", fetch, retry: { maxAttempts: 1 } });
+    const timer = setTimeout(() => controller.abort(), 0);
+    try {
+      await expect(
+        client.chat({
+          model: "deepseek-flash",
+          messages: [{ role: "user", content: "A".repeat(100_000) }],
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  it("honors an already-cancelled count", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(countTokensAsync("hello", controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
+
+  it("matches the existing V4 template including tool results and reasoning", async () => {
+    const messages = [
+      { role: "system", content: "s" },
+      { role: "user", content: "read" },
+      {
+        role: "assistant",
+        content: "",
+        reasoning_content: "inspect",
+        tool_calls: [{ id: "call", function: { name: "read", arguments: '{"path":"a.ts"}' } }],
+      },
+      { role: "tool", content: "result" },
+      { role: "user", content: "continue" },
+    ];
+    const before = JSON.stringify(messages);
+    for (const dropThinking of [false, true]) {
+      expect(await countRequestTokens(messages, [], dropThinking)).toBe(
+        countTokens(formatDeepSeekPrompt(messages, dropThinking)),
+      );
+    }
+    expect(JSON.stringify(messages)).toBe(before);
+  });
+
+  it("counts current tool schemas even when their array is reused", async () => {
+    const messages = [{ role: "user", content: "hi" }];
+    const tools = [{ function: { name: "read", description: "small" } }];
+    const before = await countRequestTokens(messages, tools);
+    tools[0]!.function.description = "large schema ".repeat(1000);
+    expect(await countRequestTokens(messages, tools)).toBeGreaterThan(before + 1000);
+  });
+
+  it("accepts an exactly-fitting request and rejects one token below it", async () => {
+    const model = "wire-boundary-regression";
+    const messages = [{ role: "user", content: `${"hello ".repeat(500)}你好` }];
+    const tokens = countTokens(formatDeepSeekPrompt(messages, true));
+    const fetch = vi.fn(async () =>
+      Response.json({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }),
+    );
+    const client = new DeepSeekClient({ apiKey: "synthetic", fetch, retry: { maxAttempts: 1 } });
+    try {
+      DEEPSEEK_CONTEXT_TOKENS[model] = tokens;
+      await expect(client.chat({ model, messages })).resolves.toMatchObject({ content: "ok" });
+      DEEPSEEK_CONTEXT_TOKENS[model] = tokens - 1;
+      await expect(client.chat({ model, messages })).rejects.toMatchObject({
+        code: "CONTEXT_WINDOW_EXCEEDED",
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      Reflect.deleteProperty(DEEPSEEK_CONTEXT_TOKENS, model);
+    }
+  });
+});
 
 describe("DeepSeek V4 tokenizer — golden cases", () => {
   it("empty string is zero tokens", () => {

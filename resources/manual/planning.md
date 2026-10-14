@@ -1,0 +1,4 @@
+# Plans, Compression and Rollback
+Plan mode is read-only: write tools and non-allowlisted commands are blocked. submit_plan requests approval before execution; submitting a plan does not execute it. todo_write tracks progress. Desktop also supports a one-shot plan request without permanently changing the session mode.
+Context compression/folding summarizes older material to control prompt size. It does not increase model memory indefinitely or guarantee that every old detail survives. Keep durable preferences in memory and important sources in the library. CLI /compact requests compression; current settings control automatic folding.
+Checkpoints, edit history and rollback are scoped recovery mechanisms, not a promise to undo every external action. Review the target and changed files before restoring. Filesystem edit rollback cannot undo browser clicks, sent messages or arbitrary side effects of shell commands. Respect existing uncommitted user work.

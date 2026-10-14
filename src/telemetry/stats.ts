@@ -287,11 +287,13 @@ export class SessionStats {
   }
 
   /** Fold external usage (e.g. subagent child-loop) into session totals without creating a turn entry. (#2008) */
-  recordExternal(model: string, usage: Usage, providerId?: string): void {
-    this._carryoverCost += costUsd(model, usage, undefined, {
-      ...this.pricingContext,
-      ...(providerId ? { providerId } : {}),
-    });
+  recordExternal(model: string, usage: Usage, providerId?: string, costOverride?: number): void {
+    this._carryoverCost +=
+      costOverride ??
+      costUsd(model, usage, undefined, {
+        ...this.pricingContext,
+        ...(providerId ? { providerId } : {}),
+      });
     this._carryoverCacheHit += usage.promptCacheHitTokens;
     this._carryoverCacheMiss += usage.promptCacheMissTokens;
     this._carryoverCompletion += usage.completionTokens;

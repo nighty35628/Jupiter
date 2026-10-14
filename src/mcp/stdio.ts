@@ -25,6 +25,10 @@ export interface StdioTransportOptions {
   cwd?: string;
   /** Default true on win32 to resolve `.cmd`/`.bat` wrappers (npx.cmd etc.). */
   shell?: boolean;
+  /** Grace period before escalating SIGTERM to SIGKILL. Default 500ms. */
+  shutdownTimeoutMs?: number;
+  /** Maximum wait for confirmed exit after SIGKILL. Default 1000ms. */
+  killTimeoutMs?: number;
 }
 
 export class StdioTransport implements McpTransport {
@@ -33,8 +37,22 @@ export class StdioTransport implements McpTransport {
   private readonly waiters: Array<(m: JsonRpcMessage | null) => void> = [];
   private closed = false;
   private stdoutBuffer = "";
+  private readonly shutdownTimeoutMs: number;
+  private readonly killTimeoutMs: number;
+  private readonly exitPromise: Promise<void>;
+  private resolveExit!: () => void;
+  private exited = false;
+  private closing: Promise<void> | undefined;
 
   constructor(opts: StdioTransportOptions) {
+    this.shutdownTimeoutMs = opts.shutdownTimeoutMs ?? 500;
+    this.killTimeoutMs = opts.killTimeoutMs ?? 1000;
+    for (const timeout of [this.shutdownTimeoutMs, this.killTimeoutMs]) {
+      if (!Number.isFinite(timeout) || timeout < 0) throw new Error("Invalid MCP shutdown timeout");
+    }
+    this.exitPromise = new Promise((resolve) => {
+      this.resolveExit = resolve;
+    });
     const env = opts.replaceEnv
       ? { ...(opts.env ?? {}) }
       : { ...sanitizedChildProcessEnv(), ...(opts.env ?? {}) };
@@ -65,13 +83,19 @@ export class StdioTransport implements McpTransport {
         env,
         cwd: opts.cwd,
         stdio: ["pipe", "pipe", "pipe"],
+        shell: false,
       });
     }
     this.child.stdout!.setEncoding("utf8");
     this.child.stdout!.on("data", (chunk: string) => this.onStdout(chunk));
+    this.child.stdout!.on("end", () => this.onClose());
+    this.child.stdout!.on("close", () => this.onClose());
+    this.child.stdout!.on("error", () => this.onClose());
+    this.child.stdin!.on("error", () => this.onClose());
     this.child.stderr!.setEncoding("utf8");
     this.child.stderr!.on("data", (chunk: string) => this.onStderr(chunk));
     this.child.on("close", () => this.onClose());
+    this.child.once("exit", () => this.onExit());
     this.child.on("error", (err) => {
       // Surface spawn errors as a synthetic JsonRpcError so callers don't
       // hang on a stream that never emits anything.
@@ -80,6 +104,9 @@ export class StdioTransport implements McpTransport {
         id: null,
         error: { code: -32000, message: `transport error: ${err.message}` },
       });
+      this.onClose();
+      // A failed spawn has no process to reap; errors on a live child do not prove exit.
+      if (this.child.pid === undefined) this.onExit();
     });
   }
 
@@ -109,25 +136,61 @@ export class StdioTransport implements McpTransport {
     }
   }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    // Signal any pending waiters.
-    while (this.waiters.length > 0) this.waiters.shift()!(null);
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
+    this.onClose();
+    const task = this.terminate();
+    this.closing = task;
+    void task.catch(() => {
+      if (this.closing === task) this.closing = undefined;
+    });
+    return task;
+  }
+
+  private async terminate(): Promise<void> {
+    if (this.exited) return;
     try {
       this.child.stdin!.end();
     } catch {
       /* already ended */
     }
-    if (this.child.exitCode === null && !this.child.killed) {
-      // child.kill("SIGTERM") throws EINVAL on Windows; plain kill()
-      // can also throw on failed spawns. Swallow both.
-      try {
-        this.child.kill(process.platform === "win32" ? undefined : "SIGTERM");
-      } catch {
-        /* already exited or unsignallable */
-      }
+    this.signal(process.platform === "win32" ? undefined : "SIGTERM");
+    if (await this.waitForExit(this.shutdownTimeoutMs)) return;
+    this.signal("SIGKILL");
+    if (!(await this.waitForExit(this.killTimeoutMs))) {
+      throw new Error("MCP child process exit could not be confirmed after SIGKILL");
     }
+    this.child.stdout?.destroy();
+    this.child.stderr?.destroy();
+  }
+
+  private signal(signal?: NodeJS.Signals): void {
+    if (this.exited) return;
+    try {
+      this.child.kill(signal);
+    } catch {
+      /* exit, not kill acknowledgement, is authoritative */
+    }
+  }
+
+  private async waitForExit(timeoutMs: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.exitPromise.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private onExit(): void {
+    this.exited = true;
+    this.resolveExit();
+    this.onClose();
   }
 
   /** Parse incoming stdout chunks into NDJSON messages. */

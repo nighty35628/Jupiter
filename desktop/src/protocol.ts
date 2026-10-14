@@ -1,15 +1,20 @@
+import type { ImageAttachment } from "../../src/attachments/types";
+import type { ProviderProbeResult, SettingsSaveResult } from "../../src/desktop/provider-settings-state";
 import type {
   TranscriptDisplayTruncation,
   TranscriptElisionSegment,
 } from "../../src/desktop/transcript-budget";
 import type { WorkflowEvent, WorkflowRun } from "../../src/workflows/types";
-import type { ImageAttachment } from "../../src/attachments/types";
 
 export type { WorkflowRun };
 
 export type ReadyEvent = { type: "$ready" };
 export type ProtocolErrorEvent = { type: "$error"; message: string };
 export type TurnCompleteEvent = { type: "$turn_complete" };
+
+export type PromptPredictionEvent =
+  | { type: "$prompt_prediction_eligible"; completionId: string }
+  | { type: "$prompt_prediction"; completionId: string; text: string | null };
 export type PathAccessRequiredEvent = {
   type: "$path_access_required";
   id: number;
@@ -376,7 +381,14 @@ export type SkillsEvent = {
 };
 
 export type ContextDiagnosticsInfo = {
-  images?: { attached: number; retained: number; request: number; omitted: number; estimatedTokens: number; transport?: string };
+  images?: {
+    attached: number;
+    retained: number;
+    request: number;
+    omitted: number;
+    estimatedTokens: number;
+    transport?: string;
+  };
   systemTokens: number;
   toolsTokens: number;
   logTokens: number;
@@ -467,7 +479,11 @@ export type MemoryDetailEvent = {
   detail: MemoryDetail;
 };
 
-export type RetryResultEvent = { type: "$retry_result"; text: string; attachments?: ImageAttachment[] };
+export type RetryResultEvent = {
+  type: "$retry_result";
+  text: string;
+  attachments?: ImageAttachment[];
+};
 
 export type BtwResultEvent = {
   type: "$btw_result";
@@ -679,14 +695,16 @@ export type OptionalComponentStatus = {
     | "libreoffice"
     | "ffmpeg"
     | "tesseract"
-    | "pandoc";
+    | "pandoc"
+    | "cua-driver";
   name: string;
   capability:
     | "browser-automation"
     | "office-preview"
     | "media-processing"
     | "ocr"
-    | "document-conversion";
+    | "document-conversion"
+    | "computer-use";
   state: "available" | "missing" | "unsupported";
   version?: string;
   executablePath?: string;
@@ -700,6 +718,25 @@ export type OptionalComponentsEvent = {
   items: OptionalComponentStatus[];
 };
 
+export type ComputerUseStatus = {
+  state:
+    | "disabled"
+    | "unsupported-surface"
+    | "unsupported-model"
+    | "driver-missing"
+    | "idle"
+    | "starting"
+    | "ready"
+    | "busy"
+    | "fault";
+  reason?: string;
+  permissions: {
+    screen: "unknown" | "verified" | "denied";
+    input: "unknown" | "verified" | "denied";
+  };
+  owner?: string;
+};
+
 export type SkillPackSourceInfo = {
   id: string;
   name: string;
@@ -708,8 +745,11 @@ export type SkillPackSourceInfo = {
 };
 
 export type SettingsEvent = {
+  promptPredictionsEnabled?: boolean;
   type: "$settings";
   settingsRevision?: number;
+  serverInstanceId?: string;
+  providerVersion?: string;
   requestId?: string;
   reasoningEffort: ReasoningEffort;
   thinkingEnabled: boolean;
@@ -734,6 +774,9 @@ export type SettingsEvent = {
   webSearchEndpoint?: string;
   browserAutomation?: BrowserAutomationStatus;
   optionalComponents?: OptionalComponentStatus[];
+  computerUseEnabled?: boolean;
+  computerUsePermissionMode?: "standard" | "bounded" | "unrestricted";
+  computerUseStatus?: ComputerUseStatus;
   skillPackSources?: SkillPackSourceInfo[];
   webSearchApiKeys?: {
     metaso?: string;
@@ -759,13 +802,8 @@ export type SettingsEvent = {
   version: string;
 };
 
-export type ProviderTestResultEvent = {
-  type: "$provider_test_result";
-  requestId: string;
-  ok: boolean;
-  message: string;
-  models?: string[];
-};
+export type ProviderTestResultEvent = ProviderProbeResult;
+export type SettingsSaveResultEvent = SettingsSaveResult;
 
 export type QQSettingsEvent = {
   type: "$qq_settings";
@@ -874,6 +912,8 @@ export type BalanceEvent = {
 };
 
 export type SettingsPatch = {
+  promptPredictionsEnabled?: boolean;
+  expectedProviderVersion?: string;
   vision?: boolean;
   imageTransport?: "auto" | "inline";
   reasoningEffort?: ReasoningEffort;
@@ -908,6 +948,8 @@ export type SettingsPatch = {
   processCardsDefaultOpen?: boolean;
   memoryConfirmWrites?: boolean;
   memoryGlobalEnabled?: boolean;
+  computerUseEnabled?: boolean;
+  computerUsePermissionMode?: "standard" | "bounded" | "unrestricted";
   /** Persisted prompt-history entries to update on each send (#2051). */
   promptHistory?: string[];
 };
@@ -980,16 +1022,40 @@ export type ModelFinalEvent = {
   forcedSummary?: boolean;
 };
 
-export type ToolPreparingEvent = {
+type ToolEventMetadata = {
+  requestId?: string;
+  localCallId?: string;
+  providerCallId?: string;
+  toolCallIndex?: number;
+  outputChars?: number;
+  reasoningChars?: number;
+  toolArgsChars?: number;
+};
+
+export type ToolPreparingEvent = ToolEventMetadata & {
   type: "tool.preparing";
   id: number;
   ts: string;
   turn: number;
   callId: string;
   name: string;
+  toolCallArgsChars?: number;
+  toolCallReadyCount?: number;
 };
 
-export type ToolIntentEvent = {
+export type ToolProgressEvent = ToolEventMetadata & {
+  type: "tool.progress";
+  id: number;
+  ts: string;
+  turn: number;
+  callId: string;
+  name: string;
+  phase: "preparing" | "running";
+  toolCallArgsChars?: number;
+  toolCallReadyCount?: number;
+};
+
+export type ToolIntentEvent = ToolEventMetadata & {
   type: "tool.intent";
   id: number;
   ts: string;
@@ -999,7 +1065,7 @@ export type ToolIntentEvent = {
   args: string;
 };
 
-export type ToolResultEvent = {
+export type ToolResultEvent = ToolEventMetadata & {
   attachments?: ImageAttachment[];
   type: "tool.result";
   id: number;
@@ -1008,6 +1074,8 @@ export type ToolResultEvent = {
   callId: string;
   ok: boolean;
   output: string;
+  terminalState?: "completed" | "failed" | "dropped" | "cancelled";
+  executed?: boolean;
 };
 
 export type StatusEvent = {
@@ -1071,6 +1139,7 @@ export type KernelErrorEvent = {
 export type WorkflowRunEvent = WorkflowEvent;
 
 export type IncomingEvent = { tabId?: string } & (
+  | PromptPredictionEvent
   | ReadyEvent
   | ProtocolErrorEvent
   | TurnCompleteEvent
@@ -1092,6 +1161,7 @@ export type IncomingEvent = { tabId?: string } & (
   | NeedsSetupEvent
   | SettingsEvent
   | ProviderTestResultEvent
+  | SettingsSaveResultEvent
   | QQSettingsEvent
   | FeishuSettingsEvent
   | DingTalkSettingsEvent
@@ -1124,6 +1194,7 @@ export type IncomingEvent = { tabId?: string } & (
   | ModelDeltaEvent
   | ModelFinalEvent
   | ToolPreparingEvent
+  | ToolProgressEvent
   | ToolIntentEvent
   | ToolResultEvent
   | CompactResultEvent
@@ -1136,6 +1207,8 @@ export type IncomingEvent = { tabId?: string } & (
 );
 
 export type OutgoingCommand = { tabId?: string } & (
+  | { cmd: "prompt_prediction_get"; completionId: string }
+  | { cmd: "prompt_prediction_dismiss"; completionId: string }
   | {
       cmd: "user_input";
       text: string;
@@ -1159,7 +1232,13 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "session_restore_archived"; name: string }
   | { cmd: "session_delete_archived"; name: string }
   | { cmd: "session_clear_archived" }
-  | { cmd: "session_load"; name: string; openInNewTab?: boolean; requestId?: string }
+  | {
+      cmd: "session_load";
+      name: string;
+      workspaceDir?: string;
+      openInNewTab?: boolean;
+      requestId?: string;
+    }
   | { cmd: "session_turn_load"; name: string; turn: number; requestId: string }
   | {
       cmd: "session_copy";
@@ -1212,6 +1291,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | {
       cmd: "provider_test";
       requestId: string;
+      expectedProviderVersion?: string;
       baseUrl: string;
       apiKey?: string;
       model: string;

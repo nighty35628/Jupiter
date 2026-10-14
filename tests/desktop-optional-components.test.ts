@@ -20,6 +20,7 @@ describe("desktop optional component payload", () => {
       "ffmpeg",
       "tesseract",
       "pandoc",
+      "cua-driver",
     ]);
   });
 

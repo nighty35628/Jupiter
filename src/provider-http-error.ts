@@ -8,9 +8,76 @@ const AUTH_SCHEME_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 const JWT_RE = /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const PREFIXED_KEY_RE = /\b(?:sk|ds|ak|key)-[A-Za-z0-9_-]{8,}\b/gi;
 const INLINE_CREDENTIAL_RE =
-  /\b(api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|authorization|cookie|client[-_ ]?secret|secret|password)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+  /\b(api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|authorization|cookie|client[-_ ]?secret|secret|password)\b(["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/gi;
+const COOKIE_HEADER_RE =
+  /\b((?:set-)?cookie)\b(["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n]+)/gi;
 const MASKED_FRAGMENT_RE = /\*{2,}[A-Za-z0-9_-]{2,}/g;
 const HTML_DOCUMENT_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
+const DIAGNOSTIC_URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'`]+/gi;
+const SENSITIVE_QUERY_KEY_RE =
+  /^(?:api[-_]?key|key|(?:access|refresh|id)[-_]?token|token|auth(?:orization)?|basic[-_]?auth|cookie|client[-_]?secret|secret|pass(?:word|wd)?|pwd|credential[s]?|signature|sig|x[-_]api[-_]key|x[-_]amz[-_](?:credential|signature|security[-_]token))$/i;
+
+/** Display only: never use this value for requests or dispatcher configuration. */
+export function sanitizeDiagnosticUrl(raw: string): string {
+  const value = raw.trim();
+  if (
+    stripControlCharacters(value) !== value ||
+    /\s/.test(value) ||
+    value.replace(BIDI_CONTROL_RE, "") !== value
+  ) {
+    return "[invalid URL]";
+  }
+  try {
+    const url = new URL(raw);
+    if (!url.host) return "[invalid URL]";
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    const sensitiveKeys = [...url.searchParams.keys()].filter((key) =>
+      SENSITIVE_QUERY_KEY_RE.test(key),
+    );
+    for (const key of sensitiveKeys) url.searchParams.delete(key);
+    return url.toString();
+  } catch {
+    return "[invalid URL]";
+  }
+}
+
+function redactKnownSecret(text: string, secret: string): string {
+  const fullyEncoded = [...new TextEncoder().encode(secret)]
+    .map((byte) => `%${byte.toString(16).padStart(2, "0").toUpperCase()}`)
+    .join("");
+  let encoded = fullyEncoded;
+  try {
+    encoded = encodeURIComponent(secret);
+  } catch {
+    // Malformed Unicode in configuration must not break diagnostic output.
+  }
+  const lowerEncoded = encoded.replace(/%[\dA-F]{2}/g, (value) => value.toLowerCase());
+  const variants = new Set([
+    secret,
+    stripControlCharacters(stripAnsi(secret).replace(BIDI_CONTROL_RE, "")),
+    encoded,
+    fullyEncoded,
+    encodeURIComponent(encoded),
+    encodeURIComponent(lowerEncoded),
+    encoded.replace(/%20/g, "+"),
+  ]);
+  let out = text;
+  for (const variant of variants) {
+    if (!variant) continue;
+    // Escape literal text, allowing either hex case only inside percent escapes.
+    const pattern = variant
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      .replace(
+        /%([\dA-F])([\dA-F])/gi,
+        (_match, a: string, b: string) =>
+          `%[${a.toUpperCase()}${a.toLowerCase()}][${b.toUpperCase()}${b.toLowerCase()}]`,
+      );
+    out = out.replace(new RegExp(pattern, "g"), "[redacted]");
+  }
+  return out;
+}
 
 const JSON_DETAIL_PATHS: ReadonlyArray<readonly string[]> = [
   ["error", "message"],
@@ -75,10 +142,23 @@ export function redactProviderSecrets(text: string, knownSecrets: readonly strin
   let out = text;
   for (const secret of knownSecrets) {
     if (secret.length < 4) continue;
-    out = out.split(secret).join("[redacted]");
+    out = redactKnownSecret(out, secret);
   }
   return out
-    .replace(AUTH_SCHEME_RE, (_match, scheme: string) => `${scheme} [redacted]`)
+    .replace(
+      COOKIE_HEADER_RE,
+      (_match, key: string, separator: string) => `${key}${separator}[redacted]`,
+    )
+    .replace(DIAGNOSTIC_URL_RE, (url) => sanitizeDiagnosticUrl(url))
+    .replace(AUTH_SCHEME_RE, (match, scheme: string) => {
+      if (
+        scheme.toLowerCase() === "basic" &&
+        !Buffer.from(match.slice(scheme.length).trim(), "base64").includes(58)
+      ) {
+        return match;
+      }
+      return `${scheme} [redacted]`;
+    })
     .replace(JWT_RE, "[redacted]")
     .replace(PREFIXED_KEY_RE, "[redacted]")
     .replace(
@@ -106,7 +186,13 @@ function stripControlCharacters(text: string): string {
   let out = "";
   for (const char of text) {
     const code = char.charCodeAt(0);
-    if (code <= 8 || code === 11 || code === 12 || (code >= 14 && code <= 31) || code === 127) {
+    if (
+      code <= 8 ||
+      code === 11 ||
+      code === 12 ||
+      (code >= 14 && code <= 31) ||
+      (code >= 127 && code <= 159)
+    ) {
       continue;
     }
     out += char;

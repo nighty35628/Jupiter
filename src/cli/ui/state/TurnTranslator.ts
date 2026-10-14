@@ -5,7 +5,8 @@ export class TurnTranslator {
   private reasoningCardId: string | null = null;
   private streamingCardId: string | null = null;
   private toolCardId: string | null = null;
-  private toolStartedAt = 0;
+  private toolCards = new Map<string, { cardId: string; startedAt: number }>();
+  private terminalToolIds = new Set<string>();
 
   constructor(private readonly log: Scrollback) {}
 
@@ -21,35 +22,58 @@ export class TurnTranslator {
   }
 
   toolStart(name: string, args: unknown, callId?: string): void {
-    this.toolStartedAt = Date.now();
+    if (callId && (this.toolCards.has(callId) || this.terminalToolIds.has(callId))) return;
     // callId from the loop event is the inflight-set key — using it as
     // the card id lets the UI derive `running` from `loop.inflight.has(card.id)`.
-    this.toolCardId = this.log.startTool(name, args, callId);
+    const cardId = this.log.startTool(name, args, callId);
+    this.toolCardId = callId ?? cardId;
+    this.toolCards.set(this.toolCardId, { cardId, startedAt: Date.now() });
   }
 
-  toolEnd(output: string): void {
-    if (this.toolCardId) {
-      this.log.endTool(this.toolCardId, {
-        output,
-        elapsedMs: Date.now() - this.toolStartedAt,
-      });
-      this.toolCardId = null;
+  toolEnd(output: string, callId?: string): void {
+    this.closeTool(output, callId, false);
+  }
+
+  toolAbort(output?: string, callId?: string): void {
+    if (callId === undefined) {
+      for (const key of this.toolCards.keys()) this.closeTool(output, key, true);
+      return;
     }
+    this.terminalToolIds.add(callId);
+    this.closeTool(output, callId, true);
   }
 
-  toolAbort(output?: string): void {
-    if (this.toolCardId) {
-      this.log.endTool(this.toolCardId, {
-        output,
-        elapsedMs: Date.now() - this.toolStartedAt,
-        aborted: true,
-      });
-      this.toolCardId = null;
-    }
+  isTerminalTool(callId: string): boolean {
+    return this.terminalToolIds.has(callId);
   }
 
-  toolRetry(attempt: number, max: number): void {
-    if (this.toolCardId) this.log.retryTool(this.toolCardId, attempt, max);
+  isActiveTool(callId: string): boolean {
+    return this.toolCardId === callId;
+  }
+
+  private closeTool(
+    output: string | undefined,
+    callId: string | undefined,
+    aborted: boolean,
+  ): void {
+    const key = callId ?? this.toolCardId;
+    if (!key) return;
+    const card = this.toolCards.get(key);
+    if (!card) return;
+    this.log.endTool(card.cardId, {
+      output,
+      elapsedMs: Date.now() - card.startedAt,
+      ...(aborted ? { aborted: true } : {}),
+    });
+    this.toolCards.delete(key);
+    this.terminalToolIds.add(key);
+    if (this.toolCardId === key) this.toolCardId = [...this.toolCards.keys()].at(-1) ?? null;
+  }
+
+  toolRetry(attempt: number, max: number, callId?: string): void {
+    const key = callId ?? this.toolCardId;
+    const card = key ? this.toolCards.get(key) : undefined;
+    if (card) this.log.retryTool(card.cardId, attempt, max);
   }
 
   reasoningDone(reasoningText: string): void {
@@ -92,13 +116,7 @@ export class TurnTranslator {
       this.log.endReasoning(this.reasoningCardId, 0, 0, true);
       this.reasoningCardId = null;
     }
-    if (this.toolCardId) {
-      this.log.endTool(this.toolCardId, {
-        elapsedMs: Date.now() - this.toolStartedAt,
-        aborted: true,
-      });
-      this.toolCardId = null;
-    }
+    for (const key of this.toolCards.keys()) this.toolAbort(undefined, key);
     this.log.abortTurn();
   }
 }

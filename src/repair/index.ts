@@ -1,5 +1,10 @@
 /** Pass order: scavenge → truncation → storm. Schema flatten runs at loop construction, not per-turn. */
 
+import {
+  createModelRequestId,
+  ensureToolCallIdentity,
+  getToolCallIdentity,
+} from "../loop/types.js";
 import type { ToolCall } from "../types.js";
 import { scavengeToolCalls } from "./scavenge.js";
 import { type IsMutating, type IsStormExempt, StormBreaker } from "./storm.js";
@@ -54,7 +59,12 @@ export class ToolCallRepair {
     declaredCalls: ToolCall[],
     reasoningContent: string | null,
     content: string | null = null,
-  ): { calls: ToolCall[]; report: RepairReport } {
+    requestId?: string,
+  ): {
+    calls: ToolCall[];
+    report: RepairReport;
+    droppedCalls: Array<{ call: ToolCall; reason: string }>;
+  } {
     const report: RepairReport = {
       scavenged: 0,
       truncationsFixed: 0,
@@ -83,6 +93,16 @@ export class ToolCallRepair {
       }
     }
     report.notes.push(...scavenged.notes);
+    const namespace =
+      requestId ??
+      declaredCalls.map(getToolCallIdentity).find(Boolean)?.requestId ??
+      createModelRequestId();
+    let nextIndex =
+      Math.max(-1, ...declaredCalls.map((call) => getToolCallIdentity(call)?.toolCallIndex ?? -1)) +
+      1;
+    for (const call of merged) {
+      if (!getToolCallIdentity(call)) ensureToolCallIdentity(call, namespace, nextIndex++);
+    }
 
     // 2. Truncation repair on argument JSON.
     for (const call of merged) {
@@ -110,17 +130,19 @@ export class ToolCallRepair {
 
     // 3. Storm breaker.
     const filtered: ToolCall[] = [];
+    const droppedCalls: Array<{ call: ToolCall; reason: string }> = [];
     for (const call of merged) {
       const verdict = this.storm.inspect(call);
       if (verdict.suppress) {
         report.stormsBroken++;
         if (verdict.reason) report.notes.push(verdict.reason);
+        droppedCalls.push({ call, reason: verdict.reason ?? "repeat-loop guard" });
         continue;
       }
       filtered.push(call);
     }
 
-    return { calls: filtered, report };
+    return { calls: filtered, report, droppedCalls };
   }
 }
 

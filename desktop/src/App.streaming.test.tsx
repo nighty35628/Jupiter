@@ -3,7 +3,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { type ReactNode, forwardRef } from "react";
+import { type CSSProperties, type ReactNode, forwardRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauri = vi.hoisted(() => {
@@ -109,6 +109,7 @@ vi.mock("react-virtuoso", () => ({
     props: {
       data?: unknown[];
       totalCount?: number;
+      style?: CSSProperties;
       itemContent: (index: number, item?: unknown) => ReactNode;
       components?: {
         Header?: () => ReactNode;
@@ -119,7 +120,7 @@ vi.mock("react-virtuoso", () => ({
   ) {
     const items = props.data ?? Array.from({ length: props.totalCount ?? 0 }, () => undefined);
     return (
-      <div data-testid="virtuoso">
+      <div data-testid="virtuoso" style={props.style}>
         {props.components?.Header ? <props.components.Header /> : null}
         {items.map((item, index) => (
           <div key={index}>{props.itemContent(index, item)}</div>
@@ -324,6 +325,39 @@ describe("Web workbench layout", () => {
     await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   }
 
+  it.each(["/tmp/target-workspace", undefined])(
+    "includes workspace context when loading a sidebar session (workspace: %s)",
+    async (workspace) => {
+      await startWeb(1024);
+      await emitRpc({
+        type: "$sessions",
+        tabId: "web-tab",
+        items: [
+          {
+            name: "target-web-session",
+            summary: "Target web chat",
+            messageCount: 2,
+            mtime: new Date().toISOString(),
+            workspace,
+            workspaceStatus: "ok",
+          },
+        ],
+      });
+      const sidebar = activeApp().querySelector<HTMLElement>(".sidebar")!;
+      fireEvent.click(within(sidebar).getByText("Target web chat").closest(".session-item")!);
+      await waitFor(() => {
+        expect(sentRpcCommands()).toContainEqual(
+          expect.objectContaining({
+            cmd: "session_load",
+            name: "target-web-session",
+            workspaceDir: workspace ?? "/tmp/web-layout",
+            openInNewTab: false,
+          }),
+        );
+      });
+    },
+  );
+
   it("keeps the docked sidebar, draft and busy task through quick and full settings", async () => {
     await startWeb(727, true);
     const app = activeApp();
@@ -446,6 +480,18 @@ describe("Web workbench layout", () => {
 });
 
 describe("App streaming events", () => {
+  it("anchors the transcript viewport without an unresolved flex percentage height", { retry: 0 }, async () => {
+    render(<App />);
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap("tab-viewport");
+    await emitRpc({ type: "user.message", tabId: "tab-viewport", turn: 1, text: "viewport regression" });
+    const scroller = screen.getByTestId("virtuoso");
+    expect(scroller.style.position).toBe("absolute");
+    expect(scroller.style.inset).toBe("0px");
+    expect(scroller.style.height).toBe("");
+    expect(within(scroller).getByText("viewport regression")).toBeTruthy();
+  });
+
   it("cleans up listeners that registered before a sibling subscription fails", async () => {
     tauri.listenFailures.add("rpc:stderr");
 
@@ -574,6 +620,149 @@ describe("App streaming events", () => {
     fireEvent.click(within(morePopup).getByText("Settings"));
     expect(screen.getByText("Current workspace")).toBeTruthy();
     expect(openUrl).not.toHaveBeenCalled();
+  });
+
+  it("provider settings retain RAM drafts across page/overlay reopen and clear only matching acknowledged keys", async () => {
+    render(<App />);
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    const tabId = "tab-provider-draft";
+    await emitBootstrap(tabId);
+    const providerSettings = { type: "$settings", tabId, serverInstanceId: "provider-server", providerVersion: "provider-server:1", settingsRevision: 12,
+      reasoningEffort: "high", editMode: "review", budgetUsd: null,
+      workspaceDir: "/tmp/jupiter-streaming-test", recentWorkspaces: [], model: "model-a",
+      baseUrl: "https://relay.example/v1", providerId: "relay", providerDialect: "auto", version: "test" };
+    await emitRpc(providerSettings);
+    const open = () => {
+      const more = screen.getByTitle("More");
+      fireEvent.click(more);
+      fireEvent.click(within(more.parentElement!).getByText("Settings"));
+      fireEvent.click(screen.getByText("Models"));
+    };
+    open();
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "mock-first-key" } });
+    fireEvent.change(screen.getByLabelText("Custom model id"), { target: { value: "draft-model" } });
+    fireEvent.click(screen.getByText("General"));
+    fireEvent.click(screen.getByText("Models"));
+    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("mock-first-key");
+    fireEvent.click(screen.getByRole("button", { name: "close" }));
+    open();
+    expect((screen.getByLabelText("Custom model id") as HTMLInputElement).value).toBe("draft-model");
+    await emitRpc({ ...providerSettings, settingsRevision: 13, showSystemEvents: false });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sentRpcCommands().some((command) => command.cmd === "settings_save")).toBe(true));
+    const save = sentRpcCommands().filter((command) => command.cmd === "settings_save").at(-1);
+    expect(save).toMatchObject({ expectedProviderVersion: "provider-server:1", apiKey: "mock-first-key", model: "draft-model" });
+    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("mock-first-key");
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "mock-second-key" } });
+    await emitRpc({ ...providerSettings, model: "draft-model", settingsRevision: 14, providerVersion: "provider-server:2" });
+    await emitRpc({ type: "$settings_save_result", tabId, requestId: save!.requestId, status: "success", serverInstanceId: "provider-server", providerVersion: "provider-server:2", provider: { status: "success", providerVersion: "provider-server:2" } });
+    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("mock-second-key");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sentRpcCommands().filter((command) => command.cmd === "settings_save")).toHaveLength(2));
+    const nextSave = sentRpcCommands().filter((command) => command.cmd === "settings_save").at(-1);
+    expect(nextSave).toMatchObject({ expectedProviderVersion: "provider-server:2", apiKey: "mock-second-key" });
+    await act(async () => {
+      tauri.emit("rpc:event", { data: JSON.stringify({ type: "$settings_save_result", tabId, requestId: nextSave!.requestId, status: "success", serverInstanceId: "provider-server", providerVersion: "provider-server:3", provider: { status: "success", providerVersion: "provider-server:3" } }) });
+      tauri.emit("rpc:event", { data: JSON.stringify({ type: "$settings_save_result", tabId, requestId: "unrelated", status: "success", serverInstanceId: "provider-server", providerVersion: "provider-server:3", settings: { status: "success" } }) });
+      await Promise.resolve();
+    });
+    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
+  });
+
+  it.each([false, true])("provider save ack respects a newer settings batch and later edits: %s", { retry: 0 }, async (editInFlight) => {
+    render(<App />);
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    const tabId = "tab-provider-newer-save";
+    await emitBootstrap(tabId);
+    const providerSettings = { type: "$settings", tabId, serverInstanceId: "provider-server", providerVersion: "provider-server:1", settingsRevision: 12,
+      reasoningEffort: "high", thinkingEnabled: false, reasoningChoices: [], editMode: "review", budgetUsd: null,
+      workspaceDir: "/tmp/jupiter-streaming-test", recentWorkspaces: [], model: "model-a",
+      baseUrl: "https://relay.example/v1", providerId: "relay", providerDialect: "auto", version: "test" };
+    await emitRpc(providerSettings);
+    const more = screen.getByTitle("More");
+    fireEvent.click(more);
+    fireEvent.click(within(more.parentElement!).getByText("Settings"));
+    fireEvent.click(screen.getByText("Models"));
+    fireEvent.change(screen.getByLabelText("Custom model id"), { target: { value: "submitted-model" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sentRpcCommands().filter((command) => command.cmd === "settings_save")).toHaveLength(1));
+    const save = sentRpcCommands().find((command) => command.cmd === "settings_save")!;
+    expect(save.expectedProviderVersion).toBe("provider-server:1");
+    if (editInFlight) fireEvent.change(screen.getByLabelText("Custom model id"), { target: { value: "later-edit" } });
+    await act(async () => {
+      for (const event of [
+        { ...providerSettings, model: "submitted-model", settingsRevision: 13, providerVersion: "provider-server:2" },
+        { type: "$settings_save_result", tabId, requestId: save.requestId, status: "success", serverInstanceId: "provider-server",
+          providerVersion: "provider-server:2", provider: { status: "success", providerVersion: "provider-server:2" } },
+        { ...providerSettings, model: "other-tab-model", settingsRevision: 14, providerVersion: "provider-server:3" },
+      ]) tauri.emit("rpc:event", { data: JSON.stringify(event) });
+      await Promise.resolve();
+    });
+    expect((screen.getByLabelText("Custom model id") as HTMLInputElement).value).toBe(editInFlight ? "later-edit" : "other-tab-model");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sentRpcCommands().filter((command) => command.cmd === "settings_save")).toHaveLength(2));
+    expect(sentRpcCommands().filter((command) => command.cmd === "settings_save").at(-1)).toMatchObject({
+      model: editInFlight ? "later-edit" : "other-tab-model", expectedProviderVersion: "provider-server:3",
+    });
+  });
+
+  it("provider settings accept restarted revision zero and ignore late events from retired servers", async () => {
+    render(<App />);
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    const tabId = "tab-provider-restart";
+    await emitBootstrap(tabId);
+    const settingsEvent = { type: "$settings", tabId, reasoningEffort: "high", editMode: "review", budgetUsd: null,
+      workspaceDir: "/tmp/jupiter-streaming-test", recentWorkspaces: [], model: "model-a", baseUrl: "https://relay.example/v1",
+      providerId: "relay", providerDialect: "auto", version: "test" };
+    await emitRpc({ ...settingsEvent, serverInstanceId: "old", providerVersion: "old:1", settingsRevision: 20 });
+    const more = screen.getByTitle("More");
+    fireEvent.click(more);
+    fireEvent.click(within(more.parentElement!).getByText("Settings"));
+    fireEvent.click(screen.getByText("Models"));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sentRpcCommands().some((command) => command.cmd === "settings_save")).toBe(true));
+    const save = sentRpcCommands().filter((command) => command.cmd === "settings_save").at(-1);
+    await emitRpc({ ...settingsEvent, serverInstanceId: "new", providerVersion: "new:1", settingsRevision: 0, model: "restarted-model" });
+    expect(screen.getByText("Save outcome unknown. Refresh settings before trying again.")).toBeTruthy();
+    expect((screen.getByLabelText("Custom model id") as HTMLInputElement).value).toBe("restarted-model");
+    await emitRpc({ ...settingsEvent, serverInstanceId: "old", providerVersion: "old:2", settingsRevision: 21, model: "late-old-model" });
+    await emitRpc({ type: "$settings_save_result", tabId, requestId: save!.requestId, status: "success", serverInstanceId: "old", providerVersion: "old:2", provider: { status: "success" } });
+    expect((screen.getByLabelText("Custom model id") as HTMLInputElement).value).toBe("restarted-model");
+    expect(screen.getByText("Save outcome unknown. Refresh settings before trying again.")).toBeTruthy();
+  });
+
+  it("provider settings show only the newest matching probe when replies arrive in a reversed batch", async () => {
+    render(<App />);
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    const tabId = "tab-provider-probe";
+    await emitBootstrap(tabId);
+    await emitRpc({ type: "$settings", tabId, serverInstanceId: "probe-server", providerVersion: "probe-server:1", settingsRevision: 1,
+      reasoningEffort: "high", editMode: "review", budgetUsd: null, workspaceDir: "/tmp/jupiter-streaming-test", recentWorkspaces: [],
+      model: "model-a", baseUrl: "https://relay.example/v1", providerId: "relay", providerDialect: "auto", version: "test" });
+    const more = screen.getByTitle("More");
+    fireEvent.click(more);
+    fireEvent.click(within(more.parentElement!).getByText("Settings"));
+    fireEvent.click(screen.getByText("Models"));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(sentRpcCommands().filter((command) => command.cmd === "provider_test")).toHaveLength(1));
+    const first = sentRpcCommands().filter((command) => command.cmd === "provider_test")[0]!;
+    fireEvent.change(screen.getByLabelText("Custom model id"), { target: { value: "model-b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(sentRpcCommands().filter((command) => command.cmd === "provider_test")).toHaveLength(2));
+    const second = sentRpcCommands().filter((command) => command.cmd === "provider_test")[1]!;
+    const response = { type: "$provider_test_result", tabId, serverInstanceId: "probe-server", providerVersion: "probe-server:1",
+      credentialSource: "saved", credentialVersion: "probe-server:1", status: "success", ok: true, message: "mock", validation: "chat",
+      config: { baseUrl: "https://relay.example/v1", model: "model-b", providerDialect: "auto" } };
+    await act(async () => {
+      tauri.emit("rpc:event", { data: JSON.stringify({ ...response, requestId: second.requestId }) });
+      tauri.emit("rpc:event", { data: JSON.stringify({ ...response, requestId: first.requestId, validation: "models", models: ["stale-model"] }) });
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Chat endpoint verified.")).toBeTruthy();
+    expect(screen.queryByText("Models endpoint verified. Chat has not been tested.")).toBeNull();
+    expect(document.querySelector('option[value="stale-model"]')).toBeNull();
+    await act(async () => { tauri.emit("rpc:exit", { code: 0 }); await Promise.resolve(); });
+    expect(screen.queryByText("Chat endpoint verified.")).toBeNull();
   });
 
   it("updates the top tab title when the workspace changes", async () => {

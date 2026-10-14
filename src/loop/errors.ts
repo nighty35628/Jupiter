@@ -34,7 +34,7 @@ export function formatLoopError(
   }
 
   const m = /^(?:DeepSeek|Upstream\s+\S+) (\d{3}):?\s*([\s\S]*)$/.exec(msg);
-  if (!m) return msg;
+  if (!m) return sanitizeProviderErrorText(msg);
   const status = m[1] ?? "";
   const body = m[2] ?? "";
   const inner = extractDeepSeekErrorMessage(body);
@@ -48,7 +48,7 @@ export function formatLoopError(
   if (is5xxStatus(status)) {
     return appendProviderDetail(format5xx(status, probe, opts?.upstreamHost), inner);
   }
-  return msg;
+  return sanitizeProviderErrorText(msg);
 }
 
 export function is5xxError(err: unknown): boolean {
@@ -122,11 +122,11 @@ function formatDeepSeek5xx(status: string, probe?: DeepSeekProbeResult): string 
 }
 
 function formatUpstream5xx(status: string, baseUrl: string): string {
-  let host = baseUrl;
+  let host = "upstream";
   try {
-    host = new URL(baseUrl).host || baseUrl;
+    host = new URL(baseUrl).host || "upstream";
   } catch {
-    /* keep raw baseUrl */
+    // Invalid configuration may contain credentials; never echo the raw value.
   }
   const head = t("errors.upstream5xxHead", { status, host });
   const action = t("errors.upstream5xxActionRetry");

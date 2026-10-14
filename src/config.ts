@@ -233,6 +233,11 @@ export interface ProxyConfig {
 }
 
 export interface JupiterConfig {
+  /** Desktop-only Computer Use controls. Disabled by default; enabling still requires OS permission. */
+  computerUse?: {
+    enabled?: boolean;
+    permissionMode?: "standard" | "bounded" | "unrestricted";
+  };
   /** Explicit per-endpoint/model vision support for third-party gateways. */
   visionModels?: Record<string, boolean>;
   imageTransport?: "auto" | "inline";
@@ -252,6 +257,8 @@ export interface JupiterConfig {
   thinkingEnabled?: boolean;
   /** Experimental one-shot DeepSeek Beta prefix continuation. Default false. */
   deepSeekAutoContinue?: boolean;
+  /** Total semantic history-summary deadline, milliseconds; 1s to 5min. */
+  historySummaryTimeoutMs?: number;
   reasoningEffort?: ReasoningEffort;
   /** Default workspace root for the desktop client. CLI uses cwd. */
   workspaceDir?: string;
@@ -318,6 +325,8 @@ export interface JupiterConfig {
   };
   /** Thread-area visibility toggles. */
   thread?: {
+    /** Predict a next message in the Desktop/Web composer. Default true. */
+    promptPredictionsEnabled?: boolean;
     /** When false, suppresses the quiet inline dividers for fold / abort / rate-limit
      *  warnings (severity="high" from the kernel). Default true. */
     showSystemEvents?: boolean;
@@ -1070,6 +1079,19 @@ export function loadImageTransport(path: string = defaultConfigPath()): "auto" |
   return readConfig(path).imageTransport === "inline" ? "inline" : "auto";
 }
 
+export function resolveHistorySummaryTimeoutMs(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1_000 && value <= 300_000
+    ? value
+    : 15_000;
+}
+
+export function loadHistorySummaryTimeoutMs(path: string = defaultConfigPath()): number {
+  const env = process.env.JUPITER_HISTORY_SUMMARY_TIMEOUT_MS;
+  return resolveHistorySummaryTimeoutMs(
+    env === undefined ? readConfig(path).historySummaryTimeoutMs : Number(env),
+  );
+}
+
 /** Compatibility no-op: runtime clients receive endpoints explicitly and config secrets never enter process.env. */
 export function bridgeEndpointEnv(path: string = defaultConfigPath()): void {
   void path;
@@ -1755,6 +1777,34 @@ export function loadLibraryRetrievalMode(path: string = defaultConfigPath()): Li
   return raw === "off" || raw === "always" || raw === "on_demand" ? raw : "on_demand";
 }
 
+export type ComputerUsePermissionMode = "standard" | "bounded" | "unrestricted";
+
+export function loadComputerUseEnabled(path: string = defaultConfigPath()): boolean {
+  return readConfig(path).computerUse?.enabled === true;
+}
+
+export function saveComputerUseEnabled(on: boolean, path: string = defaultConfigPath()): void {
+  const cfg = readConfig(path);
+  cfg.computerUse = { ...(cfg.computerUse ?? {}), enabled: on };
+  writeConfig(cfg, path);
+}
+
+export function loadComputerUsePermissionMode(
+  path: string = defaultConfigPath(),
+): ComputerUsePermissionMode {
+  const mode = readConfig(path).computerUse?.permissionMode;
+  return mode === "bounded" || mode === "unrestricted" ? mode : "standard";
+}
+
+export function saveComputerUsePermissionMode(
+  mode: ComputerUsePermissionMode,
+  path: string = defaultConfigPath(),
+): void {
+  const cfg = readConfig(path);
+  cfg.computerUse = { ...(cfg.computerUse ?? {}), permissionMode: mode };
+  writeConfig(cfg, path);
+}
+
 export function saveLibraryRetrievalMode(
   mode: LibraryRetrievalMode,
   path: string = defaultConfigPath(),
@@ -1794,6 +1844,19 @@ export function loadProcessCardsDefaultOpen(path: string = defaultConfigPath()):
 export function saveProcessCardsDefaultOpen(on: boolean, path: string = defaultConfigPath()): void {
   const cfg = readConfig(path);
   cfg.thread = { ...(cfg.thread ?? {}), processCardsDefaultOpen: on };
+  writeConfig(cfg, path);
+}
+
+export function loadPromptPredictionsEnabled(path: string = defaultConfigPath()): boolean {
+  return readConfig(path).thread?.promptPredictionsEnabled !== false;
+}
+
+export function savePromptPredictionsEnabled(
+  on: boolean,
+  path: string = defaultConfigPath(),
+): void {
+  const cfg = readConfig(path);
+  cfg.thread = { ...(cfg.thread ?? {}), promptPredictionsEnabled: on };
   writeConfig(cfg, path);
 }
 

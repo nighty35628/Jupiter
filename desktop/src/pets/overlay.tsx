@@ -16,6 +16,7 @@ import { setLang, t, useLang } from "../i18n";
 import { I } from "../icons";
 import { PetNativeContextMenu } from "./native-context-menu";
 import { PET_DRAG_THRESHOLD, petDragActivity, petDragDistance, petRollAngle } from "./overlay-drag";
+import { usePetOverlayInput } from "./overlay-input";
 import {
   PET_OVERLAY_ACTION_EVENT,
   PET_OVERLAY_OPEN_TASK_EVENT,
@@ -116,6 +117,15 @@ export function PetOverlayApp() {
   const [dragAngle, setDragAngle] = useState(0);
   const [transientActivity, setTransientActivity] = useState<PetVisualActivity | null>(null);
   const dragRef = useRef<DragSession | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const nativeMenuOpenRef = useRef(false);
+  const hitTest = usePetOverlayInput(
+    overlayWindow,
+    rootRef,
+    Boolean(snapshot?.enabled),
+    snapshot?.pet.spriteUrl,
+    () => dragRef.current !== null || nativeMenuOpenRef.current,
+  );
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const positionRef = useRef<{ x: number; y: number } | null>(null);
   const scaleFactorRef = useRef(1);
@@ -244,7 +254,7 @@ export function PetOverlayApp() {
   }, [playTransient, primary.completionOutcome, primary.completionSequence, primary.tabId]);
 
   useEffect(() => {
-    if (activeActivities.length <= 1) setTrayOpen(false);
+    if (activeActivities.length === 0) setTrayOpen(false);
   }, [activeActivities.length]);
 
   const flushWindowPosition = useCallback(async () => {
@@ -328,10 +338,12 @@ export function PetOverlayApp() {
   const openContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     if ((event.target as Element).closest(".pet-context-menu")) return;
+    if (!hitTest(event.clientX, event.clientY)) return;
     clearTransient();
     setTrayOpen(false);
     const nativeMenu = nativeContextMenuRef.current;
     if (nativeMenu && !nativeContextMenuFailed) {
+      nativeMenuOpenRef.current = true;
       void nativeMenu
         .show({
           activeTabId,
@@ -354,6 +366,9 @@ export function PetOverlayApp() {
               window.innerHeight || PET_OVERLAY_HEIGHT,
             ),
           );
+        })
+        .finally(() => {
+          nativeMenuOpenRef.current = false;
         });
       return;
     }
@@ -405,6 +420,7 @@ export function PetOverlayApp() {
 
   const beginDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || !positionRef.current) return;
+    if (!hitTest(event.clientX, event.clientY)) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     clearTransient();
@@ -450,7 +466,6 @@ export function PetOverlayApp() {
       playTransient("jumping", 620);
     } else if (!cancelled) {
       playTransient("waving", 720);
-      openTask(primary.tabId);
     }
   };
 
@@ -466,6 +481,7 @@ export function PetOverlayApp() {
   return (
     <PetErrorBoundary key={snapshot.pet.id}>
       <div
+        ref={rootRef}
         className="pet-overlay-root"
         data-activity={visualActivity}
         data-status={primary.status}
@@ -480,11 +496,8 @@ export function PetOverlayApp() {
             type="button"
             className="pet-status-bubble"
             data-status={primary.status}
-            aria-expanded={activeActivities.length > 1 ? trayOpen : undefined}
-            onClick={() => {
-              if (activeActivities.length > 1) setTrayOpen((open) => !open);
-              else openTask(primary.tabId);
-            }}
+            aria-expanded={trayOpen}
+            onClick={() => setTrayOpen((open) => !open)}
           >
             <span className="pet-status-dot" aria-hidden="true" />
             <span className="pet-status-copy">
@@ -497,7 +510,7 @@ export function PetOverlayApp() {
           </button>
         ) : null}
 
-        {trayOpen && activeActivities.length > 1 ? (
+        {trayOpen && activeActivities.length > 0 ? (
           <ul className="pet-activity-tray" aria-label={t("pets.activityTray")}>
             {activeActivities.map((activity) => (
               <li key={activity.tabId}>
@@ -590,14 +603,14 @@ export function PetOverlayApp() {
         <button
           type="button"
           className="pet-overlay-actor"
-          aria-label={t("pets.openTask")}
+          aria-label={t("pets.contextInteract")}
           title={t("pets.dragHint")}
           onPointerDown={beginDrag}
           onPointerMove={continueDrag}
           onPointerUp={(event) => finishDrag(event)}
           onPointerCancel={(event) => finishDrag(event, true)}
           onClick={(event) => {
-            if (event.detail === 0) openTask(primary.tabId);
+            if (event.detail === 0) playTransient("waving", 720);
           }}
         >
           <PetSprite

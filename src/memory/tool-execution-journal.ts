@@ -24,7 +24,9 @@ type ToolExecutionOutcome =
   | "rejected_before_execution"
   | "blocked_before_execution"
   | "interrupted_before_execution"
-  | "unknown_after_restart";
+  | "unknown_after_restart"
+  | "unknown_after_transport"
+  | "unknown_after_cancel";
 
 interface ToolExecutionRecordBase {
   version: typeof TOOL_EXECUTION_JOURNAL_VERSION;
@@ -93,7 +95,25 @@ export interface ToolExecutionRecovery {
   turn: number;
   callId: string;
   toolName: string;
-  outcome: "interrupted_before_execution" | "unknown_after_restart";
+  outcome:
+    | "interrupted_before_execution"
+    | "unknown_after_restart"
+    | "unknown_after_transport"
+    | "unknown_after_cancel";
+}
+
+/** Read the explicit uncertainty marker emitted by transport-backed tools. */
+export function toolExecutionOutcomeFromResult(
+  result: string,
+): "unknown_after_transport" | "unknown_after_cancel" | undefined {
+  try {
+    const value = JSON.parse(result) as { executionOutcome?: unknown };
+    if (value.executionOutcome === "unknown_after_transport") return value.executionOutcome;
+    if (value.executionOutcome === "unknown_after_cancel") return value.executionOutcome;
+  } catch {
+    // Most tools return plain text; only structured uncertainty envelopes matter here.
+  }
+  return undefined;
 }
 
 function sha256(value: string): string {
@@ -160,7 +180,9 @@ function isRecord(value: unknown): value is ToolExecutionJournalRecord {
     record.outcome === "rejected_before_execution" ||
     record.outcome === "blocked_before_execution" ||
     record.outcome === "interrupted_before_execution" ||
-    record.outcome === "unknown_after_restart"
+    record.outcome === "unknown_after_restart" ||
+    record.outcome === "unknown_after_transport" ||
+    record.outcome === "unknown_after_cancel"
   );
 }
 
@@ -406,6 +428,13 @@ function recoveryToolResult(record: ToolExecutionJournalRecord): string {
     return JSON.stringify({
       error:
         "Jupiter restarted after this tool began. Its outcome is unknown. Do not retry automatically; inspect current state or ask the user before repeating side effects.",
+      recovery: record.outcome,
+    });
+  }
+  if (record.outcome === "unknown_after_transport" || record.outcome === "unknown_after_cancel") {
+    return JSON.stringify({
+      error:
+        "The transport did not confirm this tool result. Do not retry automatically; inspect current state before repeating a side effect.",
       recovery: record.outcome,
     });
   }

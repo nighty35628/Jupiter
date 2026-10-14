@@ -10,6 +10,13 @@ export interface EventBase {
   id: EventId;
   ts: string;
   turn: number;
+  requestId?: string;
+  localCallId?: string;
+  providerCallId?: string;
+  toolCallIndex?: number;
+  outputChars?: number;
+  reasoningChars?: number;
+  toolArgsChars?: number;
 }
 
 export interface UserMessageEvent extends EventBase {
@@ -54,6 +61,18 @@ export interface ToolPreparingEvent extends EventBase {
   type: "tool.preparing";
   callId: string;
   name: string;
+  toolCallArgsChars?: number;
+  toolCallReadyCount?: number;
+}
+
+/** Numeric-only progress; never contains raw partial argument JSON. */
+export interface ToolProgressEvent extends EventBase {
+  type: "tool.progress";
+  callId: string;
+  name: string;
+  phase: "preparing" | "running";
+  toolCallArgsChars?: number;
+  toolCallReadyCount?: number;
 }
 
 export interface ToolIntentEvent extends EventBase {
@@ -83,6 +102,8 @@ export interface ToolResultEvent extends EventBase {
   output: string;
   truncated?: boolean;
   durationMs: number;
+  terminalState?: "completed" | "failed" | "dropped" | "cancelled";
+  executed?: boolean;
 }
 
 export interface ToolCallEvent extends EventBase {
@@ -244,6 +265,7 @@ export type Event =
   | ModelDeltaEvent
   | ModelFinalEvent
   | ToolPreparingEvent
+  | ToolProgressEvent
   | ToolIntentEvent
   | ToolDispatchedEvent
   | ToolDeniedEvent

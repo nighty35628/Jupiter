@@ -1,5 +1,6 @@
 import type { ImageAttachment } from "../attachments/types.js";
 import type { Usage } from "../client.js";
+import { type JupiterHelpContext, prepareHelpContext } from "../help/index.js";
 import { costUsd } from "../telemetry/stats.js";
 import type { ChatMessage } from "../types.js";
 
@@ -66,6 +67,8 @@ export async function runDesktopLightAsk(args: {
   reasoningEffort?: import("../config.js").ReasoningEffort;
   prefixHash?: string;
   text: string;
+  helpContext?: JupiterHelpContext | (() => JupiterHelpContext);
+  onHelpTopic?: (topic?: string) => void;
   attachments?: ImageAttachment[];
   turn: number;
   clientId?: string;
@@ -105,6 +108,15 @@ export async function runDesktopLightAsk(args: {
     reasoningEffort: args.reasoningEffort ?? "low",
     prefixHash: args.prefixHash ?? "ask-light",
   });
+  const context = typeof args.helpContext === "function" ? args.helpContext() : args.helpContext;
+  const prepared = prepareHelpContext(text, {
+    surface: "desktop",
+    mode: "Ask",
+    model: args.model,
+    provider: args.client.providerId,
+    ...context,
+  });
+  args.onHelpTopic?.(prepared.nextTopic);
   const response = await args.client.chat({
     model: args.model,
     messages: [
@@ -114,6 +126,7 @@ export async function runDesktopLightAsk(args: {
         content: text,
         ...(args.attachments?.length ? { attachments: args.attachments } : {}),
       },
+      ...(prepared.content ? [{ role: "system" as const, content: prepared.content }] : []),
     ],
     tools: [],
     thinking: "disabled",

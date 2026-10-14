@@ -529,8 +529,7 @@ describe("CacheFirstLoop (non-streaming)", () => {
       { content: "", tool_calls: [{ ...dupCall, id: "c2" }] },
       { content: "", tool_calls: [{ ...dupCall, id: "c3" }] },
       { content: "", tool_calls: [{ ...dupCall, id: "c4" }] },
-      { content: "", tool_calls: [{ ...dupCall, id: "c5" }] },
-      { content: "i would summarize but the harness should override me." },
+      { content: "The probe completed once. Further duplicate probes were suppressed." },
     ];
     const client = makeClient(responses);
     const loop = new CacheFirstLoop({

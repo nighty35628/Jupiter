@@ -315,6 +315,9 @@ export const AssistantMsg = memo(function AssistantMsg({
     idx: number,
     expanded?: boolean,
   ): ReactNode {
+    if (s.phase === "preparing" || s.terminalState === "cancelled" || s.terminalState === "dropped") {
+      return <ToolCard key={idx} name={s.name} phase={s.phase} argsChars={s.argsChars} terminalState={s.terminalState} result={s.result} ok={s.ok} defaultOpen={expanded ?? false} />;
+    }
     const skillUsage = deriveRunSkillUsage(s.name, s.args);
     if (skillUsage) {
       const status: "running" | "done" | "failed" =

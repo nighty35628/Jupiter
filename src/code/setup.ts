@@ -14,12 +14,14 @@ import {
   readConfig,
   searchEnabled,
 } from "../config.js";
+import type { JupiterHelpContext } from "../help/index.js";
 import { bootstrapSemanticSearchInCodeMode } from "../index/semantic/tool.js";
 import { createProviderClient, resolveProviderSnapshot } from "../provider-runtime.js";
 import { ToolRegistry } from "../tools.js";
 import { registerChoiceTool } from "../tools/choice.js";
 import { registerCodeQueryTools } from "../tools/code-query.js";
 import { registerFilesystemTools } from "../tools/filesystem.js";
+import { registerHelpTool } from "../tools/help.js";
 import { registerJavaSourceTool } from "../tools/java-source.js";
 import { JobRegistry } from "../tools/jobs.js";
 import { registerLibraryTools } from "../tools/library.js";
@@ -39,6 +41,9 @@ import { registerTodoTool } from "../tools/todo.js";
 import { registerWebTools } from "../tools/web.js";
 
 export interface CodeToolsetOpts {
+  helpContext?: () => JupiterHelpContext;
+  effectiveEditMode?: () => EditMode;
+  beforeCommandExecute?: (command: string, signal?: AbortSignal) => Promise<void>;
   rootDir: string;
   /** Override the default `~/.jupiter/config.json` lookup — primarily for tests that pin a tmp config. */
   configPath?: string;
@@ -65,7 +70,8 @@ export function applyPlanMode(tools: ToolRegistry, editMode: EditMode): void {
 
 export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeToolset> {
   const tools = new ToolRegistry({ rateLimit: loadToolRateLimit() });
-  applyPlanMode(tools, loadEditMode(opts.configPath));
+  registerHelpTool(tools, { helpContext: opts.helpContext ?? (() => ({ surface: "cli" })) });
+  applyPlanMode(tools, opts.effectiveEditMode?.() ?? loadEditMode(opts.configPath));
   const jobs = new JobRegistry();
 
   const outlineThresholdBytes = loadFilesystemOutlineThresholdBytes();
@@ -79,7 +85,8 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
     registerShellTools(tools, {
       rootDir: root,
       extraAllowed: () => loadProjectShellAllowed(root),
-      allowAll: () => loadEditMode() === "yolo",
+      allowAll: () => (opts.effectiveEditMode?.() ?? loadEditMode(opts.configPath)) === "yolo",
+      beforeExecute: opts.beforeCommandExecute,
       jobs,
       onJobsChanged: opts.onJobsChanged,
       sensitivePaths: cfg.sensitivePaths,

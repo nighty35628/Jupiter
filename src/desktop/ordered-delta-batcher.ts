@@ -2,6 +2,7 @@ export interface OrderedWireEvent {
   type: string;
   tabId?: string;
   turn?: number;
+  requestId?: string;
   channel?: string;
   text?: string;
   batchCount?: number;
@@ -44,7 +45,7 @@ export class OrderedDeltaBatcher<T extends OrderedWireEvent> {
       const combined = `${this.pending.text ?? ""}${event.text}`;
       if (combined.length <= this.maxChars) {
         this.pending = {
-          ...this.pending,
+          ...event,
           text: combined,
           batchCount: (this.pending.batchCount ?? 1) + (event.batchCount ?? 1),
         };
@@ -69,7 +70,12 @@ export class OrderedDeltaBatcher<T extends OrderedWireEvent> {
   }
 
   private compatible(left: T, right: T): boolean {
-    return left.tabId === right.tabId && left.turn === right.turn && left.channel === right.channel;
+    return (
+      left.tabId === right.tabId &&
+      left.turn === right.turn &&
+      left.channel === right.channel &&
+      left.requestId === right.requestId
+    );
   }
 
   private arm(): void {

@@ -79,6 +79,8 @@ export function registerSingleMcpTool(
 ): string {
   if (!mcpTool.name) return "";
   const registeredName = `${env.prefix}${mcpTool.name}`;
+  // Reserved host name. Rejected bridges must not acquire unload ownership.
+  if (registeredName === "jupiter_help") return "";
   env.registry.register({
     name: registeredName,
     description: mcpTool.description ?? "",
@@ -96,12 +98,29 @@ export function registerSingleMcpTool(
       // Resolve client at call time via the host indirection so `/mcp reconnect`
       // can swap a fresh client in without re-bridging tools.
       const live = env.host.client;
-      const toolResult = await live.callTool(mcpTool.name, args, {
-        onProgress: env.onProgress
-          ? (info) => env.onProgress!({ toolName: registeredName, ...info })
-          : undefined,
-        signal: ctx?.signal,
-      });
+      let toolResult: CallToolResult;
+      try {
+        toolResult = await live.callTool(mcpTool.name, args, {
+          onProgress: env.onProgress
+            ? (info) => env.onProgress!({ toolName: registeredName, ...info })
+            : undefined,
+          signal: ctx?.signal,
+        });
+      } catch (error) {
+        // A request can reach the driver before its transport fails. Returning
+        // a machine-readable unknown outcome prevents the loop from treating
+        // a timeout/cancel as permission to replay a side effect.
+        const message = error instanceof Error ? error.message : String(error);
+        const executionOutcome = ctx?.signal?.aborted
+          ? "unknown_after_cancel"
+          : "unknown_after_transport";
+        return JSON.stringify({
+          error: `MCP tool ${mcpTool.name} did not return a confirmed result: ${message}`,
+          recovery: "unknown",
+          executionOutcome,
+          retry: "inspect_current_state_before_repeating",
+        });
+      }
       if (env.tracker) env.tracker.record(Date.now() - t0);
       validateResultShape(toolResult);
       if (ctx?.reportImage && !toolResult.isError) {
@@ -219,6 +238,9 @@ export async function bridgeMcpTools(
   for (const mcpTool of listedTools) {
     const registeredName = registerSingleMcpTool(mcpTool, env);
     if (registeredName) result.registeredNames.push(registeredName);
+    else if (`${prefix}${mcpTool.name}` === "jupiter_help") {
+      result.skipped.push({ name: mcpTool.name, reason: "reserved host tool name" });
+    }
   }
   return { ...result, env };
 }
@@ -231,7 +253,11 @@ export interface FlattenOptions {
 export function flattenMcpResult(result: CallToolResult, opts: FlattenOptions = {}): string {
   validateResultShape(result);
   const parts = result.content.map(blockToString);
-  const joined = parts.join("\n").trim();
+  const structured =
+    result.structuredContent === undefined
+      ? ""
+      : `\nStructured result (machine-readable):\n${JSON.stringify(result.structuredContent)}`;
+  const joined = `${parts.join("\n")}${structured}`.trim();
   const prefixed = result.isError ? `ERROR: ${joined || "(no error message from server)"}` : joined;
   return opts.maxChars ? truncateForModel(prefixed, opts.maxChars) : prefixed;
 }
@@ -265,6 +291,9 @@ function validateResultShape(result: CallToolResult): void {
           `MCP server returned result.content[${i}] with non-string mimeType (${typeof block.mimeType})`,
         );
     }
+  }
+  if (_isError !== undefined && typeof _isError !== "boolean") {
+    throw new Error("MCP server returned result.isError with non-boolean value");
   }
 }
 

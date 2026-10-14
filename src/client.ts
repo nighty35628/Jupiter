@@ -13,8 +13,14 @@ import {
   isStrictOfficialDeepSeekEndpoint,
   normalizeOfficialDeepSeekEffort,
 } from "./provider-capabilities.js";
-import { providerHttpErrorFromResponse } from "./provider-http-error.js";
+import {
+  ProviderHttpError,
+  providerHttpErrorFromResponse,
+  sanitizeProviderErrorText,
+} from "./provider-http-error.js";
 import { type RetryOptions, fetchWithRetry } from "./retry.js";
+import { resolveContextTokens } from "./telemetry/stats.js";
+import { countRequestTokens } from "./tokenizer.js";
 import type { ChatMessage, ChatRequestOptions, RawUsage, ToolCall, ToolSpec } from "./types.js";
 
 export class Usage {
@@ -369,7 +375,11 @@ export class DeepSeekClient {
     const hasImages = opts.messages.some(
       (message) => message.attachments?.length || message.sourceAttachments?.length,
     );
-    let files = hasImages && this.officialDeepSeek && this.imageTransport === "auto";
+    let files =
+      hasImages &&
+      this.supportsImages(opts.model) &&
+      this.officialDeepSeek &&
+      this.imageTransport === "auto";
     let recoveredFile = false;
     const budget = {
       attempts: 0,
@@ -383,6 +393,7 @@ export class DeepSeekClient {
             supportsImages: this.supportsImages(opts.model),
             store: this.attachmentStore,
             signal,
+            activeImageIds: opts.activeImageIds,
             ...(files
               ? {
                   fileForImage: (_image, data, mime) => this.imageFiles.resolve(data, mime, signal),
@@ -403,7 +414,35 @@ export class DeepSeekClient {
           throw error;
         }
       } else this.lastImageRequest = null;
-      const body = stringifyJsonTransport(this.buildPayload(opts, stream, messages));
+      const payload = this.buildPayload(opts, stream, messages);
+      let imageTokens = 0;
+      const estimatedMessages = (payload.messages as WireMessage[]).map((message) => {
+        if (!Array.isArray(message.content)) return message as ChatMessage;
+        const content = message.content
+          .map((part) => {
+            if (part.type === "text") return part.text;
+            imageTokens += 448;
+            return "";
+          })
+          .join("\n");
+        return { ...message, content };
+      });
+      const estimatedTokens =
+        (await countRequestTokens(
+          estimatedMessages,
+          opts.tools,
+          this.dialect === "deepseek",
+          signal,
+        )) + imageTokens;
+      const contextTokens = resolveContextTokens(opts.model);
+      if (estimatedTokens > contextTokens)
+        throw Object.assign(
+          new Error(
+            `Request exceeds the model context window (~${estimatedTokens} input tokens / ${contextTokens}). Use a larger-context model or reduce the input; original history is retained.`,
+          ),
+          { status: 400, code: "CONTEXT_WINDOW_EXCEEDED" },
+        );
+      const body = stringifyJsonTransport(payload);
       if (hasImages && Buffer.byteLength(body) > 40 * 1024 * 1024)
         throw Object.assign(
           new Error(
@@ -479,7 +518,37 @@ export class DeepSeekClient {
     }
   }
 
+  private diagnosticError(error: unknown, depth = 0): Error {
+    const source = error instanceof Error ? error : new Error(String(error));
+    const sanitize = (value: string) =>
+      sanitizeProviderErrorText(value, { knownSecrets: [this.apiKey], maxChars: 4096 });
+    if (source instanceof ProviderHttpError) {
+      source.stack = source.stack ? sanitize(source.stack) : undefined;
+      return source;
+    }
+    const safe = new Error(sanitize(source.message));
+    safe.name = sanitize(source.name);
+    safe.stack = source.stack ? sanitize(source.stack) : undefined;
+    for (const key of ["status", "code", "phase", "retryable"] as const) {
+      const value = (source as unknown as Record<string, unknown>)[key];
+      if (key in source && value === undefined) Object.assign(safe, { [key]: undefined });
+      if (typeof value === "number" || typeof value === "boolean" || typeof value === "string")
+        Object.assign(safe, { [key]: typeof value === "string" ? sanitize(value) : value });
+    }
+    if (source.cause !== undefined && depth < 3)
+      safe.cause = this.diagnosticError(source.cause, depth + 1);
+    return safe;
+  }
+
   async chat(opts: ChatRequestOptions): Promise<ChatResponse> {
+    try {
+      return await this.chatUnsafe(opts);
+    } catch (error) {
+      throw this.diagnosticError(error);
+    }
+  }
+
+  private async chatUnsafe(opts: ChatRequestOptions): Promise<ChatResponse> {
     const ctrl = new AbortController();
     const timer = setTimeout(
       () => ctrl.abort(new Error(`DeepSeek request timed out after ${this.timeoutMs}ms`)),
@@ -532,6 +601,14 @@ export class DeepSeekClient {
   }
 
   async *stream(opts: ChatRequestOptions): AsyncGenerator<StreamChunk> {
+    try {
+      yield* this.streamUnsafe(opts);
+    } catch (error) {
+      throw this.diagnosticError(error);
+    }
+  }
+
+  private async *streamUnsafe(opts: ChatRequestOptions): AsyncGenerator<StreamChunk> {
     const ctrl = new AbortController();
     const timer = setTimeout(
       () => ctrl.abort(new Error(`DeepSeek stream timed out after ${this.timeoutMs}ms`)),

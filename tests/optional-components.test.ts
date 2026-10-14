@@ -69,6 +69,7 @@ describe("detectOptionalComponents", () => {
     expect(installHintFor("ffmpeg", "darwin")).toContain("brew install ffmpeg");
     expect(installHintFor("ffmpeg", "win32")).toContain("winget install");
     expect(installHintFor("ffmpeg", "linux")).toContain("apt install ffmpeg");
+    expect(installHintFor("cua-driver", "darwin")).toContain("Cua Driver");
   });
 
   it("returns stable component ids for the settings UI", () => {
@@ -88,6 +89,39 @@ describe("detectOptionalComponents", () => {
       "ffmpeg",
       "tesseract",
       "pandoc",
+      "cua-driver",
     ]);
+  });
+
+  it("detects Cua Driver without launching it", () => {
+    const components = detectOptionalComponents({
+      platform: "darwin",
+      env: { PATH: "/opt/cua/bin" },
+      exists: () => false,
+      which: (command) => (command === "cua-driver" ? "/opt/cua/bin/cua-driver" : null),
+      runVersion: vi.fn(() => "cua-driver 0.28.0"),
+    });
+    expect(components.find((component) => component.id === "cua-driver")).toMatchObject({
+      state: "available",
+      capability: "computer-use",
+      executablePath: "/opt/cua/bin/cua-driver",
+      version: "cua-driver 0.28.0",
+    });
+  });
+
+  it("finds Windows executable extensions through PATH", () => {
+    const driverPath = "C:\\Tools\\cua-driver.exe";
+    const components = detectOptionalComponents({
+      platform: "win32",
+      env: { PATH: "C:\\Tools" },
+      exists: (path) => path === driverPath,
+      runVersion: (path) => (path === driverPath ? "cua-driver 0.28.0" : null),
+    });
+
+    expect(components.find((component) => component.id === "cua-driver")).toMatchObject({
+      state: "available",
+      executablePath: driverPath,
+      version: "cua-driver 0.28.0",
+    });
   });
 });

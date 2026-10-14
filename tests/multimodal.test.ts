@@ -17,6 +17,7 @@ import {
   resolveModelCapability,
 } from "../src/provider-capabilities.js";
 import { ToolRegistry } from "../src/tools.js";
+import type { ChatMessage } from "../src/types.js";
 
 let root: string;
 let store: AttachmentStore;
@@ -116,7 +117,45 @@ describe("image capability and wire projection", () => {
     expect(JSON.stringify(projected.messages)).not.toContain("clientId");
     expect(JSON.stringify(projected.messages)).toContain("data:image/jpeg;base64,");
     expect(projected.snapshot.sent).toHaveLength(2);
+    expect(projected.snapshot.sentVariants[image.id]).toMatchObject({
+      width: expect.any(Number),
+      height: expect.any(Number),
+      bytes: expect.any(Number),
+      mime: expect.any(String),
+    });
   });
+  it("bounds desktop screenshots within a long user turn without dropping user images or history", async () => {
+    const image = await fixture();
+    const messages: ChatMessage[] = [
+      { role: "user", content: "test desktop", attachments: [image] },
+    ];
+    for (let i = 0; i < 35; i++) {
+      messages.push({
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: `shot-${i}`,
+            type: "function",
+            function: { name: "computer_use_get_desktop_state", arguments: "{}" },
+          },
+        ],
+      });
+      messages.push({
+        role: "tool",
+        tool_call_id: `shot-${i}`,
+        content: `snapshot ${i}`,
+        attachments: [image],
+      });
+    }
+    const before = JSON.stringify(messages);
+    const projected = await projectImages(messages, { supportsImages: true, store });
+    expect(projected.snapshot.sent).toHaveLength(4);
+    expect(projected.snapshot.omitted).toHaveLength(32);
+    expect(JSON.stringify(projected.messages[0])).toContain("data:image/");
+    expect(JSON.stringify(messages)).toBe(before);
+  });
+
   it("omits only older images and reports every omission", async () => {
     const image = await fixture();
     const messages = Array.from({ length: 35 }, (_, index) => ({

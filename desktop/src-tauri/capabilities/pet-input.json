@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pet-input",
+  "description": "Allow only the pet overlay to pass transparent pointer regions through to other apps",
+  "windows": ["pet-overlay"],
+  "permissions": ["core:window:allow-cursor-position", "core:window:allow-set-ignore-cursor-events"]
+}

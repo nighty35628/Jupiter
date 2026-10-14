@@ -244,7 +244,8 @@ fn create_pet_overlay(app: &mut tauri::App) -> tauri::Result<()> {
     .focusable(false)
     .focused(false)
     .visible(false)
-    .build()?;
+    .build()?
+    .set_ignore_cursor_events(true)?;
     Ok(())
 }
 

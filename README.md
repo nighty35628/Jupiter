@@ -68,7 +68,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 桌面安装包发布在 GitHub Releases：
 
-- 当前版本：`desktop-v1.0.9`，2026-09-18 发布
+- 当前版本：`desktop-v1.0.10`，2026-10-14 发布
 - [最新版本](https://github.com/nighty35628/Jupiter/releases/latest)
 - [全部版本](https://github.com/nighty35628/Jupiter/releases)
 
@@ -141,6 +141,13 @@ reasoning 和缓存统计等扩展字段；普通兼容端点不会收到这些�
 Web Beta 默认只监听 `127.0.0.1`，复用当前 Desktop 界面、会话与 agent 运行时。浏览器文件通过授权工作区和上传/下载流转；多个已配对设备可以观察，但同一时刻只有一个设备持有写入租约。Desktop 与 Web 同时打开同一会话时也会启用跨进程单写保护。
 
 局域网使用 `--access lan`；公网使用 `--access public`，并且必须放在带身份验证的 HTTPS 反向代理后，Jupiter 本身仍只绑定回环地址。公网模式固定关闭终端、MCP 写入、Git 写入和密钥写入。完整命令、能力差异与代理示例见 [Web Beta 访问指南](docs/web-beta.md)。
+
+### 1.0.10 新功能
+
+- **Desktop Computer Use Beta：** 在设置中开启后，Agent 可通过 Cua Driver 观察桌面、点击、滚动和输入。需要支持图片的模型、可用驱动及系统授权；默认关闭，CLI 和 Web 不提供原生桌面控制。
+- **下一条消息预测：** 默认开启，可在设置中关闭。对话结束后可生成短建议，Tab 或接受按钮将其填入草稿，Esc 可忽略。建议不会自动发送；辅助请求产生 API 费用并有独立用量记录，输入、会话切换和取消操作会使过期结果失效。
+- **内置官方帮助：** `jupiter_help` 读取随安装包附带的版本化手册，覆盖模式、会话、文件、资料库、浏览器、技能、MCP 和 Computer Use，并结合当前运行状态说明可用能力。
+- **可靠性修复：** 改善工具调用进度与终态、取消和会话切换、上下文压缩、供应商设置及诊断脱敏；桌宠透明区域支持鼠标穿透，状态气泡可展开任务列表。
 
 ### 图片对话 Beta
 
@@ -247,7 +254,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 Desktop installers are published on GitHub Releases:
 
-- Current version: `desktop-v1.0.9`, released on 2026-09-18
+- Current version: `desktop-v1.0.10`, released on 2026-10-14
 - [Latest Release](https://github.com/nighty35628/Jupiter/releases/latest)
 - [All Releases](https://github.com/nighty35628/Jupiter/releases)
 
@@ -324,6 +331,13 @@ DeepSeek prices to third-party usage when pricing is unknown.
 Web Beta listens on `127.0.0.1` by default and reuses the current Desktop UI, sessions, and agent runtime. Browser files flow through approved workspaces and upload/download APIs. Multiple paired devices may observe, while only one device holds the writer lease at a time. A cross-process single-writer lock also protects a session opened by Desktop and Web simultaneously.
 
 Use `--access lan` on a private network. Public access uses `--access public` behind an authenticated HTTPS reverse proxy while Jupiter remains bound to loopback. Public mode always disables terminals, MCP writes, Git writes, and secret writes. See the [Web Beta access guide](docs/web-beta.md) for commands, capability differences, and proxy configuration.
+
+### New in 1.0.10
+
+- **Desktop Computer Use Beta:** When enabled in settings, Agent can observe, click, scroll and type through Cua Driver. It requires an image-capable model, an available driver and OS permissions. It is off by default; CLI and Web do not expose native desktop control.
+- **Next-message prediction:** Enabled by default and switchable in settings. A completed conversation can produce a short suggestion. Tab or the accept button copies it into the draft; Esc dismisses it. Accepting never sends it automatically. Auxiliary requests incur API costs with separate usage accounting, and typing, switching sessions or cancelling invalidates stale results.
+- **Packaged official help:** `jupiter_help` reads the versioned manual shipped with the app, covering modes, sessions, files, libraries, browser, skills, MCP and Computer Use, with current runtime capability facts.
+- **Reliability fixes:** Improves tool progress and terminal states, cancellation, session switching, compaction, provider settings and diagnostic redaction. Transparent pet areas pass mouse input through, and the status bubble opens the task list.
 
 ### Image Conversations Beta
 

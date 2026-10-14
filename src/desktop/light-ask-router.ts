@@ -1,5 +1,8 @@
+import { isHostActionRequest, prepareHelpContext } from "../help/index.js";
+
 export interface LightAskRouteOptions {
   planOneShot?: boolean;
+  recentTopic?: string;
 }
 
 const MAX_LIGHT_ASK_CHARS = 240;
@@ -26,6 +29,8 @@ export function shouldUseLightAskForDesktopInput(
   const text = input.trim();
   if (!text) return false;
   if (text.length > MAX_LIGHT_ASK_CHARS) return false;
+  if (isHostActionRequest(text)) return false;
+  if (prepareHelpContext(text, { recentTopic: opts.recentTopic }).isHelp) return true;
   if (AGENT_INTENT_PATTERNS.some((pattern) => pattern.test(text))) return false;
   if (CASUAL_HINT_PATTERNS.some((pattern) => pattern.test(text))) return true;
   if (!/[?？]/.test(text)) return false;

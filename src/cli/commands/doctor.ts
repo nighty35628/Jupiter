@@ -19,7 +19,13 @@ import { t } from "../../i18n/index.js";
 import { indexExists } from "../../index/semantic/builder.js";
 import { checkOllamaStatus } from "../../index/semantic/ollama-launcher.js";
 import { listSessions } from "../../memory/session.js";
-import { detectProxyUrl, matchesNoProxy, resolveNoProxy } from "../../net/proxy.js";
+import {
+  detectProxyUrl,
+  matchesNoProxy,
+  normalizeProxyUrl,
+  resolveNoProxy,
+} from "../../net/proxy.js";
+import { sanitizeDiagnosticUrl, sanitizeProviderErrorText } from "../../provider-http-error.js";
 import { createProviderClient, resolveProviderSnapshot } from "../../provider-runtime.js";
 import { resolveDataPath } from "../../tokenizer.js";
 import { VERSION } from "../../version.js";
@@ -73,7 +79,7 @@ function checkEndpointSource(): Check {
   const sources = inspectEndpointSources();
   const parts = [
     `baseUrl=${sources.baseUrlSource}`,
-    `apiKey=${sources.apiKeySource}${sources.apiKeyPreview ? ` (${sources.apiKeyPreview})` : ""}`,
+    `apiKey=${sources.apiKeySource}${sources.apiKeyPreview ? " ([redacted])" : ""}`,
   ];
   if (sources.shadowedConfigApiKey) {
     parts.push("config apiKey ignored because env baseUrl owns the endpoint tuple");
@@ -107,17 +113,7 @@ function checkProxy(): Check[] {
       },
     ];
   }
-  let redacted = url;
-  try {
-    const u = new URL(url);
-    if (u.username || u.password) {
-      u.username = "***";
-      u.password = "";
-      redacted = u.toString();
-    }
-  } catch {
-    /* not a URL — leave raw */
-  }
+  const redacted = sanitizeDiagnosticUrl(normalizeProxyUrl(url) ?? "");
   const urlSource = cfg.url ? "cfg.proxy.url" : "HTTPS_PROXY";
   if (cfg.disabled) {
     return [
@@ -267,23 +263,27 @@ async function checkConfig(): Promise<Check> {
       id: "config",
       label: "config       ",
       level: "fail",
-      detail: t("doctorErrors.unreadable", { path, message: (err as Error).message }),
+      detail: t("doctorErrors.unreadable", {
+        path,
+        message: sanitizeProviderErrorText((err as Error).message),
+      }),
     };
   }
 }
 
 async function checkApiReach(): Promise<Check> {
-  const provider = resolveProviderSnapshot();
-  const key = provider.apiKey;
-  if (!key) {
-    return {
-      id: "api-reach",
-      label: "api reach    ",
-      level: "warn",
-      detail: "skipped — no api key to test with",
-    };
-  }
+  let key: string | undefined;
   try {
+    key = inspectEndpointSources().apiKey;
+    const provider = resolveProviderSnapshot();
+    if (!key) {
+      return {
+        id: "api-reach",
+        label: "api reach    ",
+        level: "warn",
+        detail: "skipped — no api key to test with",
+      };
+    }
     const client = createProviderClient(provider);
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 8_000);
@@ -331,7 +331,7 @@ async function checkApiReach(): Promise<Check> {
       id: "api-reach",
       label: "api reach    ",
       level: "fail",
-      detail: `${(err as Error).message}`,
+      detail: sanitizeProviderErrorText((err as Error).message, { knownSecrets: key ? [key] : [] }),
     };
   }
 }
@@ -414,7 +414,9 @@ async function checkSessions(): Promise<Check> {
       id: "sessions",
       label: "sessions     ",
       level: "warn",
-      detail: t("doctorErrors.cannotList", { message: (err as Error).message }),
+      detail: t("doctorErrors.cannotList", {
+        message: sanitizeProviderErrorText((err as Error).message),
+      }),
     };
   }
 }
@@ -435,7 +437,9 @@ async function checkHooks(projectRoot: string): Promise<Check> {
       id: "hooks",
       label: "hooks        ",
       level: "warn",
-      detail: t("doctorErrors.parseFailed", { message: (err as Error).message }),
+      detail: t("doctorErrors.parseFailed", {
+        message: sanitizeProviderErrorText((err as Error).message),
+      }),
     };
   }
 }
@@ -470,7 +474,7 @@ async function checkOllama(projectRoot: string): Promise<Check> {
       id: "semantic",
       label: "semantic     ",
       level: "ok",
-      detail: `openai-compat · ${resolved.baseUrl} · model ${resolved.model} · api key configured`,
+      detail: `openai-compat · ${sanitizeDiagnosticUrl(resolved.baseUrl)} · model ${resolved.model} · api key configured`,
     };
   }
   try {
@@ -513,7 +517,9 @@ async function checkOllama(projectRoot: string): Promise<Check> {
       id: "semantic",
       label: "semantic     ",
       level: "warn",
-      detail: t("doctorErrors.probeFailed", { message: (err as Error).message }),
+      detail: t("doctorErrors.probeFailed", {
+        message: sanitizeProviderErrorText((err as Error).message),
+      }),
     };
   }
 }

@@ -41,11 +41,13 @@ export interface ToolEventContext {
 
 export function handleToolEvent(ev: LoopEvent, ctx: ToolEventContext): void {
   ctx.flush();
-  ctx.setOngoingTool(null);
-  ctx.setToolProgress(null);
-  ctx.translator.toolEnd(ev.content);
-
-  ctx.toolStartedAtRef.current = null;
+  const callId = ev.localCallId ?? ev.callId;
+  if (!callId || ctx.translator.isActiveTool(callId)) {
+    ctx.setOngoingTool(null);
+    ctx.setToolProgress(null);
+    ctx.toolStartedAtRef.current = null;
+  }
+  ctx.translator.toolEnd(ev.content, callId);
 
   const lifecycleHint = formatLifecycleRejection(ev.toolName, ev.content);
   if (lifecycleHint) ctx.log.pushInfo(lifecycleHint, "warn");

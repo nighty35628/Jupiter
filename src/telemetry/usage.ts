@@ -41,6 +41,8 @@ export interface UsageRecord {
   cacheMissTokens: number;
   /** Total cost of the turn in USD. */
   costUsd: number;
+  /** False when an auxiliary request has no reliable price or response usage. */
+  costKnown?: boolean;
   /** What the same turn would have cost at Claude Sonnet 4.6 rates. */
   claudeEquivUsd: number;
   /** Absent on legacy records — treat as "turn" when missing. */
@@ -74,6 +76,7 @@ export interface AppendUsageInput {
   model: string;
   providerId?: string;
   costUsdOverride?: number;
+  costKnown?: boolean;
   usage: Usage;
   /** Override the timestamp (tests). */
   now?: number;
@@ -166,6 +169,7 @@ export function appendUsage(input: AppendUsageInput): UsageRecord {
   if (input.kind === "subagent" || input.kind === "auxiliary") record.kind = input.kind;
   if (input.subagent) record.subagent = input.subagent;
   if (input.auxiliary) record.auxiliary = input.auxiliary;
+  if (input.costKnown !== undefined) record.costKnown = input.costKnown;
 
   const path = input.path ?? defaultUsageLogPath();
   try {

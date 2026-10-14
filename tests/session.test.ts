@@ -182,6 +182,15 @@ describe("session persistence", () => {
     expect(listSessions().map((s) => s.name)).toEqual(["visible"]);
   });
 
+  it("listSessions hides empty desktop placeholders", () => {
+    appendSessionMessage("empty-placeholder", { role: "user", content: "temporary" });
+    writeFileSync(sessionPath("empty-placeholder"), "");
+    patchSessionMeta("empty-placeholder", { sessionId: "placeholder" });
+    appendSessionMessage("visible-after-placeholder", { role: "user", content: "x" });
+
+    expect(listSessions().map((s) => s.name)).toEqual(["visible-after-placeholder"]);
+  });
+
   it("listSessions returns metadata sorted by mtime desc", () => {
     appendSessionMessage("alpha", { role: "user", content: "x" });
     appendSessionMessage("beta", { role: "user", content: "y" });
@@ -331,6 +340,16 @@ describe("session persistence", () => {
     expect(deleteSession("gone")).toBe(true);
     expect(existsSync(sessionPath("gone"))).toBe(false);
     expect(deleteSession("gone")).toBe(false);
+  });
+
+  it("deleteSession removes orphaned metadata when the transcript is already gone", () => {
+    patchSessionMeta("orphaned", { sessionId: "orphaned" });
+    expect(existsSync(sessionPath("orphaned"))).toBe(false);
+    expect(existsSync(`${sessionPath("orphaned").replace(/\.jsonl$/, ".meta.json")}`)).toBe(true);
+
+    expect(deleteSession("orphaned")).toBe(true);
+    expect(existsSync(`${sessionPath("orphaned").replace(/\.jsonl$/, ".meta.json")}`)).toBe(false);
+    expect(deleteSession("orphaned")).toBe(false);
   });
 
   it("deleteSession removes the plan-state sidecar too", () => {

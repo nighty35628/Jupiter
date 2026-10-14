@@ -13,7 +13,7 @@ import {
   parseAtQuery,
   rankPickerCandidates,
 } from "../../at-mentions.js";
-import { pickPrimaryBalance } from "../../client.js";
+import { Usage, pickPrimaryBalance } from "../../client.js";
 import type { DeepSeekClient } from "../../client.js";
 import { prepareAutoGitRollbackForEditBlocks } from "../../code/auto-git-rollback.js";
 import { formatAllBlockDiffs } from "../../code/diff-preview.js";
@@ -27,6 +27,7 @@ import {
 } from "../../code/edit-blocks.js";
 import { codeSystemPrompt } from "../../code/prompt.js";
 import { applyPlanMode, buildCodeToolset } from "../../code/setup.js";
+import type { ComputerUseStatus } from "../../computer-use/status.js";
 import {
   DEFAULT_MODEL,
   type DesktopCloseBehavior,
@@ -46,6 +47,8 @@ import {
   loadApiKey,
   loadBaiduApiKey,
   loadBraveApiKey,
+  loadComputerUseEnabled,
+  loadComputerUsePermissionMode,
   loadDeepSeekAutoContinue,
   loadDeepSeekSearchApiKey,
   loadDesktopCloseBehavior,
@@ -65,6 +68,7 @@ import {
   loadPerplexityApiKey,
   loadProcessCardsDefaultOpen,
   loadPromptHistory,
+  loadPromptPredictionsEnabled,
   loadQQConfig,
   loadReasoningEffort,
   loadRecentWorkspaces,
@@ -82,6 +86,8 @@ import {
   webSearchEndpoint as readWebSearchEndpoint,
   webSearchEngine as readWebSearchEngine,
   saveApiKey,
+  saveComputerUseEnabled,
+  saveComputerUsePermissionMode,
   saveDesktopCloseBehavior,
   saveDesktopOpenTabs,
   saveDingTalkConfig,
@@ -94,6 +100,7 @@ import {
   saveModel,
   saveProcessCardsDefaultOpen,
   savePromptHistory,
+  savePromptPredictionsEnabled,
   saveProviderSettings,
   saveReasoningEffort,
   saveShowAiVisibleDetails,
@@ -129,6 +136,7 @@ import {
 import { autoResolveVerdict } from "../../core/pause-policy.js";
 import { runDesktopLightAsk } from "../../desktop/ask-light.js";
 import { writeClipboardText } from "../../desktop/clipboard.js";
+import { DesktopComputerUse, isNativeAppLaunch } from "../../desktop/computer-use.js";
 import {
   dingtalkRemoteCommandBypassesBusy,
   dingtalkRemoteDesktopHelpText,
@@ -163,6 +171,23 @@ import { buildOneShotPlanPrompt } from "../../desktop/one-shot-plan.js";
 import { detectOptionalComponents } from "../../desktop/optional-components.js";
 import { OrderedDeltaBatcher, type OrderedWireEvent } from "../../desktop/ordered-delta-batcher.js";
 import { resolvePlaywrightBrowser } from "../../desktop/playwright-browser.js";
+import {
+  PromptPredictionState,
+  predictionTurnSucceeded,
+} from "../../desktop/prompt-prediction-state.js";
+import { recordPromptPredictionUsage } from "../../desktop/prompt-prediction-usage.js";
+import { predictNextMessage } from "../../desktop/prompt-prediction.js";
+import type {
+  ProviderProbeResult,
+  ProviderSaveOutcome,
+  SettingsSaveResult,
+} from "../../desktop/provider-settings-state.js";
+import {
+  createProviderVersionTracker,
+  probeDesktopProvider,
+  saveDesktopProvider,
+  summarizeSettingsSave,
+} from "../../desktop/provider-settings.js";
 import { classifyDesktopQQIngress } from "../../desktop/qq-ingress.js";
 import {
   parseQQRemoteDesktopCommand,
@@ -211,6 +236,7 @@ import { appendDesktopAssistantFinalUsage } from "../../desktop/usage-log.js";
 import { DingTalkChannel } from "../../dingtalk/channel.js";
 import { loadDotenv } from "../../env.js";
 import { FeishuChannel } from "../../feishu/channel.js";
+import { type JupiterHelpContext, prepareHelpContext } from "../../help/index.js";
 import { type ResolvedHook, formatHookOutcomeMessage, loadHooks, runHooks } from "../../hooks.js";
 import { t } from "../../i18n/index.js";
 import { CacheFirstLoop, ImmutablePrefix, type LoopAbortOptions } from "../../index.js";
@@ -271,6 +297,7 @@ import {
   aggregateUsageHistory,
   readUsageLog,
 } from "../../telemetry/usage.js";
+import { appendUsage } from "../../telemetry/usage.js";
 import { countTokensBounded } from "../../tokenizer.js";
 import type { ChoiceOption } from "../../tools/choice.js";
 import type { SubagentEvent, SubagentSink } from "../../tools/subagent.js";
@@ -327,6 +354,21 @@ export function desktopUserAbortLoopOptions(): LoopAbortOptions | undefined {
   return undefined;
 }
 
+export function abortDesktopTurnControllers(
+  tab: {
+    aborter: AbortController | null;
+    turnAdmission: DesktopTurnAdmission;
+    runtime: { loop: Pick<CacheFirstLoop, "abort"> } | null;
+  },
+  opts: LoopAbortOptions = {},
+): void {
+  tab.aborter?.abort();
+  // Ask and Agent preparation own only the tab signal, not the idle loop's next step.
+  if (tab.turnAdmission.kind === "ask") return;
+  if (tab.turnAdmission.kind === "agent" && !tab.turnAdmission.loopEntered) return;
+  tab.runtime?.loop.abort(opts);
+}
+
 function isAbortSyntheticFinal(content: string | undefined, forcedSummary?: boolean): boolean {
   return forcedSummary === true && /^\[aborted by user \(Esc\) — /.test((content ?? "").trim());
 }
@@ -343,6 +385,8 @@ type WebCommandMetadata = {
 };
 
 type InMessage = { tabId?: string; __web?: WebCommandMetadata } & (
+  | { cmd: "prompt_prediction_get"; completionId: string }
+  | { cmd: "prompt_prediction_dismiss"; completionId: string }
   | { cmd: "attachment_import"; path: string; requestId: string }
   | { cmd: "attachment_draft_refs"; owner: string; revision: number; ids: string[] }
   | {
@@ -368,7 +412,13 @@ type InMessage = { tabId?: string; __web?: WebCommandMetadata } & (
   | { cmd: "session_restore_archived"; name: string }
   | { cmd: "session_delete_archived"; name: string }
   | { cmd: "session_clear_archived" }
-  | { cmd: "session_load"; name: string; openInNewTab?: boolean; requestId?: string }
+  | {
+      cmd: "session_load";
+      name: string;
+      workspaceDir?: string;
+      openInNewTab?: boolean;
+      requestId?: string;
+    }
   | { cmd: "session_turn_load"; name: string; turn: number; requestId: string }
   | {
       cmd: "session_copy";
@@ -431,6 +481,7 @@ type InMessage = { tabId?: string; __web?: WebCommandMetadata } & (
   | {
       cmd: "provider_test";
       requestId: string;
+      expectedProviderVersion?: string;
       baseUrl: string;
       apiKey?: string;
       model: string;
@@ -439,6 +490,8 @@ type InMessage = { tabId?: string; __web?: WebCommandMetadata } & (
   | { cmd: "context_diagnostics_get" }
   | {
       cmd: "settings_save";
+      promptPredictionsEnabled?: boolean;
+      expectedProviderVersion?: string;
       vision?: boolean;
       imageTransport?: "auto" | "inline";
       requestId?: string;
@@ -484,6 +537,8 @@ type InMessage = { tabId?: string; __web?: WebCommandMetadata } & (
       processCardsDefaultOpen?: boolean;
       memoryConfirmWrites?: boolean;
       memoryGlobalEnabled?: boolean;
+      computerUseEnabled?: boolean;
+      computerUsePermissionMode?: "standard" | "bounded" | "unrestricted";
       promptHistory?: string[];
     }
   | { cmd: "qq_status_get" }
@@ -553,8 +608,11 @@ interface NeedsSetupEvent {
 }
 
 interface SettingsEvent {
+  promptPredictionsEnabled?: boolean;
   type: "$settings";
   settingsRevision: number;
+  serverInstanceId: string;
+  providerVersion: string;
   requestId?: string;
   reasoningEffort: import("../../config.js").ReasoningEffort;
   thinkingEnabled: boolean;
@@ -598,6 +656,9 @@ interface SettingsEvent {
       }
     | { state: "unavailable"; reason: "no-browser" };
   optionalComponents?: ReturnType<typeof detectOptionalComponents>;
+  computerUseEnabled?: boolean;
+  computerUsePermissionMode?: "standard" | "bounded" | "unrestricted";
+  computerUseStatus?: ComputerUseStatus;
   skillPackSources?: ReturnType<typeof loadSkillPackSources>;
   webSearchApiKeys?: {
     metaso?: string;
@@ -622,13 +683,7 @@ interface SettingsEvent {
   version: string;
 }
 
-interface ProviderTestResultEvent {
-  type: "$provider_test_result";
-  requestId: string;
-  ok: boolean;
-  message: string;
-  models?: string[];
-}
+type ProviderTestResultEvent = ProviderProbeResult;
 
 export interface QQSettingsEvent {
   type: "$qq_settings";
@@ -1191,6 +1246,8 @@ type UpdateCheckEvent =
  *  block buffering) so every JSON line reaches Rust the moment it's
  *  produced, not whenever the next 8 KB flushes. */
 type EmittableEvent =
+  | { type: "$prompt_prediction_eligible"; completionId: string }
+  | { type: "$prompt_prediction"; completionId: string; text: string | null }
   | { type: "$attachment_result"; requestId: string; attachment?: ImageAttachment; error?: string }
   | KernelEvent
   | { type: "$ready" }
@@ -1228,6 +1285,7 @@ type EmittableEvent =
   | NeedsSetupEvent
   | SettingsEvent
   | ProviderTestResultEvent
+  | SettingsSaveResult
   | QQSettingsEvent
   | FeishuSettingsEvent
   | DingTalkSettingsEvent
@@ -1586,6 +1644,13 @@ function collectWebSearchApiKeyPrefixes(): {
 }
 
 let settingsRevision = 0;
+const providerVersions = createProviderVersionTracker();
+
+let optionalComponentsCache: ReturnType<typeof detectOptionalComponents> | undefined;
+function desktopOptionalComponents(refresh = false): ReturnType<typeof detectOptionalComponents> {
+  if (refresh || !optionalComponentsCache) optionalComponentsCache = detectOptionalComponents();
+  return optionalComponentsCache;
+}
 
 function emitSettings(tab: Tab, requestId?: string): void {
   const provider = resolveProviderSnapshot();
@@ -1595,9 +1660,9 @@ function emitSettings(tab: Tab, requestId?: string): void {
     ? normalizeOfficialDeepSeekEffort(storedReasoningEffort)
     : storedReasoningEffort;
   const editMode = loadDesktopEditMode();
-  if (tab.toolset) applyPlanMode(tab.toolset.tools, editMode);
+  if (tab.toolset && !tab.oneShotPlanActive) applyPlanMode(tab.toolset.tools, editMode);
   const recent = loadRecentWorkspaces().filter((p) => p !== tab.rootDir);
-  const optionalComponents = detectOptionalComponents();
+  const optionalComponents = desktopOptionalComponents();
   const browserResolution = resolvePlaywrightBrowser(optionalComponents);
   const browserComponent = browserResolution
     ? optionalComponents.find(
@@ -1607,7 +1672,10 @@ function emitSettings(tab: Tab, requestId?: string): void {
   emit(
     {
       type: "$settings",
+      promptPredictionsEnabled: loadPromptPredictionsEnabled(),
       settingsRevision,
+      serverInstanceId: providerVersions.serverInstanceId,
+      providerVersion: providerVersions.observe(provider),
       requestId,
       reasoningEffort: displayedReasoningEffort,
       thinkingEnabled: loadThinkingEnabled(),
@@ -1619,9 +1687,7 @@ function emitSettings(tab: Tab, requestId?: string): void {
       editMode,
       budgetUsd: tab.runtime?.loop.budgetUsd ?? null,
       baseUrl: provider.baseUrl,
-      apiKeyPrefix: provider.apiKey
-        ? `${provider.apiKey.slice(0, 6)}…${provider.apiKey.slice(-3)}`
-        : undefined,
+      apiKeyPrefix: provider.apiKey ? "********" : undefined,
       providerDialect: provider.dialectPreference,
       providerLabel: provider.label,
       providerId: provider.id,
@@ -1643,6 +1709,9 @@ function emitSettings(tab: Tab, requestId?: string): void {
           }
         : { state: "unavailable", reason: "no-browser" },
       optionalComponents,
+      computerUseEnabled: loadComputerUseEnabled(),
+      computerUsePermissionMode: loadComputerUsePermissionMode(),
+      computerUseStatus: tab.computerUse?.status(),
       skillPackSources: loadSkillPackSources(),
       webSearchApiKeys: collectWebSearchApiKeyPrefixes(),
       deepseekNativeCredentialStatus: deepSeekNativeCredentialStatus(),
@@ -2104,7 +2173,7 @@ function emitUsageHistory(tab: Tab): void {
 }
 
 function emitOptionalComponents(tab: Tab): void {
-  emit({ type: "$optional_components", items: detectOptionalComponents() }, tab.id);
+  emit({ type: "$optional_components", items: desktopOptionalComponents() }, tab.id);
 }
 
 function emitCompactResult(tab: Tab, result: Omit<CompactResultEvent, "type">): void {
@@ -2391,6 +2460,7 @@ function desktopUnifiedBlockDiff(block: EditBlock): string[] {
 }
 
 interface Tab {
+  prediction?: PromptPredictionState;
   failedLightAsk?: {
     draft: MessageDraft;
     turn: number;
@@ -2411,6 +2481,11 @@ interface Tab {
   /** Empty while bootstrapping; populated together with `toolset`. */
   system: string;
   runtime: RuntimeState | null;
+  computerUse: DesktopComputerUse | null;
+  runtimeRefreshPending?: boolean;
+  pendingModel?: string;
+  recentHelpTopic?: string;
+  injectedHelpTopics?: string[];
   runtimeInitializationError?: string;
   aborter: AbortController | null;
   fileIndex: FileWithStats[] | null;
@@ -2605,10 +2680,100 @@ function buildRuntimeFor(
 }
 
 function replaceRuntimeFor(tab: Tab): void {
+  tab.prediction?.invalidate();
+  if (tab.turnAdmission.running) {
+    tab.runtimeRefreshPending = true;
+    return;
+  }
   const previous = tab.runtime;
   const next = buildRuntimeFor(tab);
   tab.runtime = next;
   previous?.loop.dispose();
+}
+
+async function stopComputerUse(tab: Tab): Promise<void> {
+  await tab.computerUse?.stop();
+}
+
+async function coordinateDesktopCommand(
+  tab: Tab,
+  command: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (process.platform !== "darwin" || !isNativeAppLaunch(command)) return;
+  const computer = tab.computerUse;
+  if (
+    !computer ||
+    ["disabled", "unsupported-surface", "unsupported-model", "driver-missing"].includes(
+      computer.status().state,
+    )
+  )
+    return;
+  signal?.throwIfAborted();
+  await computer.prepareNativeLaunch();
+}
+
+async function startComputerUse(tab: Tab): Promise<void> {
+  if (!tab.toolset) return;
+  tab.computerUse ??= new DesktopComputerUse({
+    owner: `desktop:${tab.id}`,
+    workspaceDir: tab.rootDir,
+    policy: () => ({
+      enabled: loadComputerUseEnabled(),
+      surface: process.env.JUPITER_RUNTIME_SURFACE ?? "desktop",
+      supportsImages:
+        tab.runtime?.loop.client.supportsImages(tab.runtime.loop.model) ??
+        resolveProviderSnapshot({ model: tab.currentModel }).capability.supportsImages,
+      permissionMode: loadComputerUsePermissionMode(),
+    }),
+    detectDriver: () =>
+      desktopOptionalComponents().find((component) => component.id === "cua-driver")
+        ?.executablePath,
+    onChange: () => emitSettings(tab),
+  });
+  tab.computerUse.register(tab.toolset.tools);
+  if (tab.runtime && !tab.turnAdmission.running) {
+    tab.runtime.loop.refreshToolset(tab.system);
+    tab.runtime.ctx.prefixHash = tab.runtime.loop.prefix.fingerprint;
+  }
+}
+
+function desktopHelpContext(tab: Tab, mode = "Agent"): JupiterHelpContext {
+  const status = tab.computerUse?.status();
+  const enabled = loadComputerUseEnabled();
+  const vision =
+    tab.runtime?.loop.client.supportsImages(tab.runtime.loop.model) ??
+    resolveProviderSnapshot({ model: tab.currentModel }).capability.supportsImages;
+  const advertised =
+    tab.runtime?.loop.prefix.toolSpecs.some(
+      (spec) => spec.function.name === "computer_use_get_desktop_state",
+    ) ?? false;
+  return {
+    surface: process.env.JUPITER_RUNTIME_SURFACE === "web-beta" ? "web" : "desktop",
+    mode,
+    model: tab.runtime?.loop.model ?? tab.currentModel,
+    provider: tab.runtime?.loop.client.providerId,
+    computerUseEnabled: enabled,
+    computerUseStatus: {
+      enabled,
+      vision,
+      driver: Boolean(
+        desktopOptionalComponents().find((component) => component.id === "cua-driver")
+          ?.executablePath,
+      ),
+      available:
+        advertised && status ? ["idle", "starting", "ready"].includes(status.state) : false,
+      state: status?.state ?? "disabled",
+      permissions: status?.permissions ?? { screen: "unknown", input: "unknown" },
+      reason:
+        status?.reason ??
+        (!advertised && enabled
+          ? "Computer Use tools are not in this turn's contract; a settings/model change takes effect on the next Agent turn."
+          : undefined),
+    },
+    recentTopic: tab.recentHelpTopic,
+    injectedTopics: tab.injectedHelpTopics,
+  };
 }
 
 function installDesktopEditInterceptor(tab: Tab): void {
@@ -2822,6 +2987,121 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
 
   function activeDesktopTab(): Tab | undefined {
     return (lastActiveTabId ? tabs.get(lastActiveTabId) : undefined) ?? first;
+  }
+
+  function predictionIdentity(tab: Tab) {
+    const loop = tab.runtime?.loop;
+    return loop
+      ? {
+          sessionId: tab.sessionId,
+          bindingId: tab.bindingId,
+          revision: loop.log.revision,
+          providerId: loop.client.providerId ?? "unknown",
+          model: loop.model,
+        }
+      : null;
+  }
+
+  function offerPrediction(tab: Tab): void {
+    const identity = predictionIdentity(tab);
+    if (!identity || !loadPromptPredictionsEnabled() || tab.pendingGateIds.size) return;
+    tab.prediction ??= new PromptPredictionState();
+    emit(
+      { type: "$prompt_prediction_eligible", completionId: tab.prediction.offer(identity) },
+      tab.id,
+    );
+  }
+
+  function requestPrediction(tab: Tab, completionId: string): void {
+    const rt = tab.runtime;
+    const identity = predictionIdentity(tab);
+    if (
+      !rt ||
+      !identity ||
+      !loadPromptPredictionsEnabled() ||
+      tab.aborter ||
+      tab.pendingGateIds.size
+    )
+      return;
+    const slot = tab.prediction;
+    const claim = slot?.claim(completionId, identity);
+    if (!slot || !claim) return;
+    if (claim.kind === "cached") {
+      emit({ type: "$prompt_prediction", completionId, text: claim.text }, tab.id);
+      return;
+    }
+    if (claim.kind !== "start") return;
+    const history = rt.loop.log.toMessages();
+    const session = tab.currentSession;
+    const webFence = activeWebFence;
+    const signal = AbortSignal.any([claim.signal, AbortSignal.timeout(10_000)]);
+    void (async () => {
+      try {
+        const result = await predictNextMessage({
+          client: rt.loop.client,
+          model: identity.model,
+          history,
+          signal,
+          remainingBudgetUsd:
+            rt.loop.budgetUsd === null ? null : rt.loop.budgetUsd - rt.loop.stats.totalCost,
+        });
+        // Already-incurred usage belongs to the original request, even when its suggestion is stale.
+        if (result.usage) {
+          const sourceTab = Array.from(tabs.values()).find(
+            (item) => item.sessionId === identity.sessionId && item.runtime,
+          );
+          try {
+            recordPromptPredictionUsage({
+              stats: sourceTab?.runtime?.loop.stats ?? rt.loop.stats,
+              sessionName: sourceTab?.currentSession ?? session,
+              model: identity.model,
+              providerId: identity.providerId,
+              usage: result.usage,
+              costUsd: result.costUsd,
+              usageComplete: result.usageComplete,
+              completionId,
+            });
+          } catch {
+            process.stderr.write("[prediction] accounting metadata could not be persisted\n");
+          }
+          emitUsageHistory(tab);
+          if (tab.runtime === rt) emitCtxBreakdown(tab);
+        }
+        const current = predictionIdentity(tab);
+        if (
+          signal.aborted ||
+          webFence !== activeWebFence ||
+          !tabs.has(tab.id) ||
+          !loadPromptPredictionsEnabled()
+        ) {
+          slot.invalidate(completionId);
+          return;
+        }
+        if (current && slot.finish(completionId, current, result.text)) {
+          emit({ type: "$prompt_prediction", completionId, text: result.text }, tab.id);
+        }
+      } catch {
+        appendUsage({
+          session,
+          model: identity.model,
+          providerId: identity.providerId,
+          usage: new Usage(),
+          costUsdOverride: 0,
+          costKnown: false,
+          kind: "auxiliary",
+          auxiliary: {
+            provider: identity.providerId,
+            operation: "prompt_prediction",
+            requestId: completionId,
+          },
+        });
+        const current = predictionIdentity(tab);
+        if (!claim.signal.aborted && current && slot.finish(completionId, current, null)) {
+          emit({ type: "$prompt_prediction", completionId, text: null }, tab.id);
+        }
+        process.stderr.write("[prediction] request ended without reliable response usage\n");
+      }
+    })();
   }
 
   function broadcastQQSettings(): void {
@@ -3110,12 +3390,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (!tab.aborter) emit({ type: "$turn_complete" }, tab.id);
       return;
     }
-    const generation = tab.turnAdmission.begin();
+    const generation = tab.turnAdmission.begin("ask");
     if (generation === null) {
       emit({ type: "$error", message: "This tab already has a turn in progress." }, tab.id);
       return;
     }
     const rt = tab.runtime;
+    tab.prediction?.invalidate();
+    let predictionReady = false;
     tab.aborter = new AbortController();
     const model = tab.currentModel;
     const session = tab.currentSession;
@@ -3165,6 +3447,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           reasoningEffort: rt.loop.reasoningEffort,
           prefixHash: rt.ctx.prefixHash,
           text: askText,
+          helpContext: () => desktopHelpContext(tab, "Ask"),
+          onHelpTopic: (topic) => {
+            tab.recentHelpTopic = topic;
+          },
           attachments: images,
           turn,
           clientId,
@@ -3186,6 +3472,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           },
         });
         tab.failedLightAsk = undefined;
+        predictionReady = !!result.content.trim() && !tab.aborter?.signal.aborted;
         tab.aborter = null;
         const sessionName = tab.currentSession;
         if (sessionName) {
@@ -3242,6 +3529,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           tab.aborter = null;
           tab.turnAdmission.finish(generation);
           emit({ type: "$turn_complete" }, tab.id);
+          if (
+            predictionReady &&
+            tab.runtime === rt &&
+            tab.currentSession === session &&
+            tab.currentModel === model
+          )
+            offerPrediction(tab);
         }
       }
     });
@@ -3682,6 +3976,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   }
 
   function applyDesktopModel(tab: Tab, next: string): void {
+    if (tab.turnAdmission.running) {
+      tab.pendingModel = next;
+      saveModel(next);
+      return;
+    }
     tab.currentModel = next;
     saveModel(next);
     if (tab.toolset) {
@@ -4593,6 +4892,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       toolset: null,
       system: "",
       runtime: null,
+      computerUse: null,
       aborter: null,
       fileIndex: null,
       fileIndexBuilding: null,
@@ -4629,6 +4929,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   async function initTabToolset(tab: Tab): Promise<void> {
     const toolset = await buildCodeToolset({
       rootDir: tab.rootDir,
+      effectiveEditMode: loadDesktopEditMode,
+      helpContext: () => desktopHelpContext(tab),
+      beforeCommandExecute: (command, signal) => coordinateDesktopCommand(tab, command, signal),
       onSkillInstalled: () => emitSkills(tab),
       onJobsChanged: () => emitJobs(),
       subagentSink: tab.subagentSink,
@@ -4641,12 +4944,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       libraryRetrievalMode: loadLibraryRetrievalMode(),
       modelId: tab.currentModel,
     });
+    await startComputerUse(tab);
     if (loadApiKey()) {
       bridgeEndpointEnv();
       replaceRuntimeFor(tab);
       tab.runtimeInitializationError = undefined;
       void bridgeTabMcp(tab);
     }
+    emitSettings(tab);
   }
 
   function rotateTabToFreshSession(tab: Tab): string {
@@ -4800,6 +5105,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   async function closeTab(tab: Tab): Promise<void> {
     abortTurn(tab);
     tab.turnAdmission.invalidate();
+    await stopComputerUse(tab);
     tab.runtime?.loop.dispose();
     tab.runtime = null;
     try {
@@ -4838,6 +5144,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     } = {},
   ): Promise<void> {
     if (!tab.runtime) return;
+    await startComputerUse(tab);
     const duplicateTurn = acceptedClientTurn(tab.currentSession, clientId);
     if (duplicateTurn !== undefined) {
       const accepted = tab.runtime.eventizer.emitUserMessage(
@@ -4848,21 +5155,31 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (!tab.aborter) finishDesktopCommand(tab);
       return;
     }
-    const generation = tab.turnAdmission.begin();
+    const generation = tab.turnAdmission.begin("agent");
     if (generation === null) {
       emit({ type: "$error", message: "This tab already has a turn in progress." }, tab.id);
       return;
     }
     const fromFeishu = opts.fromFeishu === true;
+    tab.prediction?.invalidate();
+    let predictionDone = false;
+    let predictionFailed = false;
+    let predictionForced = false;
+    let predictionText = "";
     const fromDingTalk = opts.fromDingTalk === true;
     let acceptedTurn = 0;
+    let computerUseTurn: number | undefined;
+    const computerUse = tab.computerUse;
+    const rt = tab.runtime;
+    const preparationSessionId = tab.sessionId;
+    const preparationBindingId = tab.bindingId;
+    let lastLoopTurn: number | undefined;
     try {
-      const rt = tab.runtime;
-      const preparationSession = tab.currentSession;
       const preparationModel = tab.currentModel;
       const modelText = opts.planOneShot ? buildOneShotPlanPrompt(text) : text;
       tab.currentTurnEditEntry = null;
       tab.aborter = new AbortController();
+      computerUseTurn = computerUse?.beginTurn(tab.aborter.signal);
       tab.failedLightAsk = undefined;
       if (opts.imagePaths?.length && !rt.loop.client.supportsImages(tab.currentModel))
         throw new Error("This model does not support images. Select a vision model first.");
@@ -4874,11 +5191,20 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (
         !tab.turnAdmission.isCurrent(generation) ||
         tab.runtime !== rt ||
-        tab.currentSession !== preparationSession ||
+        tab.sessionId !== preparationSessionId ||
+        tab.bindingId !== preparationBindingId ||
         tab.currentModel !== preparationModel
       )
         return;
       tab.aborter.signal.throwIfAborted();
+      const help = prepareHelpContext(text, desktopHelpContext(tab));
+      tab.recentHelpTopic = help.nextTopic;
+      tab.injectedHelpTopics = help.topics;
+      const requestHelp = help.content
+        ? () =>
+            prepareHelpContext(text, { ...desktopHelpContext(tab), injectedTopics: undefined })
+              .content
+        : undefined;
       if (opts.planOneShot) beginOneShotPlanGuard(tab);
       if (fromQQ) markQQTurnStarted(qqRuntime.routing, tab.id);
       if (fromFeishu) markQQTurnStarted(feishuRuntime.routing, tab.id);
@@ -4945,14 +5271,18 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           if (
             !tab.turnAdmission.isCurrent(generation) ||
             tab.runtime !== rt ||
-            tab.currentSession !== preparationSession
+            tab.sessionId !== preparationSessionId ||
+            tab.bindingId !== preparationBindingId
           )
             return;
+          tab.aborter?.signal.throwIfAborted();
+          tab.turnAdmission.enterAgentLoop(generation);
           let emittedTurnContext = false;
           const loopEvents = opts.resumeApiFailure
-            ? rt.loop.retryFailedModelRequest()
+            ? rt.loop.retryFailedModelRequest({ requestContext: requestHelp })
             : rt.loop.step(modelText, {
                 attachments: images,
+                requestContext: requestHelp,
                 clientId,
                 onUserPersisted: (turn) => {
                   acceptedTurn = turn;
@@ -4977,6 +5307,21 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
                 },
               });
           for await (const ev of loopEvents) {
+            if (
+              !tab.turnAdmission.isCurrent(generation) ||
+              tab.switching ||
+              tab.runtime !== rt ||
+              tab.sessionId !== preparationSessionId ||
+              tab.bindingId !== preparationBindingId
+            )
+              break;
+            lastLoopTurn = ev.turn;
+            if (ev.role === "error") predictionFailed = true;
+            if (ev.role === "done") predictionDone = true;
+            if (ev.role === "assistant_final") {
+              predictionText = ev.content ?? "";
+              predictionForced = ev.forcedSummary === true;
+            }
             if (!emittedTurnContext) {
               emittedTurnContext = true;
               emitCtxBreakdown(tab);
@@ -5018,11 +5363,18 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             if (tab.aborter?.signal.aborted) break;
           }
         } catch (err) {
+          predictionFailed = true;
           emit({ type: "$error", message: (err as Error).message }, tab.id);
         } finally {
           // If a session switch happened while this turn was running,
           // suppress stale events to avoid UI state corruption (#1217).
-          if (tab.turnAdmission.isCurrent(generation) && !tab.switching) {
+          if (
+            tab.turnAdmission.isCurrent(generation) &&
+            !tab.switching &&
+            tab.runtime === rt &&
+            tab.sessionId === preparationSessionId &&
+            tab.bindingId === preparationBindingId
+          ) {
             if (
               fromQQ &&
               lastAssistantText &&
@@ -5124,8 +5476,32 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         }
       });
     } finally {
+      if (computerUseTurn !== undefined) {
+        await computerUse?.endTurn(computerUseTurn).catch((error) => {
+          emit(
+            { type: "$error", message: `Computer Use cleanup failed: ${String(error)}` },
+            tab.id,
+          );
+        });
+      }
       if (tab.turnAdmission.isCurrent(generation)) {
-        const shouldEmitCompletion = tabs.has(tab.id);
+        tab.injectedHelpTopics = undefined;
+        const shouldEmitCompletion =
+          tabs.has(tab.id) &&
+          !tab.switching &&
+          tab.runtime === rt &&
+          tab.sessionId === preparationSessionId &&
+          tab.bindingId === preparationBindingId;
+        const predictionSucceeded = predictionTurnSucceeded({
+          done: predictionDone,
+          failed: predictionFailed,
+          aborted: tab.aborter?.signal.aborted === true,
+          forced: predictionForced,
+          text: predictionText,
+        });
+        if (shouldEmitCompletion && lastLoopTurn !== undefined) {
+          for (const event of rt.eventizer.finishTurn(lastLoopTurn)) emit(event, tab.id);
+        }
         if (opts.planOneShot) restoreOneShotPlanGuard(tab);
         tab.aborter = null;
         if (fromQQ) markQQTurnFinished(qqRuntime.routing, tab.id);
@@ -5133,7 +5509,17 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         if (fromDingTalk) markQQTurnFinished(dingtalkRuntime.routing, tab.id);
         tab.switching = false;
         tab.turnAdmission.finish(generation);
+        if (tab.pendingModel) {
+          const model = tab.pendingModel;
+          tab.pendingModel = undefined;
+          tab.runtimeRefreshPending = false;
+          applyDesktopModel(tab, model);
+        } else if (tab.runtimeRefreshPending) {
+          tab.runtimeRefreshPending = false;
+          replaceRuntimeFor(tab);
+        }
         if (shouldEmitCompletion) emit({ type: "$turn_complete" }, tab.id);
+        if (shouldEmitCompletion && predictionSucceeded && tab.runtime === rt) offerPrediction(tab);
       }
     }
   }
@@ -5152,6 +5538,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     abortTurn(tab);
     tab.turnAdmission.invalidate();
     tab.switching = false;
+    await stopComputerUse(tab);
+    tab.computerUse = null;
     try {
       await tab.toolset?.jobs.shutdown();
     } catch {
@@ -5177,6 +5565,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.sessionFiles = [];
     tab.toolset = await buildCodeToolset({
       rootDir: target,
+      effectiveEditMode: loadDesktopEditMode,
+      helpContext: () => desktopHelpContext(tab),
+      beforeCommandExecute: (command, signal) => coordinateDesktopCommand(tab, command, signal),
       onSkillInstalled: () => emitSkills(tab),
       onJobsChanged: () => emitJobs(),
       subagentSink: tab.subagentSink,
@@ -5188,6 +5579,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       libraryRetrievalMode: loadLibraryRetrievalMode(),
       modelId: tab.currentModel,
     });
+    await startComputerUse(tab);
     if (tab.runtime) replaceRuntimeFor(tab);
     emitSessions(tab);
     emitSettings(tab);
@@ -5231,8 +5623,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   }
 
   function abortTurn(tab: Tab, opts: LoopAbortOptions = {}): void {
-    tab.aborter?.abort();
-    tab.runtime?.loop.abort(opts);
+    abortDesktopTurnControllers(tab, opts);
+    void stopComputerUse(tab).catch((error) => {
+      emit({ type: "$error", message: `Computer Use cleanup failed: ${String(error)}` }, tab.id);
+    });
     restoreOneShotPlanGuard(tab);
   }
 
@@ -5322,6 +5716,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   async function gracefulShutdown(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
+    for (const tab of tabs.values()) abortTurn(tab);
+    await Promise.allSettled([...tabs.values()].map((tab) => stopComputerUse(tab)));
     await stopDesktopQQ(false).catch(() => undefined);
     await stopDesktopFeishu(false).catch(() => undefined);
     await stopDesktopDingTalk(false).catch(() => undefined);
@@ -5374,6 +5770,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       pauseGate.resolve(req.id, auto);
       return;
     }
+    void tab?.computerUse?.pauseForApproval().catch((error) => {
+      emit(
+        { type: "$error", message: `Computer Use could not pause safely: ${String(error)}` },
+        tabId,
+      );
+    });
     if (req.kind === "run_command" || req.kind === "run_background") {
       const payload = req.payload as {
         command?: string;
@@ -5914,6 +6316,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
     if (msg.cmd === "tab_activate") {
       if (tabs.has(msg.tabId)) {
+        if (lastActiveTabId !== msg.tabId) tabs.get(lastActiveTabId)?.prediction?.invalidate();
         lastActiveTabId = msg.tabId;
         emitPendingGateEvents(tabs.get(msg.tabId)!);
         persistOpenTabs();
@@ -5956,6 +6359,16 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
     if (msg.cmd === "setup_save_key") {
+      if (isWebSurface) {
+        emit(
+          {
+            type: "$error",
+            message: "Provider credentials can only be changed in Jupiter Desktop.",
+          },
+          first?.id,
+        );
+        return;
+      }
       const key = msg.key.trim();
       if (!isPlausibleKey(key)) {
         emit({
@@ -5967,6 +6380,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       try {
         saveApiKey(key);
         bridgeEndpointEnv();
+        providerVersions.observe(resolveProviderSnapshot());
         for (const tab of tabs.values()) {
           // Skeleton tabs still mid-bootstrap pick up the new key inside
           // initTabToolset's tail when buildCodeToolset settles — don't
@@ -5991,8 +6405,19 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
 
     if (msg.cmd === "settings_sign_out") {
+      if (isWebSurface) {
+        emit(
+          {
+            type: "$error",
+            message: "Provider credentials can only be changed in Jupiter Desktop.",
+          },
+          first?.id,
+        );
+        return;
+      }
       try {
         clearApiKey();
+        settingsRevision++;
         for (const t of tabs.values()) {
           t.aborter?.abort();
           t.aborter = null;
@@ -6052,6 +6477,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             }
           }
           emitCtxBreakdown(t);
+          const identity = predictionIdentity(t);
+          const completionId = identity ? t.prediction?.replay(identity) : null;
+          if (completionId) emit({ type: "$prompt_prediction_eligible", completionId }, t.id);
         }
         await Promise.allSettled(balanceOps);
         if (!isWebSurface) await emitDesktopUpdateCheck(false).catch(() => undefined);
@@ -6104,6 +6532,30 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       );
       return;
     }
+
+    if (msg.cmd === "prompt_prediction_get" || msg.cmd === "prompt_prediction_dismiss") {
+      if (typeof msg.completionId !== "string" || !/^[a-f0-9-]{36}$/.test(msg.completionId)) return;
+      if (msg.cmd === "prompt_prediction_dismiss") {
+        tab.prediction?.invalidate(msg.completionId);
+        emit({ type: "$prompt_prediction", completionId: msg.completionId, text: null }, tab.id);
+      } else requestPrediction(tab, msg.completionId);
+      return;
+    }
+    if (
+      [
+        "abort",
+        "tab_close",
+        "session_load",
+        "new_chat",
+        "user_input",
+        "ask_light",
+        "compact_history",
+        "rollback_to_turn",
+        "skill_run",
+        "slash",
+      ].includes(msg.cmd)
+    )
+      tab.prediction?.invalidate();
 
     if (msg.cmd === "abort") {
       abortTurn(tab, desktopUserAbortLoopOptions());
@@ -6941,6 +7393,8 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
     if (msg.cmd === "optional_components_get") {
+      desktopOptionalComponents(true);
+      await startComputerUse(tab);
       emitOptionalComponents(tab);
       return;
     }
@@ -6949,68 +7403,30 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
     if (msg.cmd === "provider_test") {
-      try {
-        const current = resolveProviderSnapshot();
-        const targetWithoutKey = resolveProviderSnapshot({
-          baseUrl: msg.baseUrl,
-          model: msg.model,
-          dialect: msg.providerDialect,
-        });
-        const draftKey = msg.apiKey?.trim();
-        const apiKey =
-          draftKey ||
-          (targetWithoutKey.endpointIdentity === current.endpointIdentity
-            ? current.apiKey
-            : undefined);
-        if (!apiKey) throw new Error("Enter an API key for this endpoint before testing.");
-        const target = resolveProviderSnapshot({
-          baseUrl: msg.baseUrl,
-          apiKey,
-          model: msg.model,
-          dialect: msg.providerDialect,
-        });
-        const client = createProviderClient(target);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 20_000);
-        try {
-          const listed = await client.listModels({ signal: controller.signal });
-          const models = listed?.data
-            .map((entry) => entry.id)
-            .filter((id): id is string => typeof id === "string" && id.length > 0);
-          if (!models?.length) {
-            await client.chat({
-              model: target.model,
-              messages: [{ role: "user", content: "Reply with OK." }],
-              thinking: "disabled",
-              maxTokens: 8,
-              signal: controller.signal,
-              disableRetry: true,
-            });
-          }
-          emit(
-            {
-              type: "$provider_test_result",
-              requestId: msg.requestId,
-              ok: true,
-              message: `Connected to ${target.label}.`,
-              models,
-            },
-            tab.id,
-          );
-        } finally {
-          clearTimeout(timeout);
-        }
-      } catch (err) {
-        emit(
-          {
-            type: "$provider_test_result",
-            requestId: msg.requestId,
-            ok: false,
-            message: err instanceof Error ? err.message : String(err),
-          },
-          tab.id,
-        );
-      }
+      providerVersions.observe(resolveProviderSnapshot());
+      emit(
+        {
+          type: "$provider_test_result",
+          requestId: msg.requestId,
+          status: "pending",
+          ok: false,
+          message: "Testing provider connection.",
+          serverInstanceId: providerVersions.serverInstanceId,
+          providerVersion: providerVersions.version,
+          credentialSource: "none",
+          validation: "none",
+        },
+        tab.id,
+      );
+      emit(
+        await probeDesktopProvider(msg, {
+          resolve: resolveProviderSnapshot,
+          tracker: providerVersions,
+          web: isWebSurface,
+          createClient: createProviderClient,
+        }),
+        tab.id,
+      );
       return;
     }
     if (msg.cmd === "qq_status_get") {
@@ -7018,53 +7434,90 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
     if (msg.cmd === "settings_save") {
-      try {
-        const providerSettingsChanged =
-          msg.baseUrl !== undefined ||
-          msg.apiKey !== undefined ||
-          msg.providerDialect !== undefined ||
-          msg.vision !== undefined ||
-          msg.imageTransport !== undefined;
-        if (providerSettingsChanged) {
-          const sources = inspectEndpointSources();
-          if (sources.baseUrlSource.startsWith("env:")) {
-            throw new Error(
-              `Provider settings are managed by ${sources.baseUrlSource}; remove that environment variable before editing them here.`,
-            );
-          }
-          const current = resolveProviderSnapshot();
-          const targetWithoutKey = resolveProviderSnapshot({
-            baseUrl: msg.baseUrl ?? current.baseUrl,
-            model: msg.model ?? current.model,
-            dialect: msg.providerDialect ?? current.dialectPreference,
-          });
-          const draftKey = msg.apiKey?.trim();
-          const apiKey =
-            draftKey ||
-            (targetWithoutKey.endpointIdentity === current.endpointIdentity
-              ? current.apiKey
-              : undefined);
-          if (!apiKey) throw new Error("A new endpoint requires its own API key.");
-          if (
-            targetWithoutKey.officialDeepSeek &&
-            sources.apiKeySource.startsWith("env:") &&
-            draftKey &&
-            draftKey !== current.apiKey
-          ) {
-            throw new Error(
-              `${sources.apiKeySource} overrides the saved key for the official endpoint.`,
-            );
-          }
-          bindLegacySessionsToCurrentProvider();
-          saveProviderSettings({
-            baseUrl: targetWithoutKey.baseUrl,
-            apiKey,
-            model: targetWithoutKey.model,
-            dialect: targetWithoutKey.dialectPreference,
-            vision: msg.vision,
-            imageTransport: msg.imageTransport,
-          });
+      if (
+        msg.promptPredictionsEnabled !== undefined ||
+        msg.model !== undefined ||
+        msg.baseUrl !== undefined ||
+        msg.apiKey !== undefined ||
+        msg.providerDialect !== undefined ||
+        msg.budgetUsd !== undefined
+      ) {
+        for (const item of tabs.values()) item.prediction?.invalidate();
+      }
+      const providerSettingsChanged =
+        msg.expectedProviderVersion !== undefined ||
+        msg.baseUrl !== undefined ||
+        msg.apiKey !== undefined ||
+        msg.providerDialect !== undefined ||
+        msg.vision !== undefined ||
+        msg.imageTransport !== undefined;
+      const providerFields = new Set([
+        "baseUrl",
+        "apiKey",
+        "providerDialect",
+        "vision",
+        "imageTransport",
+        "expectedProviderVersion",
+        ...(providerSettingsChanged ? ["model"] : []),
+      ]);
+      const otherSettingsChanged = Object.keys(msg).some(
+        (key) =>
+          !["cmd", "requestId", "tabId"].includes(key) &&
+          !providerFields.has(key) &&
+          msg[key as keyof typeof msg] !== undefined,
+      );
+      let providerResult: ProviderSaveOutcome | undefined;
+      let settingsResult: SettingsSaveResult["settings"] = otherSettingsChanged
+        ? { status: "pending" }
+        : undefined;
+      providerVersions.observe(resolveProviderSnapshot());
+      if (msg.requestId)
+        emit(
+          summarizeSettingsSave(
+            msg.requestId,
+            providerSettingsChanged ? { status: "pending" } : undefined,
+            settingsResult,
+            providerVersions,
+          ),
+          tab.id,
+        );
+      if (providerSettingsChanged) {
+        providerResult = saveDesktopProvider(msg, {
+          resolve: resolveProviderSnapshot,
+          tracker: providerVersions,
+          sources: inspectEndpointSources,
+          bindLegacy: bindLegacySessionsToCurrentProvider,
+          save: saveProviderSettings,
+          web: isWebSurface,
+        });
+        if (providerResult.status === "success") {
+          settingsRevision++;
           emitStatus(tab, "Provider saved. It will be used by new conversations.");
+          emitSettingsToAll(tabs, msg.requestId);
+        }
+      }
+      if (!otherSettingsChanged) {
+        if (providerResult?.status !== "success") emitSettingsToAll(tabs, msg.requestId);
+        if (msg.requestId)
+          emit(
+            summarizeSettingsSave(msg.requestId, providerResult, undefined, providerVersions),
+            tab.id,
+          );
+        else if (providerResult && providerResult.status !== "success")
+          emit(
+            {
+              type: "$error",
+              message: providerResult.message ?? "Provider settings were not saved.",
+            },
+            tab.id,
+          );
+        return;
+      }
+      try {
+        const computerUseSettingsChanged =
+          msg.computerUseEnabled !== undefined || msg.computerUsePermissionMode !== undefined;
+        if (computerUseSettingsChanged && isWebSurface) {
+          throw new Error("Built-in Computer Use is only available in Jupiter Desktop");
         }
         if (msg.reasoningEffort !== undefined && isReasoningEffort(msg.reasoningEffort)) {
           saveReasoningEffort(msg.reasoningEffort);
@@ -7085,6 +7538,17 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         }
         if (msg.workspaceDir !== undefined) {
           void switchWorkspace(tab, msg.workspaceDir);
+          settingsResult = { status: "unknown" };
+          if (msg.requestId)
+            emit(
+              summarizeSettingsSave(
+                msg.requestId,
+                providerResult,
+                settingsResult,
+                providerVersions,
+              ),
+              tab.id,
+            );
           return;
         }
         if (msg.recentWorkspaces !== undefined) {
@@ -7106,11 +7570,38 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         if (msg.processCardsDefaultOpen !== undefined) {
           saveProcessCardsDefaultOpen(msg.processCardsDefaultOpen);
         }
+        if (msg.promptPredictionsEnabled !== undefined) {
+          if (typeof msg.promptPredictionsEnabled !== "boolean")
+            throw new Error("Invalid prediction preference");
+          savePromptPredictionsEnabled(msg.promptPredictionsEnabled);
+        }
         if (msg.memoryConfirmWrites !== undefined) {
           saveMemoryConfirmWrites(msg.memoryConfirmWrites);
         }
         if (msg.memoryGlobalEnabled !== undefined) {
           saveMemoryGlobalEnabled(msg.memoryGlobalEnabled);
+        }
+        if (msg.computerUseEnabled !== undefined) {
+          saveComputerUseEnabled(msg.computerUseEnabled);
+        }
+        if (msg.computerUsePermissionMode !== undefined) {
+          if (
+            msg.computerUsePermissionMode !== "standard" &&
+            msg.computerUsePermissionMode !== "bounded" &&
+            msg.computerUsePermissionMode !== "unrestricted"
+          ) {
+            throw new Error(
+              `unsupported Computer Use permission mode: ${String(msg.computerUsePermissionMode)}`,
+            );
+          }
+          saveComputerUsePermissionMode(msg.computerUsePermissionMode);
+        }
+        if (computerUseSettingsChanged) {
+          for (const affected of tabs.values()) {
+            if (affected.turnAdmission.running) await affected.computerUse?.pauseForApproval();
+            else await stopComputerUse(affected);
+            await startComputerUse(affected);
+          }
         }
         if (
           msg.webSearchEngine !== undefined ||
@@ -7212,16 +7703,24 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         }
         settingsRevision++;
         emitSettingsToAll(tabs, msg.requestId);
+        settingsResult = otherSettingsChanged ? { status: "success" } : undefined;
       } catch (err) {
+        // Earlier independent writes may already have succeeded. Do not claim a rollback.
+        settingsResult = otherSettingsChanged ? { status: "unknown" } : undefined;
         emit(
           {
             type: "$error",
-            message: `settings_save failed: ${(err as Error).message}`,
+            message: `Non-provider settings update interrupted; earlier writes may have succeeded: ${(err as Error).message}`,
           },
           tab.id,
         );
         emitSettingsToAll(tabs, msg.requestId);
       }
+      if (msg.requestId)
+        emit(
+          summarizeSettingsSave(msg.requestId, providerResult, settingsResult, providerVersions),
+          tab.id,
+        );
       return;
     }
     if (msg.cmd === "qq_config_save") {

@@ -4,6 +4,7 @@
 // HTTPS_PROXY still routes everything else through the user's proxy.
 
 import { Agent, type Dispatcher, ProxyAgent, setGlobalDispatcher } from "undici";
+import { sanitizeDiagnosticUrl, sanitizeProviderErrorText } from "../provider-http-error.js";
 
 /** Env-var precedence matches curl: HTTPS_PROXY → HTTP_PROXY → ALL_PROXY, upper-case first then lower. */
 const PROXY_ENV_KEYS = [
@@ -247,7 +248,7 @@ export function installProxyIfConfigured(
   if (!url) {
     const origin = configRaw ? "config value" : "env value";
     process.stderr.write(
-      `▲ ignoring proxy ${origin} ${JSON.stringify(raw)} — not a valid URL. Expected something like \`http://host:port\` or \`socks5://host:port\`.\n`,
+      `▲ ignoring proxy ${origin} [invalid URL] — not a valid URL. Expected something like \`http://host:port\` or \`socks5://host:port\`.\n`,
     );
     return null;
   }
@@ -265,12 +266,14 @@ export function installProxyIfConfigured(
     const reinstalled = installed;
     setGlobalDispatcher(new SelectiveProxyDispatcher(url, patterns) as unknown as Dispatcher);
     installed = true;
-    const bypassList = patterns.map((p) => p.raw).join(",");
-    process.stderr.write(`[proxy] using ${url} (source: ${source}, NO_PROXY: ${bypassList})\n`);
+    const bypassList = sanitizeProviderErrorText(patterns.map((p) => p.raw).join(","));
+    process.stderr.write(
+      `[proxy] using ${sanitizeDiagnosticUrl(url)} (source: ${source}, NO_PROXY: ${bypassList})\n`,
+    );
     return { url, source, reinstalled, noProxy: patterns };
   } catch (err) {
     process.stderr.write(
-      `▲ proxy install failed (${(err as Error).message}); continuing without proxy.\n`,
+      `▲ proxy install failed (${sanitizeProviderErrorText(err instanceof Error ? err.message : String(err), { knownSecrets: [raw, url] })}); continuing without proxy.\n`,
     );
     return null;
   }

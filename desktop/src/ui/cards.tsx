@@ -621,6 +621,9 @@ export function ToolCard({
   result,
   ok,
   durationMs,
+  phase,
+  argsChars,
+  terminalState,
   defaultOpen,
 }: {
   name: string;
@@ -628,11 +631,15 @@ export function ToolCard({
   result?: string;
   ok?: boolean;
   durationMs?: number;
+  phase?: "preparing" | "running";
+  argsChars?: number;
+  terminalState?: "completed" | "failed" | "dropped" | "cancelled";
   defaultOpen?: boolean;
 }) {
   useLang();
   const running = result === undefined;
-  const tone: Tone = running ? "default" : ok === false ? "danger" : "success";
+  const interrupted = terminalState === "dropped" || terminalState === "cancelled";
+  const tone: Tone = running || interrupted ? "default" : ok === false ? "danger" : "success";
   const editPreview = deriveToolEditPreview(name, args);
   return (
     <Card
@@ -645,8 +652,11 @@ export function ToolCard({
       meta={
         <>
           {editPreview ? <ToolEditPreviewStat preview={editPreview} /> : null}
+          {running && phase === "preparing" ? (
+            <span className="meta-dur">{t("cards.preparing")}{argsChars !== undefined ? ` · ${t("cards.argumentChars", { count: argsChars.toLocaleString() })}` : ""}</span>
+          ) : interrupted ? <span className="meta-dur">{t(terminalState === "cancelled" ? "cards.cancelled" : "cards.dropped")}</span> : null}
           {running ? (
-            <StatusIcon state="running" label={t("cards.running")} />
+            <StatusIcon state="running" label={t(phase === "preparing" ? "cards.preparing" : "cards.running")} />
           ) : ok === false ? (
             <StatusIcon state="failed" label={t("cards.error")} />
           ) : (

@@ -64,6 +64,7 @@ import type { DingTalkChannel } from "../../dingtalk/channel.js";
 import { useDingTalkChannel } from "../../dingtalk/use-dingtalk-channel.js";
 import type { FeishuChannel } from "../../feishu/channel.js";
 import { useFeishuChannel } from "../../feishu/use-feishu-channel.js";
+import { appendHelpRouting, prepareHelpContext } from "../../help/index.js";
 import { formatHookOutcomeMessage, runHooks } from "../../hooks.js";
 import { t, tObj } from "../../i18n/index.js";
 import { CacheFirstLoop, ImmutablePrefix } from "../../index.js";
@@ -105,6 +106,7 @@ import { appendUsage, defaultUsageLogPath } from "../../telemetry/usage.js";
 import { warmupTokenizer } from "../../tokenizer.js";
 import type { ToolRegistry } from "../../tools.js";
 import type { ChoiceOption } from "../../tools/choice.js";
+import { registerHelpTool } from "../../tools/help.js";
 import type { PlanStep, StepCompletion } from "../../tools/plan.js";
 import { formatCommandResult, runCommand } from "../../tools/shell.js";
 import { registerSkillTools } from "../../tools/skills.js";
@@ -164,6 +166,7 @@ import { applySlashResult } from "./hooks/apply-slash-result.js";
 import { handleAssistantFinal } from "./hooks/handle-assistant-final.js";
 import {
   handleErrorEvent,
+  handleToolDrop,
   handleToolStart,
   handleWarningEvent,
 } from "./hooks/handle-stream-events.js";
@@ -596,6 +599,8 @@ function AppInner({
   // subagent-end cost suffix renders in the live wallet's symbol.
   const walletCurrencyRef = useRef<string | undefined>(undefined);
   const loopRef = useRef<CacheFirstLoop | null>(null);
+  const helpTopicRef = useRef<string | undefined>(undefined);
+  const injectedHelpTopicsRef = useRef<readonly string[]>([]);
   const { activities: subagentActivities, sinkRef: subagentSinkRef } = useSubagent({
     session,
     log,
@@ -1017,6 +1022,16 @@ function AppInner({
     if (loopRef.current) return loopRef.current;
     const provider = resolveProviderSnapshot({ model });
     const client = createProviderClient(provider);
+    if (tools)
+      registerHelpTool(tools, {
+        getRuntimeState: () => ({
+          surface: "cli",
+          mode: tools.planMode ? "Plan" : "Agent",
+          model: loopRef.current?.model ?? model,
+          provider: client.providerId,
+          injectedTopics: injectedHelpTopicsRef.current,
+        }),
+      });
     // Register run_skill HERE (not in code.tsx / chat.tsx) because
     // subagent-runAs skills need the client + parent registry to
     // spawn child loops. Wiring lives in App.tsx so the same code
@@ -1053,7 +1068,7 @@ function AppInner({
       });
     }
     const prefix = new ImmutablePrefix({
-      system,
+      system: appendHelpRouting(system),
       toolSpecs: tools?.specs(),
     });
     const l = new CacheFirstLoop({
@@ -1069,7 +1084,7 @@ function AppInner({
       thinkingEnabled: loadThinkingEnabled(),
       autoContinueDeepSeek: loadDeepSeekAutoContinue(),
       reasoningEffort: initialReasoningEffort ?? loadReasoningEffort(),
-      rebuildSystem,
+      rebuildSystem: rebuildSystem ? () => appendHelpRouting(rebuildSystem()) : undefined,
     });
     loopRef.current = l;
     return l;
@@ -2176,6 +2191,16 @@ function AppInner({
           reasoningEffort: loop.reasoningEffort,
           prefixHash,
           text: question,
+          helpContext: () => ({
+            surface: "cli",
+            mode: "Ask",
+            model: loop.model,
+            provider: loop.client.providerId,
+            recentTopic: helpTopicRef.current,
+          }),
+          onHelpTopic: (topic) => {
+            helpTopicRef.current = topic;
+          },
           turn: loop.currentTurn + 1,
           recordExchange: (exchange) => {
             const stats = loop.recordLightAskExchange(exchange);
@@ -3018,6 +3043,14 @@ function AppInner({
         }
         setBusy(true);
         try {
+          const preparedSideHelp = prepareHelpContext(question, {
+            surface: "cli",
+            mode: "Ask",
+            model: loop.model,
+            provider: loop.client.providerId,
+            recentTopic: helpTopicRef.current,
+          });
+          helpTopicRef.current = preparedSideHelp.nextTopic;
           const reply = await loop.client.chat({
             model: loop.model,
             messages: [
@@ -3027,7 +3060,11 @@ function AppInner({
                   "You are answering a side question that is unrelated to the current coding conversation. Answer concisely (1-3 sentences) in plain prose. Do not call tools, do not ask clarifying questions, and do not reference any prior turns.",
               },
               { role: "user", content: question },
+              ...(preparedSideHelp.content
+                ? [{ role: "system" as const, content: preparedSideHelp.content }]
+                : []),
             ],
+            tools: [],
           });
           const answer = reply.content.trim() || "(no answer)";
           log.pushInfo(`${t("app.btwHeader")}\n${answer}`, "brand");
@@ -3465,7 +3502,16 @@ function AppInner({
 
       try {
         let lastAssistantText = "";
-        for await (const ev of loop.step(modelInput)) {
+        const preparedHelp = prepareHelpContext(text, {
+          surface: "cli",
+          mode: loop.tools.planMode ? "Plan" : "Agent",
+          model: loop.model,
+          provider: loop.client.providerId,
+          recentTopic: helpTopicRef.current,
+        });
+        helpTopicRef.current = preparedHelp.nextTopic;
+        injectedHelpTopicsRef.current = preparedHelp.topics;
+        for await (const ev of loop.step(modelInput, { requestContext: preparedHelp.content })) {
           writeTranscript(ev);
           // Mirror to the kernel event log sidecar. Pure passthrough —          // Eventizer holds the small state (turn boundary detection +
           // tool callId correlation) needed to translate LoopEvent
@@ -3554,6 +3600,8 @@ function AppInner({
                 ...(currency ? { balanceCurrency: currency } : {}),
               });
             }
+          } else if (ev.role === "tool_call_drop") {
+            handleToolDrop(ev, { translator, setOngoingTool, setToolProgress, toolStartedAtRef });
           } else if (ev.role === "tool_start") {
             handleToolStart(ev, {
               setOngoingTool,
@@ -3644,6 +3692,7 @@ function AppInner({
         dingtalk.maybeSendFinalReply(lastAssistantText);
         telegram.maybeSendFinalReply(lastAssistantText);
       } finally {
+        injectedHelpTopicsRef.current = [];
         flush();
         // Esc aborted the turn —close any in-flight cards (streaming /
         // reasoning / tool / branch) so they leave the live region. Without

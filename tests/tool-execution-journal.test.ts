@@ -2,9 +2,15 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DeepSeekClient } from "../src/client.js";
+import { CacheFirstLoop } from "../src/loop.js";
+import { ImmutablePrefix } from "../src/memory/runtime.js";
+import { loadSessionMessages } from "../src/memory/session.js";
 import {
   ToolExecutionJournal,
   readToolExecutionJournal,
+  toolExecutionJournalPath,
+  toolExecutionOutcomeFromResult,
 } from "../src/memory/tool-execution-journal.js";
 import { ToolRegistry } from "../src/tools.js";
 
@@ -32,6 +38,117 @@ function journal(path: string, runId: string, ids: string[]): ToolExecutionJourn
 }
 
 describe("ToolExecutionJournal", () => {
+  it.each(["returned", "unknown_after_restart"] as const)(
+    "recovers a loop's provider-linked transcript after a lost tool result (%s)",
+    { retry: 0 },
+    async (outcome) => {
+      const home = mkdtempSync(join(tmpdir(), "jupiter-loop-journal-"));
+      dirs.push(home);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.spyOn(require("node:os"), "homedir").mockReturnValue(home);
+      const fn = vi.fn(() => "mock side effect completed");
+      const tools = new ToolRegistry().register({ name: "mutate", description: "mock only", fn });
+      const client = new DeepSeekClient({
+        apiKey: "unit-test-only",
+        baseUrl: "https://gateway.example/v1",
+        fetch: vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                choices: [
+                  {
+                    message: {
+                      role: "assistant",
+                      content: "",
+                      tool_calls: [
+                        {
+                          id: "provider-1",
+                          type: "function",
+                          function: { name: "mutate", arguments: "{}" },
+                        },
+                      ],
+                    },
+                    finish_reason: "tool_calls",
+                  },
+                ],
+                usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+              }),
+              { headers: { "Content-Type": "application/json" } },
+            ),
+        ),
+      });
+      const makeLoop = () =>
+        new CacheFirstLoop({
+          client,
+          tools,
+          model: "test",
+          stream: false,
+          session: "identity-recovery",
+          prefix: new ImmutablePrefix({ system: "test", toolSpecs: tools.specs() }),
+        });
+      let loop: CacheFirstLoop | undefined;
+      let restored: CacheFirstLoop | undefined;
+      try {
+        loop = makeLoop();
+        const append = loop.appendAndPersist.bind(loop);
+        vi.spyOn(loop, "appendAndPersist").mockImplementation((message) => {
+          if (message.role === "tool") throw new Error("mock transcript write failed");
+          return append(message);
+        });
+        if (outcome === "unknown_after_restart") {
+          vi.spyOn(ToolExecutionJournal.prototype, "recordResult").mockImplementationOnce(() => {
+            throw new Error("mock journal result write failed");
+          });
+        }
+        let localCallId: string | undefined;
+        await expect(
+          (async () => {
+            for await (const event of loop!.step("mock mutation")) {
+              if (event.role === "tool_start") localCallId = event.callId;
+            }
+          })(),
+        ).rejects.toThrow("mock transcript write failed");
+        expect(localCallId).toMatch(/^request-.+:tool:0$/);
+        expect(
+          readToolExecutionJournal(toolExecutionJournalPath("identity-recovery"))[0]?.callId,
+        ).toBe("provider-1");
+        loop.dispose();
+        restored = makeLoop();
+        const messages = restored.log.toFullHistory();
+        expect(messages.find((message) => message.role === "assistant")?.tool_calls?.[0]?.id).toBe(
+          "provider-1",
+        );
+        expect(messages.find((message) => message.role === "tool")).toMatchObject({
+          tool_call_id: "provider-1",
+          content: expect.stringContaining(outcome),
+        });
+        expect(loadSessionMessages("identity-recovery")).toEqual(messages);
+        expect(fn).toHaveBeenCalledTimes(1);
+      } finally {
+        loop?.dispose();
+        restored?.dispose();
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("recognizes transport uncertainty without treating it as a successful return", () => {
+    expect(
+      toolExecutionOutcomeFromResult(
+        JSON.stringify({
+          error: "transport lost",
+          executionOutcome: "unknown_after_transport",
+        }),
+      ),
+    ).toBe("unknown_after_transport");
+    expect(
+      toolExecutionOutcomeFromResult(JSON.stringify({ executionOutcome: "unknown_after_cancel" })),
+    ).toBe("unknown_after_cancel");
+    expect(toolExecutionOutcomeFromResult("plain tool output")).toBeUndefined();
+  });
+
   it("recovers a started execution as unknown exactly once without retaining raw arguments", () => {
     const path = journalPath();
     const firstRun = journal(path, "run-1", ["execution-1"]);

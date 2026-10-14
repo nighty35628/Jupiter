@@ -3,8 +3,13 @@ import { messageImageTokens } from "./attachments/types.js";
 import type { DeepSeekClient } from "./client.js";
 import { Usage } from "./client.js";
 import { healLoadedMessages } from "./loop.js";
-import { stripHallucinatedToolMarkup } from "./loop.js";
 import { buildAssistantMessage } from "./loop/messages.js";
+import {
+  type SummaryFailure,
+  SummaryRequestError,
+  acceptedSummary,
+  requestFoldSummary,
+} from "./loop/summary.js";
 import { DEFAULT_MAX_RESULT_CHARS } from "./mcp/registry.js";
 import type { AppendOnlyLog } from "./memory/runtime.js";
 import { rewriteSession } from "./memory/session.js";
@@ -72,6 +77,8 @@ export interface ContextManagerDeps {
   /** Reuses the live prefix → fold summary call shares the cached bytes the main agent already paid for. */
   getToolSpecs?: () => readonly ToolSpec[];
   getFewShots?: () => readonly ChatMessage[];
+  getActiveImageIds?: () => readonly string[];
+  summaryTimeoutMs?: number;
   /** Fired when the message log was rewritten by fold; lets the loop drop session-scoped caches whose validity rested on the elided history (e.g. read-before-edit tracker). */
   onLogRewrite?: () => void;
 }
@@ -99,7 +106,7 @@ export interface FoldResult {
     | "already-small"
     | "tail-boundary-missing"
     | "insufficient-savings"
-    | "summary-empty"
+    | SummaryFailure
     | "session-changed"
     | "persistence-failed"
     | "log-changed";
@@ -267,7 +274,17 @@ export class ContextManager {
     model: string,
   ): { estimateTokens: number; ctxMax: number; ratio: number } {
     const ctxMax = resolveContextTokens(model);
-    const estimate = estimateRequestTokens(messages, toolSpecs ?? null, true);
+    const visible = this.deps.client.supportsImages(model)
+      ? messages
+      : messages.map((message) => {
+          if (!message.attachments?.length) return message;
+          const { attachments, ...rest } = message;
+          return {
+            ...rest,
+            content: `${rest.content ?? ""}\n${attachments.map((image) => `[Historical image ${image.name}: ${image.id}]`).join("\n")}`,
+          };
+        });
+    const estimate = estimateRequestTokens(visible, toolSpecs ?? null, true);
     return { estimateTokens: estimate, ctxMax, ratio: estimate / ctxMax };
   }
 
@@ -351,7 +368,7 @@ export class ContextManager {
     if (!summary.content) {
       return {
         ...noop,
-        reason: "summary-empty",
+        reason: summary.reason ?? "summary-empty",
         totalTokens,
         headTokens,
         tailTokens: cumTokens,
@@ -360,6 +377,16 @@ export class ContextManager {
     }
 
     const currentBinding = this.deps.getSessionBinding();
+    if ((opts?.signal ?? this.deps.getAbortSignal()).aborted) {
+      return {
+        ...noop,
+        reason: "summary-cancelled",
+        totalTokens,
+        headTokens,
+        tailTokens: cumTokens,
+        tailBudget,
+      };
+    }
     if (currentBinding.epoch !== bindingAtStart.epoch) {
       return {
         ...noop,
@@ -409,23 +436,20 @@ export class ContextManager {
     );
     if (images.size) summaryMsg.sourceAttachments = [...images.values()];
     const replacement = [summaryMsg, ...tail];
-    if (images.size) {
-      if (
-        !currentBinding.sessionName ||
-        !this.persistRewrite(currentBinding.sessionName, replacement)
-      ) {
-        return {
-          ...noop,
-          reason: "persistence-failed",
-          totalTokens,
-          headTokens,
-          tailTokens: cumTokens,
-          tailBudget,
-        };
-      }
+    if (
+      (images.size && !currentBinding.sessionName) ||
+      (currentBinding.sessionName && !this.persistRewrite(currentBinding.sessionName, replacement))
+    ) {
+      return {
+        ...noop,
+        reason: "persistence-failed",
+        totalTokens,
+        headTokens,
+        tailTokens: cumTokens,
+        tailBudget,
+      };
     }
     this.deps.log.compactInPlace(replacement);
-    if (!images.size) this.persistRewrite(currentBinding.sessionName, replacement);
     this.deps.onLogRewrite?.();
     return {
       folded: true,
@@ -456,17 +480,28 @@ export class ContextManager {
     return true;
   }
 
+  commitForcedSummary(summary: ChatMessage, sessionName: string | null): boolean {
+    const history = this.deps.log.toFullHistory();
+    const last = history.at(-1);
+    const replacement = [
+      ...(last?.role === "assistant" && last.tool_calls?.length ? history.slice(0, -1) : history),
+      summary,
+    ];
+    if (sessionName && !this.persistRewrite(sessionName, replacement)) return false;
+    this.deps.log.compactInPlace(replacement);
+    if (last?.tool_calls?.length) this.deps.onLogRewrite?.();
+    return true;
+  }
+
   private async summarizeForFold(
     messagesToSummarize: ChatMessage[],
     pinnedSkillNames: string[],
     signal?: AbortSignal,
     activeModel?: string,
-  ): Promise<{ content: string; reasoningContent: string }> {
+  ): Promise<{ content: string; reasoningContent: string; reason?: SummaryFailure }> {
     const hasImages = messagesToSummarize.some((message) => message.attachments?.length);
     const summaryModel =
       hasImages || !this.deps.client.officialDeepSeek ? activeModel! : "deepseek-flash";
-    if (hasImages && !this.deps.client.supportsImages(summaryModel))
-      return { content: "", reasoningContent: "" };
     const healed = healLoadedMessages(messagesToSummarize, DEFAULT_MAX_RESULT_CHARS).messages;
     const agentSystem = this.deps.getSystemPrompt();
     const fewShots = this.deps.getFewShots?.() ?? [];
@@ -479,49 +514,35 @@ export class ContextManager {
       { role: "user", content: instruction },
     ];
     const turnSignal = signal ?? this.deps.getAbortSignal();
-    const foldCtrl = new AbortController();
-    let cleanupAbort = (): void => {};
-    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const abortPromise = new Promise<never>((_, reject) => {
-        const abort = () => {
-          foldCtrl.abort();
-          reject(new Error("fold-aborted"));
-        };
-        if (turnSignal.aborted) {
-          abort();
-        } else {
-          turnSignal.addEventListener("abort", abort, { once: true });
-          cleanupAbort = () => turnSignal.removeEventListener("abort", abort);
-        }
-      });
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          foldCtrl.abort();
-          reject(new Error("fold-timeout"));
-        }, HISTORY_FOLD_SUMMARY_TIMEOUT_MS);
-      });
-      const resp = await Promise.race([
-        this.deps.client.chat({
+      const resp = await requestFoldSummary(
+        this.deps.client,
+        {
           model: summaryModel,
           messages,
           tools: tools.length ? (tools as ToolSpec[]) : undefined,
-          signal: foldCtrl.signal,
+          signal: turnSignal,
+          activeImageIds: this.deps.getActiveImageIds?.() ?? [],
           thinking: "disabled",
-        }),
-        abortPromise,
-        timeoutPromise,
-      ]);
+        },
+        this.deps.summaryTimeoutMs ?? HISTORY_FOLD_SUMMARY_TIMEOUT_MS,
+      );
       this.deps.stats.record(this.deps.getCurrentTurn(), summaryModel, resp.usage ?? new Usage());
       return {
-        content: stripHallucinatedToolMarkup((resp.content ?? "").trim()),
+        content: acceptedSummary(resp),
         reasoningContent: resp.reasoningContent ?? "",
       };
-    } catch {
-      return { content: "", reasoningContent: "" };
-    } finally {
-      if (timeout) clearTimeout(timeout);
-      cleanupAbort();
+    } catch (error) {
+      return {
+        content: "",
+        reasoningContent: "",
+        reason:
+          error instanceof SummaryRequestError
+            ? error.reason
+            : turnSignal.aborted
+              ? "summary-cancelled"
+              : "summary-failed",
+      };
     }
   }
 
@@ -531,7 +552,7 @@ export class ContextManager {
       rewriteSession(sessionName, messages);
       return true;
     } catch {
-      /* disk full / perms — in-memory mutation still applies */
+      // Keep the in-memory history unchanged when its durable replacement fails.
       return false;
     }
   }

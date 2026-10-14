@@ -49,6 +49,8 @@ export interface ShellToolsOptions {
   jobs?: JobRegistry;
   /** Fired after `run_background` / `stop_job` mutate the registry — used by the desktop popover for near-real-time updates without polling. */
   onJobsChanged?: () => void;
+  /** Host coordination runs only after the command has been approved. */
+  beforeExecute?: (command: string, signal?: AbortSignal) => Promise<void>;
   sensitivePaths?: { prefixes?: readonly string[]; patterns?: readonly string[] };
 }
 
@@ -137,6 +139,8 @@ export function registerShellTools(registry: ToolRegistry, opts: ShellToolsOptio
         }
         // "run_once" — fall through and execute
       }
+      await opts.beforeExecute?.(cmd, ctx?.signal);
+      ctx?.signal?.throwIfAborted();
       const result = await runCommand(cmd, {
         cwd: rootDir,
         timeoutSec: effectiveTimeout,
@@ -195,6 +199,8 @@ export function registerShellTools(registry: ToolRegistry, opts: ShellToolsOptio
         }
         // "run_once" — fall through and execute
       }
+      await opts.beforeExecute?.(cmd, ctx?.signal);
+      ctx?.signal?.throwIfAborted();
       const result = await jobs.start(cmd, {
         cwd,
         waitSec: args.waitSec,

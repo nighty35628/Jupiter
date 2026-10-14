@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type EventSourceInstance = {
   url: string;
@@ -16,19 +16,27 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
-async function loadWebBridge(hash = "#bootstrap=fragment-secret", rpcStatus = 202) {
+async function loadWebBridge(
+  hash = "#bootstrap=fragment-secret",
+  rpcStatus = 202,
+  options: { mode?: "web" | "server" | "mock"; acquireStatus?: number } = {},
+) {
   vi.resetModules();
   const replaceState = vi.fn();
+  const dispatchEvent = vi.fn();
+  const dataset: Record<string, string> = {};
   vi.stubGlobal("window", {
     location: { hash, pathname: "/", search: "", origin: "http://127.0.0.1:1420" },
     history: { replaceState },
     open: vi.fn(),
-    dispatchEvent: vi.fn(),
+    dispatchEvent,
   });
   vi.stubGlobal("document", {
-    documentElement: { dataset: {} },
+    documentElement: { dataset },
     querySelector: (selector: string) => {
-      if (selector === 'meta[name="jupiter-mode"]') return { getAttribute: () => "web" };
+      if (selector === 'meta[name="jupiter-mode"]') {
+        return { getAttribute: () => (options.mode === "mock" ? "" : (options.mode ?? "web")) };
+      }
       if (selector === 'meta[name="jupiter-token"]') return { getAttribute: () => "" };
       return null;
     },
@@ -56,6 +64,9 @@ async function loadWebBridge(hash = "#bootstrap=fragment-secret", rpcStatus = 20
       return jsonResponse({ ...session, csrfToken: "csrf-from-bootstrap" });
     }
     if (url === "/api/session") return jsonResponse({ ...session, csrfToken: "csrf-from-session" });
+    if (url === "/api/lease/acquire" && options.acquireStatus === 409) {
+      return jsonResponse({ error: "another page owns Web control" }, 409);
+    }
     if (url === "/api/lease/acquire" || url === "/api/lease/renew") {
       return jsonResponse({
         lease: { id: "lease-browser-123", fence: 7, expiresAt: Date.now() + 30_000 },
@@ -74,14 +85,151 @@ async function loadWebBridge(hash = "#bootstrap=fragment-secret", rpcStatus = 20
   vi.stubGlobal("fetch", fetchMock);
 
   const bridge = await import("../dashboard/src/lib/tauri-bridge");
-  return { bridge, eventSources, fetchMock, replaceState };
+  const writerStates = () =>
+    dispatchEvent.mock.calls
+      .map(([event]) => event as CustomEvent<{ writable: boolean }>)
+      .filter((event) => event.type === "jupiter:web-writer")
+      .map((event) => event.detail.writable);
+  return { bridge, eventSources, fetchMock, replaceState, dataset, writerStates };
 }
 
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("Dashboard Web Beta bridge", () => {
+  it("checks prediction eligibility locally after initializing a read-only observer", async () => {
+    const { bridge, fetchMock, eventSources, dataset, writerStates } = await loadWebBridge(
+      "",
+      202,
+      { acquireStatus: 409 },
+    );
+    await expect(bridge.invoke("prompt_prediction_can_request")).resolves.toBe(false);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/session",
+      "/api/lease/acquire",
+    ]);
+    expect(eventSources).toHaveLength(1);
+    expect(dataset.webWriter).toBe("false");
+    expect(writerStates()).toEqual([false]);
+    fetchMock.mockClear();
+
+    await expect(bridge.invoke("prompt_prediction_can_request")).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(writerStates()).toEqual([false]);
+  });
+
+  it("allows prediction with an active lease without HTTP or another acquisition", async () => {
+    const { bridge, fetchMock, dataset, writerStates } = await loadWebBridge();
+    await bridge.invoke("rpc_spawn");
+    expect(dataset.webWriter).toBe("true");
+    expect(writerStates()).toEqual([false, true]);
+    fetchMock.mockClear();
+
+    await expect(bridge.invoke("prompt_prediction_can_request")).resolves.toBe(true);
+    await expect(bridge.invoke("prompt_prediction_can_request")).resolves.toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(writerStates()).toEqual([false, true]);
+  });
+
+  it("disables prediction at the lease expiry boundary using only the local clock", async () => {
+    const { bridge, fetchMock, dataset, writerStates } = await loadWebBridge();
+    await bridge.invoke("rpc_spawn");
+    fetchMock.mockClear();
+    const expiresAt = Date.now() + 30_000;
+    vi.setSystemTime(expiresAt - 1);
+    await expect(bridge.invoke("prompt_prediction_can_request")).resolves.toBe(true);
+    vi.setSystemTime(expiresAt);
+
+    await expect(bridge.invoke("prompt_prediction_can_request")).resolves.toBe(false);
+    expect(dataset.webWriter).toBe("false");
+    expect(writerStates()).toEqual([false, true, false]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("publishes loss of control when renewal revokes the lease", async () => {
+    const { bridge, fetchMock, dataset, writerStates } = await loadWebBridge();
+    await bridge.invoke("rpc_spawn");
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "lease revoked" }, 409));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/lease/renew"]);
+    expect(dataset.webWriter).toBe("false");
+    expect(writerStates()).toEqual([false, true, false]);
+    fetchMock.mockClear();
+
+    await expect(bridge.invoke("prompt_prediction_can_request")).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("expires displayed prediction permission even when renewal hangs", async () => {
+    const { bridge, fetchMock, dataset } = await loadWebBridge();
+    await bridge.invoke("rpc_spawn");
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(dataset.webWriter).toBe("false");
+  });
+
+  it("synchronizes session leases, explicit control acquisition and renewal", async () => {
+    const { bridge, fetchMock, dataset, writerStates } = await loadWebBridge("", 202, {
+      acquireStatus: 409,
+    });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        csrfToken: "csrf-from-session",
+        lease: { id: "session-lease", fence: 3, expiresAt: Date.now() + 30_000 },
+      }),
+    );
+    await bridge.invoke("rpc_spawn");
+    expect(writerStates()).toEqual([true, false]);
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        lease: { id: "take-control-lease", fence: 8, expiresAt: Date.now() + 30_000 },
+      }),
+    );
+    await bridge.invoke("web_take_control");
+    expect(dataset.webWriter).toBe("true");
+    expect(writerStates()).toEqual([true, false, true]);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ lease: null }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(dataset.webWriter).toBe("false");
+    expect(writerStates()).toEqual([true, false, true, false]);
+    fetchMock.mockClear();
+    await expect(bridge.invoke("prompt_prediction_can_request")).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("retains pairing errors for prediction eligibility without bypassing webInit", async () => {
+    const { bridge, fetchMock, eventSources } = await loadWebBridge("");
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "missing session" }, 401));
+    await expect(bridge.invoke("prompt_prediction_can_request")).rejects.toMatchObject({
+      code: "required",
+    });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/session"]);
+    expect(eventSources).toHaveLength(0);
+  });
+
+  it.each(["server", "mock"] as const)(
+    "allows local prediction checks in %s mode",
+    async (mode) => {
+      const { bridge, fetchMock, eventSources, dataset, writerStates } = await loadWebBridge(
+        "",
+        202,
+        { mode },
+      );
+      await expect(bridge.invoke("prompt_prediction_can_request")).resolves.toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(eventSources).toHaveLength(0);
+      expect(dataset.webWriter).toBeUndefined();
+      expect(writerStates()).toEqual([]);
+    },
+  );
+
   it("keeps the Web host command surface explicit", async () => {
     const { WEB_HOST_COMMANDS } = await import("../dashboard/src/lib/host-services");
     expect(WEB_HOST_COMMANDS).toEqual([

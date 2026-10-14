@@ -57,6 +57,8 @@ interface InternalTool extends ToolDefinition {
   flatSchema?: JSONSchema;
 }
 
+export type ToolDefinitionSnapshot = Readonly<InternalTool>;
+
 export interface ToolRegistryOptions {
   /** Auto-flatten + re-nest at dispatch; default true. */
   autoFlatten?: boolean;
@@ -161,6 +163,10 @@ export class ToolRegistry {
     return this;
   }
 
+  captureDefinitions(): ReadonlyMap<string, ToolDefinitionSnapshot> {
+    return new Map([...this._tools].map(([name, tool]) => [name, Object.freeze({ ...tool })]));
+  }
+
   /** Drop a registered tool. Returns true if the name was present. Used by MCP hot-unbridge. */
   unregister(name: string): boolean {
     return this._tools.delete(name);
@@ -219,9 +225,11 @@ export class ToolRegistry {
       onExecutionStarted?: () => void | Promise<void>;
       /** Project root directory for saving truncated results. Defaults to process.cwd(). */
       rootDir?: string;
+      /** Definition advertised for this turn; policy gates still run at dispatch. */
+      definition?: ToolDefinitionSnapshot;
     } = {},
   ): Promise<string> {
-    const tool = this._tools.get(name);
+    const tool = opts.definition ?? this._tools.get(name);
     if (!tool) {
       return JSON.stringify({ error: `unknown tool: ${name}` });
     }

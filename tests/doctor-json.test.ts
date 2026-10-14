@@ -10,6 +10,7 @@ import {
   formatDoctorJson,
   runDoctorChecks,
 } from "../src/cli/commands/doctor.js";
+import * as providerRuntime from "../src/provider-runtime.js";
 import { VERSION } from "../src/version.js";
 
 describe("formatDoctorJson", () => {
@@ -60,6 +61,14 @@ describe("doctorCommand --json (integration)", () => {
     vi.stubEnv("USERPROFILE", tmpHome);
     // Ensure no API key so checkApiReach skips the network call.
     vi.stubEnv("DEEPSEEK_API_KEY", "");
+    vi.stubEnv("DEEPSEEK_BASE_URL", "");
+    vi.stubEnv("DEEPSEEK_API_BASE_URL", "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("synthetic offline probe");
+      }),
+    );
     process.chdir(tmpCwd);
     logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
@@ -70,6 +79,7 @@ describe("doctorCommand --json (integration)", () => {
     exitSpy.mockRestore();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     process.chdir(origCwd);
     rmSync(tmpHome, { recursive: true, force: true });
     rmSync(tmpCwd, { recursive: true, force: true });
@@ -95,6 +105,65 @@ describe("doctorCommand --json (integration)", () => {
       expect(["ok", "warn", "fail"]).toContain(c.status);
       expect(typeof c.message).toBe("string");
     }
+  });
+
+  it.each([false, true])("redacts configured proxy diagnostics (disabled=%s)", async (disabled) => {
+    const configDir = join(tmpHome, ".jupiter");
+    mkdirSync(configDir, { recursive: true });
+    const url =
+      "http://syntheticUser:syntheticPass@proxy.example:8080/?%61pi_key=opaqueSynthetic&mode=test#privateSynthetic";
+    writeFileSync(join(configDir, "config.json"), JSON.stringify({ proxy: { url, disabled } }));
+    const checks = await runDoctorChecks(tmpCwd);
+    const detail = checks.find((c) => c.id === "proxy")!.detail;
+    expect(detail).toContain("proxy.example:8080");
+    expect(detail).toContain("mode=test");
+    for (const value of ["syntheticUser", "syntheticPass", "opaqueSynthetic", "privateSynthetic"]) {
+      expect(detail).not.toContain(value);
+      expect(formatDoctorJson(checks, VERSION)).not.toContain(value);
+    }
+  });
+
+  it("does not echo invalid proxy URL values", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://[invalid:opaqueSynthetic");
+    const checks = await runDoctorChecks(tmpCwd);
+    expect(checks.find((c) => c.id === "proxy")!.detail).not.toContain("opaqueSynthetic");
+  });
+
+  it("redacts an opaque endpoint key echoed by a network exception in JSON and terminal output", async () => {
+    const secret = "opaque/SYNTHETIC+endpoint=42";
+    vi.stubEnv("DEEPSEEK_API_KEY", secret);
+    vi.stubEnv("DEEPSEEK_BASE_URL", "https://compat.example/v1");
+    vi.spyOn(providerRuntime, "createProviderClient").mockReturnValue({
+      listModels: vi.fn(async () => {
+        throw new Error(
+          `network ${encodeURIComponent(secret)} https://user:syntheticPass@relay.example/?token=opaqueSynthetic#privateSynthetic`,
+        );
+      }),
+    } as unknown as ReturnType<typeof providerRuntime.createProviderClient>);
+    const checks = await runDoctorChecks(tmpCwd);
+    expect(checks.find((c) => c.id === "api-reach")!.level).toBe("fail");
+    expect(checks.find((c) => c.id === "api-reach")!.detail).toContain("network [redacted]");
+    await doctorCommand({ json: true });
+    await doctorCommand();
+    const output = logSpy.mock.calls.map(([value]) => String(value)).join("\n");
+    for (const value of [
+      secret,
+      encodeURIComponent(secret),
+      "syntheticPass",
+      "opaqueSynthetic",
+      "privateSynthetic",
+    ]) {
+      expect(formatDoctorJson(checks, VERSION)).not.toContain(value);
+      expect(output).not.toContain(value);
+    }
+  });
+
+  it("reports an invalid upstream configuration without echoing or throwing", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "opaqueSyntheticEndpointKey");
+    vi.stubEnv("DEEPSEEK_BASE_URL", "http://[invalid:opaqueSyntheticEndpointKey");
+    const checks = await runDoctorChecks(tmpCwd);
+    expect(checks.find((c) => c.id === "api-reach")!.level).toBe("fail");
+    expect(formatDoctorJson(checks, VERSION)).not.toContain("opaqueSyntheticEndpointKey");
   });
 
   it("exits 1 when the report contains any fail status", async () => {

@@ -67,6 +67,7 @@ import type {
   CheckpointVerdict,
   ChoiceVerdict,
   ConfirmationChoice,
+  ComputerUseStatus,
   ContextDiagnosticsInfo,
   DeepSeekNativeCredentialStatus,
   ExternalSessionApp,
@@ -152,7 +153,9 @@ import {
 import { JobsPop } from "./ui/jobs-pop";
 import { JumpBar } from "./ui/jump-bar";
 import { useElapsed } from "./ui/live";
-import { SettingsModal, type PageId as SettingsPageId } from "./ui/settings";
+import { makeInert } from "./ui/overlay-focus";
+import { PlanProgressOverlay } from "./ui/plan-progress-overlay";
+import { SettingsModal, useProviderSettingsDraft, type PageId as SettingsPageId } from "./ui/settings";
 import { Sidebar } from "./ui/sidebar";
 import { SourceSearchPopover } from "./ui/source-search-popover";
 import { Splash, shouldShowSplash } from "./ui/splash";
@@ -162,6 +165,8 @@ import {
   coerceStartupFailure,
 } from "./ui/startup-failure";
 import { SettingsStatusCard } from "./ui/statusbar";
+import { hasNativeWindow } from "./ui/surface";
+import { usePromptPrediction } from "./use-prompt-prediction";
 import { ThinkingBottomIndicator } from "./ui/thinking-indicator";
 import {
   AssistantMsg,
@@ -176,14 +181,16 @@ import {
 } from "./ui/thread";
 import { getThreadMaxWidth, getVisibleContextWidth } from "./ui/thread-layout";
 import { createTranscriptProjector, retainRecentTranscript } from "./ui/transcript-elision";
-import { PlanProgressOverlay } from "./ui/plan-progress-overlay";
 import { useAutoCollapse } from "./ui/useAutoCollapse";
-import { hasNativeWindow } from "./ui/surface";
-import { useWebDrawer } from "./ui/useWebDrawer";
-import { makeInert } from "./ui/overlay-focus";
-import { useWebLayout, WEB_LAYOUT_KEY, webSideMaxWidth, webContextMaxWidth } from "./ui/useWebLayout";
 import { useDisableTextAssist } from "./ui/useDisableTextAssist";
 import { useBottomResizable, useResizable } from "./ui/useResizable";
+import { useWebDrawer } from "./ui/useWebDrawer";
+import {
+  WEB_LAYOUT_KEY,
+  useWebLayout,
+  webContextMaxWidth,
+  webSideMaxWidth,
+} from "./ui/useWebLayout";
 import {
   TRANSCRIPT_BOTTOM_THRESHOLD,
   followVirtuosoHeightChange,
@@ -232,12 +239,22 @@ export type AssistantSegment =
       result?: string;
       ok?: boolean;
       durationMs?: number;
+      phase?: "preparing" | "running";
+      argsChars?: number;
+      terminalState?: "completed" | "failed" | "dropped" | "cancelled";
     };
 
 import { type ImageAttachment, imageToken } from "../../src/attachments/types";
-import { importImage, useImageDraft } from "./ui/image-attachments";
-import { acknowledgeImageSubmission, imageSubmissionId, readImageDraft, rememberImageSubmission, syncImageDraftReferences, writeImageDraft } from "./ui/image-draft-store";
 import type { QueuedComposerDraft } from "./ui/composer";
+import { importImage, useImageDraft } from "./ui/image-attachments";
+import {
+  acknowledgeImageSubmission,
+  imageSubmissionId,
+  readImageDraft,
+  rememberImageSubmission,
+  syncImageDraftReferences,
+  writeImageDraft,
+} from "./ui/image-draft-store";
 
 export type SkillOrigin = {
   name: string;
@@ -394,7 +411,10 @@ export type SessionInfo = {
 };
 
 export type Settings = {
+  promptPredictionsEnabled?: boolean;
   settingsRevision?: number;
+  serverInstanceId?: string;
+  providerVersion?: string;
   reasoningEffort: "low" | "medium" | "high" | "max";
   thinkingEnabled?: boolean;
   reasoningChoices?: Array<"off" | "low" | "medium" | "high" | "max">;
@@ -429,6 +449,9 @@ export type Settings = {
   webSearchEndpoint?: string;
   browserAutomation?: BrowserAutomationStatus;
   optionalComponents?: OptionalComponentStatus[];
+  computerUseEnabled?: boolean;
+  computerUsePermissionMode?: "standard" | "bounded" | "unrestricted";
+  computerUseStatus?: ComputerUseStatus;
   skillPackSources?: SkillPackSourceInfo[];
   webSearchApiKeys?: {
     metaso?: string;
@@ -481,6 +504,7 @@ type MentionPreviewState = {
 };
 
 type State = {
+  promptPrediction?: { completionId: string; text?: string | null };
   ready: boolean;
   needsSetup: boolean;
   busy: boolean;
@@ -528,6 +552,11 @@ type State = {
   sourceSearchResults: SourceSearchResultsEvent | null;
   sourceIngestResult: SourceIngestResultEvent | null;
   providerTestResult?: Extract<IncomingEvent, { type: "$provider_test_result" }> | null;
+  settingsSaveResult?: Extract<IncomingEvent, { type: "$settings_save_result" }> | null;
+  settingsSaveResults?: Record<string, Extract<IncomingEvent, { type: "$settings_save_result" }>>;
+  providerTestResults?: Record<string, Extract<IncomingEvent, { type: "$provider_test_result" }>>;
+  providerConnectionLost?: boolean;
+  retiredSettingsInstances?: string[];
   jobs: JobInfo[];
   /** Live "skill running" indicator — set when a `skill_run` RPC dispatches, cleared on `$turn_complete`. */
   activeSkill: SkillOrigin | null;
@@ -703,6 +732,7 @@ export function tabBusyFromIncomingEvent(ev: IncomingEvent): boolean | null {
     case "model.delta":
     case "model.final":
     case "tool.preparing":
+    case "tool.progress":
     case "tool.intent":
     case "tool.result":
       return true;
@@ -712,7 +742,14 @@ export function tabBusyFromIncomingEvent(ev: IncomingEvent): boolean | null {
 }
 
 type Action =
-  | { t: "send_user"; text: string; clientId: string; rollbackable?: boolean; attachments?: ImageAttachment[] }
+  | { t: "dismiss_prediction" }
+  | {
+      t: "send_user";
+      text: string;
+      clientId: string;
+      rollbackable?: boolean;
+      attachments?: ImageAttachment[];
+    }
   | { t: "start_skill"; skill: SkillOrigin; args?: string; clientId: string }
   | { t: "incoming"; event: IncomingEvent }
   | { t: "set_busy"; busy: boolean }
@@ -753,6 +790,7 @@ function sanitizeSettingsPatch(patch: SettingsPatch): Partial<Settings> {
     exaApiKey: _exa,
     ollamaApiKey: _ollama,
     apiKey: _providerApiKey,
+    expectedProviderVersion: _expectedProviderVersion,
     webSearchEndpoint,
     ...rest
   } = patch;
@@ -906,11 +944,21 @@ function upsertSubagentRunMessage(messages: ChatMessage[], run: SubagentRunInfo)
 }
 
 export function reduce(state: State, action: Action): State {
-  return reduceRaw(state, action);
+  const next = reduceRaw(state, action);
+  if (next.promptPrediction && (next.busy || !next.ready ||
+    next.currentSessionId !== state.currentSessionId || next.bindingId !== state.bindingId ||
+    next.settings?.model !== state.settings?.model || next.settings?.providerVersion !== state.settings?.providerVersion ||
+    next.settings?.promptPredictionsEnabled === false || action.t === "begin_session_load" ||
+    (action.t === "incoming" && ["$compact_result", "$session_loaded", "$session_empty"].includes(action.event.type)))) {
+    return { ...next, promptPrediction: undefined };
+  }
+  return next;
 }
 
 function reduceRaw(state: State, action: Action): State {
   switch (action.t) {
+    case "dismiss_prediction":
+      return { ...state, promptPrediction: undefined };
     case "send_user": {
       const rollbackable = action.rollbackable !== false;
       const turn = rollbackable
@@ -956,6 +1004,11 @@ function reduceRaw(state: State, action: Action): State {
     case "rpc_exit":
       return {
         ...state,
+        providerConnectionLost: true,
+        providerTestResult: null,
+        providerTestResults: {},
+        settingsSaveResult: null,
+        settingsSaveResults: {},
         ready: false,
         busy: false,
         transientStatus: null,
@@ -969,7 +1022,7 @@ function reduceRaw(state: State, action: Action): State {
         pendingCheckpoints: [],
         pendingRevisions: [],
         messages: [
-          ...state.messages,
+          ...settleOpenToolCards(state.messages, true),
           {
             kind: "error",
             message: `jupiter exited (code ${action.code ?? "?"})`,
@@ -1037,6 +1090,7 @@ function reduceRaw(state: State, action: Action): State {
         sourceSearchResults: null,
         sourceIngestResult: null,
         providerTestResult: null,
+        providerTestResults: {},
         retryNonce: 0,
       };
     case "resolve_confirm":
@@ -1134,7 +1188,13 @@ function reduceRaw(state: State, action: Action): State {
     case "mention_preview":
       return { ...state, mentionPreview: action.preview };
     case "enqueue_send":
-      return { ...state, queuedSends: [...state.queuedSends, action.payload ? { text: action.text, payload: action.payload } : action.text] };
+      return {
+        ...state,
+        queuedSends: [
+          ...state.queuedSends,
+          action.payload ? { text: action.text, payload: action.payload } : action.text,
+        ],
+      };
     case "dequeue_send":
       return {
         ...state,
@@ -1182,10 +1242,16 @@ function reduceRaw(state: State, action: Action): State {
     case "push_status":
       return {
         ...state,
-        messages: [...state.messages, {
-          kind: "status", text: action.text,
-          ...(action.activity === "compaction" ? { activity: "compaction" as const, pending: true, id: nextErrorId() } : {}),
-        }],
+        messages: [
+          ...state.messages,
+          {
+            kind: "status",
+            text: action.text,
+            ...(action.activity === "compaction"
+              ? { activity: "compaction" as const, pending: true, id: nextErrorId() }
+              : {}),
+          },
+        ],
       };
   }
 }
@@ -1423,10 +1489,22 @@ function sessionFilesForMessages(messages: ChatMessage[]): SessionFile[] {
   return sessionFiles;
 }
 
+function settleOpenToolCards(messages: ChatMessage[], disconnected = false): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.kind !== "assistant" || !message.segments.some((segment) => segment.kind === "tool" && segment.result === undefined)) return message;
+    return { ...message, pending: false, segments: message.segments.map((segment) => {
+      if (segment.kind !== "tool" || segment.result !== undefined) return segment;
+      const terminalState = disconnected ? (segment.phase === "preparing" ? "dropped" : "failed") : "cancelled";
+      return { ...segment, result: t(disconnected ? (segment.phase === "preparing" ? "cards.dropped" : "cards.connectionLost") : "cards.cancelled"), ok: false, terminalState };
+    }) };
+  });
+}
+
 export function applyIncoming(state: State, ev: IncomingEvent): State {
   const next = applyIncomingRaw(state, ev);
   if (ev.type !== "$turn_complete") return next;
-  return { ...next, messages: retainRecentTranscript(next.messages, new Set(next.expandedTurns)) };
+  const messages = settleOpenToolCards(next.messages);
+  return { ...next, messages: retainRecentTranscript(messages, new Set(next.expandedTurns)) };
 }
 
 type SessionSnapshotEvent = Extract<
@@ -1554,7 +1632,8 @@ function applySessionSnapshot(
     sessionFiles: ev.sessionFiles ?? sessionFilesForMessages(nextMessages),
     subagents: keepLiveMessages ? state.subagents : [],
     activeSkill: ev.busy ? state.activeSkill : null,
-    queuedSends: keepLiveMessages || state.currentSessionId === snapshot.sessionId ? state.queuedSends : [],
+    queuedSends:
+      keepLiveMessages || state.currentSessionId === snapshot.sessionId ? state.queuedSends : [],
     sideChats: keepLiveMessages ? state.sideChats : [],
     retryNonce: keepLiveMessages ? state.retryNonce : 0,
   };
@@ -1701,8 +1780,18 @@ export function reduceSubagentRuns(
   return out;
 }
 
+function numericProgress(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 function applyIncomingRaw(state: State, ev: IncomingEvent): State {
   switch (ev.type) {
+    case "$prompt_prediction_eligible":
+      return state.promptPrediction?.completionId === ev.completionId ? state :
+        { ...state, promptPrediction: { completionId: ev.completionId } };
+    case "$prompt_prediction":
+      return state.promptPrediction?.completionId === ev.completionId ?
+        { ...state, promptPrediction: { completionId: ev.completionId, text: ev.text } } : state;
     case "user.message": {
       if (ev.clientId) {
         const existingIndex = state.messages.findIndex(
@@ -1766,9 +1855,19 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       // that drains next then appears above the zombie card (#1456).
       return {
         ...state,
-        messages: state.messages.map(message => message.kind === "assistant" && message.segments.some(segment => segment.kind === "compaction" && segment.pending)
-          ? { ...message, segments: message.segments.map(segment => segment.kind === "compaction" && segment.pending ? { ...segment, pending: false, text: t("app.compact.noopUnknown") } : segment) }
-          : message),
+        messages: state.messages.map((message) =>
+          message.kind === "assistant" &&
+          message.segments.some((segment) => segment.kind === "compaction" && segment.pending)
+            ? {
+                ...message,
+                segments: message.segments.map((segment) =>
+                  segment.kind === "compaction" && segment.pending
+                    ? { ...segment, pending: false, text: t("app.compact.noopUnknown") }
+                    : segment,
+                ),
+              }
+            : message,
+        ),
         busy: false,
         transientStatus: null,
         activeSkill: null,
@@ -1996,6 +2095,12 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
                 ? t("app.compact.noopInsufficientSavings")
                 : ev.reason === "summary-empty"
                   ? t("app.compact.noopSummaryEmpty")
+                  : ev.reason === "summary-cancelled"
+                    ? t("app.compact.cancelled")
+                    : ev.reason === "summary-timeout"
+                      ? t("app.compact.timedOut")
+                      : ev.reason === "summary-invalid" || ev.reason === "summary-failed" || ev.reason === "persistence-failed"
+                        ? t("app.compact.failedRetained")
                   : t("app.compact.noopUnknown");
       const text = ev.folded
         ? t("app.compact.done", {
@@ -2004,10 +2109,17 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
             chars: ev.summaryChars.toLocaleString(),
           })
         : `${compactNoopReason}${compactStats}`;
-      const pendingIndex = state.messages.findIndex(message => message.kind === "status" && message.activity === "compaction" && message.pending);
+      const pendingIndex = state.messages.findIndex(
+        (message) =>
+          message.kind === "status" && message.activity === "compaction" && message.pending,
+      );
       if (pendingIndex >= 0) {
         const messages = [...state.messages];
-        messages[pendingIndex] = { ...messages[pendingIndex] as Extract<ChatMessage, { kind: "status" }>, text, pending: false };
+        messages[pendingIndex] = {
+          ...(messages[pendingIndex] as Extract<ChatMessage, { kind: "status" }>),
+          text,
+          pending: false,
+        };
         return { ...state, transientStatus: null, messages };
       }
       return {
@@ -2037,7 +2149,17 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "$source_ingest_result":
       return { ...state, sourceIngestResult: ev };
     case "$provider_test_result":
-      return { ...state, providerTestResult: ev };
+      if (state.providerConnectionLost || ev.serverInstanceId !== state.settings?.serverInstanceId) return state;
+      return { ...state, providerTestResult: ev, providerTestResults: {
+        ...Object.fromEntries(Object.entries(state.providerTestResults ?? {}).filter(([id]) => id !== ev.requestId).slice(-31)),
+        [ev.requestId]: ev,
+      } };
+    case "$settings_save_result":
+      if (state.providerConnectionLost || ev.serverInstanceId !== state.settings?.serverInstanceId) return state;
+      return { ...state, settingsSaveResult: ev, settingsSaveResults: {
+        ...Object.fromEntries(Object.entries(state.settingsSaveResults ?? {}).filter(([id]) => id !== ev.requestId).slice(-31)),
+        [ev.requestId]: ev,
+      } };
     case "$library_sources":
       return { ...state, librarySources: ev.sources };
     case "$storage_scan":
@@ -2101,11 +2223,22 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
     case "$settings": {
       const incomingRevision = ev.settingsRevision ?? 0;
-      if (incomingRevision < (state.settings?.settingsRevision ?? -1)) return state;
+      if (state.providerConnectionLost && ev.serverInstanceId === state.settings?.serverInstanceId) return state;
+      if (ev.serverInstanceId && state.retiredSettingsInstances?.includes(ev.serverInstanceId)) return state;
+      const restarted = !!state.settings?.serverInstanceId && ev.serverInstanceId !== state.settings.serverInstanceId;
+      if (!restarted && incomingRevision < (state.settings?.settingsRevision ?? -1)) return state;
       const prevWs = state.settings?.workspaceDir;
       const wsChanged = prevWs !== undefined && prevWs !== ev.workspaceDir;
       return {
         ...state,
+        providerConnectionLost: false,
+        retiredSettingsInstances: restarted
+          ? [...(state.retiredSettingsInstances ?? []), state.settings!.serverInstanceId!]
+          : state.retiredSettingsInstances,
+        providerTestResult: restarted || ev.providerVersion !== state.settings?.providerVersion ? null : state.providerTestResult,
+        providerTestResults: restarted || ev.providerVersion !== state.settings?.providerVersion ? {} : state.providerTestResults,
+        settingsSaveResult: restarted ? null : state.settingsSaveResult,
+        settingsSaveResults: restarted ? {} : state.settingsSaveResults,
         busy: wsChanged ? false : state.busy,
         messages: wsChanged ? [] : state.messages,
         transientStatus: wsChanged ? null : state.transientStatus,
@@ -2122,6 +2255,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         retryNonce: wsChanged ? 0 : state.retryNonce,
         settings: {
           settingsRevision: incomingRevision,
+          serverInstanceId: ev.serverInstanceId,
+          providerVersion: ev.providerVersion,
           reasoningEffort: ev.reasoningEffort,
           thinkingEnabled: ev.thinkingEnabled,
           reasoningChoices: ev.reasoningChoices,
@@ -2145,6 +2280,9 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           webSearchEndpoint: ev.webSearchEndpoint,
           browserAutomation: ev.browserAutomation,
           optionalComponents: ev.optionalComponents,
+          computerUseEnabled: ev.computerUseEnabled,
+          computerUsePermissionMode: ev.computerUsePermissionMode,
+          computerUseStatus: ev.computerUseStatus,
           skillPackSources: ev.skillPackSources,
           webSearchApiKeys: ev.webSearchApiKeys,
           deepseekNativeCredentialStatus: ev.deepseekNativeCredentialStatus,
@@ -2261,9 +2399,9 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       const retryable = ev.type === "error" ? ev.retryable === true : false;
       // An error card is not a lifecycle boundary: hooks and other async
       // cleanup may still be running. Only $turn_complete releases queued input.
-      const settled = state.messages.filter(m => !(m.kind === "status" && m.activity === "compaction" && m.pending)).map((m) =>
-        m.kind === "assistant" && m.pending ? { ...m, pending: false } : m,
-      );
+      const settled = state.messages
+        .filter((m) => !(m.kind === "status" && m.activity === "compaction" && m.pending))
+        .map((m) => (m.kind === "assistant" && m.pending ? { ...m, pending: false } : m));
       return {
         ...state,
         pendingTurnLoads: {},
@@ -2420,6 +2558,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
               name: ev.name,
               args: "",
               startedAt: Date.now(),
+              phase: "preparing",
+              argsChars: numericProgress(ev.toolCallArgsChars),
             },
           ],
         };
@@ -2427,7 +2567,25 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       }
       return state;
     }
+    case "tool.progress": {
+      for (let i = state.messages.length - 1; i >= 0; i--) {
+        const message = state.messages[i]!;
+        if (message.kind !== "assistant" || message.turn !== ev.turn) continue;
+        const index = message.segments.findIndex((segment) => segment.kind === "tool" && segment.callId === ev.callId);
+        const segment = message.segments[index];
+        if (segment?.kind !== "tool" || segment.result !== undefined) return state;
+        const argsChars = Math.max(segment.argsChars ?? 0, numericProgress(ev.toolCallArgsChars) ?? 0);
+        if (argsChars === segment.argsChars && ev.name === segment.name) return state;
+        const segments = [...message.segments];
+        segments[index] = { ...segment, name: ev.name, argsChars };
+        const messages = [...state.messages];
+        messages[i] = { ...message, segments };
+        return { ...state, messages };
+      }
+      return state;
+    }
     case "tool.intent": {
+      if (state.messages.some((message) => message.kind === "assistant" && message.segments.some((segment) => segment.kind === "tool" && segment.callId === ev.callId && segment.result !== undefined))) return state;
       const adds = extractToolFiles(ev.name, ev.args);
       let nextState = {
         ...state,
@@ -2442,7 +2600,9 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           if (segs[idx]?.kind === "tool")
             segs[idx] = {
               ...(segs[idx] as AssistantSegment & { kind: "tool" }),
+              name: ev.name,
               args: ev.args,
+              phase: "running",
             };
           const msgs = [...nextState.messages];
           msgs[i] = { ...m, segments: segs };
@@ -2458,6 +2618,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
                 callId: ev.callId,
                 name: ev.name,
                 args: ev.args,
+                phase: "running",
                 startedAt: Date.now(),
               },
             ],
@@ -2475,12 +2636,14 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         let mutated = false;
         const segs = m.segments.map((s) => {
           if (s.kind === "tool" && s.callId === ev.callId) {
+            if (s.result !== undefined) return s;
             mutated = true;
             return {
               ...s,
               result: ev.output,
               attachments: ev.attachments,
               ok: ev.ok,
+              terminalState: ev.terminalState ?? (ev.ok ? "completed" : "failed"),
               durationMs: Date.now() - s.startedAt,
             };
           }
@@ -2494,7 +2657,12 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return state;
     }
     case "$retry_result":
-      return { ...state, retryText: ev.text, retryAttachments: ev.attachments, retryNonce: state.retryNonce + 1 };
+      return {
+        ...state,
+        retryText: ev.text,
+        retryAttachments: ev.attachments,
+        retryNonce: state.retryNonce + 1,
+      };
     case "$btw_result":
       if (ev.clientId) {
         const idx = state.sideChats.findIndex((item) => item.id === ev.clientId);
@@ -2521,17 +2689,32 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           const message = state.messages[index];
           if (message.kind !== "assistant") return state;
           const segments = [...message.segments];
-          const pendingIndex = segments.findIndex(segment => segment.kind === "compaction" && segment.pending);
+          const pendingIndex = segments.findIndex(
+            (segment) => segment.kind === "compaction" && segment.pending,
+          );
           if (pendingIndex >= 0) {
-            segments[pendingIndex] = { ...segments[pendingIndex] as Extract<AssistantSegment, { kind: "compaction" }>, text: ev.text, pending: ev.activityState === "running" };
+            segments[pendingIndex] = {
+              ...(segments[pendingIndex] as Extract<AssistantSegment, { kind: "compaction" }>),
+              text: ev.text,
+              pending: ev.activityState === "running",
+            };
           } else {
-            segments.push({ kind: "compaction", id: `compact-${ev.id}`, text: ev.text, pending: ev.activityState === "running" });
+            segments.push({
+              kind: "compaction",
+              id: `compact-${ev.id}`,
+              text: ev.text,
+              pending: ev.activityState === "running",
+            });
           }
           const messages = [...state.messages];
           messages[index] = { ...message, segments };
           return { ...state, transientStatus: null, messages };
         }
-        return { ...state, transientStatus: null, messages: [...state.messages, { kind: "status", id: `compact-${ev.id}`, text: ev.text }] };
+        return {
+          ...state,
+          transientStatus: null,
+          messages: [...state.messages, { kind: "status", id: `compact-${ev.id}`, text: ev.text }],
+        };
       }
       return {
         ...state,
@@ -2795,7 +2978,13 @@ function TabRuntimeInner({
   useLang();
   useDisableTextAssist();
   const draftKey = state.currentSessionId || state.currentSession || `new:${tabId}`;
-  const { draft, setDraft, images: draftImages, setImages: setDraftImages, pending: pendingImageDraft } = useImageDraft(draftKey);
+  const {
+    draft,
+    setDraft,
+    images: draftImages,
+    setImages: setDraftImages,
+    pending: pendingImageDraft,
+  } = useImageDraft(draftKey);
   const [dropIntakes, setDropIntakes] = useState<Record<string, number>>({});
   const queueHydratedKey = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -2851,6 +3040,8 @@ function TabRuntimeInner({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPageId>("general");
   const [settingsCardOpen, setSettingsCardOpen] = useState(false);
+  const [predictionLocalOff, setPredictionLocalOff] = useState(false);
+  const [predictionPreferenceRequest, setPredictionPreferenceRequest] = useState<string | null>(null);
   const settingsReturnFocus = useRef<HTMLElement | null>(null);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -2881,12 +3072,26 @@ function TabRuntimeInner({
     if (!state.ready || checkedImageRecovery.current.has(draftKey)) return;
     checkedImageRecovery.current.add(draftKey);
     if (!pendingImageDraft || state.busy || draft || draftImages.length) return;
-    if (readImageDraft(draftKey).queue?.some((item) => typeof item !== "string" && item.payload?.clientId === pendingImageDraft.clientId)) return;
+    if (
+      readImageDraft(draftKey).queue?.some(
+        (item) => typeof item !== "string" && item.payload?.clientId === pendingImageDraft.clientId,
+      )
+    )
+      return;
     setDraft(pendingImageDraft.draft.text);
     setDraftImages(pendingImageDraft.draft.attachments ?? []);
     setAskArmed(pendingImageDraft.ask);
     setOneShotPlanArmed(pendingImageDraft.plan);
-  }, [pendingImageDraft, state.busy, state.ready, draft, draftImages.length, setDraft, setDraftImages, draftKey]);
+  }, [
+    pendingImageDraft,
+    state.busy,
+    state.ready,
+    draft,
+    draftImages.length,
+    setDraft,
+    setDraftImages,
+    draftKey,
+  ]);
   const recordAbortDraft = useCallback((source: AbortDraftSource, text: string) => {
     abortDraftRef.current = nextAbortDraftCandidate(abortDraftRef.current, {
       type: "record",
@@ -2896,7 +3101,8 @@ function TabRuntimeInner({
   }, []);
   const openSettingsAt = useCallback((page: SettingsPageId = "general") => {
     if (!document.querySelector(".settings-card")) {
-      settingsReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      settingsReturnFocus.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
     }
     setSettingsPage(page);
     setSettingsCardOpen(false);
@@ -2916,7 +3122,8 @@ function TabRuntimeInner({
       model: state.settings?.model ?? state.model,
       hasMessages: state.messages.length > 0,
       contextInfoOpen,
-      overlayOpen: settingsOpen || settingsCardOpen || jobsOpen || aboutOpen || wdOpen || palette.open,
+      overlayOpen:
+        settingsOpen || settingsCardOpen || jobsOpen || aboutOpen || wdOpen || palette.open,
     });
   }, [
     contextInfoOpen,
@@ -3046,7 +3253,9 @@ function TabRuntimeInner({
     },
     [sendRpcToTab, tabId],
   );
-  useEffect(() => { if (state.ready && rpcTransportAvailable) syncImageDraftReferences(tabId); }, [state.ready, rpcTransportAvailable, tabId]);
+  useEffect(() => {
+    if (state.ready && rpcTransportAvailable) syncImageDraftReferences(tabId);
+  }, [state.ready, rpcTransportAvailable, tabId]);
   useEffect(() => {
     if (state.settings?.workspaceDir) sendRpc({ cmd: "library_list" });
   }, [sendRpc, state.settings?.workspaceDir]);
@@ -3110,9 +3319,17 @@ function TabRuntimeInner({
     optimisticBusyRef.current = true;
   }, []);
   const sendOptimisticRpc = useCallback(
-    (cmd: OutgoingCommand, opts: { clientId: string; restoreDraft?: string; restoreImages?: ImageAttachment[] }): void => {
+    (
+      cmd: OutgoingCommand,
+      opts: { clientId: string; restoreDraft?: string; restoreImages?: ImageAttachment[] },
+    ): void => {
       if (cmd.cmd === "user_input" || cmd.cmd === "ask_light") {
-        rememberImageSubmission(draftKey, opts.clientId, { text: opts.restoreDraft ?? cmd.text, attachments: opts.restoreImages }, { ask: cmd.cmd === "ask_light", plan: cmd.cmd === "user_input" && cmd.planOneShot });
+        rememberImageSubmission(
+          draftKey,
+          opts.clientId,
+          { text: opts.restoreDraft ?? cmd.text, attachments: opts.restoreImages },
+          { ask: cmd.cmd === "ask_light", plan: cmd.cmd === "user_input" && cmd.planOneShot },
+        );
         abortImagesRef.current = opts.restoreImages ?? [];
       }
       const pending = sendRpc(cmd);
@@ -3124,7 +3341,8 @@ function TabRuntimeInner({
         if (opts.restoreDraft !== undefined) {
           setDraft((current) => (current.length === 0 ? opts.restoreDraft! : current));
         }
-        if (opts.restoreImages?.length) setDraftImages((current) => current.length ? current : opts.restoreImages!);
+        if (opts.restoreImages?.length)
+          setDraftImages((current) => (current.length ? current : opts.restoreImages!));
       });
     },
     [clearAbortDraft, sendRpc, setDraft, setDraftImages, draftKey],
@@ -3338,19 +3556,46 @@ function TabRuntimeInner({
       toggleContextPanel,
     });
     return () => registerRuntimeControls(tabId, null);
-  }, [clearAbortDraft, openSettingsAt, registerRuntimeControls, setPaletteOpen, tabId, toggleContextPanel]);
+  }, [
+    clearAbortDraft,
+    openSettingsAt,
+    registerRuntimeControls,
+    setPaletteOpen,
+    tabId,
+    toggleContextPanel,
+  ]);
   const saveSettings = useCallback(
-    (patch: SettingsPatch) =>
-      sendRpc({ cmd: "settings_save", requestId: crypto.randomUUID(), ...patch }),
+    (patch: SettingsPatch) => {
+      const requestId = crypto.randomUUID();
+      sendRpc({ cmd: "settings_save", requestId, ...patch });
+      return requestId;
+    },
     [sendRpc],
   );
   const applySettingsPatch = useCallback(
     (patch: SettingsPatch) => {
-      dispatch({ t: "settings_patch", patch });
-      saveSettings(patch);
+      const providerPatch = patch.expectedProviderVersion !== undefined || patch.baseUrl !== undefined ||
+        patch.apiKey !== undefined || patch.providerDialect !== undefined || patch.vision !== undefined || patch.imageTransport !== undefined;
+      if (!providerPatch) dispatch({ t: "settings_patch", patch });
+      const requestId = saveSettings(patch);
+      if (patch.promptPredictionsEnabled !== undefined) {
+        setPredictionLocalOff(!patch.promptPredictionsEnabled);
+        setPredictionPreferenceRequest(requestId);
+      }
+      return requestId;
     },
     [saveSettings],
   );
+  const clearPrediction = useCallback(() => dispatch({ t: "dismiss_prediction" }), []);
+  const predictionUi = usePromptPrediction({
+    candidate: state.promptPrediction, active, ready: state.ready, busy: state.busy,
+    enabled: !predictionLocalOff && state.settings?.promptPredictionsEnabled !== false,
+    blocked: settingsOpen || settingsCardOpen || state.pendingConfirms.length > 0 ||
+      state.pendingChoices.length > 0 || state.pendingPlans.length > 0 || state.pendingPathAccess.length > 0 ||
+      state.pendingCheckpoints.length > 0 || state.pendingRevisions.length > 0,
+    hasDraft: !!draft || draftImages.length > 0 || !!pendingImageDraft || (dropIntakes[draftKey] ?? 0) > 0 || state.queuedSends.length > 0,
+    transportAvailable: rpcTransportAvailable, send: sendRpc, clear: clearPrediction,
+  });
   useEffect(() => {
     if (settingsOpen) {
       sendRpc({ cmd: "settings_get" });
@@ -3390,10 +3635,17 @@ function TabRuntimeInner({
       apiKey?: string;
       model: string;
       providerDialect: "auto" | "deepseek" | "openai-compatible";
-    }) => sendRpc({ cmd: "provider_test", requestId: crypto.randomUUID(), ...input }),
+      expectedProviderVersion?: string;
+    }) => {
+      const requestId = crypto.randomUUID();
+      sendRpc({ cmd: "provider_test", requestId, ...input });
+      return requestId;
+    },
     [sendRpc],
   );
   const signOutApiKey = useCallback(() => sendRpc({ cmd: "settings_sign_out" }), [sendRpc]);
+  const providerDraft = useProviderSettingsDraft(state.settings, state.settingsSaveResult, state.providerTestResult,
+    { saves: state.settingsSaveResults, probes: state.providerTestResults, disconnected: state.providerConnectionLost });
   const refreshOptionalComponents = useCallback(
     () => sendRpc({ cmd: "optional_components_get" }),
     [sendRpc],
@@ -3471,13 +3723,21 @@ function TabRuntimeInner({
     window.setTimeout(() => setToast(null), opts?.duration ?? 1600);
   }, []);
   useEffect(() => {
-    const result = state.providerTestResult;
-    if (!result) return;
-    flashToast(result.ok ? result.message : `Provider test failed: ${result.message}`, {
-      duration: 4200,
-    });
-  }, [flashToast, state.providerTestResult]);
-
+    if (!predictionPreferenceRequest) return;
+    const result = state.settingsSaveResults?.[predictionPreferenceRequest];
+    const failed = () => {
+      setPredictionLocalOff(true);
+      setPredictionPreferenceRequest(null);
+      flashToast(t("composer.predictionSaveFailed"), { duration: 6000 });
+    };
+    if (result?.settings?.status === "success") {
+      setPredictionPreferenceRequest(null);
+      return;
+    }
+    if (result && result.settings?.status !== "pending") { failed(); return; }
+    const timer = window.setTimeout(failed, 15_000);
+    return () => window.clearTimeout(timer);
+  }, [predictionPreferenceRequest, state.settingsSaveResults, flashToast]);
   useEffect(() => {
     const result = state.sessionActionResult;
     if (!result) return;
@@ -3569,36 +3829,57 @@ function TabRuntimeInner({
           const webFiles = (event.payload as { files?: File[] }).files ?? [];
           if (!initialPaths.length && !webFiles.length) return;
           if (initialPaths.length + webFiles.length + draftImages.length > 12) {
-            flashToast(getLang() === "zh-CN" ? "一次最多添加 12 个附件" : "At most 12 attachments per drop");
+            flashToast(
+              getLang() === "zh-CN" ? "一次最多添加 12 个附件" : "At most 12 attachments per drop",
+            );
             return;
           }
           setDropIntakes((counts) => ({ ...counts, [draftKey]: (counts[draftKey] ?? 0) + 1 }));
           // The bound draft setters belong to the session active at drop time.
           void (async () => {
-          const paths = [...initialPaths];
-          for (const file of webFiles) paths.push(await invoke<string>("web_upload_file", { file }));
-          const imagePaths = paths.filter((path) => /^jupiter-image:/.test(path) || /\.(png|jpe?g|webp|gif)$/i.test(path));
-          for (const path of imagePaths.slice(0, 12)) {
-            const image = await importImage(path, tabId);
-            setDraftImages((current) => current.some((item) => item.id === image.id) ? current : [...current, image].slice(0, 12));
-          }
-          const mentions = paths.filter((path) => !imagePaths.includes(path)).map((p) => {
-            const norm = p.replace(/\\/g, "/");
-            if (ws) {
-              const wsNorm = ws.replace(/\\/g, "/").replace(/\/+$/, "");
-              if (norm === wsNorm || norm.startsWith(`${wsNorm}/`)) {
-                return norm.slice(wsNorm.length).replace(/^\/+/, "") || ".";
-              }
+            const paths = [...initialPaths];
+            for (const file of webFiles)
+              paths.push(await invoke<string>("web_upload_file", { file }));
+            const imagePaths = paths.filter(
+              (path) => /^jupiter-image:/.test(path) || /\.(png|jpe?g|webp|gif)$/i.test(path),
+            );
+            for (const path of imagePaths.slice(0, 12)) {
+              const image = await importImage(path, tabId);
+              setDraftImages((current) =>
+                current.some((item) => item.id === image.id)
+                  ? current
+                  : [...current, image].slice(0, 12),
+              );
             }
-            return norm;
-          });
-          if (mentions.length) setDraft((d) => {
-            const prefix = d.trim() ? `${d.replace(/\s+$/, "")} ` : "";
-            return `${prefix}${mentions.map((m) => `@${m}`).join(" ")} `;
-          });
-          for (const m of mentions) markMentionPicked(m);
-          composerRef.current?.focus();
-          })().catch((error) => flashToast(`Image/file attachment failed: ${(error as Error).message}`)).finally(() => setDropIntakes((counts) => ({ ...counts, [draftKey]: Math.max(0, (counts[draftKey] ?? 1) - 1) })));
+            const mentions = paths
+              .filter((path) => !imagePaths.includes(path))
+              .map((p) => {
+                const norm = p.replace(/\\/g, "/");
+                if (ws) {
+                  const wsNorm = ws.replace(/\\/g, "/").replace(/\/+$/, "");
+                  if (norm === wsNorm || norm.startsWith(`${wsNorm}/`)) {
+                    return norm.slice(wsNorm.length).replace(/^\/+/, "") || ".";
+                  }
+                }
+                return norm;
+              });
+            if (mentions.length)
+              setDraft((d) => {
+                const prefix = d.trim() ? `${d.replace(/\s+$/, "")} ` : "";
+                return `${prefix}${mentions.map((m) => `@${m}`).join(" ")} `;
+              });
+            for (const m of mentions) markMentionPicked(m);
+            composerRef.current?.focus();
+          })()
+            .catch((error) =>
+              flashToast(`Image/file attachment failed: ${(error as Error).message}`),
+            )
+            .finally(() =>
+              setDropIntakes((counts) => ({
+                ...counts,
+                [draftKey]: Math.max(0, (counts[draftKey] ?? 1) - 1),
+              })),
+            );
         });
         if (cancelled) handle();
         else unlisten = handle;
@@ -3611,7 +3892,16 @@ function TabRuntimeInner({
       unlisten?.();
       delete document.body.dataset.dragOver;
     };
-  }, [state.settings?.workspaceDir, markMentionPicked, setDraft, setDraftImages, tabId, flashToast, draftKey, draftImages.length]);
+  }, [
+    state.settings?.workspaceDir,
+    markMentionPicked,
+    setDraft,
+    setDraftImages,
+    tabId,
+    flashToast,
+    draftKey,
+    draftImages.length,
+  ]);
 
   const send = useCallback(
     (override?: string, payload?: ComposerSendPayload) => {
@@ -3623,15 +3913,26 @@ function TabRuntimeInner({
         (!text && hiddenMentions.length === 0 && images.length === 0) ||
         !state.ready ||
         !rpcTransportAvailable ||
-        state.busy || optimisticBusyRef.current || dropIntakes[draftKey]
+        state.busy ||
+        optimisticBusyRef.current ||
+        dropIntakes[draftKey]
       )
         return;
       if (images.length && !state.settings?.supportsImages) {
-        dispatch({ t: "push_status", text: getLang() === "zh-CN" ? "请先选择支持图片的模型，附件已保留。" : "Select a vision model first. Your attachments have been kept." });
+        dispatch({
+          t: "push_status",
+          text:
+            getLang() === "zh-CN"
+              ? "请先选择支持图片的模型，附件已保留。"
+              : "Select a vision model first. Your attachments have been kept.",
+        });
         return;
       }
       if (images.length && text.startsWith("/") && !/^\/(ask|plan)\s+\S/.test(text)) {
-        dispatch({ t: "push_status", text: "Images can accompany a message, /ask question, or /plan task. Remove the other slash command before sending." });
+        dispatch({
+          t: "push_status",
+          text: "Images can accompany a message, /ask question, or /plan task. Remove the other slash command before sending.",
+        });
         return;
       }
 
@@ -3666,7 +3967,10 @@ function TabRuntimeInner({
           return true;
         }
 
-        const clientId = payload?.clientId ?? imageSubmissionId(draftKey, { text, attachments: images }) ?? `plan-${crypto.randomUUID()}`;
+        const clientId =
+          payload?.clientId ??
+          imageSubmissionId(draftKey, { text, attachments: images }) ??
+          `plan-${crypto.randomUUID()}`;
         const planText = hiddenMentions.length
           ? `${oneShotPlanCommand.text}\n\n${hiddenMentions.map((mention) => `@${mention}`).join(" ")}`
           : oneShotPlanCommand.text;
@@ -3729,13 +4033,17 @@ function TabRuntimeInner({
         if (hiddenMentions.length > 0) {
           dispatch({
             t: "push_status",
-            text: getLang() === "zh-CN"
-              ? "询问模式不能读取普通文件，请切换到 Agent 模式；附件已保留。"
-              : "Ask mode cannot read ordinary files. Switch to Agent mode; your attachments were kept.",
+            text:
+              getLang() === "zh-CN"
+                ? "询问模式不能读取普通文件，请切换到 Agent 模式；附件已保留。"
+                : "Ask mode cannot read ordinary files. Switch to Agent mode; your attachments were kept.",
           });
           return;
         }
-        const clientId = payload?.clientId ?? imageSubmissionId(draftKey, { text, attachments: images }) ?? `ask-${crypto.randomUUID()}`;
+        const clientId =
+          payload?.clientId ??
+          imageSubmissionId(draftKey, { text, attachments: images }) ??
+          `ask-${crypto.randomUUID()}`;
         setAskArmed(false);
         recordAbortDraft("ask_light", question);
         markOptimisticBusy();
@@ -3810,15 +4118,19 @@ function TabRuntimeInner({
         }
       }
 
-      const clientId = payload?.clientId ?? imageSubmissionId(draftKey, { text, attachments: images }) ?? `c-${crypto.randomUUID()}`;
+      const clientId =
+        payload?.clientId ??
+        imageSubmissionId(draftKey, { text, attachments: images }) ??
+        `c-${crypto.randomUUID()}`;
       const askFirst = payload?.ask ?? askArmed;
       if (askFirst) {
         if (hiddenMentions.length > 0) {
           dispatch({
             t: "push_status",
-            text: getLang() === "zh-CN"
-              ? "询问模式不能读取普通文件，请切换到 Agent 模式；附件已保留。"
-              : "Ask mode cannot read ordinary files. Switch to Agent mode; your attachments were kept.",
+            text:
+              getLang() === "zh-CN"
+                ? "询问模式不能读取普通文件，请切换到 Agent 模式；附件已保留。"
+                : "Ask mode cannot read ordinary files. Switch to Agent mode; your attachments were kept.",
           });
           return;
         }
@@ -3842,11 +4154,15 @@ function TabRuntimeInner({
           ? `${text}\n\n${hiddenMentionText}`
           : text
         : hiddenMentionText;
-      const displayText = text || (
-        hiddenMentions.length > 0
-          ? (getLang() === "zh-CN" ? "文件附件" : "File attachment")
-          : (getLang() === "zh-CN" ? "图片附件" : "Image attachment")
-      );
+      const displayText =
+        text ||
+        (hiddenMentions.length > 0
+          ? getLang() === "zh-CN"
+            ? "文件附件"
+            : "File attachment"
+          : getLang() === "zh-CN"
+            ? "图片附件"
+            : "Image attachment");
       addLibraryFilesFromMessage(wireText);
       recordAbortDraft("user_input", wireText);
       markOptimisticBusy();
@@ -3947,11 +4263,15 @@ function TabRuntimeInner({
     [sendRpc],
   );
 
-  const onEditUserMsg = useCallback((t: string, images?: ImageAttachment[]) => {
-    setDraft(t);
-    setDraftImages(images ?? []);
-    composerRef.current?.focus();
-  }, [setDraft, setDraftImages]);
+  const onEditUserMsg = useCallback(
+    (t: string, images?: ImageAttachment[]) => {
+      predictionUi.dismiss();
+      setDraft(t);
+      setDraftImages(images ?? []);
+      composerRef.current?.focus();
+    },
+    [setDraft, setDraftImages, predictionUi.dismiss],
+  );
   const rollbackToMessage = useCallback(
     (turn: number, role: "user" | "assistant") => {
       clearAbortDraft();
@@ -3961,8 +4281,20 @@ function TabRuntimeInner({
   );
   const loadFullTurn = useCallback(
     (turn: number) => {
-      const messages = state.messages.filter(message => (message.kind === "user" || message.kind === "assistant") && message.turn === turn);
-      if (messages.length && messages.every(message => !((message.kind === "user" || message.kind === "assistant") && message.displayTruncated))) {
+      const messages = state.messages.filter(
+        (message) =>
+          (message.kind === "user" || message.kind === "assistant") && message.turn === turn,
+      );
+      if (
+        messages.length &&
+        messages.every(
+          (message) =>
+            !(
+              (message.kind === "user" || message.kind === "assistant") &&
+              message.displayTruncated
+            ),
+        )
+      ) {
         dispatch({ t: "expand_turn", turn });
         return;
       }
@@ -4003,7 +4335,14 @@ function TabRuntimeInner({
     if (!state.busy) optimisticBusyRef.current = false;
   }, [state.busy]);
   useEffect(() => {
-    if (state.busy || optimisticBusyRef.current || !state.ready || !rpcTransportAvailable || state.queuedSends.length === 0 || queueHydratedKey.current !== draftKey)
+    if (
+      state.busy ||
+      optimisticBusyRef.current ||
+      !state.ready ||
+      !rpcTransportAvailable ||
+      state.queuedSends.length === 0 ||
+      queueHydratedKey.current !== draftKey
+    )
       return;
     const next = state.queuedSends[0];
     if (!next) return;
@@ -4790,6 +5129,13 @@ function TabRuntimeInner({
 
   const renderComposer = (variant: "default" | "hero" = "default") => (
     <Composer
+      prediction={predictionUi.prediction}
+      onPredictionAccept={predictionUi.dismiss}
+      onPredictionDismiss={predictionUi.dismiss}
+      onPredictionUnavailable={predictionUi.dismiss}
+      predictionNotice={predictionUi.notice}
+      onPredictionNoticeSeen={predictionUi.markNoticeSeen}
+      onDisablePredictions={() => { predictionUi.dismiss(); applySettingsPatch({ promptPredictionsEnabled: false }); }}
       key={draftKey}
       tabId={tabId}
       images={draftImages}
@@ -4834,7 +5180,10 @@ function TabRuntimeInner({
       queuedSends={state.queuedSends}
       onQueueWhileBusy={(text, payload) => {
         const frozen = { ...payload, clientId: `q-${crypto.randomUUID()}` };
-        writeImageDraft(draftKey, (value) => ({ ...value, queue: [...state.queuedSends, { text, payload: frozen }] }));
+        writeImageDraft(draftKey, (value) => ({
+          ...value,
+          queue: [...state.queuedSends, { text, payload: frozen }],
+        }));
         dispatch({ t: "enqueue_send", text, payload: frozen });
         setDraft("");
         setDraftImages([]);
@@ -5020,11 +5369,11 @@ function TabRuntimeInner({
                   <Virtuoso
                     ref={virtuosoRef}
                     scrollerRef={setTranscriptScroller}
-                    style={{ height: "100%" }}
+                    style={{ position: "absolute", inset: 0 }}
                     data={messageItems}
                     computeItemKey={(index, item) => chatMessageKey(item, index)}
                     atBottomThreshold={TRANSCRIPT_BOTTOM_THRESHOLD}
-                    followOutput={() => transcriptFollowRef.current ? "auto" : false}
+                    followOutput={() => (transcriptFollowRef.current ? "auto" : false)}
                     atBottomStateChange={handleTranscriptBottomState}
                     totalListHeightChanged={() => {
                       const didFollow = transcriptFollowRef.current
@@ -5060,12 +5409,20 @@ function TabRuntimeInner({
                                   rollbackToMessage(rollbackTarget.turn, rollbackTarget.role);
                               }}
                             />
-                            {m.displayTruncated ? <div className="transcript-elision-notice">
-                              <span>{t("thread.historyFolded")}</span>
-                              <button type="button" disabled={Boolean(state.pendingTurnLoads[m.turn])} onClick={() => loadFullTurn(m.turn)}>
-                                {state.pendingTurnLoads[m.turn] ? t("thread.loadingFullTurn") : t("thread.loadFullTurn")}
-                              </button>
-                            </div> : null}
+                            {m.displayTruncated ? (
+                              <div className="transcript-elision-notice">
+                                <span>{t("thread.historyFolded")}</span>
+                                <button
+                                  type="button"
+                                  disabled={Boolean(state.pendingTurnLoads[m.turn])}
+                                  onClick={() => loadFullTurn(m.turn)}
+                                >
+                                  {state.pendingTurnLoads[m.turn]
+                                    ? t("thread.loadingFullTurn")
+                                    : t("thread.loadFullTurn")}
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
                         );
                       }
@@ -5530,7 +5887,7 @@ function TabRuntimeInner({
             {settingsOpen && state.settings ? (
               <SettingsModal
                 returnFocus={settingsReturnFocus}
-                settings={state.settings}
+                settings={predictionLocalOff ? { ...state.settings, promptPredictionsEnabled: false } : state.settings}
                 balance={state.balance}
                 usage={state.usage}
                 usageHistory={state.usageHistory}
@@ -5563,6 +5920,7 @@ function TabRuntimeInner({
                 onSave={applySettingsPatch}
                 onTestProvider={testProvider}
                 providerTestResult={state.providerTestResult}
+                providerDraft={providerDraft}
                 onSignOutApiKey={signOutApiKey}
                 onLoadQQ={loadQQSettings}
                 onConnectQQ={connectQQ}
@@ -6507,30 +6865,41 @@ export function App() {
   const rightDocked =
     webLayout.stage === "wide" && (activeContextInfoOpen || (!ctxCollapsed && bottomCollapsed));
   const { width: sideWidth, onMouseDown: onSideResizeDown } = useResizable(
-    "side", sideCollapsed, false,
-    webSurface ? {
-      maxWidth: webSideMaxWidth(layoutWidth, rightDocked),
-      scale: layoutScale,
-      persistKey: `${WEB_LAYOUT_KEY}sideWidth`,
-    } : undefined,
+    "side",
+    sideCollapsed,
+    false,
+    webSurface
+      ? {
+          maxWidth: webSideMaxWidth(layoutWidth, rightDocked),
+          scale: layoutScale,
+          persistKey: `${WEB_LAYOUT_KEY}sideWidth`,
+        }
+      : undefined,
   );
   const { width: ctxWidth, onMouseDown: onCtxResizeDown } = useResizable(
-    "ctx", ctxCollapsed, true,
-    webSurface ? {
-      maxWidth: webContextMaxWidth(layoutWidth, sideCollapsed ? 0 : sideWidth),
-      scale: layoutScale,
-      persistKey: `${WEB_LAYOUT_KEY}ctxWidth`,
-    } : undefined,
+    "ctx",
+    ctxCollapsed,
+    true,
+    webSurface
+      ? {
+          maxWidth: webContextMaxWidth(layoutWidth, sideCollapsed ? 0 : sideWidth),
+          scale: layoutScale,
+          persistKey: `${WEB_LAYOUT_KEY}ctxWidth`,
+        }
+      : undefined,
   );
   const { height: bottomHeight, onMouseDown: onBottomResizeDown } = useBottomResizable(
     bottomCollapsed,
-    webSurface ? {
-      maxHeight: Math.max(
-        80, Math.min(viewportHeight / layoutScale * 0.65, viewportHeight / layoutScale - 320),
-      ),
-      scale: layoutScale,
-      persistKey: `${WEB_LAYOUT_KEY}bottomHeight`,
-    } : undefined,
+    webSurface
+      ? {
+          maxHeight: Math.max(
+            80,
+            Math.min((viewportHeight / layoutScale) * 0.65, viewportHeight / layoutScale - 320),
+          ),
+          scale: layoutScale,
+          persistKey: `${WEB_LAYOUT_KEY}bottomHeight`,
+        }
+      : undefined,
   );
   const webNarrow = webSurface && webLayout.stage === "narrow";
   const closeWebDrawers = useCallback(() => {
@@ -6553,23 +6922,36 @@ export function App() {
   useEffect(() => {
     if (webSurface && activeContextInfoOpen) webLayout.closeDrawers();
   }, [webSurface, activeContextInfoOpen, webLayout.closeDrawers]);
-  const webDrawer = !webSurface ? null
-    : webNarrow && !sideCollapsed ? "side"
-    : webLayout.stage !== "wide" && activeContextInfoOpen ? "info"
-    : webLayout.stage !== "wide" && !ctxCollapsed && bottomCollapsed ? "ctx"
-    : null;
+  const webDrawer = !webSurface
+    ? null
+    : webNarrow && !sideCollapsed
+      ? "side"
+      : webLayout.stage !== "wide" && activeContextInfoOpen
+        ? "info"
+        : webLayout.stage !== "wide" && !ctxCollapsed && bottomCollapsed
+          ? "ctx"
+          : null;
   useWebDrawer(webDrawer, closeWebDrawers, activeRuntimeSnapshot?.overlayOpen ?? false);
   useEffect(() => {
     if (!webSurface) return;
     const selectors = [
       ...(sideCollapsed ? [".sidebar"] : []),
-      ...(bottomCollapsed && (ctxCollapsed || activeContextInfoOpen) ? ['.ctx[data-placement="side"]'] : []),
+      ...(bottomCollapsed && (ctxCollapsed || activeContextInfoOpen)
+        ? ['.ctx[data-placement="side"]']
+        : []),
       ...(!activeContextInfoOpen ? [".context-info-popover"] : []),
     ];
-    return makeInert(selectors.flatMap((selector) =>
-      Array.from(document.querySelectorAll<HTMLElement>(selector)),
-    ));
-  }, [webSurface, sideCollapsed, ctxCollapsed, activeContextInfoOpen, bottomCollapsed, activeTabId]);
+    return makeInert(
+      selectors.flatMap((selector) => Array.from(document.querySelectorAll<HTMLElement>(selector))),
+    );
+  }, [
+    webSurface,
+    sideCollapsed,
+    ctxCollapsed,
+    activeContextInfoOpen,
+    bottomCollapsed,
+    activeTabId,
+  ]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -6860,7 +7242,9 @@ export function App() {
             const ev = JSON.parse(e.payload.data) as IncomingEvent;
             if (ev.type === "user.message" && ev.clientId) acknowledgeImageSubmission(ev.clientId);
             if (ev.type === "$session_loaded" || ev.type === "$session_reconciled") {
-              for (const message of ev.messages) if (message.kind === "user" && message.clientId) acknowledgeImageSubmission(message.clientId);
+              for (const message of ev.messages)
+                if (message.kind === "user" && message.clientId)
+                  acknowledgeImageSubmission(message.clientId);
             }
             recordIncomingDiagnostic(ev, e.payload.data.length);
             const tabId = ev.tabId;
@@ -7154,7 +7538,13 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || document.querySelector('.settings-card, .settings-mask, .jobs-mask, .about-mask, .wd-mask, .cmdk-mask')) return;
+      if (
+        e.defaultPrevented ||
+        document.querySelector(
+          ".settings-card, .settings-mask, .jobs-mask, .about-mask, .wd-mask, .cmdk-mask",
+        )
+      )
+        return;
       const shortcut = matchDesktopShortcut(e);
       const tabIndex = shortcut ? tabIndexFromShortcutAction(shortcut) : null;
       if (shortcut === "new-tab") {
@@ -7319,11 +7709,14 @@ export function App() {
     onHide: hidePet,
   });
   const visibleSideWidth = sideCollapsed || webNarrow ? 0 : sideWidth;
-  const visibleCtxWidth = webSurface && !rightDocked ? 0 : getVisibleContextWidth({
-      ctxCollapsed,
-      contextInfoOpen: activeContextInfoOpen,
-      ctxWidth,
-    });
+  const visibleCtxWidth =
+    webSurface && !rightDocked
+      ? 0
+      : getVisibleContextWidth({
+          ctxCollapsed,
+          contextInfoOpen: activeContextInfoOpen,
+          ctxWidth,
+        });
   const shellThreadMaxWidth = getThreadMaxWidth({
     viewportWidth: layoutWidth,
     visibleSide: visibleSideWidth,
@@ -7394,6 +7787,9 @@ export function App() {
               sendRpcToTab(activeTabId, {
                 cmd: "session_load",
                 name,
+                workspaceDir:
+                  sidebarSessions.find((session) => session.name === name)?.workspace ??
+                  activeWorkspaceDir,
                 openInNewTab: activeBusy,
                 requestId,
               });

@@ -4,6 +4,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
   type RefObject,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -23,6 +24,7 @@ import { fmtElapsed } from "./live";
 import { ImageAttachmentView, importImage } from "./image-attachments";
 import { type ImageAttachment, MAX_MESSAGE_IMAGES, MAX_IMAGE_INPUT_BYTES } from "../../../src/attachments/types";
 import { DEEPSEEK_MODELS } from "../../../src/provider-models";
+import "./prompt-prediction.css";
 
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
 export type EditMode = "review" | "auto" | "yolo";
@@ -400,6 +402,13 @@ export function Composer({
   onPrioritizeQueuedSend,
   initialHistory,
   onHistoryPush,
+  prediction,
+  onPredictionAccept,
+  onPredictionDismiss,
+  onPredictionUnavailable,
+  predictionNotice = false,
+  onPredictionNoticeSeen,
+  onDisablePredictions,
 }: {
   tabId?: string;
   images?: ImageAttachment[];
@@ -447,6 +456,14 @@ export function Composer({
   initialHistory?: string[];
   /** Called whenever an entry is pushed so the caller can persist the updated list. */
   onHistoryPush?: (entry: string, history: string[]) => void;
+  prediction?: { id: string; text: string };
+  onPredictionAccept?: () => void;
+  onPredictionDismiss?: () => void;
+  /** Invalidates the current round, including a request whose result has not arrived. */
+  onPredictionUnavailable?: () => void;
+  predictionNotice?: boolean;
+  onPredictionNoticeSeen?: () => void;
+  onDisablePredictions?: () => void;
 }) {
   const [popup, setPopup] = useState<Popup>(null);
   const [pickedChips, setPickedChips] = useState<Map<string, Chip["kind"]>>(new Map());
@@ -491,6 +508,69 @@ export function Composer({
   const activeRangeRef = useRef<ActiveRange | null>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const imageAttachmentsRef = useRef<ComposerAttachment[]>([]);
+  const [consumedPredictionId, setConsumedPredictionId] = useState<string | null>(null);
+  const consumedPredictionRef = useRef<string | null>(null);
+  const acceptedPredictionDraftRef = useRef<string | null>(null);
+  const noticeSeenRef = useRef(false);
+  const noticeSeenCallbackRef = useRef(onPredictionNoticeSeen);
+  noticeSeenCallbackRef.current = onPredictionNoticeSeen;
+
+  const consumePrediction = useCallback(() => {
+    if (prediction && consumedPredictionRef.current !== prediction.id) {
+      consumedPredictionRef.current = prediction.id;
+      setConsumedPredictionId(prediction.id);
+    }
+  }, [prediction?.id]);
+
+  const invalidatePrediction = useCallback(() => {
+    consumePrediction();
+    (onPredictionUnavailable ?? onPredictionDismiss)?.();
+  }, [consumePrediction, onPredictionUnavailable, onPredictionDismiss]);
+
+  const imageIds = JSON.stringify(images.map((image) => image.id));
+  const previousPredictionInputRef = useRef({ draft, imageIds, imageAttachments, imagePending });
+  useEffect(() => {
+    const previous = previousPredictionInputRef.current;
+    previousPredictionInputRef.current = { draft, imageIds, imageAttachments, imagePending };
+    const draftChanged = previous.draft !== draft;
+    const acceptedDraft = draftChanged && acceptedPredictionDraftRef.current === draft;
+    if (draftChanged) acceptedPredictionDraftRef.current = null;
+    if (
+      (draftChanged && !acceptedDraft) || previous.imageIds !== imageIds ||
+      previous.imageAttachments !== imageAttachments || previous.imagePending !== imagePending
+    ) invalidatePrediction();
+  }, [draft, imageIds, imageAttachments, imagePending, invalidatePrediction]);
+
+  useEffect(() => {
+    if (!predictionNotice || noticeSeenRef.current) return;
+    let afterPaint = 0;
+    // A second frame lets the disclosure paint before the parent starts a paid request.
+    const frame = requestAnimationFrame(() => {
+      afterPaint = requestAnimationFrame(() => {
+        if (!noticeSeenCallbackRef.current || noticeSeenRef.current) return;
+        noticeSeenRef.current = true;
+        noticeSeenCallbackRef.current();
+      });
+    });
+    return () => { cancelAnimationFrame(frame); cancelAnimationFrame(afterPaint); };
+  }, [predictionNotice, onPredictionNoticeSeen]);
+
+  const showPrediction = Boolean(
+    prediction?.text.trim() && prediction.id !== consumedPredictionId &&
+    draft === "" && images.length === 0 && imageAttachments.length === 0 &&
+    chips.length === 0 && imagePending === 0 && !popup &&
+    !plusMenuOpen && !modeMenuOpen && !modelMenuOpen && !busy && !disabled,
+  );
+
+  const acceptPrediction = () => {
+    if (!showPrediction || !prediction || consumedPredictionRef.current === prediction.id ||
+      composingRef.current || Date.now() - compositionEndedAtRef.current < 50) return;
+    acceptedPredictionDraftRef.current = prediction.text;
+    consumePrediction();
+    setDraft(prediction.text);
+    onPredictionAccept?.();
+    textareaRef.current?.focus();
+  };
 
   useEffect(() => {
     imageAttachmentsRef.current = imageAttachments;
@@ -510,6 +590,7 @@ export function Composer({
   }, [initialHistory, browseIdx]);
 
   const insertMentions = (pickedPaths: string[]) => {
+    invalidatePrediction();
     const rels = pickedPaths
       .map((picked) => normalizeMentionPath(picked, workspaceDir))
       .filter(Boolean);
@@ -561,6 +642,7 @@ export function Composer({
   };
 
   const addImageAttachment = async (source: string | (() => Promise<string>), preview?: ImagePreview) => {
+    invalidatePrediction();
     if (!tabId || !onImagesChange) { revokeImagePreview(preview); return; }
     if (durableImagesRef.current.length + imagePendingRef.current >= MAX_MESSAGE_IMAGES) {
       setImageError(`At most ${MAX_MESSAGE_IMAGES} images per message`); revokeImagePreview(preview); return;
@@ -578,6 +660,7 @@ export function Composer({
   };
 
   const addFileAttachments = (paths: string[], labels?: string[]) => {
+    invalidatePrediction();
     const attachments: ComposerAttachment[] = [];
     const seen = new Set<string>();
     for (const [index, path] of paths.entries()) {
@@ -601,6 +684,9 @@ export function Composer({
   };
 
   const addClipboardFileAttachments = async (files: File[]) => {
+    invalidatePrediction();
+    imagePendingRef.current++;
+    setImagePending(imagePendingRef.current);
     const paths: string[] = [];
     const labels: string[] = [];
     try {
@@ -618,6 +704,9 @@ export function Composer({
       addFileAttachments(paths, labels);
     } catch (error) {
       setImageError(`File attachment failed: ${(error as Error).message}`);
+    } finally {
+      imagePendingRef.current--;
+      setImagePending(imagePendingRef.current);
     }
   };
 
@@ -720,6 +809,7 @@ export function Composer({
   }, [modelMenuOpen, plusMenuOpen, modeMenuOpen]);
 
   const attachFile = async (filter?: "image") => {
+    invalidatePrediction();
     imagePendingRef.current++;
     setImagePending(imagePendingRef.current);
     let picked: unknown;
@@ -751,6 +841,7 @@ export function Composer({
   };
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    invalidatePrediction();
     const fileMentions = clipboardFileMentionPaths(e.clipboardData, workspaceDir);
     if (fileMentions.length > 0) {
       e.preventDefault();
@@ -790,6 +881,7 @@ export function Composer({
   };
 
   const openPopupAtCursor = (sigil: "/" | "@") => {
+    invalidatePrediction();
     const textarea = textareaRef.current;
     const cursor = textarea?.selectionStart ?? draft.length;
     activeRangeRef.current = { start: cursor, end: cursor, sigil, query: "" };
@@ -894,6 +986,7 @@ export function Composer({
   };
 
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    invalidatePrediction();
     const raw = e.target.value;
     const v = sanitizeComposerInput(raw);
     if (v !== raw) {
@@ -922,6 +1015,7 @@ export function Composer({
   const pickItem = (idx: number) => {
     const it = items[idx];
     if (!it || !popup) return;
+    invalidatePrediction();
     const range = activeRangeRef.current;
     const before = range ? draft.slice(0, range.start) : draft;
     const after = range ? draft.slice(range.end) : "";
@@ -990,6 +1084,7 @@ export function Composer({
   };
 
   const navigateHistory = (dir: -1 | 1) => {
+    invalidatePrediction();
     const hist = historyRef.current;
     if (hist.length === 0) return;
     if (dir === -1) {
@@ -1012,6 +1107,13 @@ export function Composer({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      e.nativeEvent.isComposing || e.keyCode === 229 ||
+      (!e.metaKey && !e.ctrlKey && e.key.length === 1) ||
+      e.key === "Backspace" || e.key === "Delete" ||
+      (e.key === "Enter" && e.shiftKey) ||
+      ((e.metaKey || e.ctrlKey) && ["v", "x", "z", "y"].includes(e.key.toLowerCase()))
+    ) invalidatePrediction();
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
       const draftBeforePaste = draft;
       const attachmentCountBeforePaste = imageAttachmentsRef.current.length;
@@ -1028,6 +1130,8 @@ export function Composer({
         })();
       }, 250);
     }
+    if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229 ||
+      Date.now() - compositionEndedAtRef.current < 50) return;
     if (popup) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -1044,7 +1148,8 @@ export function Composer({
         dismiss();
         return;
       }
-      if (e.key === "Tab" && popup.kind === "at" && items.length > 0) {
+      if (e.key === "Tab" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey &&
+        popup.kind === "at" && items.length > 0) {
         e.preventDefault();
         // `..` is the synthetic parent-dir entry (#1019); same shape
         // but rewrites to the parent path.
@@ -1109,9 +1214,23 @@ export function Composer({
     if (
       composingRef.current ||
       e.nativeEvent.isComposing ||
+      e.keyCode === 229 ||
       Date.now() - compositionEndedAtRef.current < 50
     )
       return;
+    if (!popup) {
+      if (showPrediction && e.key === "Tab" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        acceptPrediction();
+        return;
+      }
+      if (e.key === "Escape" && (showPrediction || onPredictionDismiss)) {
+        e.preventDefault();
+        consumePrediction();
+        onPredictionDismiss?.();
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey && !popup) {
       e.preventDefault();
       if (busy) {
@@ -1170,6 +1289,21 @@ export function Composer({
         ) : null}
 
         <div className="composer">
+          {predictionNotice ? (
+            <div className="composer-prediction-notice" role="status">
+              <I.info size={12} />
+              <span>{t("composer.predictionNotice")}</span>
+              <button
+                type="button"
+                className="composer-ask-notice-close"
+                aria-label={t("composer.disablePredictions")}
+                title={t("composer.disablePredictions")}
+                onClick={() => { invalidatePrediction(); onDisablePredictions?.(); }}
+              >
+                <I.x size={12} />
+              </button>
+            </div>
+          ) : null}
           {images.length > 0 && <div className="image-attachments">{images.map((image) => <ImageAttachmentView key={image.id} image={image} onRemove={() => onImagesChange?.((current) => current.filter((item) => item.id !== image.id))} />)}</div>}
           {imagePending > 0 && <div className="composer-image-status" role="status">{getLang() === "zh-CN" ? "正在处理附件…" : "Processing attachments..."}</div>}
           {(imageError || (images.length > 0 && !supportsImages)) && <div className="composer-image-status" role="alert">{imageError || "Select a vision model to send images"}</div>}
@@ -1261,16 +1395,27 @@ export function Composer({
             <div className="composer-backdrop" ref={backdropRef} aria-hidden="true">
               {backdropContent}
             </div>
+            {showPrediction ? (
+              <div className="composer-backdrop composer-prediction" role="note">
+                {prediction?.text}
+              </div>
+            ) : null}
             <textarea
               ref={textareaRef}
               value={draft}
-              placeholder={t("composer.placeholder")}
+              placeholder={showPrediction ? "" : t("composer.placeholder")}
+              aria-label={t("composer.placeholder")}
               onChange={handleChange}
+              onBeforeInput={invalidatePrediction}
+              onInput={invalidatePrediction}
+              onCut={invalidatePrediction}
+              onDrop={invalidatePrediction}
               onSelect={handleSelect}
               onScroll={handleTextareaScroll}
               onPaste={(e) => void handlePaste(e)}
               onKeyDown={handleKeyDown}
               onCompositionStart={() => {
+                invalidatePrediction();
                 composingRef.current = true;
               }}
               onCompositionEnd={() => {
@@ -1436,6 +1581,17 @@ export function Composer({
                   <span className="composer-busy-label">{busyLabel}</span>
                   <span className="composer-busy-time">{fmtElapsed(busyElapsedMs ?? 0)}</span>
                 </span>
+              ) : null}
+              {showPrediction ? (
+                <button
+                  type="button"
+                  className="composer-plus-btn composer-prediction-accept"
+                  aria-label={t("composer.acceptPrediction")}
+                  title={`${t("composer.acceptPrediction")}: ${prediction?.text}`}
+                  onClick={acceptPrediction}
+                >
+                  <I.check size={14} />
+                </button>
               ) : null}
             </div>
 

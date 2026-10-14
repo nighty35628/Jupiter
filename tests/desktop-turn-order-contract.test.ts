@@ -14,7 +14,9 @@ describe("desktop turn completion ordering contract", () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     expect(completions).toHaveLength(1);
-    expect(runTurn).toContain("if (tab.turnAdmission.isCurrent(generation) && !tab.switching) {");
+    expect(runTurn).toMatch(
+      /if\s*\(\s*tab\.turnAdmission\.isCurrent\(generation\)\s*&&\s*!tab\.switching\s*&&\s*tab\.runtime === rt\s*&&\s*tab\.sessionId === preparationSessionId\s*&&\s*tab\.bindingId === preparationBindingId\s*\)/,
+    );
     expect(completions[0]).toBeGreaterThan(runTurn.indexOf('event: "Stop"'));
     expect(completions[0]).toBeGreaterThan(runTurn.indexOf("tab.turnAdmission.finish(generation)"));
   });

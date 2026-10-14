@@ -13,6 +13,75 @@ const ev = (partial: Partial<LoopEvent>): LoopEvent =>
   ({ turn: 1, role: "status", content: "", ...partial }) as LoopEvent;
 
 describe("run JSONL events", () => {
+  it("maps dropped calls to explicit terminal records with stable host identity", () => {
+    expect(
+      runJsonEventsFromLoopEvent(
+        ev({
+          role: "tool_call_drop",
+          callId: "provider",
+          localCallId: "local",
+          providerCallId: "provider",
+          requestId: "request",
+          toolName: "read",
+          content: "guard",
+          terminalState: "cancelled",
+        }),
+        now,
+      ),
+    ).toEqual([
+      {
+        type: "tool_call_drop",
+        timestamp: now(),
+        turn: 1,
+        callId: "local",
+        localCallId: "local",
+        providerCallId: "provider",
+        requestId: "request",
+        name: "read",
+        reason: "guard",
+        terminalState: "cancelled",
+      },
+    ]);
+  });
+
+  it("preserves numeric request counters across assistant and tool adapters without raw partial args", () => {
+    const counters = {
+      requestId: "request",
+      outputChars: 12,
+      reasoningChars: 23,
+      toolArgsChars: 45,
+    };
+    for (const role of [
+      "assistant_delta",
+      "assistant_final",
+      "tool_call_delta",
+      "tool_start",
+      "tool",
+    ] as const) {
+      const record = runJsonEventsFromLoopEvent(
+        ev({
+          role,
+          content: role === "assistant_delta" ? "x" : "",
+          ...counters,
+          localCallId: "local",
+          callId: "provider",
+          providerCallId: "provider",
+          toolName: "read",
+          toolCallArgsChars: 45,
+        }),
+        now,
+      )[0];
+      expect(record).toMatchObject(counters);
+      if (role.startsWith("tool"))
+        expect(record).toMatchObject({
+          callId: "local",
+          localCallId: "local",
+          providerCallId: "provider",
+        });
+      expect(record).not.toHaveProperty("partialJSON");
+    }
+  });
+
   it("maps assistant deltas with reasoning", () => {
     expect(
       runJsonEventsFromLoopEvent(

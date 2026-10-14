@@ -5,10 +5,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings as SettingsType, UsageStats } from "../App";
-import { setLang } from "../i18n";
+import { setLang, t } from "../i18n";
 import { BUILTIN_PETS } from "../pets/catalog";
 import type { DesktopPetUi } from "../pets/types";
-import type { MemoryEntryInfo, UsageHistoryEvent } from "../protocol";
+import type { ComputerUseStatus, MemoryEntryInfo, UsageHistoryEvent } from "../protocol";
 import { SettingsModal } from "./settings";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -17,11 +17,33 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 afterEach(() => {
   cleanup();
+  delete document.documentElement.dataset.runtime;
   vi.useRealTimers();
 });
 
 beforeEach(() => {
   setLang("en");
+});
+
+describe("prompt prediction behavior setting", () => {
+  it("defaults on and saves an explicit disabled patch with API usage disclosure", () => {
+    const onSave = vi.fn();
+    renderSettings({ onSave });
+    const toggle = screen.getByRole("switch", { name: "Prompt predictions" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText(/additional API usage/)).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenCalledWith({ promptPredictionsEnabled: false });
+  });
+
+  it("reflects a saved disabled value and saves an enabled patch", () => {
+    const onSave = vi.fn();
+    renderSettings({ onSave, settings: { promptPredictionsEnabled: false } as Partial<SettingsType> });
+    const toggle = screen.getByRole("switch", { name: "Prompt predictions" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenCalledWith({ promptPredictionsEnabled: true });
+  });
 });
 
 const settings: SettingsType = {
@@ -123,6 +145,7 @@ function renderSettings({
     | "storage"
     | "billing"
     | "components"
+    | "computer-use"
     | "pets";
   storageScan?: any;
   onScanStorage?: () => void;
@@ -223,7 +246,14 @@ function renderSettings({
     );
   }
 
-  return render(<TestSettingsModal />);
+  const view = render(<TestSettingsModal />);
+  return {
+    ...view,
+    rerenderSettings(next: Partial<SettingsType>) {
+      settingsOverride = next;
+      view.rerender(<TestSettingsModal />);
+    },
+  };
 }
 
 describe("SettingsModal", () => {
@@ -559,6 +589,15 @@ describe("SettingsModal", () => {
     expect(onSave).toHaveBeenCalledWith(expected);
   });
 
+  it("keeps the provider key in RAM until a successful save acknowledgement", () => {
+    renderSettings();
+    fireEvent.click(screen.getByText("Models"));
+    const key = screen.getByLabelText("API key") as HTMLInputElement;
+    fireEvent.change(key, { target: { value: "mock-unsaved-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(key.value).toBe("mock-unsaved-key");
+  });
+
   it("shows detected browser automation status in components", () => {
     renderSettings({
       settings: {
@@ -635,6 +674,174 @@ describe("SettingsModal", () => {
       "https://www.libreoffice.org/download/download-libreoffice/",
     );
     expect(onRefreshOptionalComponents).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows guarded Computer Use controls and saves their settings", () => {
+    const onSave = vi.fn();
+    const onRefreshOptionalComponents = vi.fn();
+    renderSettings({
+      initialPage: "computer-use",
+      onSave,
+      onRefreshOptionalComponents,
+      settings: {
+        computerUseEnabled: true,
+        optionalComponents: [
+          {
+            id: "cua-driver",
+            name: "Cua Driver",
+            capability: "computer-use",
+            state: "available",
+            executablePath: "/Users/test/.local/bin/cua-driver",
+            version: "cua-driver 0.28.0",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("Allow desktop control")).toBeTruthy();
+    expect(screen.getByText("Cua Driver")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "On" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bounded" }));
+    fireEvent.click(screen.getByRole("button", { name: "Detect again" }));
+    expect(onSave).toHaveBeenCalledWith({ computerUseEnabled: true });
+    expect(onSave).toHaveBeenCalledWith({ computerUsePermissionMode: "bounded" });
+    expect(onRefreshOptionalComponents).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not equate a detected driver with a verified runtime", () => {
+    renderSettings({
+      initialPage: "computer-use",
+      settings: {
+        computerUseEnabled: true,
+        optionalComponents: [{
+          id: "cua-driver", name: "Cua Driver", capability: "computer-use", state: "available",
+        }],
+      },
+    });
+    expect(screen.getByRole("status").textContent).toContain("Pending first-operation verification");
+    expect(screen.queryByText("Available")).toBeNull();
+    for (const label of ["Screen recording", "Input / Accessibility"]) {
+      const row = screen.getByText(label).closest(".setting-row")!;
+      expect(within(row as HTMLElement).getByText("Not verified")).toBeTruthy();
+    }
+  });
+
+  it("distinguishes unrun component detection from a missing driver", () => {
+    renderSettings({ initialPage: "computer-use", settings: { computerUseEnabled: true } });
+    const row = screen.getByText("Cua Driver").closest(".setting-row")!;
+    expect(within(row as HTMLElement).queryByText("Missing")).toBeNull();
+    expect(row.querySelector(".status-pill")?.getAttribute("data-status")).toBe("disabled");
+  });
+
+  it("uses the localized Computer Use navigation title", () => {
+    renderSettings({ initialPage: "computer-use" });
+    expect(screen.getByRole("heading", { name: "Computer Use" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Computer Use" })).toBeTruthy();
+  });
+
+  it("updates runtime status without saving settings or moving focus", () => {
+    const onSave = vi.fn();
+    const initialSettings: Partial<SettingsType> = {
+      computerUseEnabled: true,
+      computerUseStatus: { state: "idle", permissions: { screen: "unknown", input: "unknown" } },
+    };
+    const view = renderSettings({ initialPage: "computer-use", settings: initialSettings, onSave });
+    const button = screen.getByRole("button", { name: "On" });
+    button.focus();
+    view.rerenderSettings({
+      ...initialSettings,
+      computerUseStatus: { state: "ready", permissions: { screen: "verified", input: "unknown" } },
+    });
+    expect(screen.getByRole("status").textContent).toContain("Ready");
+    expect(document.activeElement).toBe(button);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it.each<[ComputerUseStatus["state"], string]>([
+    ["disabled", "Disabled"],
+    ["unsupported-surface", "Unavailable on this surface"],
+    ["unsupported-model", "Model does not support images"],
+    ["driver-missing", "Driver missing"],
+    ["idle", "Pending first-operation verification"],
+    ["starting", "Starting"],
+    ["ready", "Ready"],
+    ["busy", "Busy"],
+    ["fault", "Runtime error"],
+  ])("shows the authoritative current-tab runtime state %s", (state, label) => {
+    renderSettings({
+      initialPage: "computer-use",
+      settings: {
+        computerUseEnabled: state !== "disabled",
+        computerUseStatus: { state, permissions: { screen: "unknown", input: "unknown" } },
+      },
+    });
+    const status = screen.getByRole("status");
+    expect(status.textContent).toContain("Current tab");
+    expect(status.textContent).toContain(label);
+    expect(status.getAttribute("aria-atomic")).toBe("true");
+  });
+
+  it("keeps screen and input permissions separate and shows reason and owner as text", () => {
+    renderSettings({
+      initialPage: "computer-use",
+      settings: {
+        computerUseEnabled: true,
+        computerUseStatus: {
+          state: "fault", reason: "<b>Input permission denied</b>", owner: "tab-2",
+          permissions: { screen: "verified", input: "denied" },
+        },
+      },
+    });
+    const screenRow = screen.getByText("Screen recording").closest(".setting-row")!;
+    const inputRow = screen.getByText("Input / Accessibility").closest(".setting-row")!;
+    expect(within(screenRow as HTMLElement).getByText("Verified")).toBeTruthy();
+    expect(within(inputRow as HTMLElement).getByText("Denied")).toBeTruthy();
+    expect(screen.getByText("<b>Input permission denied</b>").querySelector("b")).toBeNull();
+    expect(screen.getByText("Desktop owner: tab-2")).toBeTruthy();
+  });
+
+  it("shows the Web surface limitation even with a stale ready runtime and global enablement", () => {
+    document.documentElement.dataset.runtime = "web";
+    renderSettings({
+      initialPage: "computer-use",
+      settings: {
+        computerUseEnabled: true,
+        computerUseStatus: { state: "ready", permissions: { screen: "verified", input: "verified" } },
+      },
+    });
+    expect(screen.getByRole("status").textContent).toContain("Unavailable on this surface");
+    expect(screen.getByText("The Web interface cannot control this computer. Use the desktop app.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "On" }).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("button", { name: "Standard" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText("Ready")).toBeNull();
+    expect(screen.getAllByText("Not verified")).toHaveLength(2);
+  });
+
+  it("keeps the disabled default and describes the actual mode difference", () => {
+    renderSettings({ initialPage: "computer-use" });
+    expect(screen.getByRole("status").textContent).toContain("Disabled");
+    expect((screen.getByRole("button", { name: "Bounded" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Standard and bounded currently behave identically/)).toBeTruthy();
+    expect(screen.getByText(/2,000 characters per text input/)).toBeTruthy();
+    expect(screen.getByText(/Unrestricted removes only this text limit/)).toBeTruthy();
+    expect(screen.getByText(/Neither mode isolates applications or asks for confirmation before each action/)).toBeTruthy();
+  });
+
+  it.each(["en", "zh-CN", "de", "ja"] as const)("localizes runtime and permission labels in %s", (lang) => {
+    setLang(lang);
+    renderSettings({
+      initialPage: "computer-use",
+      settings: {
+        computerUseEnabled: true,
+        computerUseStatus: { state: "busy", permissions: { screen: "verified", input: "denied" } },
+      },
+    });
+    const keys = ["computerUseCurrentTab", "computerUseStateBusy", "computerUseScreenPermission", "computerUseInputPermission", "computerUsePermissionVerified", "computerUsePermissionDenied"] as const;
+    for (const key of keys) {
+      const translation = t(`settings.${key}`);
+      expect(translation).not.toBe(`settings.${key}`);
+      expect(screen.getByText(translation)).toBeTruthy();
+    }
   });
 
   it("saves the model memory confirmation setting", () => {

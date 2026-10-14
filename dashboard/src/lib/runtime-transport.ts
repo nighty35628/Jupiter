@@ -62,6 +62,7 @@ export type WebUploadedFile = {
   previewUrl: string;
 };
 let webLease: WebLease | null = null;
+let webLeaseExpiryTimer: ReturnType<typeof setTimeout> | null = null;
 let webWorkspaces: WebWorkspace[] = [];
 let webLeaseRenewTimer: ReturnType<typeof setInterval> | null = null;
 let webInitPromise: Promise<void> | null = null;
@@ -92,8 +93,22 @@ function trackWebTab(packet: WebPacket): void {
   }
 }
 
+function syncWebWriter(): boolean {
+  if (webLeaseExpiryTimer) clearTimeout(webLeaseExpiryTimer);
+  webLeaseExpiryTimer = null;
+  const writable = Boolean(webLease && webLease.expiresAt > Date.now());
+  if (writable && webLease) webLeaseExpiryTimer = setTimeout(() => syncWebWriter(), webLease.expiresAt - Date.now());
+  const value = String(writable);
+  if (document.documentElement.dataset.webWriter !== value) {
+    document.documentElement.dataset.webWriter = value;
+    window.dispatchEvent(new CustomEvent("jupiter:web-writer", { detail: { writable } }));
+  }
+  return writable;
+}
+
 function reportInactiveWebController(): void {
   webLease = null;
+  syncWebWriter();
   const message =
     "This page is read-only because another paired device controls Jupiter. Take control before making changes.";
   if (webTabIds.size === 0) {
@@ -200,6 +215,7 @@ function applyWebSession(body: any): void {
     body?.lease && typeof body.lease.id === "string" && Number.isSafeInteger(body.lease.fence)
       ? body.lease
       : null;
+  syncWebWriter();
   webWorkspaces = Array.isArray(body?.workspaces)
     ? body.workspaces.filter(
         (item: unknown): item is WebWorkspace =>
@@ -340,6 +356,7 @@ async function acquireWebLease(force: boolean): Promise<void> {
   }
   const body = await readJsonResponse(response);
   webLease = body?.lease ?? null;
+  syncWebWriter();
   scheduleLeaseRenewal();
 }
 
@@ -363,6 +380,7 @@ async function renewWebLease(): Promise<void> {
   }
   const body = await readJsonResponse(response);
   webLease = body?.lease ?? null;
+  syncWebWriter();
 }
 
 function webMutationHeaders(): Record<string, string> {
@@ -1527,6 +1545,12 @@ async function serverRpc(payload: Record<string, any>): Promise<void> {
 // Tauri core API
 export async function invoke<T = unknown>(cmd: string, args?: any): Promise<T> {
   console.log(`[tauri-bridge] invoke -> cmd: ${cmd}`);
+
+  if (cmd === "prompt_prediction_can_request") {
+    if (MODE !== "web") return true as T;
+    await webInit();
+    return syncWebWriter() as T;
+  }
 
   if (MODE === "web") {
     if (cmd === "rpc_spawn") {

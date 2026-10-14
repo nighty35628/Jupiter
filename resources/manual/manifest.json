@@ -1,0 +1,13 @@
+{
+  "chapters": [
+    { "id": "identity", "title": "Identity, model and API", "keywords": ["identity", "model", "provider", "API", "third-party", "模型", "第三方", "你是谁", "who are you"] },
+    { "id": "modes", "title": "Agent and Ask", "keywords": ["Agent", "Ask", "mode", "模式", "轻量"] },
+    { "id": "files", "title": "Files, external paths and attachments", "keywords": ["file", "attachment", "path", "文件", "附件", "外部", "路径", "图片"] },
+    { "id": "browser", "title": "Browser and web", "keywords": ["browser", "web", "浏览器", "网页", "Chrome"] },
+    { "id": "computer-use", "title": "Computer Use", "keywords": ["computer use", "CU", "桌面控制", "电脑操作", "屏幕", "截图", "vision", "driver"] },
+    { "id": "planning", "title": "Plans, compression and rollback", "keywords": ["plan", "compact", "rollback", "计划", "压缩", "回滚", "撤销", "上下文"] },
+    { "id": "memory-library", "title": "Memory and workspace library", "keywords": ["memory", "library", "记忆", "资料库"] },
+    { "id": "skills-mcp", "title": "Skills and MCP", "keywords": ["skill", "MCP", "技能", "插件"] },
+    { "id": "sessions", "title": "Surfaces, sessions and settings", "keywords": ["session", "setting", "CLI", "Desktop", "Web", "会话", "设置", "多端", "终端"] }
+  ]
+}

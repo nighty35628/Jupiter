@@ -36,6 +36,8 @@ export interface McpClientOptions {
   workspaceDir?: string;
   /** Per-request timeout. Default 60s. */
   requestTimeoutMs?: number;
+  /** Called once when the reader disconnects unexpectedly (including clean EOF). */
+  onDisconnect?: (error: Error) => void;
 }
 
 interface PendingRequest {
@@ -68,9 +70,13 @@ export class McpClient {
   private readonly workspaceRoot: McpRoot | undefined;
   private readonly requestTimeoutMs: number;
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
+  private readonly responseObservers = new Map<JsonRpcId, () => void>();
   private nextId = 1;
   private readerStarted = false;
+  private readerError: Error | undefined;
   private initialized = false;
+  private closing = false;
+  private readonly onDisconnect: McpClientOptions["onDisconnect"];
   private _serverCapabilities: InitializeResult["capabilities"] = {};
   private _serverInfo: InitializeResult["serverInfo"] = { name: "", version: "" };
   private _protocolVersion = "";
@@ -84,6 +90,7 @@ export class McpClient {
   private nextProgressToken = 1;
 
   constructor(opts: McpClientOptions) {
+    this.onDisconnect = opts.onDisconnect;
     this.transport = opts.transport;
     this.clientInfo = opts.clientInfo ?? { name: "jupiter", version: VERSION };
     const workspaceDir = opts.workspaceDir?.trim();
@@ -119,6 +126,10 @@ export class McpClient {
 
   get workspaceRootDir(): string | undefined {
     return this.workspaceDir;
+  }
+
+  get connected(): boolean {
+    return this.initialized && !this.readerError && !this.closing;
   }
 
   /** Compliant servers reject other methods until this completes. */
@@ -218,7 +229,14 @@ export class McpClient {
   async callTool(
     name: string,
     args?: Record<string, unknown>,
-    opts: { onProgress?: McpProgressHandler; signal?: AbortSignal } = {},
+    opts: {
+      onProgress?: McpProgressHandler;
+      signal?: AbortSignal;
+      /** Called at the transport send boundary, after local request validation. */
+      onSending?: () => void;
+      /** Called for a matching response, including server JSON-RPC errors. */
+      onResponse?: () => void;
+    } = {},
   ): Promise<CallToolResult> {
     this.assertInitialized();
     const params: CallToolParams = { name, arguments: args ?? {} };
@@ -229,7 +247,7 @@ export class McpClient {
       params._meta = { progressToken: token };
     }
     try {
-      return await this.request<CallToolResult>("tools/call", params, opts.signal);
+      return await this.request<CallToolResult>("tools/call", params, opts.signal, opts);
     } finally {
       if (token !== undefined) this.progressHandlers.delete(token);
     }
@@ -269,6 +287,8 @@ export class McpClient {
 
   /** Close the transport and reject any outstanding requests. */
   async close(): Promise<void> {
+    this.closing = true;
+    this.readerError = new Error("MCP client closed");
     for (const [, pending] of this.pending) {
       clearTimeout(pending.timeout);
       pending.reject(new Error("MCP client closed"));
@@ -281,7 +301,13 @@ export class McpClient {
     if (!this.initialized) throw new Error("MCP client not initialized — call initialize() first");
   }
 
-  private async request<R>(method: string, params: unknown, signal?: AbortSignal): Promise<R> {
+  private async request<R>(
+    method: string,
+    params: unknown,
+    signal?: AbortSignal,
+    callbacks: { onSending?: () => void; onResponse?: () => void } = {},
+  ): Promise<R> {
+    if (this.readerError) throw this.readerError;
     const id = this.nextId++;
     const frame: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
     let abortHandler: (() => void) | null = null;
@@ -337,7 +363,11 @@ export class McpClient {
       () => undefined,
     );
     try {
-      await Promise.race([this.transport.send(frame), promiseSettled]);
+      if (this.pending.has(id)) {
+        callbacks.onSending?.();
+        if (callbacks.onResponse) this.responseObservers.set(id, callbacks.onResponse);
+        await Promise.race([this.transport.send(frame), promiseSettled]);
+      }
     } catch (err) {
       const pending = this.pending.get(id);
       if (pending) clearTimeout(pending.timeout);
@@ -360,17 +390,29 @@ export class McpClient {
   }
 
   private async readLoop(): Promise<void> {
+    let failure = new Error("MCP transport closed before a response was received");
     try {
       for await (const msg of this.transport.messages()) {
         this.dispatch(msg);
       }
     } catch (err) {
-      // Surface as rejections on all pending requests so nobody hangs.
+      failure = err instanceof Error ? err : new Error(String(err));
+    } finally {
+      // A clean EOF also means pending requests can never receive a response.
+      this.readerError = failure;
       for (const [, pending] of this.pending) {
         clearTimeout(pending.timeout);
-        pending.reject(err as Error);
+        pending.reject(failure);
       }
       this.pending.clear();
+      this.responseObservers.clear();
+      if (!this.closing) {
+        try {
+          this.onDisconnect?.(failure);
+        } catch {
+          /* observers cannot break cleanup */
+        }
+      }
     }
   }
 
@@ -392,6 +434,15 @@ export class McpClient {
     if (!("result" in msg) && !("error" in msg)) {
       this.handleServerRequest(msg as JsonRpcRequest);
       return;
+    }
+    // Cancellation ends the local promise, not the remote operation. Late ACKs
+    // still settle the input observer while this connection can receive them.
+    const observer = this.responseObservers.get(msg.id);
+    this.responseObservers.delete(msg.id);
+    try {
+      observer?.();
+    } catch {
+      /* response settlement must still reach the caller */
     }
     const pending = this.pending.get(msg.id);
     if (!pending) return; // late response after timeout; drop

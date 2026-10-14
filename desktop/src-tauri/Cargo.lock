@@ -2012,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "jupiter-desktop"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "anyhow",
  "cap-fs-ext",

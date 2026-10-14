@@ -91,7 +91,14 @@ export const conversation: Reducer<ConversationView> = (v, ev) => {
         pendingToolCalls: [...v.pendingToolCalls, { callId: ev.callId, name: ev.name }],
       };
     case "tool.result": {
-      const msg: ChatMessage = { role: "tool", content: ev.output, tool_call_id: ev.callId };
+      if (ev.executed === false) {
+        return { ...v, pendingToolCalls: v.pendingToolCalls.filter((c) => c.callId !== ev.callId) };
+      }
+      const msg: ChatMessage = {
+        role: "tool",
+        content: ev.output,
+        tool_call_id: ev.providerCallId ?? ev.callId,
+      };
       if (ev.attachments?.length) msg.attachments = ev.attachments;
       return {
         messages: [...v.messages, msg],

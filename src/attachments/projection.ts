@@ -21,6 +21,7 @@ export interface ImageRequestSnapshot {
   omitted: string[];
   bytes: number;
   transport: "inline" | "files";
+  sentVariants: Record<string, { width: number; height: number; bytes: number; mime: string }>;
 }
 
 export interface ProjectedImages {
@@ -32,6 +33,7 @@ export async function projectImages(
   messages: readonly ChatMessage[],
   opts: {
     supportsImages: boolean;
+    activeImageIds?: readonly string[];
     store?: AttachmentStore;
     signal?: AbortSignal;
     fileForImage?: (image: ImageAttachment, data: Uint8Array, mime: string) => Promise<string>;
@@ -43,17 +45,24 @@ export async function projectImages(
     omitted: [],
     bytes: 0,
     transport: opts.fileForImage ? "files" : "inline",
+    sentVariants: {},
   };
-  const counts = messages.reduce((n, message) => n + (message.attachments?.length ?? 0), 0);
-  if (counts && !opts.supportsImages)
-    throw Object.assign(
-      new Error("This model does not support image input. Select a vision model before sending."),
-      { status: 400, code: "IMAGE_UNSUPPORTED" },
-    );
   const selected = new Map<string, ContentPart[]>();
   let lastUser = -1;
   for (let i = 0; i < messages.length; i++) if (messages[i]!.role === "user") lastUser = i;
+  const activeIds = opts.activeImageIds ? new Set(opts.activeImageIds) : null;
+  const activeOccurrences = new Set<string>();
   let slots = 0;
+  const desktopCaptures = new Set(
+    messages.flatMap((message) =>
+      message.role === "assistant"
+        ? (message.tool_calls ?? [])
+            .filter((call) => call.function.name === "computer_use_get_desktop_state")
+            .map((call) => call.id)
+        : [],
+    ),
+  );
+  let desktopScreenshots = 0;
   // Keep the newest images. Never silently omit images from the active user/tool turn.
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
@@ -64,8 +73,32 @@ export async function projectImages(
       opts.signal?.throwIfAborted();
       const image = images[i]!;
       if (!isImageAttachment(image)) throw new Error("Invalid image attachment in message history");
+      // Hashes can recur in earlier turns; only their newest occurrence is current.
+      const active = activeIds
+        ? activeIds.has(image.id) && !activeOccurrences.has(image.id)
+        : index >= lastUser;
+      if (active) activeOccurrences.add(image.id);
+      if (!opts.supportsImages) {
+        if (active)
+          throw Object.assign(
+            new Error(
+              "This model does not support image input. Select a vision model before sending.",
+            ),
+            { status: 400, code: "IMAGE_UNSUPPORTED" },
+          );
+        snapshot.omitted.push(image.id);
+        continue;
+      }
+      // Continuous desktop work can capture indefinitely within one user turn.
+      // Retain recent visual evidence on the wire, leaving durable history intact.
+      if (message.role === "tool" && desktopCaptures.has(message.tool_call_id ?? "")) {
+        if (++desktopScreenshots > 3) {
+          snapshot.omitted.push(image.id);
+          continue;
+        }
+      }
       if (slots >= MAX_REQUEST_IMAGES) {
-        if (index >= lastUser)
+        if (active)
           throw new Error(
             "The current turn contains too many images; send fewer images before retrying",
           );
@@ -74,7 +107,7 @@ export async function projectImages(
       }
       const variant = await store.requestImage(image.id, opts.signal);
       if (snapshot.bytes + variant.data.length > MAX_REQUEST_IMAGE_BYTES) {
-        if (index >= lastUser) throw new Error("The current turn exceeds the image byte budget");
+        if (active) throw new Error("The current turn exceeds the image byte budget");
         snapshot.omitted.push(image.id);
         continue;
       }
@@ -96,6 +129,12 @@ export async function projectImages(
       ]);
       snapshot.sent.push(image.id);
       snapshot.bytes += variant.data.length;
+      snapshot.sentVariants[image.id] = {
+        width: variant.width,
+        height: variant.height,
+        bytes: variant.data.length,
+        mime: variant.mime,
+      };
       slots++;
     }
   }
@@ -123,12 +162,14 @@ export async function projectImages(
         selected.get(`${index}:${imageIndex}`) ?? [
           {
             type: "text",
-            text: `[Earlier image ${JSON.stringify(image.name)} omitted from this request's image budget. Attachment ${image.id} can be reread with read_image.]`,
+            text: opts.supportsImages
+              ? `[Earlier image ${JSON.stringify(image.name)} omitted from this request's image budget. Attachment ${image.id} can be reread with read_image.]`
+              : `[Earlier image ${JSON.stringify(image.name)} omitted because this model does not support images. Retained attachment ${image.id}; switch to a vision model to reread it.]`,
           },
         ],
     );
     if (sourceAttachments?.length) {
-      wire.content = `${wire.content ?? ""}\n[Retained image attachments, not included as pixels: ${sourceAttachments.map((image) => `${JSON.stringify(image.name)} ${image.id}`).join("; ")}. Use read_image if visual details are needed.]`;
+      wire.content = `${wire.content ?? ""}\n[Retained image attachments, not included as pixels: ${sourceAttachments.map((image) => `${JSON.stringify(image.name)} ${image.id}`).join("; ")}. ${opts.supportsImages ? "Use read_image if visual details are needed." : "Switch to a vision model if visual details are needed."}]`;
     }
     if (wire.role === "tool") {
       result.push({ ...wire, content: wire.content || "(image result)" });

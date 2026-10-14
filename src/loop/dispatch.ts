@@ -1,6 +1,6 @@
 import { parseRateLimitedToolResult } from "../tools/rate-limit.js";
 import type { ChatMessage, ToolCall } from "../types.js";
-import type { LoopEvent } from "./types.js";
+import { type LoopEvent, toolCallEventFields } from "./types.js";
 
 export interface RunOneToolCallResult {
   attachments?: ChatMessage["attachments"];
@@ -15,6 +15,7 @@ export interface DispatchContext {
   isParallelSafe: (name: string) => boolean;
   inflightIdFor: (call: ToolCall) => string;
   inflightAdd: (id: string) => void;
+  inflightDelete: (id: string) => void;
   runOne: (call: ToolCall, signal: AbortSignal) => Promise<RunOneToolCallResult>;
   appendAndPersist: (msg: ChatMessage) => void;
   /** Mutable across iter cycles — single rate-limit warning per step(). */
@@ -39,6 +40,19 @@ export async function* dispatchToolCallsChunked(
 
   let callIdx = 0;
   while (callIdx < repairedCalls.length) {
+    if (ctx.signal.aborted) {
+      for (const call of repairedCalls.slice(callIdx)) {
+        yield {
+          turn: ctx.turn,
+          role: "tool_call_drop",
+          content: "Cancelled before execution.",
+          toolName: call.function.name,
+          ...toolCallEventFields(call),
+          terminalState: "cancelled",
+        };
+      }
+      return;
+    }
     const chunk: ToolCall[] = [];
     if (!dispatchSerial) {
       while (
@@ -53,20 +67,41 @@ export async function* dispatchToolCallsChunked(
       chunk.push(repairedCalls[callIdx++]!);
     }
 
-    for (const call of chunk) {
-      const callId = ctx.inflightIdFor(call);
-      ctx.inflightAdd(callId);
-      yield {
-        turn: ctx.turn,
-        role: "tool_start",
-        content: "",
-        toolName: call.function?.name ?? "",
-        toolArgs: call.function?.arguments ?? "{}",
-        callId,
-      };
-    }
+    const callIds = chunk.map((call) => ctx.inflightIdFor(call));
+    const pendingIds = new Set<string>();
+    const release = (id: string) => {
+      if (pendingIds.delete(id)) ctx.inflightDelete(id);
+    };
+    let settled: PromiseSettledResult<RunOneToolCallResult>[];
+    try {
+      for (const [index, call] of chunk.entries()) {
+        const callId = callIds[index]!;
+        ctx.inflightAdd(callId);
+        pendingIds.add(callId);
+        yield {
+          turn: ctx.turn,
+          role: "tool_start",
+          content: "",
+          toolName: call.function?.name ?? "",
+          toolArgs: call.function?.arguments ?? "{}",
+          ...toolCallEventFields(call),
+          callId,
+        };
+      }
 
-    const settled = await Promise.allSettled(chunk.map((c) => ctx.runOne(c, ctx.signal)));
+      settled = await Promise.allSettled(
+        chunk.map(async (call, index) => {
+          try {
+            return await ctx.runOne(call, ctx.signal);
+          } finally {
+            release(callIds[index]!);
+          }
+        }),
+      );
+    } finally {
+      // Also covers generator.return() while suspended at an unexecuted tool_start.
+      for (const id of pendingIds) release(id);
+    }
 
     for (let k = 0; k < chunk.length; k++) {
       const call = chunk[k]!;
@@ -118,7 +153,8 @@ export async function* dispatchToolCallsChunked(
           : {}),
         toolName: name,
         toolArgs: args,
-        callId: ctx.inflightIdFor(call),
+        ...toolCallEventFields(call),
+        callId: callIds[k]!,
       };
     }
   }

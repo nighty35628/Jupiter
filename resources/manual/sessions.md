@@ -1,0 +1,4 @@
+# Surfaces, Sessions and Settings
+Jupiter has CLI/TUI, Desktop and Web/dashboard surfaces plus configured messaging integrations. Tool availability differs by surface and by session. Desktop supports tabbed sessions; CLI chat/code and run are different entry points. Web/dashboard does not imply native local Computer Use.
+Settings cover provider/model, reasoning, permissions, tools/integrations, memory/library and session behavior. Changes may affect the next request or require reconnect/restart for an integration; use the reported live state. Do not expose credentials when describing configuration.
+Sessions preserve visible exchanges and provider binding; switching/resuming does not authorize mixing providers, workspaces or foreign histories. CLI offers session selection and /new; desktop provides session navigation. Lightweight side questions use a fresh message list. Host help context is request-only and must not become a persistent user/assistant message.

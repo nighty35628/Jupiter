@@ -3,7 +3,12 @@ import type { ReasoningEffort } from "../config.js";
 import type { ChatMessage, ToolCall, ToolSpec } from "../types.js";
 import { looksLikeCompleteJson } from "./shrink.js";
 import { thinkingModeForModel } from "./thinking.js";
-import type { LoopEvent } from "./types.js";
+import {
+  type LoopEvent,
+  createModelRequestId,
+  ensureToolCallIdentity,
+  toolCallEventFields,
+} from "./types.js";
 
 export interface StreamModelOptions {
   client: DeepSeekClient;
@@ -17,6 +22,9 @@ export interface StreamModelOptions {
   betaPrefix?: boolean;
   disableRetry?: boolean;
   turn: number;
+  requestId?: string;
+  /** Host-only image access gate; client projection must not serialize this field. */
+  activeImageIds?: readonly string[];
 }
 
 export interface StreamModelResult {
@@ -26,6 +34,10 @@ export interface StreamModelResult {
   usage: Usage | null;
   usageComplete: boolean;
   finishReason: ChatFinishReason;
+  requestId: string;
+  outputChars: number;
+  reasoningChars: number;
+  toolArgsChars: number;
 }
 
 export async function* streamModelResponse(
@@ -50,70 +62,110 @@ export async function* streamModelResponse(
   let finishReason: ChatFinishReason = "unknown";
   const callBuf: Map<number, ToolCall> = new Map();
   const readyIndices = new Set<number>();
-
-  for await (const chunk of client.stream({
-    model,
-    messages,
-    tools: toolSpecs.length ? toolSpecs : undefined,
-    signal,
-    thinking: thinkingModeForModel(model, thinkingEnabled),
-    reasoningEffort: thinkingEnabled ? reasoningEffort : undefined,
-    maxTokens,
-    betaPrefix,
-    disableRetry,
-  })) {
-    if (chunk.reasoningDelta) {
-      reasoningContent += chunk.reasoningDelta;
+  const requestId = opts.requestId ?? createModelRequestId();
+  let outputChars = 0;
+  let reasoningChars = 0;
+  let toolArgsChars = 0;
+  const pendingIndices = new Set<number>();
+  const announcedIndices = new Set<number>();
+  let lastProgressAt = Date.now();
+  const counters = () => ({ requestId, outputChars, reasoningChars, toolArgsChars });
+  function* flushProgress(): Generator<LoopEvent> {
+    for (const index of pendingIndices) {
+      const call = callBuf.get(index)!;
+      if (looksLikeCompleteJson(call.function.arguments)) readyIndices.add(index);
+    }
+    for (const index of pendingIndices) {
+      const call = callBuf.get(index)!;
+      if (!call.function.name) continue;
+      announcedIndices.add(index);
       yield {
         turn,
-        role: "assistant_delta",
+        role: "tool_call_delta",
         content: "",
-        reasoningDelta: chunk.reasoningDelta,
+        ...counters(),
+        ...toolCallEventFields(call),
+        toolName: call.function.name,
+        toolCallArgsChars: call.function.arguments.length,
+        toolCallReadyCount: readyIndices.size,
       };
     }
-    if (chunk.contentDelta) {
-      assistantContent += chunk.contentDelta;
-      yield {
-        turn,
-        role: "assistant_delta",
-        content: chunk.contentDelta,
-      };
-    }
-    for (const d of chunk.toolCallDeltas ?? []) {
-      const cur = callBuf.get(d.index) ?? {
-        id: d.id,
-        type: "function" as const,
-        function: { name: "", arguments: "" },
-      };
-      if (d.id) cur.id = d.id;
-      if (d.name) cur.function.name = (cur.function.name ?? "") + d.name;
-      if (d.argumentsDelta)
-        cur.function.arguments = (cur.function.arguments ?? "") + d.argumentsDelta;
-      callBuf.set(d.index, cur);
+    pendingIndices.clear();
+    lastProgressAt = Date.now();
+  }
 
-      if (
-        !readyIndices.has(d.index) &&
-        cur.function.name &&
-        looksLikeCompleteJson(cur.function.arguments ?? "")
-      ) {
-        readyIndices.add(d.index);
-      }
-
-      if (cur.function.name) {
+  try {
+    for await (const chunk of client.stream({
+      model,
+      messages,
+      tools: toolSpecs.length ? toolSpecs : undefined,
+      signal,
+      thinking: thinkingModeForModel(model, thinkingEnabled),
+      reasoningEffort: thinkingEnabled ? reasoningEffort : undefined,
+      maxTokens,
+      betaPrefix,
+      disableRetry,
+      activeImageIds: opts.activeImageIds,
+    })) {
+      if (chunk.reasoningDelta) {
+        reasoningContent += chunk.reasoningDelta;
+        reasoningChars += chunk.reasoningDelta.length;
         yield {
           turn,
-          role: "tool_call_delta",
+          role: "assistant_delta",
           content: "",
-          toolName: cur.function.name,
-          toolCallArgsChars: (cur.function.arguments ?? "").length,
-          toolCallIndex: d.index,
-          toolCallReadyCount: readyIndices.size,
+          reasoningDelta: chunk.reasoningDelta,
+          ...counters(),
         };
       }
+      if (chunk.contentDelta) {
+        assistantContent += chunk.contentDelta;
+        outputChars += chunk.contentDelta.length;
+        yield {
+          turn,
+          role: "assistant_delta",
+          content: chunk.contentDelta,
+          ...counters(),
+        };
+      }
+      for (const d of chunk.toolCallDeltas ?? []) {
+        const cur = callBuf.get(d.index) ?? {
+          id: d.id,
+          type: "function" as const,
+          function: { name: "", arguments: "" },
+        };
+        if (d.id) cur.id = d.id;
+        if (d.name) cur.function.name = (cur.function.name ?? "") + d.name;
+        if (d.argumentsDelta)
+          cur.function.arguments = (cur.function.arguments ?? "") + d.argumentsDelta;
+        toolArgsChars += d.argumentsDelta?.length ?? 0;
+        callBuf.set(d.index, cur);
+        ensureToolCallIdentity(cur, requestId, d.index);
+        pendingIndices.add(d.index);
+        if (cur.function.name && !announcedIndices.has(d.index)) yield* flushProgress();
+      }
+      if (pendingIndices.size && Date.now() - lastProgressAt >= 50) yield* flushProgress();
+      if (chunk.usage) usage = chunk.usage;
+      if (chunk.finishReason) finishReason = chunk.finishReason;
     }
-    if (chunk.usage) usage = chunk.usage;
-    if (chunk.finishReason) finishReason = chunk.finishReason;
+    signal.throwIfAborted();
+  } catch (error) {
+    yield* flushProgress();
+    for (const call of callBuf.values()) {
+      yield {
+        turn,
+        role: "tool_call_drop",
+        content: signal.aborted
+          ? "Tool preparation was cancelled."
+          : "Tool preparation ended before the stream completed.",
+        toolName: call.function.name,
+        ...toolCallEventFields(call),
+        terminalState: signal.aborted ? "cancelled" : "dropped",
+      };
+    }
+    throw error;
   }
+  yield* flushProgress();
 
   return {
     assistantContent,
@@ -122,5 +174,6 @@ export async function* streamModelResponse(
     usage,
     usageComplete: usage !== null,
     finishReason,
+    ...counters(),
   };
 }

@@ -5,6 +5,69 @@ import {
 } from "../src/desktop/ordered-delta-batcher.js";
 
 describe("OrderedDeltaBatcher", () => {
+  it(
+    "keeps the latest same-request metadata while concatenating text and batch counts",
+    { retry: 0 },
+    () => {
+      const written: OrderedWireEvent[] = [];
+      const batcher = new OrderedDeltaBatcher((event) => written.push(event));
+      const base = {
+        type: "model.delta",
+        tabId: "t1",
+        turn: 2,
+        channel: "content",
+        requestId: "r1",
+      };
+      const first = {
+        ...base,
+        id: 1,
+        ts: "first",
+        text: "ab",
+        outputChars: 2,
+        reasoningChars: 3,
+        toolArgsChars: 4,
+        batchCount: 2,
+        oldOnly: true,
+      };
+      const latest = {
+        ...base,
+        id: 5,
+        ts: "latest",
+        text: "cde",
+        outputChars: 5,
+        reasoningChars: 6,
+        toolArgsChars: 7,
+        batchCount: 3,
+      };
+
+      batcher.push(first);
+      batcher.push(latest);
+      batcher.flush();
+
+      expect(written).toEqual([{ ...latest, text: "abcde", batchCount: 5 }]);
+      expect(first.text).toBe("ab");
+      expect(latest.text).toBe("cde");
+    },
+  );
+
+  it.each([
+    ["r1", "r2"],
+    [undefined, "r2"],
+    ["r1", undefined],
+  ])("does not merge different request identities (%s, %s)", { retry: 0 }, (left, right) => {
+    const written: OrderedWireEvent[] = [];
+    const batcher = new OrderedDeltaBatcher((event) => written.push(event));
+    const base = { type: "model.delta", tabId: "t1", turn: 1, channel: "content" };
+    const first = { ...base, requestId: left, text: "first", outputChars: 5 };
+    const second = { ...base, requestId: right, text: "second", outputChars: 6 };
+
+    batcher.push(first);
+    batcher.push(second);
+    batcher.flush();
+
+    expect(written).toEqual([first, second]);
+  });
+
   it("coalesces adjacent deltas from the same tab, turn, and channel", () => {
     const written: OrderedWireEvent[] = [];
     let scheduled: (() => void) | undefined;

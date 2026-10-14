@@ -1,5 +1,9 @@
 import { type ChatFinishReason, type DeepSeekClient, Usage } from "./client.js";
-import type { ReasoningEffort } from "./config.js";
+import {
+  type ReasoningEffort,
+  loadHistorySummaryTimeoutMs,
+  resolveHistorySummaryTimeoutMs,
+} from "./config.js";
 import type { PauseGate } from "./core/pause-gate.js";
 import { pauseGate as defaultPauseGate } from "./core/pause-gate.js";
 import { type HookPayload, type ResolvedHook, runHooks } from "./hooks.js";
@@ -12,6 +16,7 @@ import {
 
 import {
   ContextManager,
+  type FoldResult,
   MANUAL_COMPACT_KEEP_RECENT_TOKENS,
   TURN_START_FOLD_THRESHOLD,
   pruneOldToolResultsForModelContext,
@@ -50,7 +55,13 @@ import {
   stripHallucinatedToolMarkup,
   thinkingModeForModel,
 } from "./loop/thinking.js";
-import type { LoopEvent } from "./loop/types.js";
+import {
+  type LoopEvent,
+  createModelRequestId,
+  ensureToolCallIdentity,
+  getToolCallIdentity,
+  toolCallEventFields,
+} from "./loop/types.js";
 import { AppendOnlyLog, type ImmutablePrefix, VolatileScratch } from "./memory/runtime.js";
 import { SessionWriterLease } from "./memory/session-writer-lock.js";
 import {
@@ -67,12 +78,13 @@ import {
   type ToolExecutionJournal,
   openToolExecutionJournal,
   toolExecutionJournalPath,
+  toolExecutionOutcomeFromResult,
 } from "./memory/tool-execution-journal.js";
 import { sanitizeProviderErrorText } from "./provider-http-error.js";
 import { type RepairReport, ToolCallRepair } from "./repair/index.js";
 import { SessionStats, type TurnStats, costUsd } from "./telemetry/stats.js";
 import { appendUsage } from "./telemetry/usage.js";
-import { type AuxiliaryUsageReport, ToolRegistry } from "./tools.js";
+import { type AuxiliaryUsageReport, type ToolDefinitionSnapshot, ToolRegistry } from "./tools.js";
 import { ReadTracker } from "./tools/read-tracker.js";
 import type { ChatMessage, ToolCall } from "./types.js";
 
@@ -137,6 +149,7 @@ export interface CacheFirstLoopOptions {
   reasoningEffort?: ReasoningEffort;
   /** Soft USD cap — warns at 80%, refuses next turn at 100%. Opt-in (default no cap). */
   budgetUsd?: number;
+  historySummaryTimeoutMs?: number;
   session?: string;
   /** Stable logical session identity used to prevent two desktop/web runtimes from writing it. */
   sessionWriterKey?: string;
@@ -168,6 +181,8 @@ export interface LoopAbortOptions {
 }
 
 export interface LoopStepOptions {
+  /** Host-provided help for this request only; never enters the session log. */
+  requestContext?: string | (() => string);
   attachments?: import("./attachments/types.js").ImageAttachment[];
   clientId?: string;
   onUserPersisted?: (turn: number) => void;
@@ -189,6 +204,14 @@ export class CacheFirstLoop {
   readonly scratch = new VolatileScratch();
   readonly stats: SessionStats;
   readonly repair: ToolCallRepair;
+  private readonly allowedToolNames = new Set<string>();
+  private turnDefinitions: ReadonlyMap<string, ToolDefinitionSnapshot> | null = null;
+  private requestContext: LoopStepOptions["requestContext"];
+  private stepActive = false;
+  private manualCompaction: { controller: AbortController; promise: Promise<FoldResult> } | null =
+    null;
+  private readonly activeImageIds = new Set<string>();
+  private readonly historySummaryTimeoutMs: number;
   /** Files the model has read this session; gates edit_file / multi_edit so SEARCH text matches on-disk bytes. Cleared on fold / mechanical truncate (the model's byte-level view of the elided history is gone). In-memory only — naturally empty on resume. */
   readonly readTracker = new ReadTracker();
 
@@ -268,6 +291,10 @@ export class CacheFirstLoop {
 
   constructor(opts: CacheFirstLoopOptions) {
     this.client = opts.client;
+    this.historySummaryTimeoutMs =
+      opts.historySummaryTimeoutMs === undefined
+        ? loadHistorySummaryTimeoutMs()
+        : resolveHistorySummaryTimeoutMs(opts.historySummaryTimeoutMs);
     this.stats = new SessionStats({ providerId: opts.client.providerId });
     this.prefix = opts.prefix;
     this.tools = opts.tools ?? new ToolRegistry();
@@ -301,16 +328,16 @@ export class CacheFirstLoop {
     this._streamPreference = opts.stream ?? true;
     this.stream = this._streamPreference;
 
-    const allowedNames = new Set([...this.prefix.toolSpecs.map((s) => s.function.name)]);
+    for (const spec of this.prefix.toolSpecs) this.allowedToolNames.add(spec.function.name);
     // Storm breaker clears its window on mutating calls so read → edit → verify isn't a storm.
     const registry = this.tools;
     const isStormExempt = (call: ToolCall): boolean => {
       const name = call.function?.name;
       if (!name) return false;
-      return registry.get(name)?.stormExempt === true;
+      return (this.turnDefinitions?.get(name) ?? registry.get(name))?.stormExempt === true;
     };
     this.repair = new ToolCallRepair({
-      allowedToolNames: allowedNames,
+      allowedToolNames: this.allowedToolNames,
       isMutating: (call) => this.isMutating(call),
       isStormExempt,
       stormThreshold: parsePositiveIntEnv(process.env.JUPITER_STORM_THRESHOLD),
@@ -395,6 +422,8 @@ export class CacheFirstLoop {
       getSystemPrompt: () => this.prefix.system,
       getToolSpecs: () => this.prefix.toolSpecs,
       getFewShots: () => this.prefix.fewShots,
+      getActiveImageIds: () => (this.stepActive ? [...this.activeImageIds] : []),
+      summaryTimeoutMs: this.historySummaryTimeoutMs,
       onLogRewrite: () => this.readTracker.reset(),
     });
   }
@@ -408,6 +437,10 @@ export class CacheFirstLoop {
     sessionName: string | null,
     opts: { logicalSessionChanged?: boolean; sessionWriterKey?: string } = {},
   ): void {
+    if (opts.logicalSessionChanged) {
+      this.manualCompaction?.controller.abort();
+      this.activeImageIds.clear();
+    }
     const nextWriterKey = sessionName
       ? (opts.sessionWriterKey ??
         (opts.logicalSessionChanged ? `session:${sessionName}` : this._sessionWriterKey))
@@ -461,37 +494,26 @@ export class CacheFirstLoop {
     keepRecentTokens?: number;
     requireTailBoundary?: boolean;
     signal?: AbortSignal;
-  }): Promise<{
-    folded: boolean;
-    beforeMessages: number;
-    afterMessages: number;
-    summaryChars: number;
-    reason?: string;
-    totalTokens?: number;
-    headTokens?: number;
-    tailTokens?: number;
-    tailBudget?: number;
-  }> {
+  }): Promise<FoldResult> {
     return this.context.fold(this.model, opts);
   }
 
   /** User-triggered compaction should shrink ordinary long sessions, not wait for model-window pressure. */
-  async manualCompactHistory(): Promise<{
-    folded: boolean;
-    beforeMessages: number;
-    afterMessages: number;
-    summaryChars: number;
-    reason?: string;
-    totalTokens?: number;
-    headTokens?: number;
-    tailTokens?: number;
-    tailBudget?: number;
-  }> {
-    const manualSignal = new AbortController().signal;
-    return this.compactHistory({
+  async manualCompactHistory(): Promise<FoldResult> {
+    if (this.stepActive || this.manualCompaction)
+      throw new Error("Cannot compact while a task or another compaction is running");
+    const controller = new AbortController();
+    const promise = this.compactHistory({
       keepRecentTokens: MANUAL_COMPACT_KEEP_RECENT_TOKENS,
-      signal: manualSignal,
+      signal: controller.signal,
     });
+    const operation = { controller, promise };
+    this.manualCompaction = operation;
+    try {
+      return await promise;
+    } finally {
+      if (this.manualCompaction === operation) this.manualCompaction = null;
+    }
   }
 
   /** Real-time token count of the current log — forwarded to Desktop for meter refresh. */
@@ -501,6 +523,8 @@ export class CacheFirstLoop {
 
   appendAndPersist(message: ChatMessage): boolean {
     const retained = shrinkMessageForRetention(message);
+    if (this.stepActive)
+      for (const image of retained.attachments ?? []) this.activeImageIds.add(image.id);
     if (retained.attachments?.length) {
       if (!this.sessionName) throw new Error("Image messages require a saved session");
       appendSessionMessage(this.sessionName, retained);
@@ -691,7 +715,7 @@ export class CacheFirstLoop {
   private isMutating(call: ToolCall): boolean {
     const name = call.function?.name;
     if (!name) return false;
-    const def = this.tools.get(name);
+    const def = this.turnDefinitions?.get(name) ?? this.tools.get(name);
     if (!def) return false;
     if (def.readOnlyCheck) {
       let args: Record<string, unknown> = {};
@@ -724,6 +748,14 @@ export class CacheFirstLoop {
     const name = call.function?.name ?? "";
     const args = call.function?.arguments ?? "{}";
     const parsedArgs = safeParseToolArgs(args);
+    const definition = this.turnDefinitions?.get(name);
+    if (this.turnDefinitions && !definition) {
+      return {
+        preWarnings: [],
+        postWarnings: [],
+        result: JSON.stringify({ error: `${name}: unavailable in this turn's tool snapshot` }),
+      };
+    }
     const journal = this._toolJournal;
     if (this.sessionName && !journal) {
       return {
@@ -737,7 +769,8 @@ export class CacheFirstLoop {
       try {
         executionId = journal.recordIntent({
           turn: this._turn,
-          callId: this.inflightIdFor(call),
+          // Recovery joins the transcript by provider ID, not the UI/inflight identity.
+          callId: call.id || this.inflightIdFor(call),
           toolName: name,
           args,
         });
@@ -791,6 +824,7 @@ export class CacheFirstLoop {
       let executionStarted = false;
       const toolImages: NonNullable<ChatMessage["attachments"]> = [];
       const result = await this.tools.dispatch(name, args, {
+        definition,
         reportImage: this.client.supportsImages(this.model)
           ? (image) => {
               if (toolImages.length >= 12) throw new Error("Tool image limit exceeded");
@@ -825,7 +859,9 @@ export class CacheFirstLoop {
         try {
           journal.recordResult(
             executionId,
-            executionStarted ? "returned" : "rejected_before_execution",
+            executionStarted
+              ? (toolExecutionOutcomeFromResult(result) ?? "returned")
+              : "rejected_before_execution",
             result,
           );
         } catch (err) {
@@ -886,6 +922,8 @@ export class CacheFirstLoop {
 
   /** Stable per-call id used as the inflight key AND threaded into tool_start / tool events so the UI matches them up. */
   private inflightIdFor(call: ToolCall): string {
+    const localCallId = getToolCallIdentity(call)?.localCallId;
+    if (localCallId) return localCallId;
     if (call.id) return call.id;
     const fallback = (call as { _inflightFallback?: string })._inflightFallback;
     if (fallback) return fallback;
@@ -895,9 +933,22 @@ export class CacheFirstLoop {
   }
   private _inflightCounter = 0;
 
-  private buildMessages(): ChatMessage[] {
-    const healedMessages = this.healActiveLogBeforeSend();
-    return [...this.prefix.toMessages(), ...pruneOldToolResultsForModelContext(healedMessages)];
+  private buildMessages(persistHealing = true): ChatMessage[] {
+    const healedMessages = persistHealing
+      ? this.healActiveLogBeforeSend()
+      : stripDroppableReasoningContent(
+          shrinkOversizedToolCallArgsByTokens(
+            healLoadedMessages(this.log.toFullHistory(), DEFAULT_MAX_RESULT_CHARS).messages,
+            DEFAULT_MAX_RESULT_TOKENS,
+          ).messages,
+        ).messages;
+    const requestContext =
+      typeof this.requestContext === "function" ? this.requestContext() : this.requestContext;
+    return [
+      ...this.prefix.toMessages(),
+      ...pruneOldToolResultsForModelContext(healedMessages),
+      ...(requestContext ? [{ role: "system" as const, content: requestContext }] : []),
+    ];
   }
 
   private healActiveLogBeforeSend(): ChatMessage[] {
@@ -923,6 +974,10 @@ export class CacheFirstLoop {
   }
 
   abort(opts: LoopAbortOptions = {}): void {
+    if (this.manualCompaction && !this.stepActive) {
+      this.manualCompaction.controller.abort();
+      return;
+    }
     if (opts.discardCurrentTurn) this._discardAbortRequested = true;
     this._turnAbort.abort();
   }
@@ -1112,17 +1167,55 @@ export class CacheFirstLoop {
     );
   }
 
-  retryFailedModelRequest(): AsyncGenerator<LoopEvent> {
+  retryFailedModelRequest(opts: LoopStepOptions = {}): AsyncGenerator<LoopEvent> {
     if (!this.canRetryFailedModelRequest()) {
       throw new Error("There is no retryable failed model request in the current turn.");
     }
     this._retryableModelFailure = null;
-    return this.runStep("", {}, true);
+    return this.runWithSnapshot("", opts, true);
   }
 
   step(userInput: string, opts: LoopStepOptions = {}): AsyncGenerator<LoopEvent> {
     this._retryableModelFailure = null;
-    return this.runStep(userInput, opts, false);
+    return this.runWithSnapshot(userInput, opts, false);
+  }
+
+  /** Update request contracts at a turn boundary without replacing history, stats or journals. */
+  refreshToolset(system?: string): void {
+    if (this.stepActive) throw new Error("Cannot refresh tools during an active turn");
+    const specs = this.tools.specs();
+    if (JSON.stringify(specs) !== JSON.stringify(this.prefix.toolSpecs)) {
+      for (const spec of [...this.prefix.toolSpecs]) this.prefix.removeTool(spec.function.name);
+      for (const spec of specs) this.prefix.addTool(spec);
+    }
+    if (system !== undefined) this.prefix.replaceSystem(system);
+    this.allowedToolNames.clear();
+    for (const spec of specs) this.allowedToolNames.add(spec.function.name);
+  }
+
+  private async *runWithSnapshot(
+    input: string,
+    opts: LoopStepOptions,
+    retry: boolean,
+  ): AsyncGenerator<LoopEvent> {
+    if (this.manualCompaction) {
+      this.manualCompaction.controller.abort();
+      await this.manualCompaction.promise;
+    }
+    if (this.stepActive) throw new Error("A turn is already running");
+    this.stepActive = true;
+    this.turnDefinitions = this.tools.captureDefinitions();
+    this.requestContext = opts.requestContext;
+    const abortBeforeStep = this._turnAbort;
+    try {
+      yield* this.runStep(input, opts, retry);
+    } finally {
+      // A consumer may close at delta/drop before runStep's abort handler is reached.
+      if (this._turnAbort !== abortBeforeStep) this.resetAbortState();
+      this.stepActive = false;
+      this.turnDefinitions = null;
+      this.requestContext = undefined;
+    }
   }
 
   private async *runStep(
@@ -1177,7 +1270,10 @@ export class CacheFirstLoop {
         };
       }
     }
-    if (!resumeFailedRequest) this._turn++;
+    if (!resumeFailedRequest) {
+      this.activeImageIds.clear();
+      this._turn++;
+    }
     if (this._turn < 1) throw new Error("Cannot retry a model request before the first user turn.");
     const turnSessionEpoch = this._sessionEpoch;
     const turnNumber = this._turn;
@@ -1284,6 +1380,28 @@ export class CacheFirstLoop {
             activityState: "complete",
           };
         }
+        const afterFold = this.context.estimateTurnStart(
+          this.buildMessages(),
+          this.prefix.toolSpecs,
+          this.model,
+        );
+        if (afterFold.ratio >= 1 && !signal.aborted) {
+          const message =
+            "The conversation still exceeds this model's context window. Compaction did not create enough room; use a larger-context model or reduce the input.";
+          yield {
+            turn: this._turn,
+            role: "error",
+            content: "",
+            error: message,
+            errorDetail: {
+              name: "ContextWindowExceeded",
+              message,
+              retryable: false,
+              recoverable: true,
+            },
+          };
+          return;
+        }
       }
     }
 
@@ -1359,6 +1477,7 @@ export class CacheFirstLoop {
       let usage: TurnStats["usage"] | null = null;
       let usageComplete = false;
       let finishReason: ChatFinishReason = "unknown";
+      const modelRequestId = createModelRequestId();
 
       try {
         if (this.stream) {
@@ -1368,9 +1487,11 @@ export class CacheFirstLoop {
             messages,
             toolSpecs,
             signal,
+            activeImageIds: [...this.activeImageIds],
             thinkingEnabled: this.thinkingEnabled,
             reasoningEffort: this.reasoningEffort,
             turn: this._turn,
+            requestId: modelRequestId,
           });
           assistantContent = result.assistantContent;
           reasoningContent = result.reasoningContent;
@@ -1385,6 +1506,7 @@ export class CacheFirstLoop {
             messages,
             tools: toolSpecs.length ? toolSpecs : undefined,
             signal,
+            activeImageIds: [...this.activeImageIds],
             thinking: thinkingModeForModel(callModel, this.thinkingEnabled),
             reasoningEffort: this.thinkingEnabled ? this.reasoningEffort : undefined,
           });
@@ -1435,12 +1557,18 @@ export class CacheFirstLoop {
           };
         }
         const { code, phase } = errorMeta(cause);
-        const safeCauseMessage = sanitizeProviderErrorText(cause.message, { maxChars: 4096 });
+        const safeCauseMessage = sanitizeProviderErrorText(cause.message, {
+          knownSecrets: [this.client.apiKey],
+          maxChars: 4096,
+        });
         yield {
           turn: this._turn,
           role: "error",
           content: "",
-          error: formatLoopError(err as Error, probe, { upstreamHost }),
+          error: sanitizeProviderErrorText(formatLoopError(err as Error, probe, { upstreamHost }), {
+            knownSecrets: [this.client.apiKey],
+            maxChars: 4096,
+          }),
           errorDetail: {
             name: cause.name,
             message: safeCauseMessage,
@@ -1455,6 +1583,7 @@ export class CacheFirstLoop {
       }
 
       let billableUsage = usage;
+      toolCalls.forEach((call, index) => ensureToolCallIdentity(call, modelRequestId, index));
       let contextUsage = usage;
       let billableUsageComplete = usageComplete;
       let continuationAttempted = false;
@@ -1495,12 +1624,14 @@ export class CacheFirstLoop {
               messages: continuationPlan.messages,
               toolSpecs: [],
               signal,
+              activeImageIds: [...this.activeImageIds],
               thinkingEnabled: this.thinkingEnabled,
               reasoningEffort: this.reasoningEffort,
               maxTokens: continuationPlan.maxTokens,
               betaPrefix: true,
               disableRetry: true,
               turn: this._turn,
+              requestId: createModelRequestId(),
             });
             assistantContent += continued.assistantContent;
             reasoningContent += continued.reasoningContent;
@@ -1513,6 +1644,7 @@ export class CacheFirstLoop {
               model: this.model,
               messages: continuationPlan.messages,
               signal,
+              activeImageIds: [...this.activeImageIds],
               thinking: thinkingModeForModel(this.model, this.thinkingEnabled),
               reasoningEffort: this.thinkingEnabled ? this.reasoningEffort : undefined,
               maxTokens: continuationPlan.maxTokens,
@@ -1578,10 +1710,15 @@ export class CacheFirstLoop {
 
       this.scratch.reasoning = reasoningContent || null;
 
-      const { calls: repairedCalls, report } = this.repair.process(
+      const {
+        calls: repairedCalls,
+        report,
+        droppedCalls,
+      } = this.repair.process(
         toolCalls,
         reasoningContent || null,
         assistantContent || null,
+        modelRequestId,
       );
 
       this.appendAndPersist(
@@ -1595,7 +1732,19 @@ export class CacheFirstLoop {
         reasoningContent: reasoningContent || undefined,
         stats: turnStats,
         repair: report,
+        requestId: modelRequestId,
       };
+
+      for (const { call, reason } of droppedCalls) {
+        yield {
+          turn: this._turn,
+          role: "tool_call_drop",
+          content: reason,
+          toolName: call.function.name,
+          ...toolCallEventFields(call),
+          terminalState: "dropped",
+        };
+      }
 
       const allSuppressed =
         report.stormsBroken > 0 && repairedCalls.length === 0 && toolCalls.length > 0;
@@ -1667,7 +1816,7 @@ export class CacheFirstLoop {
         return;
       }
 
-      if (yield* this.handlePostUsageContextDecision(contextUsage)) {
+      if (yield* this.handlePostUsageContextDecision(contextUsage, repairedCalls)) {
         this._steerQueue.length = 0;
         return;
       }
@@ -1678,6 +1827,7 @@ export class CacheFirstLoop {
         isParallelSafe: (name) => this.tools.isParallelSafe(name),
         inflightIdFor: (call) => this.inflightIdFor(call),
         inflightAdd: (id) => this._inflight.add(id),
+        inflightDelete: (id) => this._inflight.delete(id),
         runOne: (call, sig) => this.runOneToolCall(call, sig),
         appendAndPersist: (m) => this.appendAndPersist(m),
         rateLimitState,
@@ -1711,6 +1861,7 @@ export class CacheFirstLoop {
 
   private async *handlePostUsageContextDecision(
     usage: TurnStats["usage"] | null,
+    pendingCalls: ToolCall[] = [],
   ): AsyncGenerator<LoopEvent, boolean, unknown> {
     // Context-management decision after each turn's response.
     // ContextManager owns the policy; loop renders the events.
@@ -1756,6 +1907,16 @@ export class CacheFirstLoop {
         };
       }
     } else if (decision.kind === "exit-with-summary") {
+      for (const call of pendingCalls) {
+        yield {
+          turn: this._turn,
+          role: "tool_call_drop",
+          content: "Context guard stopped this call before execution.",
+          toolName: call.function.name,
+          ...toolCallEventFields(call),
+          terminalState: "dropped",
+        };
+      }
       const before = decision.promptTokens;
       const ctxMax = decision.ctxMax;
       yield {
@@ -1767,7 +1928,6 @@ export class CacheFirstLoop {
           pct: Math.round((before / ctxMax) * 100),
         }),
       };
-      this.context.trimTrailingToolCalls();
       yield* forceSummaryAfterGuard(this.summaryContext(), { reason: "context-guard" });
       return true;
     }
@@ -1775,11 +1935,18 @@ export class CacheFirstLoop {
   }
 
   private summaryContext(): ForceSummaryContext {
+    const epoch = this._sessionEpoch;
+    const revision = this.log.revision;
     return {
       client: this.client,
       signal: this._turnAbort.signal,
-      buildMessages: () => this.buildMessages(),
-      appendAndPersist: (m) => this.appendAndPersist(m),
+      buildMessages: () => this.buildMessages(false),
+      activeImageIds: [...this.activeImageIds],
+      summaryTimeoutMs: this.historySummaryTimeoutMs,
+      appendAndPersist: (m) =>
+        this._sessionEpoch === epoch &&
+        this.log.revision === revision &&
+        this.context.commitForcedSummary(m, this._sessionName),
       recordStats: (model, usage) => this.stats.record(this._turn, model, usage),
       turn: this._turn,
       model: this.model,

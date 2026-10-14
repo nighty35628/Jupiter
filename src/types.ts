@@ -62,6 +62,8 @@ export interface RawUsage {
 export interface ChatRequestOptions {
   model: string;
   messages: ChatMessage[];
+  /** Host-owned current-turn images. An empty list makes all attached pixels historical. */
+  activeImageIds?: readonly string[];
   tools?: readonly ToolSpec[];
   temperature?: number;
   maxTokens?: number;
