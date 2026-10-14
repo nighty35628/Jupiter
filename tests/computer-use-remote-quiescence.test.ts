@@ -309,7 +309,7 @@ describe("Computer Use shared-daemon quiescence", () => {
         command: process.execPath,
         args: [
           "-e",
-          "const rl=require('node:readline').createInterface({input:process.stdin}); rl.on('line',line=>{const r=JSON.parse(line);if(r.method==='initialize')process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result:{capabilities:{tools:{}},serverInfo:{name:'fake-proxy',version:'1'}}})+'\\n');if(r.method==='tools/call')process.stdout.end();});setInterval(()=>{},1000);",
+          "const rl=require('node:readline').createInterface({input:process.stdin}); rl.on('line',line=>{const r=JSON.parse(line);if(r.method==='initialize')process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result:{capabilities:{tools:{}},serverInfo:{name:'fake-proxy',version:'1'}}})+'\\n');if(r.method==='tools/call'){if(process.platform==='win32')require('node:fs').closeSync(1);else process.stdout.end();}});setInterval(()=>{},1000);",
         ],
         shutdownTimeoutMs: 30,
       },

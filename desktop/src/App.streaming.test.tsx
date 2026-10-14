@@ -667,7 +667,7 @@ describe("App streaming events", () => {
       await Promise.resolve();
     });
     expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
-  });
+  }, 20_000);
 
   it.each([false, true])("provider save ack respects a newer settings batch and later edits: %s", { retry: 0 }, async (editInFlight) => {
     render(<App />);

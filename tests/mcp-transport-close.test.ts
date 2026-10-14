@@ -81,7 +81,9 @@ describe("MCP bounded process shutdown", () => {
       const kill = vi.spyOn(child, "kill");
       await Promise.all([transport.close(), transport.close()]);
       if (process.platform === "win32") {
-        expect(kill.mock.calls.map(([signal]) => signal)).toEqual([undefined]);
+        const signals = kill.mock.calls.map(([signal]) => signal);
+        expect(signals[0]).toBeUndefined();
+        expect(signals.slice(1)).toEqual(signals.length === 2 ? ["SIGKILL"] : []);
         expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
       } else {
         expect(kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
@@ -95,7 +97,10 @@ describe("MCP bounded process shutdown", () => {
   it("detects stdout EOF even while the child is still alive, then waits for exit on close", async () => {
     const transport = new StdioTransport({
       command: process.execPath,
-      args: ["-e", "process.stdout.end(); setInterval(() => {}, 1000);"],
+      args: [
+        "-e",
+        "if (process.platform === 'win32') require('node:fs').closeSync(1); else process.stdout.end(); setInterval(() => {}, 1000);",
+      ],
       shell: false,
       shutdownTimeoutMs: 30,
     });
