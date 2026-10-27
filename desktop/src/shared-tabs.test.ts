@@ -162,7 +162,8 @@ describe("shared tabs draft migration", { retry: 0 }, () => {
     const image = { kind: "image" as const, id: "a".repeat(64), name: "draft.png", mime: "image/png" as const, width: 2, height: 1, bytes: 12 };
     const record = { text: "local", attachments: [image], queue: [{ text: "", payload: { clientId: "queued", attachments: [image], ask: true } }], pending: { clientId: "pending", draft: { text: "sent", attachments: [image] }, ask: true, plan: false } };
     writeImageDraft(source, () => record);
-    const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
+    const storageMethods = Object.hasOwn(localStorage, "setItem") ? localStorage : Object.getPrototypeOf(localStorage);
+    const setItem = vi.spyOn(storageMethods, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
     try { expect(handoffImageDraft(source, target)).toBe(false); } finally { setItem.mockRestore(); }
     expect(readImageDraft(source)).toEqual(record);
     expect(localStorage.getItem(`jupiter.image-draft.v1:${source}`)).toContain("local");
@@ -236,7 +237,8 @@ describe("shared tabs draft migration", { retry: 0 }, () => {
   it("retains the legacy draft if saving the scoped copy fails", () => {
     const sid = crypto.randomUUID();
     writeImageDraft(sid, () => ({ text: "must survive" }));
-    const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
+    const storageMethods = Object.hasOwn(localStorage, "setItem") ? localStorage : Object.getPrototypeOf(localStorage);
+    const setItem = vi.spyOn(storageMethods, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
     try { migrateConversationDraft(sid, "default"); } finally { setItem.mockRestore(); }
     expect(localStorage.getItem(`jupiter.image-draft.v1:${sid}`)).toContain("must survive");
     expect(localStorage.getItem(`jupiter.image-draft.migrated:${sid}`)).toBeNull();

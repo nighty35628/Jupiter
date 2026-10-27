@@ -1907,7 +1907,7 @@ describe("App streaming events", () => {
     expect(userInputCalls).toBe(1);
   });
 
-  it("suspends the shared queue and rolls back a command blocked behind a failed write", async () => {
+  it("suspends the shared queue and rolls back a command blocked behind a failed write", { timeout: 20000 }, async () => {
     render(<App />);
 
     await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));

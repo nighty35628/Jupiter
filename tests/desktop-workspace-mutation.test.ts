@@ -1,9 +1,9 @@
 import { getEventListeners } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type WorkspaceMutationLease,
   acquireComputerUse,
@@ -14,6 +14,11 @@ import {
   isWorkspaceMutationActive,
   markWorkspaceMutation,
 } from "../src/desktop/workspace-mutation.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
+});
 
 const roots: string[] = [];
 const leases: WorkspaceMutationLease[] = [];
@@ -147,14 +152,23 @@ describe("workspace mutation coordination", { retry: 0 }, () => {
   });
 
   it("normalizes Windows casing, separators, and extended paths", () => {
-    expect(canonicalWorkspacePath("C:\\Project\\Code\\..\\APP\\", "win32")).toBe(
-      "c:\\project\\app",
-    );
-    expect(canonicalWorkspacePath("c:/PROJECT/app", "win32")).toBe("c:\\project\\app");
-    expect(canonicalWorkspacePath("\\\\?\\C:\\Project\\APP", "win32")).toBe("c:\\project\\app");
-    expect(canonicalWorkspacePath("\\\\?\\UNC\\Server\\Share\\APP", "win32")).toBe(
-      "\\\\server\\share\\app",
-    );
+    // These synthetic paths must not contact a real Windows network share.
+    const originalRealpath = vi.mocked(realpathSync).getMockImplementation()!;
+    vi.mocked(realpathSync).mockImplementation(() => {
+      throw Object.assign(new Error("Synthetic path does not exist"), { code: "ENOENT" });
+    });
+    try {
+      expect(canonicalWorkspacePath("C:\\Project\\Code\\..\\APP\\", "win32")).toBe(
+        "c:\\project\\app",
+      );
+      expect(canonicalWorkspacePath("c:/PROJECT/app", "win32")).toBe("c:\\project\\app");
+      expect(canonicalWorkspacePath("\\\\?\\C:\\Project\\APP", "win32")).toBe("c:\\project\\app");
+      expect(canonicalWorkspacePath("\\\\?\\UNC\\Server\\Share\\APP", "win32")).toBe(
+        "\\\\server\\share\\app",
+      );
+    } finally {
+      vi.mocked(realpathSync).mockImplementation(originalRealpath);
+    }
   });
 
   it("marks acquisition, explicit changes, and final release without resetting idle revision", async () => {

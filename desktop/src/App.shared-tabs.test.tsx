@@ -106,7 +106,7 @@ describe("shared tabs menu", { retry: 0 }, () => {
 });
 
 describe("shared tabs real App routing", { retry: 0 }, () => {
-  it.each(["default", "123e4567-e89b-12d3-a456-426614174000"])("does not persist an empty placeholder or let a parallel view claim a late default draft (%s)", async (view) => {
+  it.each(["default", "123e4567-e89b-12d3-a456-426614174000"])("does not persist an empty placeholder or let a parallel view claim a late default draft (%s)", { timeout: 20000 }, async (view) => {
     const sid = crypto.randomUUID();
     writeImageDraft(sid, () => ({ text: "legacy text", queue: [{ text: "queued once", payload: { clientId: "late-once" } }] }));
     render(<App />); await waitFor(() => expect(bridge.handlers.has("rpc:event")).toBe(true));

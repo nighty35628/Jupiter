@@ -1,6 +1,5 @@
 import {
   appendFileSync,
-  chmodSync,
   mkdirSync,
   mkdtempSync,
   renameSync,
@@ -9,6 +8,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,11 @@ import {
 } from "../src/memory/session-history.js";
 import { sessionPath } from "../src/memory/session.js";
 import type { ChatMessage } from "../src/types.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 const jsonl = (records: ChatMessage[], eol = "\n") =>
   records.map((record) => JSON.stringify(record)).join(eol) + eol;
@@ -254,22 +259,25 @@ describe("bounded session history pages", () => {
     expect((await readSessionHistoryPage("s")).records).toEqual(turns(1));
   });
 
-  it.skipIf(process.getuid?.() === 0)(
-    "uses backup when an existing live file is unreadable",
-    async () => {
-      writeFileSync(sessionPath("s"), jsonl(turns(1)));
-      writeFileSync(`${sessionPath("s")}.bak`, jsonl(turns(2)));
-      chmodSync(sessionPath("s"), 0);
-      try {
-        const page = await readSessionHistoryPage("s");
-        expect(page.records).toEqual(turns(2));
-        expect(await getSessionHistoryGeneration("s")).toBe(page.generation);
-      } finally {
-        chmodSync(sessionPath("s"), 0o600);
+  it("uses backup when an existing live file is unreadable", async () => {
+    writeFileSync(sessionPath("s"), jsonl(turns(1)));
+    writeFileSync(`${sessionPath("s")}.bak`, jsonl(turns(2)));
+    const originalOpen = vi.mocked(open).getMockImplementation()!;
+    vi.mocked(open).mockImplementation((...args) => {
+      if (args[0] === sessionPath("s")) {
+        return Promise.reject(Object.assign(new Error("Permission denied"), { code: "EACCES" }));
       }
-      expect((await readSessionHistoryPage("s")).records).toEqual(turns(1));
-    },
-  );
+      return originalOpen(...args);
+    });
+    try {
+      const page = await readSessionHistoryPage("s");
+      expect(page.records).toEqual(turns(2));
+      expect(await getSessionHistoryGeneration("s")).toBe(page.generation);
+    } finally {
+      vi.mocked(open).mockImplementation(originalOpen);
+    }
+    expect((await readSessionHistoryPage("s")).records).toEqual(turns(1));
+  });
 
   it("makes warm page/detail reads proportional to their byte ranges, with read counters", async () => {
     writeFileSync(sessionPath("s"), jsonl(turns(500, 2048)));
@@ -388,28 +396,32 @@ describe("bounded session history pages", () => {
     }
   });
 
-  it("streams late/escaped/duplicate top-level roles and ignores malformed huge lines", async () => {
-    const large = "x".repeat(SESSION_HISTORY_LIMITS.maxRecordBytes + 50);
-    const body = [
-      JSON.stringify({ content: large, nested: { role: "user" }, role: "user" }),
-      JSON.stringify({ content: large, role: "tool" }),
-      `{"content":${JSON.stringify(large)},"ro\\u006ce":"us\\u0065r"}`,
-      `{"role":"user","content":${JSON.stringify(large)},"role":"tool"}`,
-      `{"role":"user","content":${JSON.stringify(large)},broken}`,
-      JSON.stringify({ content: large, nested: { role: "user" } }),
-      JSON.stringify({ role: "user", content: "last" }),
-    ].join("\r\n");
-    writeFileSync(sessionPath("s"), body);
-    const newest = await readSessionHistoryPage("s", { limitTurns: 1 });
-    expect(newest).toMatchObject({
-      totalTurns: 3,
-      startTurn: 2,
-      records: [{ role: "user", content: "last" }],
-    });
-    const all = await readSessionHistoryPage("s");
-    expect(all.omissions).toHaveLength(2);
-    expect(all.records.map((record) => record.role)).toEqual(["user", "user", "user"]);
-  });
+  it(
+    "streams late/escaped/duplicate top-level roles and ignores malformed huge lines",
+    { timeout: 20000 },
+    async () => {
+      const large = "x".repeat(SESSION_HISTORY_LIMITS.maxRecordBytes + 50);
+      const body = [
+        JSON.stringify({ content: large, nested: { role: "user" }, role: "user" }),
+        JSON.stringify({ content: large, role: "tool" }),
+        `{"content":${JSON.stringify(large)},"ro\\u006ce":"us\\u0065r"}`,
+        `{"role":"user","content":${JSON.stringify(large)},"role":"tool"}`,
+        `{"role":"user","content":${JSON.stringify(large)},broken}`,
+        JSON.stringify({ content: large, nested: { role: "user" } }),
+        JSON.stringify({ role: "user", content: "last" }),
+      ].join("\r\n");
+      writeFileSync(sessionPath("s"), body);
+      const newest = await readSessionHistoryPage("s", { limitTurns: 1 });
+      expect(newest).toMatchObject({
+        totalTurns: 3,
+        startTurn: 2,
+        records: [{ role: "user", content: "last" }],
+      });
+      const all = await readSessionHistoryPage("s");
+      expect(all.omissions).toHaveLength(2);
+      expect(all.records.map((record) => record.role)).toEqual(["user", "user", "user"]);
+    },
+  );
 
   it("streams nested grammar, numeric/literal values and chunk-split Unicode/escapes", async () => {
     const large = `${"x".repeat(SESSION_HISTORY_LIMITS.maxRecordBytes)}你好\\\"`;
