@@ -90,7 +90,7 @@ describe("provider configuration", () => {
     ]) {
       saveModel(model, path);
       const snapshot = resolveProviderSnapshot({ configPath: path });
-      expect(snapshot.model).toBe(model);
+      expect(snapshot.model).toBe(model === "deepseek-v4-pro" ? model : "deepseek-flash");
       expect(snapshot.capability.supportsImages).toBe(model !== "deepseek-v4-pro");
     }
   });

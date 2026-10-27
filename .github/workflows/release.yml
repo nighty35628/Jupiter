@@ -262,7 +262,8 @@ jobs:
             exit 1
           fi
 
-          notes="../.github/release-notes/${TAG}.md"
+          notes="$RUNNER_TEMP/desktop-release-notes.md"
+          node ../scripts/prepare-desktop-release-notes.mjs "$TAG" "$notes"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
               --title "Jupiter $TAG" --notes-file "$notes" || \
@@ -379,10 +380,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.name }}
         run: |
-          notes=".github/release-notes/${TAG}.md"
-          if [ ! -f "$notes" ]; then
-            echo "Missing desktop release notes: $notes" >&2
-            echo "Add a bilingual notes file before pushing the desktop release tag." >&2
-            exit 1
-          fi
+          notes="$RUNNER_TEMP/desktop-release-notes.md"
+          node scripts/prepare-desktop-release-notes.mjs "$TAG" "$notes"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes"

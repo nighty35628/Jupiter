@@ -87,9 +87,11 @@ describe("ModelPicker (#371)", () => {
   });
 
   it("falls back to the known DeepSeek ids when catalog is null so the picker isn't empty on first open", () => {
-    const text = renderPicker({ models: null, current: "deepseek-v4-flash" });
-    expect(text).toContain("deepseek-v4-flash");
+    const text = renderPicker({ models: null, current: "deepseek-flash" });
+    expect(text).toContain("deepseek-flash");
     expect(text).toContain("deepseek-v4-pro");
+    expect(text).not.toContain("deepseek-v4-flash");
+    expect(text).not.toContain("deepseek-v4-flash-vision-exp");
   });
 
   it("shows the explicit empty hint when catalog loaded but is empty", () => {

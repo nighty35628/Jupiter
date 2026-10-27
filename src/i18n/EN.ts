@@ -1370,6 +1370,11 @@ export const EN: TranslationSchema = {
         "  /search-engine ollama              use Ollama cloud web search — set OLLAMA_API_KEY or ollamaApiKey in config; get one at https://ollama.com/settings/keys",
       usageBrave:
         "  /search-engine brave               use Brave Search API (independent index, free 2000/mo — set BRAVE_SEARCH_API_KEY or braveApiKey in config; get one at https://brave.com/search/api/)",
+      usageDeepSeek:
+        "  /search-engine deepseek            Direct DeepSeek Search API (per request)",
+      fetchUsage:
+        "Fetch: {engine}. /search-engine fetch legacy|http|ollama|deepseek (remote Fetch sends URLs to that service)",
+      fetchConfirmed: "Fetch engine: {engine}",
       usageDeepSeekNative:
         "  /search-engine deepseek-native     use DeepSeek native search (experimental; full model-call cost)",
       alias: "Alias: /se",

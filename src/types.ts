@@ -38,6 +38,9 @@ export interface ChatMessage {
   sourceAttachments?: import("./attachments/types.js").ImageAttachment[];
   /** Durable submission identity; never transmitted to the model. */
   clientId?: string;
+  /** Local history identity and origin; never transmitted to a provider. */
+  turnId?: string;
+  conversationViewId?: string;
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];

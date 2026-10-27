@@ -3,12 +3,14 @@ import { messageImageTokens } from "./attachments/types.js";
 import type { DeepSeekClient } from "./client.js";
 import { Usage } from "./client.js";
 import { healLoadedMessages } from "./loop.js";
+import { compactionRequestTokens } from "./loop/compaction.js";
 import { buildAssistantMessage } from "./loop/messages.js";
 import {
   type SummaryFailure,
   SummaryRequestError,
   acceptedSummary,
   requestFoldSummary,
+  withSummaryDeadline,
 } from "./loop/summary.js";
 import { DEFAULT_MAX_RESULT_CHARS } from "./mcp/registry.js";
 import type { AppendOnlyLog } from "./memory/runtime.js";
@@ -78,9 +80,17 @@ export interface ContextManagerDeps {
   getToolSpecs?: () => readonly ToolSpec[];
   getFewShots?: () => readonly ChatMessage[];
   getActiveImageIds?: () => readonly string[];
+  /** Live request prefix/context around an uncommitted replacement; never writes. */
+  buildReplacementMessages?: (history: ChatMessage[]) => ChatMessage[];
+  /** Installs a same-model total-window output reserve, only after durable/in-memory commit. */
+  onFoldOutputCap?: (model: string, maxTokens: number) => void;
   summaryTimeoutMs?: number;
   /** Fired when the message log was rewritten by fold; lets the loop drop session-scoped caches whose validity rested on the elided history (e.g. read-before-edit tracker). */
   onLogRewrite?: () => void;
+  /** Run-local persistence override; context folds must not rewrite raw turn records. */
+  persistMessages?: (messages: ChatMessage[], reason: "context" | "history") => void;
+  /** Forced summaries are raw assistant output, unlike a history fold. */
+  persistForcedSummary?: (summary: ChatMessage, replacesTail: boolean) => ChatMessage | undefined;
 }
 
 export type PostUsageDecisionKind = "none" | "fold" | "exit-with-summary";
@@ -109,7 +119,9 @@ export interface FoldResult {
     | SummaryFailure
     | "session-changed"
     | "persistence-failed"
-    | "log-changed";
+    | "log-changed"
+    | "replacement-over-limit"
+    | "output-cap-unavailable";
   totalTokens?: number;
   headTokens?: number;
   tailTokens?: number;
@@ -292,6 +304,7 @@ export class ContextManager {
     model: string,
     opts?: { keepRecentTokens?: number; requireTailBoundary?: boolean; signal?: AbortSignal },
   ): Promise<FoldResult> {
+    const deadline = Date.now() + (this.deps.summaryTimeoutMs ?? HISTORY_FOLD_SUMMARY_TIMEOUT_MS);
     const ctxMax = resolveContextTokens(model);
     const tailBudget = opts?.keepRecentTokens ?? Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION);
     const bindingAtStart = this.deps.getSessionBinding();
@@ -364,7 +377,7 @@ export class ContextManager {
     }
 
     const { names: pinnedNames, bodies: pinnedBodies } = collectPinnedSkills(head);
-    const summary = await this.summarizeForFold(head, pinnedNames, opts?.signal, model);
+    const summary = await this.summarizeForFold(head, pinnedNames, deadline, opts?.signal, model);
     if (!summary.content) {
       return {
         ...noop,
@@ -376,6 +389,59 @@ export class ContextManager {
       };
     }
 
+    const memoTail =
+      pinnedBodies.length > 0 ? `\n\n${SKILL_PIN_MEMO_HEADER}\n\n${pinnedBodies.join("\n\n")}` : "";
+    const userTurnsTail = buildPreservedUserTurns(head);
+    const constraints = extractPinnedConstraints(this.deps.getSystemPrompt());
+    const constraintTail = constraints
+      ? `\n\n[PINNED CONSTRAINTS — preserved verbatim]\n\n${constraints}`
+      : "";
+    const summaryMsg = buildAssistantMessage(
+      HISTORY_FOLD_MARKER + summary.content + userTurnsTail + memoTail + constraintTail,
+      [],
+      model,
+      summary.reasoningContent,
+    );
+    const images = new Map(
+      head
+        .flatMap((message) => [
+          ...(message.attachments ?? []),
+          ...(message.sourceAttachments ?? []),
+        ])
+        .map((image) => [image.id, image]),
+    );
+    if (images.size) summaryMsg.sourceAttachments = [...images.values()];
+    const replacement = [summaryMsg, ...tail];
+    const turnSignal = opts?.signal ?? this.deps.getAbortSignal();
+    let replacementFailure: FoldResult["reason"];
+    try {
+      const messages = this.deps.buildReplacementMessages?.(replacement) ?? [
+        { role: "system" as const, content: this.deps.getSystemPrompt() },
+        ...(this.deps.getFewShots?.() ?? []),
+        ...replacement,
+      ];
+      if (
+        (await withSummaryDeadline(turnSignal, deadline - Date.now(), (signal) =>
+          compactionRequestTokens(this.deps.client, {
+            model,
+            messages,
+            tools: this.deps.getToolSpecs?.(),
+            activeImageIds: this.deps.getActiveImageIds?.() ?? [],
+            signal,
+          }),
+        )) > Math.min(resolveContextTokens(model), summary.promptBudget ?? Number.POSITIVE_INFINITY)
+      )
+        replacementFailure = "replacement-over-limit";
+    } catch (error) {
+      replacementFailure =
+        error instanceof SummaryRequestError
+          ? error.reason
+          : turnSignal.aborted
+            ? "summary-cancelled"
+            : "summary-failed";
+    }
+    // Validation yields while counting the complete replacement. Check the
+    // epoch/revision/cancellation *after* it, immediately before persistence.
     const currentBinding = this.deps.getSessionBinding();
     if ((opts?.signal ?? this.deps.getAbortSignal()).aborted) {
       return {
@@ -408,37 +474,25 @@ export class ContextManager {
       };
     }
 
-    const memoTail =
-      pinnedBodies.length > 0 ? `\n\n${SKILL_PIN_MEMO_HEADER}\n\n${pinnedBodies.join("\n\n")}` : "";
-    const userTurnsTail = buildPreservedUserTurns(head);
-    const constraints = extractPinnedConstraints(this.deps.getSystemPrompt());
-    const constraintTail = constraints
-      ? `\n\n[PINNED CONSTRAINTS — preserved verbatim]\n\n${constraints}`
-      : "";
-    // Route via buildAssistantMessage so the synthetic summary carries
-    // reasoning_content under thinking-mode sessions — without it the
-    // next API call 400s with "must be passed back" (#1042). Stamp uses
-    // the SESSION model so an empty placeholder is added even when the
-    // summarizer call somehow returned no reasoning.
-    const summaryMsg = buildAssistantMessage(
-      HISTORY_FOLD_MARKER + summary.content + userTurnsTail + memoTail + constraintTail,
-      [],
-      model,
-      summary.reasoningContent,
-    );
-    const images = new Map(
-      head
-        .flatMap((message) => [
-          ...(message.attachments ?? []),
-          ...(message.sourceAttachments ?? []),
-        ])
-        .map((image) => [image.id, image]),
-    );
-    if (images.size) summaryMsg.sourceAttachments = [...images.values()];
-    const replacement = [summaryMsg, ...tail];
+    if (Date.now() >= deadline) replacementFailure = "summary-timeout";
+
+    if (!replacementFailure && summary.outputCap !== undefined && !this.deps.onFoldOutputCap) {
+      replacementFailure = "output-cap-unavailable";
+    }
+
+    if (replacementFailure)
+      return {
+        ...noop,
+        reason: replacementFailure,
+        totalTokens,
+        headTokens,
+        tailTokens: cumTokens,
+        tailBudget,
+      };
     if (
-      (images.size && !currentBinding.sessionName) ||
-      (currentBinding.sessionName && !this.persistRewrite(currentBinding.sessionName, replacement))
+      (images.size && !currentBinding.sessionName && !this.deps.persistMessages) ||
+      ((currentBinding.sessionName || this.deps.persistMessages) &&
+        !this.persistRewrite(currentBinding.sessionName, replacement))
     ) {
       return {
         ...noop,
@@ -450,6 +504,7 @@ export class ContextManager {
       };
     }
     this.deps.log.compactInPlace(replacement);
+    if (summary.outputCap !== undefined) this.deps.onFoldOutputCap?.(model, summary.outputCap);
     this.deps.onLogRewrite?.();
     return {
       folded: true,
@@ -474,9 +529,13 @@ export class ContextManager {
     ) {
       return false;
     }
-    const kept = this.deps.log.entries.slice(0, -1);
-    this.deps.log.compactInPlace([...kept]);
-    this.persistRewrite(this.deps.getSessionBinding().sessionName, [...kept]);
+    const kept = this.deps.log.toFullHistory().slice(0, -1);
+    if (
+      !this.persistRewrite(this.deps.getSessionBinding().sessionName, kept, "history") &&
+      this.deps.persistMessages
+    )
+      return false;
+    this.deps.log.compactInPlace(kept);
     return true;
   }
 
@@ -487,7 +546,21 @@ export class ContextManager {
       ...(last?.role === "assistant" && last.tool_calls?.length ? history.slice(0, -1) : history),
       summary,
     ];
-    if (sessionName && !this.persistRewrite(sessionName, replacement)) return false;
+    if (this.deps.persistForcedSummary) {
+      try {
+        const stored = this.deps.persistForcedSummary(
+          summary,
+          Boolean(last?.role === "assistant" && last.tool_calls?.length),
+        );
+        if (stored) replacement[replacement.length - 1] = stored;
+      } catch {
+        return false;
+      }
+    } else if (
+      (sessionName || this.deps.persistMessages) &&
+      !this.persistRewrite(sessionName, replacement, "history")
+    )
+      return false;
     this.deps.log.compactInPlace(replacement);
     if (last?.tool_calls?.length) this.deps.onLogRewrite?.();
     return true;
@@ -496,9 +569,16 @@ export class ContextManager {
   private async summarizeForFold(
     messagesToSummarize: ChatMessage[],
     pinnedSkillNames: string[],
+    deadline: number,
     signal?: AbortSignal,
     activeModel?: string,
-  ): Promise<{ content: string; reasoningContent: string; reason?: SummaryFailure }> {
+  ): Promise<{
+    content: string;
+    reasoningContent: string;
+    reason?: SummaryFailure;
+    promptBudget?: number;
+    outputCap?: number;
+  }> {
     const hasImages = messagesToSummarize.some((message) => message.attachments?.length);
     const summaryModel =
       hasImages || !this.deps.client.officialDeepSeek ? activeModel! : "deepseek-flash";
@@ -525,12 +605,17 @@ export class ContextManager {
           activeImageIds: this.deps.getActiveImageIds?.() ?? [],
           thinking: "disabled",
         },
-        this.deps.summaryTimeoutMs ?? HISTORY_FOLD_SUMMARY_TIMEOUT_MS,
+        deadline - Date.now(),
+        { historyStart: 1 + fewShots.length, historyEnd: messages.length - 1 },
       );
       this.deps.stats.record(this.deps.getCurrentTurn(), summaryModel, resp.usage ?? new Usage());
+      const contextBudget =
+        resp.contextBudget?.model === activeModel ? resp.contextBudget : undefined;
       return {
         content: acceptedSummary(resp),
         reasoningContent: resp.reasoningContent ?? "",
+        promptBudget: contextBudget?.promptTokens,
+        outputCap: contextBudget?.kind === "total" ? contextBudget.maxTokens : undefined,
       };
     } catch (error) {
       return {
@@ -546,9 +631,17 @@ export class ContextManager {
     }
   }
 
-  private persistRewrite(sessionName: string | null, messages: ChatMessage[]): boolean {
-    if (!sessionName) return false;
+  private persistRewrite(
+    sessionName: string | null,
+    messages: ChatMessage[],
+    reason: "context" | "history" = "context",
+  ): boolean {
     try {
+      if (this.deps.persistMessages) {
+        this.deps.persistMessages(messages, reason);
+        return true;
+      }
+      if (!sessionName) return false;
       rewriteSession(sessionName, messages);
       return true;
     } catch {

@@ -284,11 +284,11 @@ describe("config", () => {
     expect(loadModel(path)).toBe("deepseek-v4-pro");
   });
 
-  it("preserves the vision model after saving with the default official endpoint", () => {
+  it("loads the current multimodal Flash model while preserving a saved legacy vision ID", () => {
     saveModel("deepseek-v4-flash-vision-exp", path);
     expect(readConfig(path).baseUrl).toBeUndefined();
     expect(readConfig(path).model).toBe("deepseek-v4-flash-vision-exp");
-    expect(loadModel(path)).toBe("deepseek-v4-flash-vision-exp");
+    expect(loadModel(path)).toBe("deepseek-flash");
   });
 
   it("loadEndpoint: env tuple wins when env sets baseUrl", () => {

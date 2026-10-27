@@ -22,6 +22,23 @@ export interface ToolCallContext {
   readTracker?: ReadTracker;
   /** Reports billable model calls made inside a tool (for example native web search). */
   reportAuxiliaryUsage?: (report: AuxiliaryUsageReport) => void;
+  /** Non-model services have no token usage or inferred token price. */
+  reportServiceCall?: (report: ServiceCallReport) => void;
+}
+
+export interface ServiceCallReport {
+  kind: "service-call";
+  provider: "deepseek";
+  operation: "web_search" | "web_fetch";
+  requestId: string;
+  costKnown: false;
+  usageKnown: false;
+  status: "succeeded" | "failed" | "cancelled";
+  /** True once dispatch began; network errors and cancellation cannot prove non-delivery. */
+  requestMayHaveReachedService: boolean;
+  httpStatus?: number;
+  /** Whether the response contained results, not a claim about final billing. */
+  hasResults?: boolean;
 }
 
 export interface AuxiliaryUsageReport {
@@ -221,6 +238,7 @@ export class ToolRegistry {
       /** Session-scoped read tracker; filesystem tools mark on read/write, edit_file/multi_edit gate on it. */
       readTracker?: ReadTracker;
       reportAuxiliaryUsage?: (report: AuxiliaryUsageReport) => void;
+      reportServiceCall?: (report: ServiceCallReport) => void;
       /** Called at the last host-side boundary before control enters the tool implementation. */
       onExecutionStarted?: () => void | Promise<void>;
       /** Project root directory for saving truncated results. Defaults to process.cwd(). */
@@ -333,6 +351,7 @@ export class ToolRegistry {
         confirmationGate: opts.confirmationGate,
         readTracker: opts.readTracker,
         reportAuxiliaryUsage: opts.reportAuxiliaryUsage,
+        reportServiceCall: opts.reportServiceCall,
         reportImage: opts.reportImage,
         allowedImageIds: opts.allowedImageIds,
       });
@@ -489,7 +508,7 @@ function rejectionRecoveryHint(reason: string): string {
   }
 }
 
-function isReadOnlyCall(tool: InternalTool, args: Record<string, unknown>): boolean {
+export function isReadOnlyCall(tool: InternalTool, args: Record<string, unknown>): boolean {
   if (tool.readOnlyCheck) {
     try {
       return Boolean(tool.readOnlyCheck(args as never));

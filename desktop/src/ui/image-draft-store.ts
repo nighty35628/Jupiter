@@ -9,6 +9,67 @@ export interface ImageDraftRecord extends MessageDraft {
 }
 const cache = new Map<string, ImageDraftRecord>();
 const listeners = new Map<string, Set<() => void>>();
+
+export function conversationDraftKey(sessionId: string, conversationViewId: string): string {
+  return `conversation:${JSON.stringify([sessionId, conversationViewId])}`;
+}
+
+function hasDraftContent(draft: ImageDraftRecord): boolean {
+  return !!(draft.text || draft.attachments?.length || draft.queue?.length || draft.pending);
+}
+
+/** A new tab's local draft belongs to that tab, not to the legacy default view. */
+export function handoffImageDraft(sourceKey: string, targetKey: string): boolean {
+  if (sourceKey === targetKey) return true;
+  const source = readImageDraft(sourceKey);
+  if (!hasDraftContent(source)) return true;
+  const target = readImageDraft(targetKey);
+  if (hasDraftContent(target) && JSON.stringify(source) !== JSON.stringify(target)) return false;
+  try {
+    localStorage.setItem(PREFIX + targetKey, JSON.stringify(source));
+    cache.set(targetKey, source);
+    localStorage.removeItem(PREFIX + sourceKey);
+    cache.delete(sourceKey);
+    syncImageDraftReferences();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Only the deterministic default view may claim a pre-view session draft. */
+export function migrateConversationDraft(sessionId: string, conversationViewId: string, legacyKeys: string[] = [sessionId], defaultConversationViewId = "default"): boolean {
+  if (conversationViewId !== defaultConversationViewId) return false;
+  const key = conversationDraftKey(sessionId, conversationViewId);
+  const marker = `jupiter.image-draft.migrated:${sessionId}`;
+  let copied = false;
+  try {
+    if (localStorage.getItem(marker)) return false;
+    const keys = [...new Set([sessionId, ...legacyKeys])].filter((old) => old !== key);
+    const source = keys.find((old) => hasDraftContent(readImageDraft(old)));
+    const target = readImageDraft(key);
+    const value = source ? readImageDraft(source) : target;
+    // An empty placeholder is not a claimed draft. Conflicting real drafts
+    // both survive; only successful migration consumes the legacy copy.
+    if (source && hasDraftContent(target) && JSON.stringify(target) !== JSON.stringify(value)) return false;
+    if (source || localStorage.getItem(PREFIX + key) === null) {
+      localStorage.setItem(PREFIX + key, JSON.stringify(value));
+      cache.set(key, value);
+      copied = !!source && JSON.stringify(target) !== JSON.stringify(value);
+    }
+    localStorage.setItem(marker, "1");
+    for (const old of keys) {
+      const legacy = readImageDraft(old);
+      if (hasDraftContent(legacy) && JSON.stringify(legacy) !== JSON.stringify(value)) continue;
+      localStorage.removeItem(PREFIX + old);
+      cache.delete(old);
+    }
+    syncImageDraftReferences();
+  } catch {
+    // Leave the legacy copy intact if persistence is unavailable.
+  }
+  return copied;
+}
 let retentionTab: string | undefined;
 let retentionTimer: ReturnType<typeof setTimeout> | undefined;
 let retentionRevision = 0;

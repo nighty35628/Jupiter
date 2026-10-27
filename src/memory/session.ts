@@ -15,6 +15,7 @@ import {
   readSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -23,6 +24,7 @@ import { homedir } from "node:os";
 import { dirname, join, posix as posixPath, win32 as win32Path } from "node:path";
 import { atomicWriteSync } from "../core/atomic-write.js";
 import type { ChatMessage } from "../types.js";
+import { committedSessionSize, readPendingSharedCommit } from "./shared-session-boundary.js";
 
 const SESSION_SIDECAR_EXTS = [
   ".events.jsonl",
@@ -31,6 +33,7 @@ const SESSION_SIDECAR_EXTS = [
   ".pending.json",
   ".plan.json",
   ".jsonl.bak",
+  ".shared-commit.json",
 ] as const;
 
 /** Best-effort git branch sniff; returns undefined if not a git repo or git missing. */
@@ -60,6 +63,8 @@ export interface SessionInfo {
 }
 
 export interface SessionMeta {
+  sharedHistoryVersion?: number;
+  defaultConversationViewId?: string;
   /** Stable desktop identity; unlike the filename, this survives automatic title renames. */
   sessionId?: string;
   /** Recent idempotency keys for renderer-submitted user messages. */
@@ -213,7 +218,8 @@ function readSessionMessages(
 ): { messages: ChatMessage[]; hadContent: boolean } | null {
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    const bytes = readFileSync(path);
+    raw = bytes.subarray(0, committedSessionSize(path, bytes.length)).toString("utf8");
   } catch {
     return null;
   }
@@ -240,7 +246,7 @@ export function readTailMessages(path: string, count: number): ChatMessage[] {
   try {
     const fd = openSync(path, "r");
     try {
-      const { size } = fstatSync(fd);
+      const size = committedSessionSize(path, fstatSync(fd).size);
       if (size === 0) return [];
       const out: ChatMessage[] = [];
       let pos = size;
@@ -291,6 +297,8 @@ function loadSessionMessagesFromPath(path: string): ChatMessage[] {
 
 export function appendSessionMessage(name: string, message: ChatMessage): void {
   const path = sessionPath(name);
+  if (readPendingSharedCommit(path))
+    throw new Error("Shared-session commit recovery is required before writing");
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(message)}\n`, {
     encoding: "utf8",
@@ -441,7 +449,17 @@ function patchSessionMetaInDir(
   const next: SessionMeta = { ...cur, ...patch };
   const p = metaPathInDir(dir, name);
   mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(next), "utf8");
+  const temporary = `${p}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(next), { encoding: "utf8", mode: 0o600, flush: true });
+    renameSync(temporary, p);
+  } finally {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      /* rename consumed the temporary file */
+    }
+  }
   try {
     chmodSync(p, 0o600);
   } catch {
@@ -576,6 +594,18 @@ function moveSessionFiles(oldJsonl: string, newJsonl: string): void {
 }
 
 function deleteSessionFiles(path: string): boolean {
+  let sharedRuns: string | undefined;
+  try {
+    const meta = JSON.parse(readFileSync(path.replace(/\.jsonl$/, ".meta.json"), "utf8"));
+    if (typeof meta.sessionId === "string" && meta.sessionId.length > 0)
+      sharedRuns = join(
+        sessionsDir(),
+        ".shared-runs",
+        meta.sessionId.replace(/[^\w-]/g, "_").slice(0, 100),
+      );
+  } catch {
+    /* Unreadable identities cannot select a recovery directory for deletion. */
+  }
   let deleted = false;
   for (const candidate of [
     path,
@@ -588,12 +618,15 @@ function deleteSessionFiles(path: string): boolean {
       /* expected when the transcript or a sidecar doesn't exist */
     }
   }
+  if (deleted && sharedRuns) rmSync(sharedRuns, { recursive: true, force: true });
   return deleted;
 }
 
 /** Crash-safe rewrite: snapshot the previous live log, write a sibling tmp file, then atomically swap it in. */
 export function rewriteSession(name: string, messages: ChatMessage[]): void {
   const path = sessionPath(name);
+  if (readPendingSharedCommit(path))
+    throw new Error("Shared-session commit recovery is required before rewriting");
   mkdirSync(dirname(path), { recursive: true });
   const body = messages.map((m) => JSON.stringify(m)).join("\n");
   const tmp = `${path}.${randomBytes(8).toString("hex")}.tmp`;
@@ -624,7 +657,8 @@ export function archiveSession(name: string): string | null {
 /** Byte-scan for `\n` — avoids the UTF-8 decode + regex split + per-line filter the previous implementation paid on every list. ~10× faster on multi-MB jsonls. */
 function countLines(path: string): number {
   try {
-    const buf = readFileSync(path);
+    const bytes = readFileSync(path);
+    const buf = bytes.subarray(0, committedSessionSize(path, bytes.length));
     let count = 0;
     for (let i = 0; i < buf.length; i++) {
       if (buf[i] === 0x0a) count++;

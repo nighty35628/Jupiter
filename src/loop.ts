@@ -24,7 +24,7 @@ import {
 import { InflightSet } from "./core/inflight.js";
 import { t } from "./i18n/index.js";
 import { addUsage, planPrefixContinuation } from "./loop/continuation.js";
-import { dispatchToolCallsChunked } from "./loop/dispatch.js";
+import { type RunOneToolCallResult, dispatchToolCallsChunked } from "./loop/dispatch.js";
 import {
   errorMeta,
   formatLoopError,
@@ -62,9 +62,11 @@ import {
   getToolCallIdentity,
   toolCallEventFields,
 } from "./loop/types.js";
+import type { LoopSessionStorage } from "./memory/loop-session-storage.js";
 import { AppendOnlyLog, type ImmutablePrefix, VolatileScratch } from "./memory/runtime.js";
 import { SessionWriterLease } from "./memory/session-writer-lock.js";
 import {
+  type SessionMeta,
   type SessionProviderBinding,
   appendSessionMessage,
   archiveSession,
@@ -83,7 +85,7 @@ import {
 import { sanitizeProviderErrorText } from "./provider-http-error.js";
 import { type RepairReport, ToolCallRepair } from "./repair/index.js";
 import { SessionStats, type TurnStats, costUsd } from "./telemetry/stats.js";
-import { appendUsage } from "./telemetry/usage.js";
+import { appendServiceCall, appendUsage } from "./telemetry/usage.js";
 import { type AuxiliaryUsageReport, type ToolDefinitionSnapshot, ToolRegistry } from "./tools.js";
 import { ReadTracker } from "./tools/read-tracker.js";
 import type { ChatMessage, ToolCall } from "./types.js";
@@ -110,6 +112,7 @@ export {
   thinkingModeForModel,
 };
 export type { EventRole, LoopEvent } from "./loop/types.js";
+export type { LoopSessionStorage } from "./memory/loop-session-storage.js";
 
 function chatMessagesEqual(a: ChatMessage[], b: ChatMessage[]): boolean {
   if (a.length !== b.length) return false;
@@ -151,6 +154,10 @@ export interface CacheFirstLoopOptions {
   budgetUsd?: number;
   historySummaryTimeoutMs?: number;
   session?: string;
+  /** Isolated per-run persistence; its owner holds the shared session writer lease. */
+  sessionStorage?: LoopSessionStorage;
+  /** Host-owned resource admission, covering hooks and tool execution as one scope. */
+  toolExecutionScope?: (call: ToolCall, signal: AbortSignal) => Promise<(result?: string) => void>;
   /** Stable logical session identity used to prevent two desktop/web runtimes from writing it. */
   sessionWriterKey?: string;
   /** Stable owner within this process. Rebuilding one tab may re-enter its own lease. */
@@ -212,6 +219,8 @@ export class CacheFirstLoop {
     null;
   private readonly activeImageIds = new Set<string>();
   private readonly historySummaryTimeoutMs: number;
+  /** Provider total-window reserves learned by committed folds; runtime-only, per model. */
+  private readonly compactionOutputCaps = new Map<string, number>();
   /** Files the model has read this session; gates edit_file / multi_edit so SEARCH text matches on-disk bytes. Cleared on fold / mechanical truncate (the model's byte-level view of the elided history is gone). In-memory only — naturally empty on resume. */
   readonly readTracker = new ReadTracker();
 
@@ -226,6 +235,8 @@ export class CacheFirstLoop {
   /** One-shot 80% warning latch — cleared by setBudget so a bump re-arms at the new boundary. */
   private _budgetWarned = false;
   private _sessionName: string | null;
+  private readonly sessionStorage: LoopSessionStorage | null;
+  private readonly toolExecutionScope: CacheFirstLoopOptions["toolExecutionScope"];
   private _sessionWriterKey: string | null;
   private readonly _sessionWriterOwnerId: string | null;
   private _sessionWriterLease: SessionWriterLease | null = null;
@@ -299,10 +310,17 @@ export class CacheFirstLoop {
     this.prefix = opts.prefix;
     this.tools = opts.tools ?? new ToolRegistry();
     this._sessionName = opts.session ?? null;
+    this.sessionStorage = opts.sessionStorage ?? null;
+    this.toolExecutionScope = opts.toolExecutionScope;
     this._sessionWriterKey = opts.sessionWriterKey ?? null;
     this._sessionWriterOwnerId = opts.sessionWriterOwnerId ?? null;
     this._providerBinding = opts.providerBinding ?? null;
-    if (this._sessionName && this._sessionWriterKey && this._sessionWriterOwnerId) {
+    if (
+      !this.sessionStorage &&
+      this._sessionName &&
+      this._sessionWriterKey &&
+      this._sessionWriterOwnerId
+    ) {
       this._sessionWriterLease = SessionWriterLease.acquire({
         key: this._sessionWriterKey,
         ownerId: this._sessionWriterOwnerId,
@@ -311,7 +329,9 @@ export class CacheFirstLoop {
     }
     this.bindToolJournal(this._sessionName);
     this.log = new AppendOnlyLog({
-      sessionPath: this.sessionName ? sessionPath(this.sessionName) : undefined,
+      ...(this.sessionStorage
+        ? { fullHistory: [] }
+        : { sessionPath: this.sessionName ? sessionPath(this.sessionName) : undefined }),
     });
     this.model = opts.model ?? "deepseek-flash";
     this.thinkingEnabled = opts.thinkingEnabled ?? true;
@@ -345,11 +365,13 @@ export class CacheFirstLoop {
     });
 
     // Heal-on-load: oversized tool results would 400 the next call before the user types.
-    if (this.sessionName) {
-      const loadedPrior = loadSessionMessages(this.sessionName);
+    if (this.sessionStorage || this.sessionName) {
+      const loadedPrior = this.sessionStorage
+        ? this.sessionStorage.loadMessages()
+        : loadSessionMessages(this.sessionName!);
       let prior = loadedPrior;
       let recoveredToolResults = 0;
-      if (this._toolJournal) {
+      if (this._toolJournal && !this.sessionStorage) {
         try {
           this._toolJournal.recoverIncompleteExecutions();
           const repaired = this._toolJournal.repairDanglingToolCalls(prior);
@@ -374,7 +396,7 @@ export class CacheFirstLoop {
       // Carry forward cumulative cost / turn count so the TUI's session
       // total continues across resumes; otherwise each restart resets to $0.
       if (messages.length > 0) {
-        const meta = loadSessionMeta(this.sessionName);
+        const meta = this.loadMeta();
         this.stats.seedCarryover({
           totalCostUsd: meta.totalCostUsd,
           turnCount: meta.turnCount,
@@ -389,14 +411,10 @@ export class CacheFirstLoop {
         !chatMessagesEqual(loadedPrior, messages)
       ) {
         // Persist healed log so the same break isn't re-noticed every restart.
-        try {
-          rewriteSession(this.sessionName, messages);
-        } catch {
-          /* disk full / perms — skip, in-memory heal still applies */
-        }
+        this.persistRewrite(messages, "context");
         if (healedCount > 0) {
           process.stderr.write(
-            `▸ session "${this.sessionName}": healed ${healedCount} entr${healedCount === 1 ? "y" : "ies"}${tokensSaved > 0 ? ` (shrunk ${tokensSaved.toLocaleString()} tokens of oversized tool output/arguments)` : " (dropped dangling tool_calls tail)"}. Rewrote session file.\n`,
+            `▸ session "${this.sessionName}": healed ${healedCount} entr${healedCount === 1 ? "y" : "ies"}${tokensSaved > 0 ? ` (shrunk ${tokensSaved.toLocaleString()} tokens of oversized tool output/arguments)` : " (dropped dangling tool_calls tail)"}. ${this.sessionStorage ? "Updated working history." : "Rewrote session file."}\n`,
           );
         }
         if (recoveredToolResults > 0) {
@@ -423,7 +441,32 @@ export class CacheFirstLoop {
       getToolSpecs: () => this.prefix.toolSpecs,
       getFewShots: () => this.prefix.fewShots,
       getActiveImageIds: () => (this.stepActive ? [...this.activeImageIds] : []),
+      buildReplacementMessages: (history) => this.withRequestPrefix(history),
+      onFoldOutputCap: (model, maxTokens) => {
+        this.compactionOutputCaps.set(
+          model,
+          Math.min(this.compactionOutputCaps.get(model) ?? Number.POSITIVE_INFINITY, maxTokens),
+        );
+      },
       summaryTimeoutMs: this.historySummaryTimeoutMs,
+      ...(this.sessionStorage
+        ? {
+            persistMessages: (messages: ChatMessage[], reason: "context" | "history") =>
+              this.sessionStorage!.rewriteMessages(messages, reason),
+            persistForcedSummary: (summary: ChatMessage, replacesTail: boolean) => {
+              if (replacesTail && this.sessionStorage!.replaceTailMessage) {
+                return this.sessionStorage!.replaceTailMessage(summary) ?? undefined;
+              }
+              if (!replacesTail) {
+                return this.sessionStorage!.appendMessage(summary) ?? undefined;
+              }
+              this.sessionStorage!.rewriteMessages(
+                [...this.log.toFullHistory().slice(0, -1), summary],
+                "history",
+              );
+            },
+          }
+        : {}),
       onLogRewrite: () => this.readTracker.reset(),
     });
   }
@@ -446,7 +489,12 @@ export class CacheFirstLoop {
         (opts.logicalSessionChanged ? `session:${sessionName}` : this._sessionWriterKey))
       : null;
     let nextLease = this._sessionWriterLease;
-    if (this._sessionWriterOwnerId && nextWriterKey && nextWriterKey !== this._sessionWriterKey) {
+    if (
+      !this.sessionStorage &&
+      this._sessionWriterOwnerId &&
+      nextWriterKey &&
+      nextWriterKey !== this._sessionWriterKey
+    ) {
       nextLease = SessionWriterLease.acquire({
         key: nextWriterKey,
         ownerId: this._sessionWriterOwnerId,
@@ -463,6 +511,7 @@ export class CacheFirstLoop {
     this._sessionWriterLease = nextLease;
     this._sessionWriterKey = nextWriterKey;
     this._sessionName = sessionName;
+    if (this.sessionStorage) return;
     this.log.setSessionPath(sessionName ? sessionPath(sessionName) : null);
     if (sessionName && this._toolJournal && !opts.logicalSessionChanged) {
       this._toolJournal.rebindPath(toolExecutionJournalPath(sessionName));
@@ -481,6 +530,10 @@ export class CacheFirstLoop {
   private bindToolJournal(sessionName: string | null): void {
     this._toolJournal = null;
     this._toolJournalError = null;
+    if (this.sessionStorage) {
+      this._toolJournal = this.sessionStorage.journal;
+      return;
+    }
     if (!sessionName) return;
     try {
       this._toolJournal = openToolExecutionJournal(sessionName);
@@ -521,10 +574,42 @@ export class CacheFirstLoop {
     return this.context.getLogTokens();
   }
 
+  private loadMeta(): SessionMeta {
+    return this.sessionStorage
+      ? this.sessionStorage.loadMeta()
+      : this.sessionName
+        ? loadSessionMeta(this.sessionName)
+        : {};
+  }
+
+  private patchMeta(patch: Partial<SessionMeta>): void {
+    if (this.sessionStorage) this.sessionStorage.patchMeta(patch);
+    else if (this.sessionName) patchSessionMeta(this.sessionName, patch);
+  }
+
+  private persistRewrite(messages: ChatMessage[], reason: "context" | "history"): void {
+    if (this.sessionStorage) {
+      this.sessionStorage.rewriteMessages(messages, reason);
+      return;
+    }
+    if (this.sessionName) {
+      try {
+        rewriteSession(this.sessionName, messages);
+      } catch {
+        // Preserve the CLI's best-effort in-memory recovery on disk failures.
+      }
+    }
+  }
+
   appendAndPersist(message: ChatMessage): boolean {
     const retained = shrinkMessageForRetention(message);
     if (this.stepActive)
       for (const image of retained.attachments ?? []) this.activeImageIds.add(image.id);
+    if (this.sessionStorage) {
+      const stored = this.sessionStorage.appendMessage(retained);
+      this.log.append(stored ?? retained);
+      return true;
+    }
     if (retained.attachments?.length) {
       if (!this.sessionName) throw new Error("Image messages require a saved session");
       appendSessionMessage(this.sessionName, retained);
@@ -574,9 +659,9 @@ export class CacheFirstLoop {
       buildAssistantMessage(args.assistantContent, [], args.model, args.reasoningContent ?? null),
     );
     const turnStats = this.stats.record(this._turn, args.model, args.usage);
-    if (this.sessionName) {
+    if (this.sessionStorage || this.sessionName) {
       try {
-        patchSessionMeta(this.sessionName, {
+        this.patchMeta({
           totalCostUsd: this.stats.totalCost,
           cacheHitTokens: this.stats.cumulativeCacheHitTokens,
           cacheMissTokens: this.stats.cumulativeCacheMissTokens,
@@ -604,28 +689,25 @@ export class CacheFirstLoop {
   /** Swap the just-appended assistant entry — used by self-correction to restore the original tool_calls without dropping reasoning_content. */
   private replaceTailAssistantMessage(message: ChatMessage): void {
     const retained = shrinkMessageForRetention(message);
-    const entries = this.log.entries;
+    const entries = this.log.toFullHistory();
     const tail = entries[entries.length - 1];
     if (!tail || tail.role !== "assistant") return;
     const kept = entries.slice(0, -1);
     kept.push(retained);
+    if (this.sessionStorage?.replaceTailMessage) {
+      kept[kept.length - 1] = this.sessionStorage.replaceTailMessage(retained) ?? retained;
+    } else this.persistRewrite(kept, "history");
     this.log.compactInPlace(kept);
-    if (this.sessionName) {
-      try {
-        rewriteSession(this.sessionName, kept);
-      } catch {
-        /* disk issue shouldn't block the in-memory swap */
-      }
-    }
   }
 
   /** "New chat" — drops in-memory messages, archives the on-disk transcript so it survives in Sessions, keeps sessionName so the prefix cache stays warm. Re-runs the system-prompt builder if one was wired (issue #778: JUPITER.md edits otherwise need a restart). */
   clearLog(): { dropped: number; archived: string | null; systemRebuilt: boolean } {
-    const dropped = this.log.length;
+    const dropped = this.log.totalLength;
+    if (this.sessionStorage) this.sessionStorage.rewriteMessages([], "history");
     this.log.compactInPlace([]);
     let archived: string | null = null;
     const priorToolJournal = this._toolJournal;
-    if (this.sessionName) {
+    if (this.sessionName && !this.sessionStorage) {
       try {
         archived = archiveSession(this.sessionName);
         if (archived === null) rewriteSession(this.sessionName, []);
@@ -660,10 +742,11 @@ export class CacheFirstLoop {
 
   /** `/cwd` follow-through — archives the previous session, drops in-memory state, repoints sessionName, and rebuilds the system prompt against whatever the rebuilder closure now resolves (the caller is expected to have already updated the root the closure reads). */
   switchWorkspace(opts: { sessionName: string }): { dropped: number; archived: string | null } {
-    const dropped = this.log.length;
+    const dropped = this.log.totalLength;
+    if (this.sessionStorage) this.sessionStorage.rewriteMessages([], "history");
     let archived: string | null = null;
     const priorToolJournal = this._toolJournal;
-    if (this.sessionName) {
+    if (this.sessionName && !this.sessionStorage) {
       try {
         archived = archiveSession(this.sessionName);
         if (archived === null) rewriteSession(this.sessionName, []);
@@ -736,15 +819,24 @@ export class CacheFirstLoop {
     return def.readOnly !== true;
   }
 
-  private async runOneToolCall(
+  private async runOneToolCall(call: ToolCall, signal: AbortSignal): Promise<RunOneToolCallResult> {
+    if (!this.toolExecutionScope) return this.runScopedToolCall(call, signal);
+    signal.throwIfAborted();
+    const release = await this.toolExecutionScope(call, signal);
+    let outcome: RunOneToolCallResult | undefined;
+    try {
+      signal.throwIfAborted();
+      outcome = await this.runScopedToolCall(call, signal);
+      return outcome;
+    } finally {
+      release(outcome?.result);
+    }
+  }
+
+  private async runScopedToolCall(
     call: ToolCall,
     signal: AbortSignal,
-  ): Promise<{
-    preWarnings: LoopEvent[];
-    postWarnings: LoopEvent[];
-    result: string;
-    attachments?: ChatMessage["attachments"];
-  }> {
+  ): Promise<RunOneToolCallResult> {
     const name = call.function?.name ?? "";
     const args = call.function?.arguments ?? "{}";
     const parsedArgs = safeParseToolArgs(args);
@@ -846,6 +938,7 @@ export class CacheFirstLoop {
         readTracker: this.readTracker,
         rootDir: this.hookCwd,
         reportAuxiliaryUsage: (report) => this.recordAuxiliaryUsage(report),
+        reportServiceCall: (report) => appendServiceCall({ session: this.sessionName, report }),
         onExecutionStarted:
           journal && executionId
             ? () => {
@@ -942,13 +1035,22 @@ export class CacheFirstLoop {
             DEFAULT_MAX_RESULT_TOKENS,
           ).messages,
         ).messages;
+    return this.withRequestPrefix(pruneOldToolResultsForModelContext(healedMessages));
+  }
+
+  private withRequestPrefix(history: ChatMessage[]): ChatMessage[] {
     const requestContext =
       typeof this.requestContext === "function" ? this.requestContext() : this.requestContext;
     return [
       ...this.prefix.toMessages(),
-      ...pruneOldToolResultsForModelContext(healedMessages),
+      ...history,
       ...(requestContext ? [{ role: "system" as const, content: requestContext }] : []),
     ];
+  }
+
+  private compactionMaxTokens(model: string, requested?: number): number | undefined {
+    const learned = this.compactionOutputCaps.get(model);
+    return learned === undefined ? requested : Math.min(learned, requested ?? learned);
   }
 
   private healActiveLogBeforeSend(): ChatMessage[] {
@@ -962,14 +1064,8 @@ export class CacheFirstLoop {
     if (healed.healedCount === 0 && argsShrunk.healedCount === 0 && pruned.prunedCount === 0) {
       return current;
     }
+    this.persistRewrite(pruned.messages, "context");
     this.log.compactInPlace(pruned.messages);
-    if (this.sessionName) {
-      try {
-        rewriteSession(this.sessionName, pruned.messages);
-      } catch {
-        /* disk issue shouldn't block the in-memory heal */
-      }
-    }
     return pruned.messages;
   }
 
@@ -989,19 +1085,20 @@ export class CacheFirstLoop {
 
   private discardLogFrom(index: number): void {
     this._retryableModelFailure = null;
+    if (this.sessionStorage?.discardCurrentTurn) {
+      this.sessionStorage.discardCurrentTurn();
+      const preserved = this.sessionStorage.loadMessages();
+      this.log.compactInPlace(preserved);
+      this._turn = countUserTurns(preserved);
+      return;
+    }
     const preserved = this.log
       .toFullHistory()
       .slice(0, index)
       .map((m) => ({ ...m }));
+    this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
     this._turn = countUserTurns(preserved);
-    if (this.sessionName) {
-      try {
-        rewriteSession(this.sessionName, preserved);
-      } catch {
-        /* disk-full / perms — in-memory compaction still applies */
-      }
-    }
   }
 
   /** Drop the last user message + everything after; caller re-sends. Persists to session file. */
@@ -1022,16 +1119,22 @@ export class CacheFirstLoop {
     if (lastUserIdx < 0) return null;
     const raw = entries[lastUserIdx]!.content;
     const userText = typeof raw === "string" ? raw : "";
+    if (this.sessionStorage?.discardCurrentTurn) {
+      this.sessionStorage.discardCurrentTurn();
+      const preserved = this.sessionStorage.loadMessages();
+      this.log.compactInPlace(preserved);
+      this._turn = countUserTurns(preserved);
+      return {
+        text: userText,
+        ...(entries[lastUserIdx]!.attachments?.length
+          ? { attachments: entries[lastUserIdx]!.attachments }
+          : {}),
+      };
+    }
     const preserved = entries.slice(0, lastUserIdx).map((m) => ({ ...m }));
+    this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
     this._turn = countUserTurns(preserved);
-    if (this.sessionName) {
-      try {
-        rewriteSession(this.sessionName, preserved);
-      } catch {
-        /* disk-full / perms — in-memory compaction still applies */
-      }
-    }
     return {
       text: userText,
       ...(entries[lastUserIdx]!.attachments?.length
@@ -1053,15 +1156,9 @@ export class CacheFirstLoop {
     }
     if (lastUserIdx < 0) return false;
     const preserved = entries.slice(0, lastUserIdx).map((m) => ({ ...m }));
+    this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
     this._turn = countUserTurns(preserved);
-    if (this.sessionName) {
-      try {
-        rewriteSession(this.sessionName, preserved);
-      } catch {
-        /* disk-full / perms — in-memory rollback still applies */
-      }
-    }
     return true;
   }
 
@@ -1099,15 +1196,9 @@ export class CacheFirstLoop {
     if (cutoff >= entries.length) return false;
 
     const preserved = entries.slice(0, cutoff).map((m) => ({ ...m }));
+    this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
     this._turn = countUserTurns(preserved);
-    if (this.sessionName) {
-      try {
-        rewriteSession(this.sessionName, preserved);
-      } catch {
-        /* disk-full / perms — in-memory rollback still applies */
-      }
-    }
     return true;
   }
 
@@ -1133,15 +1224,9 @@ export class CacheFirstLoop {
     const raw = entries[targetIdx]!.content;
     const userText = typeof raw === "string" ? raw : "";
     const preserved = entries.slice(0, targetIdx).map((m) => ({ ...m }));
+    this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
     this._turn = countUserTurns(preserved);
-    if (this.sessionName) {
-      try {
-        rewriteSession(this.sessionName, preserved);
-      } catch {
-        /* disk-full / perms — in-memory compaction still applies */
-      }
-    }
     return {
       text: userText,
       ...(entries[targetIdx]!.attachments?.length
@@ -1310,7 +1395,7 @@ export class CacheFirstLoop {
     // when the user navigates away before the model responds). A failed
     // first round-trip still leaves the message in the log; the user can
     // /retry without re-typing.
-    const turnStartLogIndex = this.log.length;
+    const turnStartLogIndex = this.log.totalLength;
     if (!resumeFailedRequest) {
       let userPersisted: boolean;
       try {
@@ -1341,7 +1426,7 @@ export class CacheFirstLoop {
     // post-response 75% trigger handles routine growth.
     {
       const turnStart = this.context.estimateTurnStart(
-        this.buildMessages(),
+        this.buildMessages(false),
         this.prefix.toolSpecs,
         this.model,
       );
@@ -1381,7 +1466,7 @@ export class CacheFirstLoop {
           };
         }
         const afterFold = this.context.estimateTurnStart(
-          this.buildMessages(),
+          this.buildMessages(false),
           this.prefix.toolSpecs,
           this.model,
         );
@@ -1492,6 +1577,7 @@ export class CacheFirstLoop {
             reasoningEffort: this.reasoningEffort,
             turn: this._turn,
             requestId: modelRequestId,
+            maxTokens: this.compactionMaxTokens(this.model),
           });
           assistantContent = result.assistantContent;
           reasoningContent = result.reasoningContent;
@@ -1503,6 +1589,7 @@ export class CacheFirstLoop {
           const callModel = this.model;
           const resp = await this.client.chat({
             model: callModel,
+            maxTokens: this.compactionMaxTokens(callModel),
             messages,
             tools: toolSpecs.length ? toolSpecs : undefined,
             signal,
@@ -1627,7 +1714,7 @@ export class CacheFirstLoop {
               activeImageIds: [...this.activeImageIds],
               thinkingEnabled: this.thinkingEnabled,
               reasoningEffort: this.reasoningEffort,
-              maxTokens: continuationPlan.maxTokens,
+              maxTokens: this.compactionMaxTokens(this.model, continuationPlan.maxTokens),
               betaPrefix: true,
               disableRetry: true,
               turn: this._turn,
@@ -1647,7 +1734,7 @@ export class CacheFirstLoop {
               activeImageIds: [...this.activeImageIds],
               thinking: thinkingModeForModel(this.model, this.thinkingEnabled),
               reasoningEffort: this.thinkingEnabled ? this.reasoningEffort : undefined,
-              maxTokens: continuationPlan.maxTokens,
+              maxTokens: this.compactionMaxTokens(this.model, continuationPlan.maxTokens),
               betaPrefix: true,
               disableRetry: true,
             });
@@ -1692,11 +1779,11 @@ export class CacheFirstLoop {
       });
 
       // Carry cumulative stats across app restarts.
-      if (this.sessionName) {
+      if (this.sessionStorage || this.sessionName) {
         try {
           const last =
             this.stats.turns.length > 0 ? this.stats.turns[this.stats.turns.length - 1] : null;
-          patchSessionMeta(this.sessionName, {
+          this.patchMeta({
             totalCostUsd: this.stats.totalCost,
             cacheHitTokens: this.stats.cumulativeCacheHitTokens,
             cacheMissTokens: this.stats.cumulativeCacheMissTokens,
@@ -1840,8 +1927,8 @@ export class CacheFirstLoop {
   }
 
   private ensureSessionProviderBinding(): void {
-    if (!this.sessionName || !this._providerBinding) return;
-    const meta = loadSessionMeta(this.sessionName);
+    if ((!this.sessionName && !this.sessionStorage) || !this._providerBinding) return;
+    const meta = this.loadMeta();
     const existing = meta.provider;
     if (
       existing &&
@@ -1853,7 +1940,7 @@ export class CacheFirstLoop {
       );
     }
     if (!existing || existing.model !== this.model) {
-      patchSessionMeta(this.sessionName, {
+      this.patchMeta({
         provider: { ...this._providerBinding, model: this.model },
       });
     }

@@ -4,14 +4,18 @@ import {
   type EditMode,
   REASONING_EFFORT_VALUES,
   type ReasoningEffort,
+  WEB_SEARCH_ENGINES,
   isPlausibleKey,
   isReasoningEffort,
+  isWebFetchEngine,
+  isWebSearchEngine,
   loadBaiduApiKey,
   loadDeepSeekSearchApiKey,
   loadModel,
   normalizeSkillPathEntries,
   normalizeSkillPaths,
   readConfig,
+  webFetchEngine as readWebFetchEngine,
   webSearchEngine as readWebSearchEngine,
   redactKey,
   saveEditMode,
@@ -30,6 +34,7 @@ interface SettingsBody {
   reasoningEffort?: unknown;
   search?: unknown;
   webSearchEngine?: unknown;
+  webFetchEngine?: unknown;
   baiduApiKey?: unknown;
   deepseekSearchApiKey?: unknown;
   model?: unknown;
@@ -47,20 +52,6 @@ function parseBody(raw: string): SettingsBody {
     return {};
   }
 }
-
-const VALID_WEB_SEARCH_ENGINES = new Set([
-  "bing",
-  "bing-intl",
-  "searxng",
-  "metaso",
-  "baidu",
-  "tavily",
-  "perplexity",
-  "exa",
-  "brave",
-  "ollama",
-  "deepseek-native",
-]);
 
 const VALID_EDIT_MODES = new Set(["review", "auto", "yolo", "plan"]);
 
@@ -91,6 +82,7 @@ export async function handleSettings(
         reasoningEffort: isReasoningEffort(cfg.reasoningEffort) ? cfg.reasoningEffort : "high",
         search: cfg.search !== false,
         webSearchEngine: readWebSearchEngine(ctx.configPath),
+        webFetchEngine: readWebFetchEngine(ctx.configPath),
         webSearchApiKeys: {
           baidu: baiduApiKey ? redactKey(baiduApiKey) : undefined,
           deepseekNative: deepseekSearchApiKey ? redactKey(deepseekSearchApiKey) : undefined,
@@ -115,6 +107,7 @@ export async function handleSettings(
           reasoningEffort: "next-turn",
           search: "next-session",
           webSearchEngine: "next-turn",
+          webFetchEngine: "next-turn",
           model: "next-turn",
           budgetUsd: "live",
           skillPaths: "next-session",
@@ -187,31 +180,26 @@ export async function handleSettings(
       changed.push("search");
     }
     if (fields.webSearchEngine !== undefined) {
-      if (
-        typeof fields.webSearchEngine !== "string" ||
-        !VALID_WEB_SEARCH_ENGINES.has(fields.webSearchEngine)
-      ) {
+      if (!isWebSearchEngine(fields.webSearchEngine)) {
         return {
           status: 400,
           body: {
-            error:
-              "webSearchEngine must be bing | bing-intl | searxng | metaso | baidu | tavily | perplexity | exa | brave | ollama | deepseek-native",
+            error: `webSearchEngine must be ${WEB_SEARCH_ENGINES.join(" | ")}`,
           },
         };
       }
-      cfg.webSearchEngine = fields.webSearchEngine as
-        | "bing"
-        | "bing-intl"
-        | "searxng"
-        | "metaso"
-        | "baidu"
-        | "tavily"
-        | "perplexity"
-        | "exa"
-        | "brave"
-        | "ollama"
-        | "deepseek-native";
+      cfg.webSearchEngine = fields.webSearchEngine;
       changed.push("webSearchEngine");
+    }
+    if (fields.webFetchEngine !== undefined) {
+      if (!isWebFetchEngine(fields.webFetchEngine)) {
+        return {
+          status: 400,
+          body: { error: "webFetchEngine must be legacy | http | ollama | deepseek" },
+        };
+      }
+      cfg.webFetchEngine = fields.webFetchEngine;
+      changed.push("webFetchEngine");
     }
     if (fields.baiduApiKey !== undefined) {
       if (fields.baiduApiKey !== null && typeof fields.baiduApiKey !== "string") {

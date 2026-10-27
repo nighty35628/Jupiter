@@ -11,6 +11,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   type ReactNode,
   memo,
+  forwardRef,
   useCallback,
   useEffect,
   useMemo,
@@ -18,7 +19,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle, type ItemProps } from "react-virtuoso";
+import { ChevronDown, ChevronRight, Copy } from "lucide-react";
+import { createPortal } from "react-dom";
+import type { WebFetchEngine, WebSearchEngine } from "../../src/tools/web-config";
 import { CommandPalette, Toast, buildCommands, useCommandPalette } from "./CommandPalette";
 import { WorkspaceProvider } from "./Markdown";
 import { type AbortDraftSource, nextAbortDraftCandidate, restoreAbortedDraft } from "./abort-draft";
@@ -129,7 +133,7 @@ import {
   themeForStyle,
 } from "./theme";
 import { AboutModal } from "./ui/about";
-import { AppContextMenu } from "./ui/app-context-menu";
+import { AppContextMenu, positionAppContextMenu } from "./ui/app-context-menu";
 import { SubagentRunCard, WorkflowRunCard, parseEditResult } from "./ui/cards";
 import {
   Composer,
@@ -199,10 +203,22 @@ import {
 } from "./ui/virtuoso-scroll";
 import { WorkdirPop } from "./ui/workdir-pop";
 import { displayWorkspaceBasename, displayWorkspacePath } from "./workspace-display";
+import { historyPageState, mergeHistoryMessages, replaceHistoryKeepingLiveTail, retainedHistoryTailIndex, upsertHistoryTurn, type HistoryPageState } from "./ui/history-page-state";
 
 const RIGHT_SIDEBAR_COLLAPSE_WIDTH = 1120;
 const LEFT_SIDEBAR_COLLAPSE_WIDTH = 760;
 const DEEPSEEK_API_KEYS_URL = "https://platform.deepseek.com/api_keys";
+
+function HistoryPagingHeader({ context }: { context?: { historyControl: ReactNode } }) {
+  return context?.historyControl ? <div style={{ display: "flow-root" }}>{context.historyControl}</div> : null;
+}
+
+const TranscriptItem = forwardRef<HTMLDivElement, ItemProps<ChatMessage> & { context?: { historyControl: ReactNode } }>(
+  function TranscriptItem({ item: _item, context: _context, style, ...props }, ref) {
+    // Collapsed child margins are outside Virtuoso's measured row height.
+    return <div {...props} ref={ref} style={{ ...style, display: "flow-root" }} />;
+  },
+);
 
 const RESPONSIVE_STAGE = {
   WIDE: "wide",
@@ -249,7 +265,10 @@ import type { QueuedComposerDraft } from "./ui/composer";
 import { importImage, useImageDraft } from "./ui/image-attachments";
 import {
   acknowledgeImageSubmission,
+  conversationDraftKey,
+  handoffImageDraft,
   imageSubmissionId,
+  migrateConversationDraft,
   readImageDraft,
   rememberImageSubmission,
   syncImageDraftReferences,
@@ -268,18 +287,26 @@ export type ChatMessage =
       text: string;
       clientId: string;
       turn: number;
+      turnId?: string;
+      conversationViewId?: string;
       messageId?: string;
       displayTruncated?: { originalChars: number };
       rollbackable?: boolean;
+      rollbackRef?: import("./protocol").RollbackRef | null;
+      historyOmission?: import("./protocol").HistoryOmission;
       skill?: SkillOrigin;
     }
   | {
       kind: "assistant";
       turn: number;
+      turnId?: string;
+      conversationViewId?: string;
       segments: AssistantSegment[];
       pending: boolean;
       messageId?: string;
       displayTruncated?: boolean;
+      rollbackRef?: import("./protocol").RollbackRef | null;
+      historyOmission?: import("./protocol").HistoryOmission;
     }
   | { kind: "workflow"; run: WorkflowRun }
   | { kind: "subagent"; run: SubagentRunInfo }
@@ -434,18 +461,8 @@ export type Settings = {
   model: string;
   editor?: string;
   desktopCloseBehavior?: "closeToTray" | "closeToQuit";
-  webSearchEngine?:
-    | "bing"
-    | "bing-intl"
-    | "searxng"
-    | "metaso"
-    | "baidu"
-    | "tavily"
-    | "perplexity"
-    | "exa"
-    | "brave"
-    | "ollama"
-    | "deepseek-native";
+  webSearchEngine?: WebSearchEngine;
+  webFetchEngine?: WebFetchEngine;
   webSearchEndpoint?: string;
   browserAutomation?: BrowserAutomationStatus;
   optionalComponents?: OptionalComponentStatus[];
@@ -512,8 +529,16 @@ type State = {
   model?: string;
   currentSession?: string;
   currentSessionId?: string;
+  conversationViewId?: string;
+  defaultConversationViewId?: string;
+  sessionTitle?: string;
+  activeTurnId?: string;
+  historyVersion?: number;
+  notifiedHistoryVersion?: number;
+  sharedSessionUpdate?: { historyVersion: number; sourceViewId: string; sourceTurnId?: string };
   bindingId: number;
   pendingLoadRequestId?: string;
+  history?: HistoryPageState;
   pendingTurnLoads: Record<number, string>;
   expandedTurns: number[];
   sessionActionResult: Extract<IncomingEvent, { type: "$session_action_result" }> | null;
@@ -723,7 +748,7 @@ export function tabBusyFromIncomingEvent(ev: IncomingEvent): boolean | null {
     case "$tab_opened":
       return ev.busy ?? null;
     case "$session_loaded":
-      return ev.busy ?? false;
+      return ev.busy ?? (ev.snapshot?.reason === "resync" ? null : false);
     case "$session_empty":
     case "$turn_complete":
       return false;
@@ -743,6 +768,7 @@ export function tabBusyFromIncomingEvent(ev: IncomingEvent): boolean | null {
 
 type Action =
   | { t: "dismiss_prediction" }
+  | { t: "dismiss_shared_update" }
   | {
       t: "send_user";
       text: string;
@@ -773,6 +799,8 @@ type Action =
   | { t: "shift_queued_send" }
   | { t: "restore_queued_sends"; queue: State["queuedSends"] }
   | { t: "begin_session_load"; requestId: string }
+  | { t: "begin_history_page"; requestId: string }
+  | { t: "history_page_failed"; requestId: string; error: string }
   | { t: "begin_turn_load"; turn: number; requestId: string }
   | { t: "cancel_turn_load"; turn: number; requestId: string }
   | { t: "expand_turn"; turn: number }
@@ -858,9 +886,9 @@ export function chatMessageKey(message: ChatMessage | undefined, index: number):
   if (!message) return `missing-${index}`;
   switch (message.kind) {
     case "user":
-      return `user-${message.messageId ?? message.clientId ?? message.turn}`;
+      return message.turnId ? `user-turn-${message.turnId}` : `user-${message.messageId ?? message.clientId ?? message.turn}`;
     case "assistant":
-      return `assistant-${message.messageId ?? fallbackMessageKey(message)}`;
+      return message.turnId ? `assistant-turn-${message.turnId}` : `assistant-${message.messageId ?? fallbackMessageKey(message)}`;
     case "workflow":
       return `workflow-${message.run.id}`;
     case "subagent":
@@ -880,6 +908,8 @@ export function canRollbackMessage(messages: ChatMessage[], index: number, busy:
   if (!message || (message.kind !== "user" && message.kind !== "assistant")) return false;
   if (message.kind === "user" && !isRollbackableUserMessage(message)) return false;
   if (message.kind === "assistant" && message.pending) return false;
+  if (message.rollbackRef === null) return false;
+  if (message.historyOmission) return false;
   return messages.slice(index + 1).some(isConversationTurnMessage);
 }
 
@@ -906,6 +936,8 @@ export function rollbackTargetForMessage(
   if (!message || (message.kind !== "user" && message.kind !== "assistant")) return null;
   if (message.kind === "user" && !isRollbackableUserMessage(message)) return null;
   if (message.kind === "assistant" && message.pending) return null;
+  if (message.historyOmission) return null;
+  if (message.rollbackRef !== undefined) return message.rollbackRef;
 
   let turn = 0;
   for (let i = 0; i <= index; i++) {
@@ -945,11 +977,18 @@ function upsertSubagentRunMessage(messages: ChatMessage[], run: SubagentRunInfo)
 
 export function reduce(state: State, action: Action): State {
   const next = reduceRaw(state, action);
+  const snapshotEvent = action.t === "incoming" && action.event.type === "$session_loaded" ? action.event : undefined;
+  const ownCompletionResync = snapshotEvent?.snapshot?.reason === "resync" &&
+    snapshotEvent.snapshot.sessionId === state.currentSessionId && snapshotEvent.snapshot.bindingId === state.bindingId &&
+    snapshotEvent.snapshot.historyVersion !== undefined && snapshotEvent.snapshot.historyVersion === state.sharedSessionUpdate?.historyVersion &&
+    state.sharedSessionUpdate.sourceViewId === state.conversationViewId &&
+    snapshotEvent.messages.some((row) => row.kind === "assistant" && row.turnId === state.sharedSessionUpdate?.sourceTurnId && row.conversationViewId === state.conversationViewId);
   if (next.promptPrediction && (next.busy || !next.ready ||
     next.currentSessionId !== state.currentSessionId || next.bindingId !== state.bindingId ||
     next.settings?.model !== state.settings?.model || next.settings?.providerVersion !== state.settings?.providerVersion ||
     next.settings?.promptPredictionsEnabled === false || action.t === "begin_session_load" ||
-    (action.t === "incoming" && ["$compact_result", "$session_loaded", "$session_empty"].includes(action.event.type)))) {
+    (action.t === "incoming" && (["$compact_result", "$session_empty"].includes(action.event.type) ||
+      (action.event.type === "$session_loaded" && !ownCompletionResync))))) {
     return { ...next, promptPrediction: undefined };
   }
   return next;
@@ -959,6 +998,8 @@ function reduceRaw(state: State, action: Action): State {
   switch (action.t) {
     case "dismiss_prediction":
       return { ...state, promptPrediction: undefined };
+    case "dismiss_shared_update":
+      return { ...state, sharedSessionUpdate: undefined };
     case "send_user": {
       const rollbackable = action.rollbackable !== false;
       const turn = rollbackable
@@ -967,6 +1008,7 @@ function reduceRaw(state: State, action: Action): State {
       return {
         ...state,
         busy: true,
+        activeTurnId: undefined,
         messages: [
           ...state.messages,
           {
@@ -976,6 +1018,7 @@ function reduceRaw(state: State, action: Action): State {
             clientId: action.clientId,
             messageId: action.clientId,
             turn,
+            conversationViewId: state.conversationViewId,
             ...(rollbackable ? {} : { rollbackable: false }),
           },
         ],
@@ -1010,6 +1053,7 @@ function reduceRaw(state: State, action: Action): State {
         settingsSaveResult: null,
         settingsSaveResults: {},
         ready: false,
+        history: state.history ? { ...state.history, pending: undefined } : undefined,
         busy: false,
         transientStatus: null,
         activeSkill: null,
@@ -1067,8 +1111,16 @@ function reduceRaw(state: State, action: Action): State {
         transientStatus: null,
         currentSession: undefined,
         currentSessionId: undefined,
+        conversationViewId: undefined,
+        defaultConversationViewId: undefined,
+        sessionTitle: undefined,
+        activeTurnId: undefined,
+        historyVersion: undefined,
+        notifiedHistoryVersion: undefined,
+        sharedSessionUpdate: undefined,
         bindingId: state.bindingId + 1,
         pendingLoadRequestId: undefined,
+        history: undefined,
         pendingTurnLoads: {},
         expandedTurns: [],
         messages: [],
@@ -1213,7 +1265,15 @@ function reduceRaw(state: State, action: Action): State {
     case "restore_queued_sends":
       return { ...state, queuedSends: action.queue };
     case "begin_session_load":
-      return { ...state, pendingLoadRequestId: action.requestId };
+      return { ...state, pendingLoadRequestId: action.requestId, history: state.history ? { ...state.history, pending: undefined } : undefined };
+    case "begin_history_page":
+      if (!state.history?.hasMore || !state.history.beforeCursor || state.history.pending || state.pendingLoadRequestId) return state;
+      return { ...state, history: { ...state.history, error: undefined, pending: {
+        requestId: action.requestId, cursor: state.history.beforeCursor, generation: state.history.generation,
+      } } };
+    case "history_page_failed":
+      if (state.history?.pending?.requestId !== action.requestId) return state;
+      return { ...state, history: { ...state.history, pending: undefined, error: action.error } };
     case "expand_turn":
       return { ...state, expandedTurns: [...new Set([...state.expandedTurns, action.turn])] };
     case "begin_turn_load":
@@ -1522,7 +1582,11 @@ function loadedMessagesToChat(messages: LoadedMessage[], sessionId: string): Cha
         clientId: message.clientId ?? `loaded:${sessionId}:${message.messageId}`,
         messageId: message.messageId,
         turn: message.turn,
+        turnId: message.turnId,
+        conversationViewId: message.conversationViewId,
         displayTruncated: message.displayTruncated,
+        ...(message.rollbackRef !== undefined ? { rollbackRef: message.rollbackRef } : {}),
+        ...(message.historyOmission ? { historyOmission: message.historyOmission } : {}),
       };
     }
     const segments: AssistantSegment[] = message.segments.map((segment) => {
@@ -1544,10 +1608,14 @@ function loadedMessagesToChat(messages: LoadedMessage[], sessionId: string): Cha
     return {
       kind: "assistant" as const,
       turn: message.turn,
+      turnId: message.turnId,
+      conversationViewId: message.conversationViewId,
       messageId: message.messageId,
       segments,
       pending: false,
       displayTruncated: message.displayTruncated,
+      ...(message.rollbackRef !== undefined ? { rollbackRef: message.rollbackRef } : {}),
+      ...(message.historyOmission ? { historyOmission: message.historyOmission } : {}),
     };
   });
 }
@@ -1575,8 +1643,41 @@ function applySessionSnapshot(
     return state;
   }
   if (snapshot.bindingId < state.bindingId) return state;
+  if (state.pendingLoadRequestId && snapshot.reason === "resync") return state;
+  const sameSession = state.currentSessionId === snapshot.sessionId;
+  const minimumHistoryVersion = Math.max(state.historyVersion ?? -1, state.notifiedHistoryVersion ?? -1, state.sharedSessionUpdate?.historyVersion ?? -1);
+  if (sameSession && snapshot.historyVersion !== undefined && snapshot.historyVersion < minimumHistoryVersion) return state;
+  const conversationViewId = snapshot.conversationViewId ?? (sameSession ? state.conversationViewId : undefined) ?? "default";
+  const sharedIdentity = {
+    conversationViewId,
+    defaultConversationViewId: snapshot.defaultConversationViewId ?? (sameSession ? state.defaultConversationViewId : undefined) ??
+      (snapshot.conversationViewId === undefined && conversationViewId === "default" ? "default" : undefined),
+    sessionTitle: snapshot.sessionTitle ?? (sameSession ? state.sessionTitle : undefined),
+    historyVersion: snapshot.historyVersion ?? (sameSession ? state.historyVersion : undefined),
+    notifiedHistoryVersion: sameSession ? state.notifiedHistoryVersion : undefined,
+    sharedSessionUpdate: sameSession ? state.sharedSessionUpdate : undefined,
+  };
+  if (sameSession && ev.history && state.history?.retiredGenerations?.includes(ev.history.generation)) return state;
+  const sameHistory = sameSession && !!ev.history && state.history?.generation === ev.history.generation;
+  const rewritten = sameSession && !!ev.history && !!state.history && !sameHistory;
+  const preserveRewrittenLive = rewritten && snapshot.bindingId === state.bindingId && state.busy && ev.busy !== false;
   const sessionName = ev.name;
   const loaded = loadedMessagesToChat(ev.messages, snapshot.sessionId);
+  const keepCurrent = (sameSession || (!state.currentSessionId && state.currentSession === ev.name)) && !rewritten && shouldKeepCurrentMessagesForReconcile(state.messages, loaded);
+  const merged = sameHistory ? mergeHistoryMessages(state.messages, loaded, chatMessageKey, keepCurrent, state.busy ? liveTurnIdentity(state, {}) : undefined) : undefined;
+  const rewrittenMessages = preserveRewrittenLive ? replaceHistoryKeepingLiveTail(state.messages, loaded, chatMessageKey, liveTurnIdentity(state, {})) : undefined;
+  const history: HistoryPageState | undefined = ev.history
+    ? sameHistory
+      ? { ...state.history!, totalTurns: Math.max(state.history!.totalTurns, ev.history.totalTurns),
+          sourceSize: Math.max(state.history!.sourceSize, ev.history.sourceSize),
+          firstItemIndex: state.history!.firstItemIndex - (merged?.prepended ?? 0),
+          pending: snapshot.bindingId === state.bindingId ? state.history!.pending : undefined }
+      : { ...historyPageState(ev.history), ...(preserveRewrittenLive && rewrittenMessages ? {
+          viewId: state.history!.viewId ?? state.history!.generation,
+          firstItemIndex: retainedHistoryTailIndex(state.messages, rewrittenMessages, state.history!.firstItemIndex, chatMessageKey),
+        } : {}), retiredGenerations: rewritten
+          ? [...(state.history?.retiredGenerations ?? []), state.history!.generation] : [] }
+    : undefined;
   const usage = {
     ...zeroUsage(),
     totalCostUsd: ev.carryover.totalCostUsd,
@@ -1591,12 +1692,18 @@ function applySessionSnapshot(
     contextDiagnostics: state.usage.contextDiagnostics,
   };
   if (!opts.resetUi) {
-    const nextMessages = shouldKeepCurrentMessagesForReconcile(state.messages, loaded)
+    const nextMessages = rewrittenMessages ?? merged?.messages ?? (keepCurrent
       ? state.messages
-      : loaded;
+      : loaded);
     const sessionFiles = sessionFilesForMessages(nextMessages);
     return {
       ...state,
+      ...sharedIdentity,
+      ready: ev.runtimeReady ?? state.ready,
+      busy: ev.busy ?? state.busy,
+      history,
+      pendingTurnLoads: rewritten || snapshot.bindingId !== state.bindingId ? {} : state.pendingTurnLoads,
+      expandedTurns: rewritten ? [] : state.expandedTurns,
       currentSession: sessionName,
       currentSessionId: snapshot.sessionId,
       bindingId: snapshot.bindingId,
@@ -1604,14 +1711,17 @@ function applySessionSnapshot(
       messages: nextMessages,
       usage,
       sessionFiles: ev.sessionFiles ?? sessionFiles,
-      transientStatus: null,
+      transientStatus: state.busy ? state.transientStatus : null,
     };
   }
   const keepLiveMessages =
-    Boolean(ev.busy) && shouldKeepCurrentMessagesForReconcile(state.messages, loaded);
-  const nextMessages = keepLiveMessages ? state.messages : loaded;
+    preserveRewrittenLive || (Boolean(ev.busy) && keepCurrent);
+  const nextMessages = rewrittenMessages ?? merged?.messages ?? (keepLiveMessages ? state.messages : loaded);
   return {
     ...state,
+    ...sharedIdentity,
+    ready: ev.runtimeReady ?? state.ready,
+    history,
     busy: ev.busy ?? false,
     transientStatus: keepLiveMessages ? state.transientStatus : null,
     currentSession: sessionName,
@@ -1669,15 +1779,32 @@ function latestUserIndexForTurn(messages: ChatMessage[], turn: number): number {
   return -1;
 }
 
-function latestAssistantIndexForLiveTurn(messages: ChatMessage[], turn: number): number {
+function latestAssistantIndexForLiveTurn(messages: ChatMessage[], turn: number, identity?: { turnId?: string; conversationViewId?: string }): number {
+  if (identity?.turnId) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message.kind === "assistant" && message.turnId === identity.turnId) return i;
+    }
+    return -1;
+  }
   const userIndex = latestUserIndexForTurn(messages, turn);
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message?.kind !== "assistant" || message.turn !== turn) continue;
+    if (identity?.conversationViewId && message.conversationViewId && identity.conversationViewId !== message.conversationViewId) continue;
     if (userIndex >= 0 && i < userIndex) continue;
     return i;
   }
   return -1;
+}
+
+function liveTurnIdentity(state: State, event: { turnId?: string; conversationViewId?: string }) {
+  const turnId = event.turnId ?? state.activeTurnId;
+  const conversationViewId = event.conversationViewId ?? state.conversationViewId;
+  const user = state.busy ? [...state.messages].reverse().find((row) => row.kind === "user" &&
+    (turnId ? row.turnId === turnId : row.rollbackRef === undefined && row.messageId === row.clientId && !row.clientId.startsWith("loaded:")) &&
+    (!conversationViewId || !row.conversationViewId || row.conversationViewId === conversationViewId)) : undefined;
+  return { turnId, conversationViewId, clientId: user?.kind === "user" ? user.clientId : undefined };
 }
 
 function shouldKeepCurrentMessagesForReconcile(
@@ -1786,6 +1913,20 @@ function numericProgress(value: unknown): number | undefined {
 
 function applyIncomingRaw(state: State, ev: IncomingEvent): State {
   switch (ev.type) {
+    case "$tab_opened":
+      return {
+        ...state,
+        ...(ev.sessionId ? { currentSessionId: ev.sessionId } : {}),
+        ...(ev.conversationViewId ? { conversationViewId: ev.conversationViewId } : {}),
+        ...(ev.sessionTitle ? { sessionTitle: ev.sessionTitle } : {}),
+      };
+    case "$shared_session_updated": {
+      if (ev.sessionId !== state.currentSessionId || state.pendingLoadRequestId ||
+        ev.historyVersion <= Math.max(state.historyVersion ?? -1, state.notifiedHistoryVersion ?? -1, state.sharedSessionUpdate?.historyVersion ?? -1)) return state;
+      return { ...state, promptPrediction: undefined,
+        notifiedHistoryVersion: ev.historyVersion,
+        sharedSessionUpdate: { historyVersion: ev.historyVersion, sourceViewId: ev.sourceViewId, sourceTurnId: ev.sourceTurnId } };
+    }
     case "$prompt_prediction_eligible":
       return state.promptPrediction?.completionId === ev.completionId ? state :
         { ...state, promptPrediction: { completionId: ev.completionId } };
@@ -1808,14 +1949,17 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
               text: ev.text,
               ...(ev.attachments?.length ? { attachments: ev.attachments } : {}),
               turn: ev.turn > 0 ? ev.turn : existing.turn,
+              turnId: ev.turnId ?? existing.turnId,
+              conversationViewId: ev.conversationViewId ?? existing.conversationViewId ?? state.conversationViewId,
             };
           }
-          return { ...state, busy: true, messages };
+          return { ...state, busy: true, activeTurnId: ev.turnId, messages };
         }
       }
       return {
         ...state,
         busy: true,
+        activeTurnId: ev.turnId,
         messages: [
           ...state.messages,
           {
@@ -1825,6 +1969,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
             clientId: ev.clientId ?? `remote-${ev.id}`,
             messageId: ev.clientId ?? `remote-${ev.id}`,
             turn: ev.turn > 0 ? ev.turn : nextMessageTurn(state.messages),
+            turnId: ev.turnId,
+            conversationViewId: ev.conversationViewId ?? state.conversationViewId,
           },
         ],
       };
@@ -1855,7 +2001,9 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       // that drains next then appears above the zombie card (#1456).
       return {
         ...state,
-        messages: state.messages.map((message) =>
+        messages: state.messages.filter((message) =>
+          !(message.kind === "user" && message.clientId === ev.unacceptedClientId),
+        ).map((message) =>
           message.kind === "assistant" &&
           message.segments.some((segment) => segment.kind === "compaction" && segment.pending)
             ? {
@@ -2241,6 +2389,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         settingsSaveResults: restarted ? {} : state.settingsSaveResults,
         busy: wsChanged ? false : state.busy,
         messages: wsChanged ? [] : state.messages,
+        history: wsChanged ? undefined : state.history,
         transientStatus: wsChanged ? null : state.transientStatus,
         pendingConfirms: wsChanged ? [] : state.pendingConfirms,
         pendingPathAccess: wsChanged ? [] : state.pendingPathAccess,
@@ -2277,6 +2426,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           editor: ev.editor,
           desktopCloseBehavior: ev.desktopCloseBehavior,
           webSearchEngine: ev.webSearchEngine,
+          webFetchEngine: ev.webFetchEngine,
           webSearchEndpoint: ev.webSearchEndpoint,
           browserAutomation: ev.browserAutomation,
           optionalComponents: ev.optionalComponents,
@@ -2300,30 +2450,63 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
     }
     case "$session_loaded": {
-      return applySessionSnapshot(state, ev, { resetUi: true });
+      return applySessionSnapshot(state, ev, { resetUi: ev.snapshot?.reason !== "resync" });
     }
     case "$session_reconciled": {
       return applySessionSnapshot(state, ev, { resetUi: false });
+    }
+    case "$session_history_page": {
+      const history = state.history;
+      const pending = history?.pending;
+      if (!history || !pending || state.pendingLoadRequestId ||
+        ev.name !== state.currentSession || ev.sessionId !== state.currentSessionId ||
+        ev.bindingId !== state.bindingId || ev.requestId !== pending.requestId ||
+        pending.generation !== history.generation ||
+        (ev.history && (history.retiredGenerations?.includes(ev.history.generation) ||
+          (!ev.reset && ev.history.generation !== history.generation)))) return state;
+      if (ev.error && !ev.reset) return { ...state, history: { ...history, pending: undefined, error: ev.error } };
+      if (ev.reset && !ev.history) return state;
+      const loaded = loadedMessagesToChat(ev.messages, ev.sessionId);
+      const merged = ev.reset ? { messages: state.busy ? replaceHistoryKeepingLiveTail(state.messages, loaded, chatMessageKey, liveTurnIdentity(state, {})) : loaded, prepended: 0 }
+        : mergeHistoryMessages(state.messages, loaded, chatMessageKey, true, state.busy ? liveTurnIdentity(state, {}) : undefined);
+      return {
+        ...state,
+        messages: merged.messages,
+        sessionFiles: mergeSessionFiles(state.sessionFiles, sessionFilesForMessages(merged.messages)),
+        pendingTurnLoads: ev.reset ? {} : state.pendingTurnLoads,
+        expandedTurns: ev.reset ? [] : state.expandedTurns,
+        history: ev.reset
+          ? { ...historyPageState(ev.history!), ...(state.busy ? {
+              viewId: history.viewId ?? history.generation,
+              firstItemIndex: retainedHistoryTailIndex(state.messages, merged.messages, history.firstItemIndex, chatMessageKey),
+            } : {}), retiredGenerations: ev.history!.generation !== history.generation
+              ? [...(history.retiredGenerations ?? []), history.generation] : history.retiredGenerations }
+          : { ...history, ...ev.history, firstItemIndex: history.firstItemIndex - merged.prepended,
+              sourceSize: Math.max(history.sourceSize, ev.history?.sourceSize ?? 0),
+              totalTurns: Math.max(history.totalTurns, ev.history?.totalTurns ?? 0),
+              pending: undefined, error: undefined },
+      };
     }
     case "$session_turn_loaded": {
       if (
         ev.name !== state.currentSession ||
         ev.sessionId !== state.currentSessionId ||
         ev.bindingId !== state.bindingId ||
+        state.pendingLoadRequestId ||
+        (state.history && ev.generation !== undefined && ev.generation !== state.history.generation) ||
         state.pendingTurnLoads[ev.turn] !== ev.requestId
       ) {
         return state;
       }
+      if (ev.error) {
+        const pendingTurnLoads = { ...state.pendingTurnLoads };
+        delete pendingTurnLoads[ev.turn];
+        return { ...state, pendingTurnLoads, messages: [...state.messages, {
+          kind: "error", id: `history-detail-${ev.requestId}`, message: ev.error, recoverable: true,
+        }] };
+      }
       const loaded = loadedMessagesToChat(ev.messages, ev.sessionId);
-      const firstIndex = state.messages.findIndex(
-        (message) =>
-          (message.kind === "user" || message.kind === "assistant") && message.turn === ev.turn,
-      );
-      const messages = state.messages.filter(
-        (message) =>
-          !((message.kind === "user" || message.kind === "assistant") && message.turn === ev.turn),
-      );
-      messages.splice(firstIndex >= 0 ? firstIndex : messages.length, 0, ...loaded);
+      const messages = upsertHistoryTurn(state.messages, loaded, ev.turn, chatMessageKey);
       const pendingTurnLoads = { ...state.pendingTurnLoads };
       delete pendingTurnLoads[ev.turn];
       return {
@@ -2346,7 +2529,16 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         ...state,
         currentSession: ev.name,
         currentSessionId: ev.sessionId,
+        conversationViewId: ev.conversationViewId ?? state.conversationViewId ?? "default",
         bindingId: ev.bindingId,
+        // The commit's turn is service-assigned, unlike the visible page position.
+        messages: state.history ? state.messages.map((message) => {
+          if ((message.kind !== "user" && message.kind !== "assistant") ||
+            (ev.turnId ? message.turnId !== ev.turnId && !(message.kind === "user" && ev.clientId && message.clientId === ev.clientId) : message.turn !== ev.turn) ||
+            message.rollbackRef !== undefined || message.historyOmission ||
+            (message.kind === "user" && !isRollbackableUserMessage(message))) return message;
+          return { ...message, turn: ev.turn, turnId: ev.turnId ?? message.turnId, rollbackRef: { turn: ev.turn, role: message.kind } };
+        }) : state.messages,
         sessionFiles: ev.sessionFiles,
         usage: {
           ...state.usage,
@@ -2420,26 +2612,28 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
     }
     case "model.turn.started":
-      if (latestAssistantIndexForLiveTurn(state.messages, ev.turn) >= 0) {
-        return { ...state, model: ev.model, transientStatus: null };
+      if (latestAssistantIndexForLiveTurn(state.messages, ev.turn, liveTurnIdentity(state, ev)) >= 0) {
+        return { ...state, activeTurnId: ev.turnId ?? state.activeTurnId, model: ev.model, transientStatus: null };
       }
       return {
         ...state,
         model: ev.model,
+        activeTurnId: ev.turnId ?? state.activeTurnId,
         transientStatus: null,
         messages: [
           ...state.messages,
           {
             kind: "assistant",
             turn: ev.turn,
-            messageId: `a-live-${ev.turn}`,
+            ...liveTurnIdentity(state, ev),
+            messageId: `a-live-${ev.turnId ?? ev.turn}`,
             segments: [],
             pending: true,
           },
         ],
       };
     case "model.delta": {
-      const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn);
+      const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn, liveTurnIdentity(state, ev));
       if (assistantIndex >= 0) {
         const m = state.messages[assistantIndex]!;
         if (m.kind !== "assistant") return state;
@@ -2472,7 +2666,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           {
             kind: "assistant",
             turn: ev.turn,
-            messageId: `a-live-${ev.turn}`,
+            ...liveTurnIdentity(state, ev),
+            messageId: `a-live-${ev.turnId ?? ev.turn}`,
             segments,
             pending: true,
           },
@@ -2481,7 +2676,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     }
     case "model.final": {
       if (isAbortSyntheticFinal(ev)) {
-        const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn);
+        const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn, liveTurnIdentity(state, ev));
         if (assistantIndex < 0) return { ...state, transientStatus: null };
         const m = state.messages[assistantIndex]!;
         if (m.kind !== "assistant") return { ...state, transientStatus: null };
@@ -2512,7 +2707,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
         contextDiagnostics: state.usage.contextDiagnostics,
       };
       let matchedAssistant = false;
-      const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn);
+      const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn, liveTurnIdentity(state, ev));
       if (assistantIndex >= 0) {
         const m = state.messages[assistantIndex]!;
         if (m.kind !== "assistant") return state;
@@ -2533,7 +2728,8 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
             {
               kind: "assistant",
               turn: ev.turn,
-              messageId: `a-live-${ev.turn}`,
+              ...liveTurnIdentity(state, ev),
+              messageId: `a-live-${ev.turnId ?? ev.turn}`,
               segments: finalSegments,
               pending: false,
             },
@@ -2545,7 +2741,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "tool.preparing": {
       for (let i = state.messages.length - 1; i >= 0; i--) {
         const m = state.messages[i]!;
-        if (m.kind !== "assistant" || m.turn !== ev.turn) continue;
+        if (m.kind !== "assistant" || i !== latestAssistantIndexForLiveTurn(state.messages, ev.turn, liveTurnIdentity(state, ev))) continue;
         if (m.segments.some((s) => s.kind === "tool" && s.callId === ev.callId)) return state;
         const next = [...state.messages];
         next[i] = {
@@ -2570,7 +2766,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "tool.progress": {
       for (let i = state.messages.length - 1; i >= 0; i--) {
         const message = state.messages[i]!;
-        if (message.kind !== "assistant" || message.turn !== ev.turn) continue;
+        if (message.kind !== "assistant" || i !== latestAssistantIndexForLiveTurn(state.messages, ev.turn, liveTurnIdentity(state, ev))) continue;
         const index = message.segments.findIndex((segment) => segment.kind === "tool" && segment.callId === ev.callId);
         const segment = message.segments[index];
         if (segment?.kind !== "tool" || segment.result !== undefined) return state;
@@ -2585,7 +2781,9 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       return state;
     }
     case "tool.intent": {
-      if (state.messages.some((message) => message.kind === "assistant" && message.segments.some((segment) => segment.kind === "tool" && segment.callId === ev.callId && segment.result !== undefined))) return state;
+      const assistantIndex = latestAssistantIndexForLiveTurn(state.messages, ev.turn, liveTurnIdentity(state, ev));
+      const assistant = state.messages[assistantIndex];
+      if (assistant?.kind === "assistant" && assistant.segments.some((segment) => segment.kind === "tool" && segment.callId === ev.callId && segment.result !== undefined)) return state;
       const adds = extractToolFiles(ev.name, ev.args);
       let nextState = {
         ...state,
@@ -2593,7 +2791,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
       for (let i = state.messages.length - 1; i >= 0; i--) {
         const m = state.messages[i]!;
-        if (m.kind !== "assistant" || m.turn !== ev.turn) continue;
+        if (m.kind !== "assistant" || i !== assistantIndex) continue;
         const idx = m.segments.findIndex((s) => s.kind === "tool" && s.callId === ev.callId);
         if (idx >= 0) {
           const segs = [...m.segments];
@@ -2632,7 +2830,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
     case "tool.result": {
       for (let i = state.messages.length - 1; i >= 0; i--) {
         const m = state.messages[i]!;
-        if (m.kind !== "assistant") continue;
+        if (m.kind !== "assistant" || i !== latestAssistantIndexForLiveTurn(state.messages, ev.turn, liveTurnIdentity(state, ev))) continue;
         let mutated = false;
         const segs = m.segments.map((s) => {
           if (s.kind === "tool" && s.callId === ev.callId) {
@@ -2684,7 +2882,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
       };
     case "status":
       if (ev.activity === "compaction") {
-        const index = latestAssistantIndexForLiveTurn(state.messages, ev.turn);
+        const index = latestAssistantIndexForLiveTurn(state.messages, ev.turn, liveTurnIdentity(state, {}));
         if (index >= 0) {
           const message = state.messages[index];
           if (message.kind !== "assistant") return state;
@@ -2820,6 +3018,9 @@ function ApprovalResponseLock({
 
 type TabRuntimeSnapshot = {
   currentSession?: string;
+  sessionId?: string;
+  conversationViewId?: string;
+  sessionTitle?: string;
   busy: boolean;
   sessions: SessionInfo[];
   importSources: ExternalSessionApp[];
@@ -2977,7 +3178,30 @@ function TabRuntimeInner({
   });
   useLang();
   useDisableTextAssist();
-  const draftKey = state.currentSessionId || state.currentSession || `new:${tabId}`;
+  const draftIdentityReady = !state.pendingLoadRequestId && (!state.currentSessionId || !!state.conversationViewId);
+  const scopedDraftKey = state.currentSessionId && state.conversationViewId
+    ? conversationDraftKey(state.currentSessionId, state.conversationViewId) : undefined;
+  const previousDraftBinding = useRef<{ sessionId?: string; key: string }>({ key: `new:${tabId}` });
+  const pendingDraftHandoff = useRef<string | undefined>(undefined);
+  if (scopedDraftKey && previousDraftBinding.current.key === `new:${tabId}`) {
+    pendingDraftHandoff.current = previousDraftBinding.current.key;
+  }
+  if (scopedDraftKey && pendingDraftHandoff.current && handoffImageDraft(pendingDraftHandoff.current, scopedDraftKey)) {
+    pendingDraftHandoff.current = undefined;
+  }
+  const defaultConversationViewId = state.defaultConversationViewId;
+  const draftStorageReady = draftIdentityReady && (!state.currentSessionId || !!defaultConversationViewId) && !pendingDraftHandoff.current;
+  const queueHydratedKey = useRef<string | undefined>(undefined);
+  // Migration is synchronous and idempotent; claim before the draft hook reads
+  // its initial snapshot. Parallel views never read the legacy session key.
+  if (draftStorageReady && state.ready && state.currentSessionId && state.conversationViewId) {
+    const migrated = migrateConversationDraft(state.currentSessionId, state.conversationViewId, [
+      ...(state.currentSession ? [state.currentSession] : []),
+    ], defaultConversationViewId);
+    if (migrated) queueHydratedKey.current = undefined;
+  }
+  const draftKey = pendingDraftHandoff.current ?? scopedDraftKey ?? `new:${tabId}`;
+  previousDraftBinding.current = { sessionId: state.currentSessionId, key: draftKey };
   const {
     draft,
     setDraft,
@@ -2986,15 +3210,17 @@ function TabRuntimeInner({
     pending: pendingImageDraft,
   } = useImageDraft(draftKey);
   const [dropIntakes, setDropIntakes] = useState<Record<string, number>>({});
-  const queueHydratedKey = useRef<string | undefined>(undefined);
+  const [expandedSharedReplies, setExpandedSharedReplies] = useState<Set<string>>(() => new Set());
   useEffect(() => {
+    // Explicit enqueue already persists its own payload in onQueueWhileBusy.
+    if (!draftStorageReady || !state.ready) return;
     if (queueHydratedKey.current !== draftKey) {
       queueHydratedKey.current = draftKey;
       dispatch({ t: "restore_queued_sends", queue: readImageDraft(draftKey).queue ?? [] });
       return;
     }
     writeImageDraft(draftKey, (value) => ({ ...value, queue: state.queuedSends }));
-  }, [draftKey, state.queuedSends]);
+  }, [draftKey, draftStorageReady, state.ready, state.queuedSends]);
   const [oneShotPlanArmed, setOneShotPlanArmed] = useState(false);
   const [askArmed, setAskArmed] = useState(false);
   const [filePreview, setFilePreview] = useState<{
@@ -3069,7 +3295,7 @@ function TabRuntimeInner({
     });
   }, []);
   useEffect(() => {
-    if (!state.ready || checkedImageRecovery.current.has(draftKey)) return;
+    if (!state.ready || !draftStorageReady || checkedImageRecovery.current.has(draftKey)) return;
     checkedImageRecovery.current.add(draftKey);
     if (!pendingImageDraft || state.busy || draft || draftImages.length) return;
     if (
@@ -3086,6 +3312,7 @@ function TabRuntimeInner({
     pendingImageDraft,
     state.busy,
     state.ready,
+    draftStorageReady,
     draft,
     draftImages.length,
     setDraft,
@@ -3113,6 +3340,9 @@ function TabRuntimeInner({
   useEffect(() => {
     onRuntimeSnapshot(tabId, {
       currentSession: state.currentSession,
+      sessionId: state.currentSessionId,
+      conversationViewId: state.conversationViewId,
+      sessionTitle: state.sessionTitle,
       busy: state.busy,
       sessions: state.sessions,
       importSources: state.externalImportSources,
@@ -3130,6 +3360,9 @@ function TabRuntimeInner({
     onRuntimeSnapshot,
     state.busy,
     state.currentSession,
+    state.currentSessionId,
+    state.conversationViewId,
+    state.sessionTitle,
     state.externalImportCandidates,
     state.externalImportSources,
     state.messages.length,
@@ -3588,7 +3821,7 @@ function TabRuntimeInner({
   );
   const clearPrediction = useCallback(() => dispatch({ t: "dismiss_prediction" }), []);
   const predictionUi = usePromptPrediction({
-    candidate: state.promptPrediction, active, ready: state.ready, busy: state.busy,
+    candidate: state.promptPrediction, active, ready: state.ready && draftIdentityReady, busy: state.busy,
     enabled: !predictionLocalOff && state.settings?.promptPredictionsEnabled !== false,
     blocked: settingsOpen || settingsCardOpen || state.pendingConfirms.length > 0 ||
       state.pendingChoices.length > 0 || state.pendingPlans.length > 0 || state.pendingPathAccess.length > 0 ||
@@ -3912,6 +4145,7 @@ function TabRuntimeInner({
       if (
         (!text && hiddenMentions.length === 0 && images.length === 0) ||
         !state.ready ||
+        !draftIdentityReady ||
         !rpcTransportAvailable ||
         state.busy ||
         optimisticBusyRef.current ||
@@ -4275,9 +4509,9 @@ function TabRuntimeInner({
   const rollbackToMessage = useCallback(
     (turn: number, role: "user" | "assistant") => {
       clearAbortDraft();
-      sendRpc({ cmd: "rollback_to_turn", turn, role });
+      sendRpc({ cmd: "rollback_to_turn", turn, role, historyGeneration: state.history?.generation });
     },
-    [clearAbortDraft, sendRpc],
+    [clearAbortDraft, sendRpc, state.history?.generation],
   );
   const loadFullTurn = useCallback(
     (turn: number) => {
@@ -4291,7 +4525,7 @@ function TabRuntimeInner({
           (message) =>
             !(
               (message.kind === "user" || message.kind === "assistant") &&
-              message.displayTruncated
+              (message.displayTruncated || message.historyOmission)
             ),
         )
       ) {
@@ -4307,9 +4541,12 @@ function TabRuntimeInner({
         name: state.currentSession,
         turn,
         requestId,
+        sessionId: state.currentSessionId,
+        bindingId: state.bindingId,
+        generation: state.history?.generation,
       }).catch(() => dispatch({ t: "cancel_turn_load", turn, requestId }));
     },
-    [sendRpc, state.currentSession, state.messages, tabId],
+    [sendRpc, state.currentSession, state.currentSessionId, state.bindingId, state.history?.generation, state.messages, tabId],
   );
   const copyFullTurn = useCallback(
     (turn: number) => {
@@ -4339,6 +4576,7 @@ function TabRuntimeInner({
       state.busy ||
       optimisticBusyRef.current ||
       !state.ready ||
+      !draftStorageReady ||
       !rpcTransportAvailable ||
       state.queuedSends.length === 0 ||
       queueHydratedKey.current !== draftKey
@@ -4348,7 +4586,7 @@ function TabRuntimeInner({
     if (!next) return;
     const accepted = typeof next === "string" ? send(next) : send(next.text, next.payload);
     if (accepted) dispatch({ t: "shift_queued_send" });
-  }, [rpcTransportAvailable, state.busy, state.ready, state.queuedSends, send, draftKey]);
+  }, [rpcTransportAvailable, state.busy, state.ready, state.queuedSends, send, draftKey, draftStorageReady]);
   const sendSideChat = useCallback(
     (text: string) => {
       const next = nextSideChatSend({ text, ready: state.ready && rpcTransportAvailable });
@@ -4577,7 +4815,25 @@ function TabRuntimeInner({
     () => projectTranscript(state.messages, new Set(state.expandedTurns)),
     [state.messages, state.expandedTurns],
   );
+  const jumpMessages = useMemo(() => {
+    const used = new Set<number>();
+    let last = state.messages.reduce((max, row) => row.kind === "user" ? Math.max(max, row.turn) : max, 0);
+    // A live branch may still have a provisional display number already used
+    // by a newly committed turn. Keep JumpBar's existing numeric interface.
+    return state.messages.map((row) => {
+      if (row.kind !== "user") return row;
+      if (used.has(row.turn)) return { ...row, turn: ++last };
+      used.add(row.turn);
+      return row;
+    });
+  }, [state.messages]);
   const transcriptFollowRef = useRef(true);
+  const historyPageInFlightRef = useRef(false);
+  const readingOlderHistoryRef = useRef(false);
+  const historyPageRequestIdRef = useRef(0);
+  useEffect(() => {
+    historyPageInFlightRef.current = Boolean(state.history?.pending);
+  }, [state.history?.pending]);
   const followFrameIdsRef = useRef<number[]>([]);
 
   const [showJumpButton, setShowJumpButton] = useState(false);
@@ -4609,10 +4865,27 @@ function TabRuntimeInner({
   useEffect(() => cancelScheduledTranscriptFollow, [cancelScheduledTranscriptFollow]);
   useEffect(() => {
     transcriptFollowRef.current = true;
+    readingOlderHistoryRef.current = false;
     setShowJumpButton(false);
-  }, [state.currentSession]);
+  }, [state.currentSession, state.history?.generation]);
+  const loadOlderHistory = useCallback(() => {
+    const history = state.history;
+    if (!history?.hasMore || !history.beforeCursor || history.pending || historyPageInFlightRef.current ||
+      !state.currentSession || !state.currentSessionId || state.pendingLoadRequestId || !rpcTransportAvailable) return;
+    historyPageInFlightRef.current = true;
+    readingOlderHistoryRef.current = true;
+    transcriptFollowRef.current = false;
+    cancelScheduledTranscriptFollow();
+    const requestId = `history-${tabId}-${++historyPageRequestIdRef.current}`;
+    dispatch({ t: "begin_history_page", requestId });
+    void sendRpc({ cmd: "session_history_page", name: state.currentSession,
+      sessionId: state.currentSessionId, bindingId: state.bindingId, requestId,
+      cursor: history.beforeCursor, generation: history.generation,
+    }).catch((error: unknown) => dispatch({ t: "history_page_failed", requestId, error: String(error) }));
+  }, [state.history, state.currentSession, state.currentSessionId, state.bindingId, state.pendingLoadRequestId, rpcTransportAvailable, cancelScheduledTranscriptFollow, sendRpc, tabId]);
   const scrollToBottom = useCallback(
     (smooth = true) => {
+      readingOlderHistoryRef.current = false;
       transcriptFollowRef.current = true;
       requestTranscriptFollow(smooth, 3);
     },
@@ -4620,6 +4893,7 @@ function TabRuntimeInner({
   );
 
   const handleTranscriptBottomState = useCallback((atBottom: boolean) => {
+    if (readingOlderHistoryRef.current) return;
     if (atBottom) {
       transcriptFollowRef.current = true;
       setShowJumpButton(false);
@@ -4640,6 +4914,7 @@ function TabRuntimeInner({
         pendingFrame = 0;
         const atBottom = isScrollElementNearBottom(el);
         transcriptFollowRef.current = atBottom;
+        if (atBottom && !historyPageInFlightRef.current) readingOlderHistoryRef.current = false;
         setShowJumpButton(!atBottom);
       });
     };
@@ -4684,6 +4959,10 @@ function TabRuntimeInner({
   const wasTranscriptBusyRef = useRef(state.busy);
   useEffect(() => {
     if (wasTranscriptBusyRef.current !== state.busy) {
+      if (readingOlderHistoryRef.current) {
+        wasTranscriptBusyRef.current = state.busy;
+        return;
+      }
       transcriptFollowRef.current = true;
       const id = window.requestAnimationFrame(() => requestTranscriptFollow(true, 8));
       wasTranscriptBusyRef.current = state.busy;
@@ -5076,7 +5355,8 @@ function TabRuntimeInner({
       const s = state.sessions.find((x) => x.name === state.currentSession);
       if (s?.summary?.trim()) return s.summary.trim();
     }
-    const firstUser = state.messages.find((m) => m.kind === "user");
+    if (state.sessionTitle?.trim()) return state.sessionTitle.trim();
+    const firstUser = state.messages.find((m) => m.kind === "user" && (!state.history || m.turn === 1));
     if (firstUser && firstUser.kind === "user") {
       const cleaned = firstUser.text.replace(/\s+/g, " ").trim();
       if (cleaned) return cleaned.length > 60 ? `${cleaned.slice(0, 60)}…` : cleaned;
@@ -5090,6 +5370,7 @@ function TabRuntimeInner({
           hour: m[4],
           minute: m[5],
         });
+      if (state.history) return state.currentSession;
     }
     return state.messages.length === 0
       ? t("app.session.new", { workspace: workspaceLabel })
@@ -5146,12 +5427,12 @@ function TabRuntimeInner({
       setDraft={setDraft}
       onSend={(payload) => send(undefined, payload)}
       onAbort={abort}
-      disabled={!state.ready || !rpcTransportAvailable}
+      disabled={!state.ready || !draftIdentityReady || !rpcTransportAvailable}
       busy={state.busy}
       busyLabel={state.busy ? t("app.thinkingNow") : undefined}
       busyElapsedMs={elapsed}
       textareaRef={composerRef}
-      modelLabel={state.settings?.model ?? "deepseek-v4-flash"}
+      modelLabel={state.settings?.model ?? "deepseek-flash"}
       reasoningEffort={composerReasoningSelection}
       effortChoices={composerEffortChoices}
       onModelChange={(model) => {
@@ -5278,8 +5559,25 @@ function TabRuntimeInner({
   }, [state.messages.length, state.currentSession, flashToast, sendRpc, tabId]);
 
   const thinkingFooterVisible = shouldShowThinkingFooter(state.messages, state.busy);
+  const historyControl = state.history?.hasMore || state.history?.pending || state.history?.error ? (
+    <div className="thread-inner" data-history-partial={state.history.hasMore || undefined}>
+      <div className="transcript-elision-notice" style={{ flexWrap: "wrap" }} aria-busy={Boolean(state.history.pending)}>
+        <span role={state.history.error ? "alert" : "status"}>
+          {t((state.history.error ? "thread.historyLoadFailed" : "thread.historyPartial") as Parameters<typeof t>[0])}
+        </span>
+        <button type="button" disabled={Boolean(state.history.pending) || !!state.pendingLoadRequestId || !rpcTransportAvailable}
+          onClick={loadOlderHistory}>
+          {state.history.error ? <I.refresh /> : null}
+          {state.history.pending ? t("thread.loadingHistory" as Parameters<typeof t>[0])
+            : state.history.error ? t("app.retryApiRequest") : t("thread.loadOlderHistory" as Parameters<typeof t>[0])}
+        </button>
+      </div>
+    </div>
+  ) : null;
   const threadVirtuosoComponents = useMemo(
     () => ({
+      Item: TranscriptItem,
+      Header: HistoryPagingHeader,
       Footer: () => (
         <div className="thread-bottom-spacer">
           <ThinkingBottomIndicator active={thinkingFooterVisible} />
@@ -5330,6 +5628,8 @@ function TabRuntimeInner({
                 void sendRpcToTab(id, { cmd: "tab_close" });
               }}
               onNew={onNewTab}
+              onParallel={(id) => { void sendRpcToTab(id, { cmd: "tab_parallel" }); }}
+              parallelDisabled={!rpcTransportAvailable}
               singleTab={tabsList.length <= 1}
             />
           </>
@@ -5339,7 +5639,10 @@ function TabRuntimeInner({
           className="main"
           style={{ display: active ? undefined : "none", position: "relative" }}
         >
-          <JumpBar messages={state.messages} virtuosoRef={virtuosoRef} />
+          <div role="group" aria-label={state.history?.hasMore ? t("thread.historyPartial" as Parameters<typeof t>[0]) : undefined}
+            title={state.history?.hasMore ? t("thread.historyPartial" as Parameters<typeof t>[0]) : undefined}>
+            <JumpBar messages={jumpMessages} virtuosoRef={virtuosoRef} />
+          </div>
           {state.needsSetup ? (
             <NeedsSetupView
               workspaceDir={state.settings?.workspaceDir}
@@ -5356,9 +5659,18 @@ function TabRuntimeInner({
                 onCopy={conversationCopy}
                 onExport={exportConversation}
               />
+              {state.sharedSessionUpdate && state.sharedSessionUpdate.sourceViewId !== state.conversationViewId ? (
+                <div className="shared-session-notice" role="status">
+                  <Copy size={13} aria-hidden="true" />
+                  <span>{t(state.busy ? "app.tab.sharedUpdatedWhileRunning" : "app.tab.sharedUpdated")}</span>
+                  <button type="button" className="icon-btn" title={t("app.tab.dismissUpdate")} aria-label={t("app.tab.dismissUpdate")}
+                    onClick={() => dispatch({ t: "dismiss_shared_update" })}><I.x size={12} /></button>
+                </div>
+              ) : null}
               <div className="thread" ref={threadRef}>
                 {state.messages.length === 0 ? (
                   <div className="thread-inner thread-inner--standalone">
+                    {historyControl}
                     <EmptyState
                       onPick={handleEmptySuggestion}
                       workspaceDir={state.settings?.workspaceDir}
@@ -5367,10 +5679,15 @@ function TabRuntimeInner({
                   </div>
                 ) : (
                   <Virtuoso
+                    key={`${state.currentSessionId ?? "local"}:${state.history?.viewId ?? state.history?.generation ?? "legacy"}`}
                     ref={virtuosoRef}
                     scrollerRef={setTranscriptScroller}
                     style={{ position: "absolute", inset: 0 }}
                     data={messageItems}
+                    context={{ historyControl }}
+                    firstItemIndex={state.history?.firstItemIndex ?? 0}
+                    initialTopMostItemIndex={state.history ? Math.max(0, messageItems.length - 1) : 0}
+                    startReached={() => { if (!state.history?.error) loadOlderHistory(); }}
                     computeItemKey={(index, item) => chatMessageKey(item, index)}
                     atBottomThreshold={TRANSCRIPT_BOTTOM_THRESHOLD}
                     followOutput={() => (transcriptFollowRef.current ? "auto" : false)}
@@ -5386,7 +5703,8 @@ function TabRuntimeInner({
                       if (didFollow) setShowJumpButton(false);
                     }}
                     components={threadVirtuosoComponents}
-                    itemContent={(index, m) => {
+                    itemContent={(absoluteIndex, m) => {
+                      const index = absoluteIndex - (state.history?.firstItemIndex ?? 0);
                       if (!m) return null;
                       if (m.kind === "user") {
                         const rollbackAvailable = canRollbackMessage(
@@ -5398,26 +5716,33 @@ function TabRuntimeInner({
                         return (
                           <div className="thread-inner" data-turn={m.turn}>
                             <TurnDivider label={`turn ${m.turn}`} />
+                            {m.conversationViewId ? (
+                              <div className="turn-source" data-conversation-view-id={m.conversationViewId}>
+                                <Copy size={11} aria-hidden="true" />
+                                <span>{m.conversationViewId === state.conversationViewId ? t("app.tab.currentView") :
+                                  t("app.tab.otherView")}</span>
+                              </div>
+                            ) : null}
                             <UserMsg
                               text={m.text}
                               attachments={m.attachments}
                               skill={m.skill}
-                              onEdit={onEditUserMsg}
+                              onEdit={m.historyOmission ? undefined : onEditUserMsg}
                               rollbackAvailable={rollbackAvailable}
                               onRollback={() => {
                                 if (rollbackTarget)
                                   rollbackToMessage(rollbackTarget.turn, rollbackTarget.role);
                               }}
                             />
-                            {m.displayTruncated ? (
-                              <div className="transcript-elision-notice">
+                            {m.displayTruncated || m.historyOmission ? (
+                              <div className="transcript-elision-notice" style={{ flexWrap: "wrap" }} data-history-omission={m.historyOmission ? true : undefined}>
                                 <span>{t("thread.historyFolded")}</span>
                                 <button
                                   type="button"
-                                  disabled={Boolean(state.pendingTurnLoads[m.turn])}
-                                  onClick={() => loadFullTurn(m.turn)}
+                                  disabled={!m.historyOmission?.exportRequired && Boolean(state.pendingTurnLoads[m.turn])}
+                                  onClick={() => m.historyOmission?.exportRequired ? void exportConversation() : loadFullTurn(m.turn)}
                                 >
-                                  {state.pendingTurnLoads[m.turn]
+                                  {m.historyOmission?.exportRequired ? t("app.header.exportMd") : state.pendingTurnLoads[m.turn]
                                     ? t("thread.loadingFullTurn")
                                     : t("thread.loadFullTurn")}
                                 </button>
@@ -5427,6 +5752,23 @@ function TabRuntimeInner({
                         );
                       }
                       if (m.kind === "assistant") {
+                        const sharedReplyKey = `${state.currentSessionId}:${m.turnId ?? m.messageId ?? m.turn}`;
+                        const foreignReply = Boolean(m.conversationViewId && state.conversationViewId &&
+                          m.conversationViewId !== state.conversationViewId && !m.pending);
+                        const sharedReplyOpen = expandedSharedReplies.has(sharedReplyKey);
+                        const toggleSharedReply = () => setExpandedSharedReplies((previous) => {
+                          const next = new Set(previous);
+                          if (next.has(sharedReplyKey)) next.delete(sharedReplyKey); else next.add(sharedReplyKey);
+                          return next;
+                        });
+                        const sharedReplyControl = foreignReply ? (
+                          <button type="button" className="shared-reply-toggle" aria-expanded={sharedReplyOpen}
+                            onClick={toggleSharedReply}>
+                            {sharedReplyOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                            <span>{t(sharedReplyOpen ? "app.tab.hideReply" : "app.tab.showReply")}</span>
+                          </button>
+                        ) : null;
+                        if (foreignReply && !sharedReplyOpen) return <div className="thread-inner shared-reply-collapsed">{sharedReplyControl}</div>;
                         const rollbackAvailable = canRollbackMessage(
                           state.messages,
                           index,
@@ -5436,6 +5778,7 @@ function TabRuntimeInner({
                         const rollbackTarget = rollbackTargetForMessage(state.messages, index);
                         return (
                           <div className="thread-inner">
+                            {sharedReplyControl}
                             <AssistantMsg
                               segments={m.segments}
                               pending={m.pending}
@@ -5462,13 +5805,23 @@ function TabRuntimeInner({
                                 state.settings?.processCardsDefaultOpen ?? false
                               }
                               onLoadFullTurn={
-                                m.displayTruncated ? () => loadFullTurn(m.turn) : undefined
+                                m.displayTruncated && !m.historyOmission ? () => loadFullTurn(m.turn) : undefined
                               }
                               loadingFullTurn={Boolean(state.pendingTurnLoads[m.turn])}
                               onCopyFull={
-                                m.displayTruncated ? () => copyFullTurn(m.turn) : undefined
+                                m.displayTruncated && !m.historyOmission?.exportRequired ? () => copyFullTurn(m.turn) : undefined
                               }
                             />
+                            {m.historyOmission ? (
+                              <div className="transcript-elision-notice" style={{ flexWrap: "wrap" }} data-history-omission>
+                                <span>{t("thread.historyFolded")}</span>
+                                <button type="button" disabled={!m.historyOmission.exportRequired && Boolean(state.pendingTurnLoads[m.turn])}
+                                  onClick={() => m.historyOmission?.exportRequired ? void exportConversation() : loadFullTurn(m.turn)}>
+                                  {m.historyOmission.exportRequired ? t("app.header.exportMd") : state.pendingTurnLoads[m.turn]
+                                    ? t("thread.loadingFullTurn") : t("thread.loadFullTurn")}
+                                </button>
+                              </div>
+                            ) : null}
                             {stats ? <DiffStats stats={stats} /> : null}
                           </div>
                         );
@@ -6376,12 +6729,14 @@ function TitleBar({
   );
 }
 
-function TabBar({
+export function TabBar({
   tabs,
   activeId,
   setActive,
   onClose,
   onNew,
+  onParallel,
+  parallelDisabled,
   singleTab,
 }: {
   tabs: TabMeta[];
@@ -6389,34 +6744,86 @@ function TabBar({
   setActive: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
+  onParallel: (id: string) => void;
+  parallelDisabled?: boolean;
   singleTab?: boolean;
 }) {
   useLang();
+  const [menu, setMenu] = useState<{ tabId: string; left: number; top: number; target: HTMLElement } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTab = menu ? tabs.find((tab) => tab.id === menu.tabId) : undefined;
+  const dismissMenu = useCallback((restoreFocus = false) => {
+    if (restoreFocus) menu?.target.focus();
+    setMenu(null);
+  }, [menu]);
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const down = (event: MouseEvent) => { if (!menuRef.current?.contains(event.target as Node)) dismissMenu(); };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); dismissMenu(true); }
+      else if (event.key === "Tab") dismissMenu();
+    };
+    const close = () => dismissMenu();
+    window.addEventListener("mousedown", down);
+    window.addEventListener("keydown", key);
+    window.addEventListener("resize", close);
+    return () => { window.removeEventListener("mousedown", down); window.removeEventListener("keydown", key); window.removeEventListener("resize", close); };
+  }, [menu, dismissMenu]);
+  const openMenu = (target: HTMLElement, tabId: string, left: number, top: number) => {
+    setMenu({ tabId, target, ...positionAppContextMenu({ left, top }, { width: 320, height: 46 }) });
+  };
   return (
-    <div className="tabbar">
-      {tabs.map((t) => {
-        const ws = t.workspaceDir ?? "";
-        const label = displayWorkspaceBasename(ws);
+    <div className="tabbar" role="tablist" aria-label={t("app.tab.tabsLabel")}>
+      {tabs.map((tab) => {
+        const ws = tab.workspaceDir ?? "";
+        const peers = tab.sessionId ? tabs.filter((item) => item.sessionId === tab.sessionId) : [];
+        const shared = new Set(peers.map((peer) => peer.conversationViewId).filter(Boolean)).size > 1;
+        const ordinal = peers.findIndex((item) => item.id === tab.id) + 1;
+        const titleLabel = shared ? tab.sessionTitle || displayWorkspaceBasename(ws) : displayWorkspaceBasename(ws);
+        const viewLabel = t("app.tab.viewNumber", { number: Math.max(1, ordinal) });
+        const label = shared ? `${titleLabel} · ${viewLabel}` : titleLabel;
         return (
           <div
-            key={t.id}
+            key={tab.id}
             className="tab"
-            data-active={t.id === activeId}
-            onClick={() => setActive(t.id)}
+            role="tab"
+            tabIndex={tab.id === activeId ? 0 : -1}
+            aria-selected={tab.id === activeId}
+            aria-label={label}
+            data-active={tab.id === activeId}
+            data-session-id={tab.sessionId}
+            data-conversation-view-id={tab.conversationViewId}
+            onClick={() => setActive(tab.id)}
+            onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openMenu(event.currentTarget, tab.id, event.clientX, event.clientY); }}
+            onKeyDown={(event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu(event.currentTarget, tab.id, rect.left, rect.bottom);
+              } else if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+                event.preventDefault(); const index = tabs.findIndex((item) => item.id === tab.id);
+                const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+                setActive(tabs[next].id);
+                (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
+              } else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActive(tab.id); }
+            }}
             title={displayWorkspacePath(ws, label)}
           >
-            <span className="dot" data-state={t.busy ? "running" : "idle"} />
-            <span className="label">{label}</span>
+            <span className="dot" data-state={tab.busy ? "running" : "idle"} />
+            <span className="label">{titleLabel}</span>
+            {shared ? <span className="tab-view-number">{viewLabel}</span> : null}
             {!singleTab ? (
-              <span
+              <button
+                type="button"
                 className="close"
+                aria-label={t("app.tab.closeTab")}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onClose(t.id);
+                  onClose(tab.id);
                 }}
               >
                 <I.x size={11} />
-              </span>
+              </button>
             ) : null}
           </div>
         );
@@ -6425,6 +6832,13 @@ function TabBar({
         <I.plus size={12} />
         <span className="newtab-label">{t("app.tab.newTab")}</span>
       </div>
+      {menu && menuTab ? createPortal(
+        <div ref={menuRef} role="menu" className="app-context-menu shared-tab-menu" style={{ left: menu.left, top: menu.top }}>
+          <button type="button" role="menuitem" disabled={parallelDisabled || !menuTab.sessionId || !menuTab.conversationViewId}
+            onClick={() => { onParallel(menu.tabId); dismissMenu(true); }}>
+            <Copy size={13} aria-hidden="true" /><span>{t("app.tab.parallel")}</span>
+          </button>
+        </div>, document.body) : null}
     </div>
   );
 }
@@ -6747,7 +7161,7 @@ function UpdateOverlay({
   );
 }
 
-type TabMeta = { id: string; workspaceDir?: string; busy?: boolean };
+type TabMeta = { id: string; workspaceDir?: string; busy?: boolean; sessionId?: string; conversationViewId?: string; sessionTitle?: string };
 type AvailableUpdateEvent = Extract<UpdateCheckEvent, { status: "available" }>;
 type UpdateCheckViewState =
   | UpdateCheckEvent
@@ -7081,13 +7495,11 @@ export function App() {
     if (d) {
       dispatchersRef.current.set(tabId, d);
       const buf = pendingEventsRef.current.get(tabId);
-      let drainedBufferedEvents = false;
       if (buf && buf.length > 0) {
         for (const action of buf) d(action);
         pendingEventsRef.current.delete(tabId);
-        drainedBufferedEvents = true;
       }
-      if (drainedBufferedEvents && pendingRestoredFocusRef.current.delete(tabId)) {
+      if (buf?.some((action) => action.t === "incoming" && action.event.type === "$session_loaded") && pendingRestoredFocusRef.current.delete(tabId)) {
         setActiveTabId(tabId);
       }
     } else {
@@ -7159,6 +7571,9 @@ export function App() {
       if (
         current &&
         current.currentSession === snapshot.currentSession &&
+        current.sessionId === snapshot.sessionId &&
+        current.conversationViewId === snapshot.conversationViewId &&
+        current.sessionTitle === snapshot.sessionTitle &&
         current.busy === snapshot.busy &&
         current.sessions === snapshot.sessions &&
         current.importSources === snapshot.importSources &&
@@ -7271,6 +7686,9 @@ export function App() {
                         ? {
                             ...t,
                             workspaceDir: ev.workspaceDir,
+                            sessionId: ev.sessionId ?? t.sessionId,
+                            conversationViewId: ev.conversationViewId ?? t.conversationViewId,
+                            sessionTitle: ev.sessionTitle ?? t.sessionTitle,
                             busy: ev.busy ?? t.busy,
                           }
                         : t,
@@ -7280,10 +7698,14 @@ export function App() {
                       {
                         id: tabId,
                         workspaceDir: ev.workspaceDir,
+                        sessionId: ev.sessionId,
+                        conversationViewId: ev.conversationViewId,
+                        sessionTitle: ev.sessionTitle,
                         busy: ev.busy,
                       },
                     ],
               );
+              deliverToTab(tabId, { t: "incoming", event: ev });
               if (ev.busy !== undefined) {
                 deliverToTab(tabId, { t: "set_busy", busy: ev.busy });
               }
@@ -7491,7 +7913,7 @@ export function App() {
         // alive but loses every $tab_opened / $settings / $needs_setup that
         // already fired. Ask the desktop server to re-emit them.
         if (!cancelled) {
-          await enqueueRpcLine(JSON.stringify({ cmd: "desktop_resync" }), "desktop_resync");
+          await enqueueRpcLine(JSON.stringify({ cmd: "desktop_resync", historyPaging: true }), "desktop_resync");
         }
       } catch (err) {
         if (!cancelled) {
@@ -7623,8 +8045,11 @@ export function App() {
         const snapshot = runtimeSnapshots[tab.id];
         const workspaceDir = snapshot?.workspaceDir ?? tab.workspaceDir;
         const busy = snapshot?.busy ?? tab.busy;
-        if (workspaceDir === tab.workspaceDir && busy === tab.busy) return tab;
-        return { ...tab, workspaceDir, busy };
+        const sessionId = snapshot ? snapshot.sessionId : tab.sessionId;
+        const conversationViewId = snapshot ? snapshot.conversationViewId : tab.conversationViewId;
+        const sessionTitle = snapshot?.sessions.find((session) => session.name === snapshot.currentSession)?.summary ?? snapshot?.sessionTitle ?? tab.sessionTitle;
+        if (workspaceDir === tab.workspaceDir && busy === tab.busy && sessionId === tab.sessionId && conversationViewId === tab.conversationViewId && sessionTitle === tab.sessionTitle) return tab;
+        return { ...tab, workspaceDir, busy, sessionId, conversationViewId, sessionTitle };
       }),
     [runtimeSnapshots, tabs],
   );
@@ -7786,6 +8211,7 @@ export function App() {
               }
               sendRpcToTab(activeTabId, {
                 cmd: "session_load",
+                historyPaging: true,
                 name,
                 workspaceDir:
                   sidebarSessions.find((session) => session.name === name)?.workspace ??

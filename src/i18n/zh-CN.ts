@@ -1290,6 +1290,10 @@ export const zhCN: TranslationSchema = {
         "  /search-engine ollama              使用 Ollama 云端网页搜索 — 设置 OLLAMA_API_KEY 或 config 的 ollamaApiKey；在 https://ollama.com/settings/keys 获取密钥",
       usageBrave:
         "  /search-engine brave               使用 Brave Search API（独立索引，每月 2000 次免费 — 设置 BRAVE_SEARCH_API_KEY 或 config 的 braveApiKey；在 https://brave.com/search/api/ 获取密钥）",
+      usageDeepSeek: "  /search-engine deepseek            DeepSeek 直连搜索（按请求计费）",
+      fetchUsage:
+        "抓取：{engine}。/search-engine fetch legacy|http|ollama|deepseek（远程抓取会将 URL 发送给该服务）",
+      fetchConfirmed: "抓取引擎：{engine}",
       usageDeepSeekNative:
         "  /search-engine deepseek-native     使用 DeepSeek 原生搜索（实验；按完整模型调用计费）",
       alias: "别名：/se",

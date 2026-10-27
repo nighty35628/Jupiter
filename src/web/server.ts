@@ -9,6 +9,7 @@ import type { Duplex } from "node:stream";
 import { attachments, readImageSnapshot } from "../attachments/store.js";
 import { renderIndexHtml, serveAsset } from "../server/assets.js";
 import { type DeviceSession, DeviceSessionStore, WriterLeaseStore } from "./auth.js";
+import { isHistoryReadCommand } from "./history-read.js";
 import { invokeWebHost } from "./host.js";
 import { OperationJournal } from "./operations.js";
 import {
@@ -444,7 +445,7 @@ class WebServerRuntime {
     for (const packet of pendingLive) client.send(this.outboundPacket(packet), runtimeEpoch);
     if (needsResync) {
       void this.sidecar
-        .send({ cmd: "desktop_resync", requestId: randomUUID() })
+        .send({ cmd: "desktop_resync", requestId: randomUUID(), historyPaging: true })
         .catch(() => client.close());
     }
 
@@ -536,14 +537,9 @@ class WebServerRuntime {
     res: ServerResponse,
     session: DeviceSession,
   ): Promise<void> {
-    if (!this.authorizeWriterMutation(req, res, session)) return;
+    if (!this.authorizeConnectionMutation(req, res, session)) return;
     const body = await readJsonBody(req, res);
     if (!body) return;
-    const lease = this.leaseFromHeaders(req, session);
-    if (!lease) {
-      respondJson(res, 409, { error: "writer lease changed while the command was in flight" });
-      return;
-    }
     const commandId = typeof body.commandId === "string" ? body.commandId : "";
     if (!validId(commandId)) {
       respondJson(res, 400, { error: "invalid commandId" });
@@ -554,13 +550,22 @@ class WebServerRuntime {
       respondJson(res, 400, { error: "payload must be a command object" });
       return;
     }
+    const historyRead = isHistoryReadCommand(payload as Record<string, unknown>);
+    const lease = historyRead ? null : this.leaseFromHeaders(req, session);
+    if (!historyRead && !lease) {
+      respondJson(res, 409, { error: "writer lease changed while the command was in flight" });
+      return;
+    }
 
     try {
       const authorized = await authorizeDesktopCommand(
         payload as Record<string, unknown>,
         this.policy(),
       );
-      if (!this.leaseStore.validate(lease.id, session.id, lease.fence)) {
+      if (
+        !historyRead &&
+        (!lease || !this.leaseStore.validate(lease.id, session.id, lease.fence))
+      ) {
         respondJson(res, 409, { error: "writer lease was superseded before command dispatch" });
         return;
       }
@@ -570,9 +575,10 @@ class WebServerRuntime {
           __web: {
             commandId,
             deviceId: session.id,
-            leaseId: lease.id,
-            fence: lease.fence,
+            leaseId: lease?.id ?? "",
+            fence: lease?.fence ?? 0,
             runtimeEpoch: this.sidecar.runtimeEpoch,
+            ...(historyRead ? { access: "read" } : {}),
           },
         });
         return { accepted: true, risk: authorized.risk };

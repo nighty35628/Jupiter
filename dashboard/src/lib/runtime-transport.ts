@@ -2,6 +2,7 @@
 
 import { createWebHostServices } from "./host-services";
 import { runtimeMode } from "./surface-capabilities";
+import { isHistoryReadCommand } from "../../../src/web/history-read";
 
 type UnlistenFn = () => void;
 type EventCallback<T = any> = (event: { payload: T; event: string }) => void;
@@ -488,7 +489,7 @@ function normalizeWebHostArgs(
 
 async function webRpc(payload: Record<string, any>): Promise<void> {
   await webInit();
-  if (!webLease) throw new Error("This browser is connected in read-only mode");
+  if (!webLease && !isHistoryReadCommand(payload)) throw new Error("This browser is connected in read-only mode");
   const commandId = makeBrowserId();
   const outgoing = prepareWebRpcPayload(normalizeWebRpcPayload(payload));
   try {
@@ -694,7 +695,7 @@ function sseToIncoming(ev: any): Record<string, any>[] {
           tabId: "tab-1",
           id: ev.id,
           turn: currentTurn,
-          model: "deepseek-reasoner",
+          model: "deepseek-flash",
         });
       }
       if (ev.contentDelta) {
@@ -956,6 +957,7 @@ function emitServerSettings(settings: any, overview?: any): void {
     model: overview?.model ?? settings?.model ?? "deepseek-flash",
     editor: "code",
     webSearchEngine: settings?.webSearchEngine ?? "bing",
+    webFetchEngine: settings?.webFetchEngine ?? "legacy",
     webSearchApiKeys: settings?.webSearchApiKeys ?? {},
     subagentModels: settings?.subagentModels ?? {},
     version: overview?.version ?? "",
@@ -1774,14 +1776,14 @@ const mockMessages: any[] = [
 ];
 
 function mockAssistantTurn(_promptText: string) {
-  emitEvent({ type: "status", text: "DeepSeek R1 思考中...", tabId: "tab-1" });
+  emitEvent({ type: "status", text: "DeepSeek 思考中...", tabId: "tab-1" });
   setTimeout(() => {
     emitEvent({
       type: "model.turn.started",
       tabId: "tab-1",
       id: Date.now(),
       turn: 2,
-      model: "deepseek-reasoner",
+      model: "deepseek-flash",
       reasoningEffort: "high",
     });
   }, 600);

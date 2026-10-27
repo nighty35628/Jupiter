@@ -16,7 +16,8 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Usage } from "../client.js";
+import { Usage } from "../client.js";
+import type { ServiceCallReport } from "../tools.js";
 import {
   CLAUDE_SONNET_PRICING,
   DEEPSEEK_PRICING,
@@ -43,6 +44,8 @@ export interface UsageRecord {
   costUsd: number;
   /** False when an auxiliary request has no reliable price or response usage. */
   costKnown?: boolean;
+  /** False for service rows: zero numeric fields are legacy storage placeholders, not model usage. */
+  usageKnown?: boolean;
   /** What the same turn would have cost at Claude Sonnet 4.6 rates. */
   claudeEquivUsd: number;
   /** Absent on legacy records — treat as "turn" when missing. */
@@ -63,6 +66,7 @@ export interface UsageRecord {
     provider: string;
     operation: string;
     requestId: string;
+    service?: ServiceCallReport;
   };
 }
 
@@ -77,6 +81,7 @@ export interface AppendUsageInput {
   providerId?: string;
   costUsdOverride?: number;
   costKnown?: boolean;
+  usageKnown?: boolean;
   usage: Usage;
   /** Override the timestamp (tests). */
   now?: number;
@@ -170,6 +175,7 @@ export function appendUsage(input: AppendUsageInput): UsageRecord {
   if (input.subagent) record.subagent = input.subagent;
   if (input.auxiliary) record.auxiliary = input.auxiliary;
   if (input.costKnown !== undefined) record.costKnown = input.costKnown;
+  if (input.usageKnown !== undefined) record.usageKnown = input.usageKnown;
 
   const path = input.path ?? defaultUsageLogPath();
   try {
@@ -180,6 +186,48 @@ export function appendUsage(input: AppendUsageInput): UsageRecord {
     /* best-effort — disk failure shouldn't break the chat */
   }
   return record;
+}
+
+/** Uses the existing ledger without inventing a model or claiming unknown charges are free. */
+export function appendServiceCall(input: {
+  session: string | null;
+  report: ServiceCallReport;
+  now?: number;
+  path?: string;
+}): UsageRecord {
+  return appendUsage({
+    session: input.session,
+    model: "",
+    providerId: `service:${input.report.provider}`,
+    usage: new Usage(),
+    usageKnown: false,
+    costKnown: false,
+    costUsdOverride: 0,
+    kind: "auxiliary",
+    auxiliary: {
+      provider: input.report.provider,
+      operation: input.report.operation,
+      requestId: input.report.requestId,
+      service: input.report,
+    },
+    now: input.now,
+    path: input.path,
+  });
+}
+
+export interface UsageCostAwareness {
+  /** False means costUsd is only a known subtotal, never a free/zero total. */
+  costKnown?: boolean;
+  unknownCostCalls?: number;
+  serviceCalls?: number;
+}
+
+export function addCostAwareness(total: UsageCostAwareness, record: UsageRecord): void {
+  if (record.costKnown === false) {
+    total.costKnown = false;
+    total.unknownCostCalls = (total.unknownCostCalls ?? 0) + 1;
+  }
+  if (record.auxiliary?.service) total.serviceCalls = (total.serviceCalls ?? 0) + 1;
 }
 
 export function readUsageLog(path: string = defaultUsageLogPath()): UsageRecord[] {
@@ -219,7 +267,7 @@ function isValidRecord(rec: unknown): rec is UsageRecord {
 }
 
 /** One row of the `jupiter stats` dashboard — a rolled-up window. */
-export interface UsageBucket {
+export interface UsageBucket extends UsageCostAwareness {
   label: string;
   /** Start of the window as epoch millis. `0` = unbounded (all-time). */
   since: number;
@@ -261,7 +309,8 @@ function emptyBucket(label: string, since: number): UsageBucket {
 }
 
 function addToBucket(b: UsageBucket, r: UsageRecord): void {
-  b.turns += 1;
+  addCostAwareness(b, r);
+  if (!r.auxiliary?.service) b.turns += 1;
   b.promptTokens += r.promptTokens;
   b.completionTokens += r.completionTokens;
   b.cacheHitTokens += r.cacheHitTokens;
@@ -294,7 +343,7 @@ export interface UsageAggregate {
   subagents?: SubagentAggregate;
 }
 
-export interface UsageHistoryDay {
+export interface UsageHistoryDay extends UsageCostAwareness {
   day: string;
   turns: number;
   promptTokens: number;
@@ -357,9 +406,9 @@ export function aggregateUsage(
     if (r.ts >= week.since) addToBucket(week, r);
     if (r.ts >= month.since) addToBucket(month, r);
 
-    modelCounts.set(r.model, (modelCounts.get(r.model) ?? 0) + 1);
+    if (!r.auxiliary?.service) modelCounts.set(r.model, (modelCounts.get(r.model) ?? 0) + 1);
     const sessKey = r.session ?? "(ephemeral)";
-    sessionCounts.set(sessKey, (sessionCounts.get(sessKey) ?? 0) + 1);
+    if (!r.auxiliary?.service) sessionCounts.set(sessKey, (sessionCounts.get(sessKey) ?? 0) + 1);
 
     if (firstSeen === null || r.ts < firstSeen) firstSeen = r.ts;
     if (lastSeen === null || r.ts > lastSeen) lastSeen = r.ts;
@@ -443,7 +492,8 @@ function emptyHistoryDay(day: string): UsageHistoryDay {
 }
 
 function addRecordToHistoryDay(day: UsageHistoryDay, record: UsageRecord): void {
-  day.turns += 1;
+  addCostAwareness(day, record);
+  if (!record.auxiliary?.service) day.turns += 1;
   day.promptTokens += record.promptTokens;
   day.completionTokens += record.completionTokens;
   day.cacheHitTokens += record.cacheHitTokens;

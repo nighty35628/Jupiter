@@ -15,6 +15,11 @@ import {
 } from "./index/config.js";
 import { type McpServerSpec, parseMcpSpec } from "./mcp/spec.js";
 import { isStrictOfficialDeepSeekEndpoint } from "./provider-capabilities.js";
+import {
+  DEEPSEEK_DEFAULT_MODEL,
+  DEEPSEEK_MODELS,
+  normalizeOfficialDeepSeekModel,
+} from "./provider-models.js";
 import { normalizeProviderBaseUrl } from "./provider-url.js";
 import { normalizeQQAllowlist, normalizeQQOpenId } from "./qq/access.js";
 import type { SkillPackSource } from "./skill-packs.js";
@@ -24,41 +29,29 @@ import {
   type ToolRateLimitConfig,
   normalizeToolRateLimitConfig,
 } from "./tools/rate-limit.js";
+import {
+  type WebFetchEngine,
+  type WebSearchEngine,
+  isWebFetchEngine,
+  isWebSearchEngine,
+} from "./tools/web-config.js";
+export {
+  type WebSearchEngine,
+  type WebFetchEngine,
+  WEB_SEARCH_ENGINES,
+  WEB_FETCH_ENGINES,
+  isWebSearchEngine,
+  isWebFetchEngine,
+} from "./tools/web-config.js";
 
 /** Single trust dial: review queues edits + gates shell; auto applies + gates shell; yolo skips both gates; plan blocks every non-readonly tool (write_file / edit_file / multi_edit / run_command) at dispatch. */
 export type EditMode = "review" | "auto" | "yolo" | "plan";
 export type DesktopCloseBehavior = "closeToTray" | "closeToQuit";
 export type ProviderDialectPreference = "auto" | "deepseek" | "openai-compatible";
 
-export type WebSearchEngine =
-  | "bing"
-  | "bing-intl"
-  | "searxng"
-  | "metaso"
-  | "baidu"
-  | "tavily"
-  | "perplexity"
-  | "exa"
-  | "brave"
-  | "ollama"
-  | "deepseek-native";
-
-export const WEB_SEARCH_ENGINES: readonly WebSearchEngine[] = [
-  "bing",
-  "bing-intl",
-  "searxng",
-  "metaso",
-  "baidu",
-  "tavily",
-  "perplexity",
-  "exa",
-  "brave",
-  "ollama",
-  "deepseek-native",
-];
-
-export function isWebSearchEngine(value: unknown): value is WebSearchEngine {
-  return typeof value === "string" && WEB_SEARCH_ENGINES.includes(value as WebSearchEngine);
+export function webFetchEngine(path: string = defaultConfigPath()): WebFetchEngine {
+  const value = readConfig(path).webFetchEngine;
+  return isWebFetchEngine(value) ? value : "legacy";
 }
 
 export function saveWebSearchEngine(
@@ -74,16 +67,10 @@ export function saveWebSearchEngine(
   return engine;
 }
 
-export const DEFAULT_MODEL = "deepseek-flash";
+export const DEFAULT_MODEL = DEEPSEEK_DEFAULT_MODEL;
 
-/** Models the official api.deepseek.com endpoint currently accepts. v3-era
- *  `deepseek-chat`/`deepseek-reasoner` are gone — sending them produces a 400. */
-export const SUPPORTED_OFFICIAL_MODELS: readonly string[] = [
-  "deepseek-flash",
-  "deepseek-v4-flash",
-  "deepseek-v4-pro",
-  "deepseek-v4-flash-vision-exp",
-];
+/** Current official choices; older IDs are normalized before use. */
+export const SUPPORTED_OFFICIAL_MODELS = DEEPSEEK_MODELS;
 
 export type ReasoningEffort = "low" | "medium" | "high" | "max";
 
@@ -286,6 +273,7 @@ export interface JupiterConfig {
   search?: boolean;
   /** Web search engine backend: "bing" (default, scrapes cn.bing.com), "bing-intl" (www.bing.com, indexes international sites), "searxng" (self-hosted SearXNG), "metaso" (Metaso API), "baidu" (Baidu AI Search API), "tavily" (LLM-friendly API, free tier), "perplexity" (Perplexity AI), "exa" (Exa API), "brave" (Brave Search API), or "ollama" (Ollama cloud web search). */
   webSearchEngine?: WebSearchEngine;
+  webFetchEngine?: WebFetchEngine;
   /** Base URL for SearXNG instance (default http://localhost:8080). */
   webSearchEndpoint?: string;
   /** Metaso API key. Falls back to METASO_API_KEY env var. */
@@ -1428,6 +1416,7 @@ export function webSearchEngine(path: string = defaultConfigPath()): WebSearchEn
   if (cfg === "exa") return "exa";
   if (cfg === "brave") return "brave";
   if (cfg === "ollama") return "ollama";
+  if (cfg === "deepseek") return "deepseek";
   if (cfg === "deepseek-native") return "deepseek-native";
   // Any other value (including legacy "mojeek" from configs predating the
   // engine swap) falls through to bing. Read-only — we never rewrite the
@@ -1714,15 +1703,16 @@ export function saveThinkingEnabled(enabled: boolean, path: string = defaultConf
   writeConfig(cfg, path);
 }
 
-export function loadModel(path: string = defaultConfigPath()): string {
+export function loadModel(path: string = defaultConfigPath(), baseUrl?: string): string {
   const cfg = readConfig(path);
   const raw = cfg.model;
   const trimmed = typeof raw === "string" ? raw.trim() : "";
   if (!trimmed) return DEFAULT_MODEL;
   // Custom-endpoint owners pick their own model namespace; trust them.
-  const customEndpoint = cfg.baseUrl?.trim() || resolveBaseUrlEnv();
-  if (customEndpoint) return trimmed;
-  return SUPPORTED_OFFICIAL_MODELS.includes(trimmed) ? trimmed : DEFAULT_MODEL;
+  const endpoint = baseUrl ?? resolveBaseUrlEnv() ?? cfg.baseUrl?.trim();
+  if (!isStrictOfficialDeepSeekEndpoint(endpoint)) return trimmed;
+  const model = normalizeOfficialDeepSeekModel(trimmed);
+  return SUPPORTED_OFFICIAL_MODELS.includes(model) ? model : DEFAULT_MODEL;
 }
 
 export function saveModel(model: string, path: string = defaultConfigPath()): void {
@@ -1901,15 +1891,23 @@ export interface DesktopOpenTab {
   dir: string;
   /** Session the tab had loaded; reopened on boot if its jsonl still exists. */
   session?: string;
+  /** Persistent identity of this conversation view, independent of its session. */
+  conversationViewId?: string;
   /** Whether this was the focused tab. */
   active?: boolean;
 }
 
-export function loadDesktopOpenTabs(path: string = defaultConfigPath()): DesktopOpenTab[] {
-  const v: unknown = readConfig(path).desktopOpenTabs;
-  if (!Array.isArray(v)) return [];
+export function isDesktopConversationViewId(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value)
+  );
+}
+
+function normalizeDesktopOpenTabs(value: unknown): DesktopOpenTab[] {
+  if (!Array.isArray(value)) return [];
   const out: DesktopOpenTab[] = [];
-  for (const entry of v) {
+  const viewIds = new Set<string>();
+  for (const entry of value) {
     // Legacy format (issue #933) persisted bare workspace-dir strings.
     if (typeof entry === "string") {
       if (entry) out.push({ dir: entry });
@@ -1920,25 +1918,30 @@ export function loadDesktopOpenTabs(path: string = defaultConfigPath()): Desktop
       (entry as DesktopOpenTab).dir.length > 0
     ) {
       const e = entry as DesktopOpenTab;
-      out.push({ dir: e.dir, session: e.session, active: e.active });
+      const tab: DesktopOpenTab = { dir: e.dir };
+      if (typeof e.session === "string" && e.session.length > 0) tab.session = e.session;
+      if (e.active === true) tab.active = true;
+      if (isDesktopConversationViewId(e.conversationViewId) && !viewIds.has(e.conversationViewId)) {
+        tab.conversationViewId = e.conversationViewId;
+        viewIds.add(e.conversationViewId);
+      }
+      // Missing/invalid/duplicate IDs are filled by the restore planner, not by a config read.
+      out.push(tab);
     }
   }
   return out;
 }
 
+export function loadDesktopOpenTabs(path: string = defaultConfigPath()): DesktopOpenTab[] {
+  return normalizeDesktopOpenTabs(readConfig(path).desktopOpenTabs);
+}
+
 export function saveDesktopOpenTabs(
-  tabs: DesktopOpenTab[],
+  tabs: readonly (DesktopOpenTab | string)[],
   path: string = defaultConfigPath(),
 ): void {
   const cfg = readConfig(path);
-  const cleaned = tabs
-    .filter((t) => t && typeof t.dir === "string" && t.dir.length > 0)
-    .map((t) => {
-      const e: DesktopOpenTab = { dir: t.dir };
-      if (t.session) e.session = t.session;
-      if (t.active) e.active = true;
-      return e;
-    });
+  const cleaned = normalizeDesktopOpenTabs(tabs);
   cfg.desktopOpenTabs = cleaned.length === 0 ? undefined : cleaned;
   writeConfig(cfg, path);
 }

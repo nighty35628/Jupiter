@@ -329,6 +329,9 @@ async function serveProvider(req, res) {
     remoteAddress: req.socket.remoteAddress, remotePort: req.socket.remotePort,
     stream: body.stream === true, authenticatedSynthetic: req.headers.authorization === `Bearer ${syntheticKey}`,
     bytes, tools: (body.tools ?? []).map((t) => t.function?.name),
+    historyMarkers: (body.messages ?? []).map((message) => ({ role: message.role,
+      markers: String(typeof message.content === "string" ? message.content : "").match(/SMOKE:[a-z0-9-]+/g) ?? [] })),
+    localMetadataLeak: (body.messages ?? []).some((message) => "turnId" in message || "conversationViewId" in message || "clientId" in message),
     toolResults: (body.messages ?? []).filter((m) => m.role === "tool").map((m) => ({ id: m.tool_call_id, contentHash: hash(JSON.stringify(m.content)) })),
     attempt: previous + 1, start: Date.now(), toolArgumentChunkDelayMs };
   receipts.push(receipt);
@@ -339,6 +342,7 @@ async function serveProvider(req, res) {
   });
   const json = (code, payload) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(payload)); };
   if (!receipt.authenticatedSynthetic) { json(401, { error: { message: "synthetic authorization required" } }); return; }
+  if (url.pathname.startsWith("/deny/")) { json(401, { error: { message: "synthetic provider denied" } }); return; }
   if (url.pathname.endsWith("/models")) {
     if (url.pathname.startsWith("/fault/")) json(401, { error: { message: "synthetic models denied" } });
     else json(200, { object: "list", data: url.pathname.startsWith("/empty/") ? [] : models.map((id) => ({ id, object: "model", owned_by: "local-smoke" })) });
@@ -549,12 +553,11 @@ function queueNativeRefresh() {
   nativeRefresh = nativeRefresh.catch(() => {}).then(refreshNativeEvidence);
   return nativeRefresh;
 }
-async function createNativeSandbox() {
+async function createNativeSandbox(bundleId = report.app?.bundleId) {
   nativeSandbox = join(run, "qa-native.sb");
   const realHome = await realpath(homedir());
   const protectedPaths = [".jupiter", ".ssh", ".aws", ".gnupg", ".config", "Library/Keychains"].map((path) => join(realHome, path));
-  const bundleId = report.app.bundleId;
-  assert(bundleId !== "dev.jupiter.desktop" && /^dev\.jupiter\.desktop\.[a-z0-9.-]+qa[a-z0-9.-]*$/.test(bundleId));
+  assert(typeof bundleId === "string" && bundleId !== "dev.jupiter.desktop" && /^dev\.jupiter\.desktop\.[a-z0-9.-]+qa[a-z0-9.-]*$/.test(bundleId));
   // Cocoa resolves these through the real account home, not the isolated HOME.
   // Permit only this explicitly named QA artifact's cache directories, never Jupiter's data.
   const qaCaches = ["Library/WebKit", "Library/Caches", "Library/HTTPStorages", "Library/Saved Application State"].map((path) =>
@@ -590,7 +593,8 @@ async function startNativeUi() {
   const metadata = JSON.parse(decoded.stdout);
   const expectedId = value("--expected-bundle-id", "dev.jupiter.desktop.reliability-qa");
   check("qa_unique_bundle_identity", metadata.CFBundleIdentifier === expectedId && expectedId !== "dev.jupiter.desktop");
-  check("qa_unique_product_name", (metadata.CFBundleDisplayName ?? metadata.CFBundleName) === "Jupiter Reliability QA");
+  const expectedProductName = value("--expected-product-name", "Jupiter Reliability QA");
+  check("qa_unique_product_name", /^Jupiter .+ QA$/.test(expectedProductName) && (metadata.CFBundleDisplayName ?? metadata.CFBundleName) === expectedProductName);
   check("qa_executable_basename_safe", typeof metadata.CFBundleExecutable === "string" && !/[\/\\]/.test(metadata.CFBundleExecutable) && metadata.CFBundleExecutable !== "..");
   const executable = await realpath(join(app, "Contents/MacOS", metadata.CFBundleExecutable));
   check("qa_executable_inside_bundle", executable.startsWith(app + "/Contents/MacOS/"));
@@ -616,7 +620,7 @@ async function startNativeUi() {
   const sidecarArgs = [cli, "desktop", "--dir", workspace, "--model", models[0]];
   // rpc.rs splits JUPITER_CLI on whitespace; the absolute shim preserves .app paths with spaces.
   await writeFile(launcher, ownedWorkspaceScript([node, ...sidecarArgs], { cwd: ownedCwd }), { mode: 0o700 });
-  const env = { ...isolatedEnv(), JUPITER_CLI: launcher, JUPITER_RUNTIME_SURFACE: "desktop", JUPITER_SMOKE_CAPTURE_RPC: "1" };
+  const env = { ...isolatedEnv(), __CFBundleIdentifier: expectedId, JUPITER_CLI: launcher, JUPITER_RUNTIME_SURFACE: "desktop", JUPITER_SMOKE_CAPTURE_RPC: "1" };
   await save("launch-env.json", env);
   await createNativeSandbox();
   await probeNativeSandbox(node, env);
@@ -928,7 +932,7 @@ async function suite() {
   check("production_nonstream_provider_chain", receipts.some((r) => r.marker === "SMOKE:nonstream" && !r.stream && r.authenticatedSynthetic));
   report.stages[1] = { chain: mode === "web" ? "production CLI Web server -> production Node desktop sidecar -> HTTP provider" : "real Tauri rpc_spawn -> production Node desktop -> HTTP provider", elapsedMs: normal.elapsedMs };
   if (mode === "native") {
-    for (const [prefix, model, ok, validation] of [["", models[0], true, "models"], ["/empty", models[1], true, "chat"], ["/fault", models[2], false, "models"]]) {
+    for (const [prefix, model, ok, validation] of [["", models[0], true, "models"], ["/empty", models[1], true, "chat"], ["/fault", models[2], true, "chat"], ["/deny", models[2], false, "chat"]]) {
       const requestId = randomUUID();
       const result = await inputProbe(`native-provider${prefix}`, { cmd: "provider_test", requestId,
         baseUrl: `http://127.0.0.1:${providerPort}${prefix}/v1`, model, providerDialect: "openai-compatible", apiKey: syntheticKey },
@@ -974,6 +978,30 @@ async function suite() {
   check("agent_recovers_after_ask_cancel", receipts.some((r) => r.marker === "SMOKE:agent-recovery" && r.stream && r.authenticatedSynthetic) &&
     successful(agentRecovery.events, "agent-recovery"), { finals: agentRecovery.events.filter((e) => e.type === "model.final").map((e) => ({ content: e.content, forcedSummary: e.forcedSummary })) });
   await inputProbe("recovery", { cmd: "ask_light", text: "SMOKE:recovery Reply OK" }, (list) => successful(list, "recovery"));
+  if (argv.includes("--shared-tabs")) {
+    phase = "shared-session-parallel";
+    const cursor = events.length;
+    const sourceTab = tabId;
+    const slowId = randomUUID();
+    await send({ cmd: "ask_light", tabId: sourceTab, clientId: slowId, text: "SMOKE:parallel-cancel-a hold this turn" });
+    await until(() => events.slice(cursor).some((event) => event.type === "user.message" && event.tabId === sourceTab));
+    await send({ cmd: "tab_parallel", tabId: sourceTab });
+    await until(() => events.slice(cursor).some((event) => event.type === "$tab_opened" && event.tabId !== sourceTab));
+    const peer = events.slice(cursor).find((event) => event.type === "$tab_opened" && event.tabId !== sourceTab);
+    await until(() => events.slice(cursor).some((event) => event.type === "$ready" && event.tabId === peer.tabId));
+    await send({ cmd: "ask_light", tabId: peer.tabId, clientId: randomUUID(), text: "SMOKE:parallel-fast-b reply now" });
+    await until(() => events.slice(cursor).some((event) => event.type === "model.final" && event.tabId === peer.tabId));
+    check("native_parallel_peer_completes_while_source_runs", !events.slice(cursor).some((event) => event.type === "model.final" && event.tabId === sourceTab));
+    await until(() => events.slice(cursor).filter((event) => event.type === "$shared_session_updated" && event.tabId === peer.tabId).length >= 2);
+    const commits = events.slice(cursor).filter((event) => event.type === "$shared_session_updated" && event.tabId === peer.tabId);
+    check("native_parallel_commits_follow_completion_order", commits[0].sourceTurnId !== slowId && commits[1].sourceTurnId === slowId);
+    await send({ cmd: "ask_light", tabId: peer.tabId, clientId: randomUUID(), text: "SMOKE:parallel-next see both replies" });
+    await until(() => events.slice(cursor).some((event) => event.type === "model.final" && event.content?.includes("SMOKE:parallel-next")));
+    const next = receipts.findLast((receipt) => receipt.marker === "SMOKE:parallel-next");
+    const markers = next.historyMarkers.flatMap((row) => row.markers);
+    check("native_next_request_sees_both_committed_turns", markers.includes("SMOKE:parallel-cancel-a") && markers.includes("SMOKE:parallel-fast-b"));
+    check("native_provider_does_not_receive_local_identity", receipts.every((receipt) => !receipt.localMetadataLeak));
+  }
   check("no_transport_error_after_faults", !report.transportError && !report.leaseError);
   const network = (await readFile(join(run, "network.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
   const nodeProcesses = network.filter((r) => r.kind === "process");
@@ -1133,7 +1161,7 @@ async function selfCheck() {
   const teeExit = await new Promise((done, fail) => { tee.on("error", fail); tee.on("exit", done); });
   check("observational_stdio_tee_and_key_redaction", teeExit === 0 && (await rows("native-commands.jsonl")).some((r) => r.command.text === "SMOKE:tee-check" && r.command.apiKey === "[redacted]") && (await rows("native-sidecar-events.jsonl")).some((r) => r.event.type === "$ready"));
   if (process.platform === "darwin") {
-    await createNativeSandbox();
+    await createNativeSandbox("dev.jupiter.desktop.shared-qa-self-check");
     await probeNativeSandbox(process.execPath, isolatedEnv());
   }
   report.status = "self_check_passed_not_production_acceptance";

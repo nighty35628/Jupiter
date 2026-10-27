@@ -109,6 +109,8 @@ export class AppendOnlyLog {
   private _windowSize: number;
   private _sessionPath: string | null;
   private _revision = 0;
+  /** Isolated working history; never falls back to the live session file. */
+  private _snapshot: ChatMessage[] | null;
   // Tracks total across window + disk so callers see the correct length.
   private _totalLength: number;
   /** Cached full-history result — avoids redundant sync disk I/O when
@@ -116,19 +118,29 @@ export class AppendOnlyLog {
    *  append / compactInPlace / initWindow. */
   private _fullHistoryCache: { version: number; messages: ChatMessage[] } | null = null;
 
-  constructor(opts?: { windowSize?: number; sessionPath?: string }) {
+  constructor(opts?: {
+    windowSize?: number;
+    sessionPath?: string;
+    fullHistory?: readonly ChatMessage[];
+  }) {
     this._windowSize = opts?.windowSize ?? DEFAULT_WINDOW;
-    this._sessionPath = opts?.sessionPath ?? null;
+    this._snapshot = opts?.fullHistory !== undefined ? [] : null;
+    this._sessionPath = this._snapshot !== null ? null : (opts?.sessionPath ?? null);
     this._totalLength = 0;
+    if (opts?.fullHistory !== undefined) this.initWindow([...opts.fullHistory]);
   }
 
   // Replaces manual append loops — keeps only the window, discards older entries.
   initWindow(messages: ChatMessage[]): void {
+    if (this._snapshot !== null) {
+      this._snapshot = structuredClone(messages);
+    }
+    const source = this._snapshot ?? messages;
     this._entries =
-      messages.length > this._windowSize
-        ? messages.slice(messages.length - this._windowSize)
-        : [...messages];
-    this._totalLength = messages.length;
+      source.length > this._windowSize
+        ? source.slice(source.length - this._windowSize)
+        : [...source];
+    this._totalLength = source.length;
     this._fullHistoryCache = null;
     this._revision++;
   }
@@ -137,7 +149,9 @@ export class AppendOnlyLog {
     if (!message || typeof message !== "object" || !("role" in message)) {
       throw new Error(`invalid log entry: ${JSON.stringify(message)}`);
     }
-    this._entries.push(message);
+    const retained = this._snapshot !== null ? structuredClone(message) : message;
+    this._snapshot?.push(retained);
+    this._entries.push(retained);
     this._totalLength++;
     if (this._entries.length > this._windowSize) {
       this._entries.shift();
@@ -152,6 +166,10 @@ export class AppendOnlyLog {
 
   /** The one append-only-breaking path — reserved for `/compact` + recovery. Use `append()` otherwise. */
   compactInPlace(replacement: ChatMessage[]): void {
+    if (this._snapshot !== null) {
+      this.initWindow(replacement);
+      return;
+    }
     this._entries = [...replacement];
     this._totalLength = replacement.length;
     this._fullHistoryCache = null;
@@ -161,6 +179,7 @@ export class AppendOnlyLog {
   // Checks memory window first; falls back to disk for older messages.
   getEntry(index: number): ChatMessage | undefined {
     if (index < 0 || index >= this._totalLength) return undefined;
+    if (this._snapshot !== null) return structuredClone(this._snapshot[index]);
     const windowStart = this._totalLength - this._entries.length;
     if (index >= windowStart) {
       return this._entries[index - windowStart];
@@ -174,11 +193,13 @@ export class AppendOnlyLog {
 
   /** Window only — no disk I/O. */
   toMessages(): ChatMessage[] {
+    if (this._snapshot !== null) return structuredClone(this._entries);
     return this._entries.map((e) => ({ ...e }));
   }
 
   /** Full history — reads from disk when window doesn't cover everything. */
   toFullHistory(): ChatMessage[] {
+    if (this._snapshot !== null) return structuredClone(this._snapshot);
     if (!this._sessionPath || this._entries.length >= this._totalLength) {
       return this.toMessages();
     }
@@ -191,6 +212,7 @@ export class AppendOnlyLog {
   }
 
   get entries(): readonly ChatMessage[] {
+    if (this._snapshot !== null) return structuredClone(this._entries);
     return this._entries;
   }
 
@@ -218,7 +240,7 @@ export class AppendOnlyLog {
   }
 
   setSessionPath(path: string | null): void {
-    this._sessionPath = path;
+    this._sessionPath = this._snapshot !== null ? null : path;
     this._fullHistoryCache = null;
   }
 }

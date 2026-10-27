@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import type { WebSearchEngine, WebFetchEngine } from "../../../src/tools/web-config";
 import {
   acknowledgeProviderDraft, createProviderDraft, editProviderDraft, refreshProviderDraft,
   type ProviderDraft, type ProviderDraftValues, type ProviderRequestStatus,
@@ -1505,7 +1506,7 @@ function PageGeneral({
   );
 }
 
-function WebSearchSection({
+export function WebSearchSection({
   settings,
   onSave,
 }: {
@@ -1526,18 +1527,7 @@ function WebSearchSection({
           value={settings.webSearchEngine ?? "bing"}
           onChange={(e) =>
             onSave({
-              webSearchEngine: e.target.value as
-                | "bing"
-                | "bing-intl"
-                | "searxng"
-                | "metaso"
-                | "baidu"
-                | "tavily"
-                | "perplexity"
-                | "exa"
-                | "brave"
-                | "ollama"
-                | "deepseek-native",
+              webSearchEngine: e.target.value as WebSearchEngine,
             })
           }
         >
@@ -1552,9 +1542,28 @@ function WebSearchSection({
           <option value="brave">{t("settings.webSearchEngineBrave")}</option>
           <option value="ollama">{t("settings.webSearchEngineOllama")}</option>
           <option value="deepseek-native">{t("settings.webSearchEngineDeepSeekNative")}</option>
+          <option value="deepseek">{t("settings.webSearchEngineDeepSeek")}</option>
         </select>
       </div>
       <WebSearchEngineCredentials settings={settings} onSave={onSave} />
+      <div className="setting-row">
+        <div className="l">
+          <div className="n">{t("settings.webFetchEngine")}</div>
+          <div className="h">{t("settings.webFetchEngineNote")}</div>
+        </div>
+        <select className="field" aria-label={t("settings.webFetchEngine")}
+          value={settings.webFetchEngine ?? "legacy"}
+          onChange={(e) => onSave({ webFetchEngine: e.target.value as WebFetchEngine })}>
+          <option value="legacy">{t("settings.webFetchEngineLegacy")}</option>
+          <option value="http">{t("settings.webFetchEngineHttp")}</option>
+          <option value="ollama">{t("settings.webFetchEngineOllama")}</option>
+          <option value="deepseek">{t("settings.webFetchEngineDeepSeek")}</option>
+        </select>
+      </div>
+      {settings.webFetchEngine === "deepseek" && settings.webSearchEngine !== "deepseek" && settings.webSearchEngine !== "deepseek-native"
+        ? <WebSearchEngineCredentials settings={settings} onSave={onSave} engineOverride="deepseek" /> : null}
+      {settings.webFetchEngine === "ollama" && settings.webSearchEngine !== "ollama"
+        ? <WebSearchEngineCredentials settings={settings} onSave={onSave} engineOverride="ollama" /> : null}
     </section>
   );
 }
@@ -2092,6 +2101,7 @@ const SEARCH_ENGINE_API_KEY_FIELDS: ReadonlyArray<{
     | "exa"
     | "brave"
     | "ollama"
+    | "deepseek"
     | "deepseek-native";
   patchKey:
     | "metasoApiKey"
@@ -2144,16 +2154,23 @@ const SEARCH_ENGINE_API_KEY_FIELDS: ReadonlyArray<{
     patchKey: "deepseekSearchApiKey",
     signupUrl: "https://platform.deepseek.com/api_keys",
   },
+  {
+    engine: "deepseek",
+    patchKey: "deepseekSearchApiKey",
+    signupUrl: "https://platform.deepseek.com/api_keys",
+  },
 ];
 
 function WebSearchEngineCredentials({
   settings,
   onSave,
+  engineOverride,
 }: {
   settings: SettingsType;
   onSave: (patch: SettingsPatch) => void;
+  engineOverride?: "deepseek" | "ollama";
 }) {
-  const engine = settings.webSearchEngine ?? "bing";
+  const engine = engineOverride ?? settings.webSearchEngine ?? "bing";
   if (engine === "bing" || engine === "bing-intl") return null;
   if (engine === "searxng") {
     return <SearxngEndpointRow settings={settings} onSave={onSave} />;
@@ -2161,7 +2178,7 @@ function WebSearchEngineCredentials({
   const field = SEARCH_ENGINE_API_KEY_FIELDS.find((f) => f.engine === engine);
   if (!field) return null;
   const prefix =
-    engine === "deepseek-native"
+    engine === "deepseek-native" || engine === "deepseek"
       ? settings.webSearchApiKeys?.deepseekNative
       : settings.webSearchApiKeys?.[engine];
   const statusHint =
@@ -2250,6 +2267,7 @@ function WebSearchApiKeyRow({
     | "exa"
     | "brave"
     | "ollama"
+    | "deepseek"
     | "deepseek-native";
   patchKey:
     | "metasoApiKey"
@@ -3795,7 +3813,7 @@ function PageRules({
   );
 }
 
-function PageBilling({
+export function PageBilling({
   balance,
   usageHistory,
   currency,
@@ -3804,7 +3822,6 @@ function PageBilling({
   usageHistory: UsageHistoryEvent | null;
   currency: "CNY" | "USD";
 }) {
-  const symbol = currency === "CNY" ? "¥" : "$";
   const months = usageHistory?.months ?? [];
   const [monthIndex, setMonthIndex] = useState(0);
   const [mode, setMode] = useState<"day" | "week" | "month">("day");
@@ -3816,7 +3833,6 @@ function PageBilling({
   const selected = months[Math.min(monthIndex, Math.max(0, months.length - 1))] ?? null;
   const selectedTotal = selected?.total ?? emptyUsageHistoryDay("");
   const selectedTokens = usageHistoryTokens(selectedTotal);
-  const selectedCost = usageHistoryDisplayCost(selectedTotal.costUsd, currency);
   const rows = selected ? usageHistoryRows(selected, mode) : [];
   const tableTitle =
     mode === "week"
@@ -3848,7 +3864,7 @@ function PageBilling({
         <div className="bill-card">
           <div className="l">{t("settings.usageHistoryTotalCost")}</div>
           <div className="v acc">
-            {symbol} {selectedCost.toFixed(4)}
+            {usageHistoryCostLabel(selectedTotal, currency)}
           </div>
           <div className="sub">{t("settings.usageHistoryCostHint")}</div>
         </div>
@@ -3921,7 +3937,7 @@ function PageBilling({
                       <td className="num">{row.total.turns.toLocaleString()}</td>
                       <td className="num">{usageHistoryTokens(row.total).toLocaleString()}</td>
                       <td className="num">
-                        {symbol} {usageHistoryDisplayCost(row.total.costUsd, currency).toFixed(4)}
+                        {usageHistoryCostLabel(row.total, currency)}
                       </td>
                     </tr>
                   ))
@@ -3968,6 +3984,14 @@ function usageHistoryDisplayCost(costUsd: number, currency: "CNY" | "USD"): numb
   return currency === "CNY" ? costUsd * 7.2 : costUsd;
 }
 
+function usageHistoryCostLabel(day: UsageHistoryDay, currency: "CNY" | "USD"): string {
+  const cost = `${currency === "CNY" ? "¥" : "$"} ${usageHistoryDisplayCost(day.costUsd, currency).toFixed(4)}`;
+  if (day.costKnown !== false && !day.unknownCostCalls) return cost;
+  return day.costUsd > 0
+    ? t("settings.usageHistoryCostPartial", { cost })
+    : t("settings.usageHistoryCostUnknown");
+}
+
 function sumUsageHistoryDays(days: UsageHistoryDay[], label: string): UsageHistoryDay {
   const total = emptyUsageHistoryDay(label);
   for (const day of days) {
@@ -3979,6 +4003,9 @@ function sumUsageHistoryDays(days: UsageHistoryDay[], label: string): UsageHisto
     total.costUsd += day.costUsd;
     total.claudeEquivUsd += day.claudeEquivUsd;
     total.cacheSavingsUsd += day.cacheSavingsUsd;
+    if (day.costKnown === false) total.costKnown = false;
+    if (day.unknownCostCalls) total.unknownCostCalls = (total.unknownCostCalls ?? 0) + day.unknownCostCalls;
+    if (day.serviceCalls) total.serviceCalls = (total.serviceCalls ?? 0) + day.serviceCalls;
   }
   return total;
 }

@@ -2,6 +2,7 @@ import { Box, Text, useStdout } from "ink";
 import React, { useState } from "react";
 import { t } from "../../i18n/index.js";
 import { type ReasoningSelection, displayReasoningSelection } from "../../provider-capabilities.js";
+import { DEEPSEEK_MODELS } from "../../provider-models.js";
 import { useKeystroke } from "./keystroke-context.js";
 import { PILL_MODEL, Pill, modelBadgeFor } from "./primitives/Pill.js";
 import { FG, TONE } from "./theme/tokens.js";
@@ -196,4 +197,4 @@ function ModelRow({
   );
 }
 
-const FALLBACK_MODELS: ReadonlyArray<string> = ["deepseek-v4-flash", "deepseek-v4-pro"];
+const FALLBACK_MODELS = DEEPSEEK_MODELS;

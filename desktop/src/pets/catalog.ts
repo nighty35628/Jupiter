@@ -25,11 +25,18 @@ function builtin(
 ): PetDefinition {
   const assets: Record<
     string,
-    { spriteUrl: string; thumbnailUrl: string; atlasWidth?: number; atlasHeight?: number }
+    {
+      spriteUrl: string;
+      thumbnailUrl: string;
+      previewUrl?: string;
+      atlasWidth?: number;
+      atlasHeight?: number;
+    }
   > = {
     "companion-cube": {
       spriteUrl: new URL("../assets/pets/companion-cube/spritesheet.webp", import.meta.url).href,
       thumbnailUrl: new URL("../assets/pets/companion-cube/thumbnail.webp", import.meta.url).href,
+      previewUrl: new URL("../assets/pets/companion-cube/preview.webp", import.meta.url).href,
     },
     "jupiter-sprout": {
       spriteUrl: new URL("../assets/pets/jupiter-sprout/spritesheet.webp", import.meta.url).href,
@@ -66,6 +73,7 @@ function builtin(
     source: "builtin",
     spriteUrl: asset.spriteUrl,
     thumbnailUrl: asset.thumbnailUrl,
+    previewUrl: asset.previewUrl,
     atlasWidth: asset.atlasWidth ?? BUILTIN_ATLAS_WIDTH,
     atlasHeight: asset.atlasHeight ?? BUILTIN_ATLAS_HEIGHT,
     pixelated,

@@ -67,6 +67,7 @@ export async function runDesktopLightAsk(args: {
   reasoningEffort?: import("../config.js").ReasoningEffort;
   prefixHash?: string;
   text: string;
+  history?: ChatMessage[];
   helpContext?: JupiterHelpContext | (() => JupiterHelpContext);
   onHelpTopic?: (topic?: string) => void;
   attachments?: ImageAttachment[];
@@ -121,6 +122,7 @@ export async function runDesktopLightAsk(args: {
     model: args.model,
     messages: [
       { role: "system", content: LIGHT_ASK_SYSTEM_PROMPT },
+      ...(args.history ?? []),
       {
         role: "user",
         content: text,

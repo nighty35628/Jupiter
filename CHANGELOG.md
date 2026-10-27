@@ -5,6 +5,32 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.11] — 2026-10-27
+
+### 中文
+
+- 同一会话可在多个标签中独立执行，完成回合按提交顺序同步到共享历史；新增私有回合暂存、提交边界和恢复校验，保留各标签草稿、运行状态及重启恢复身份。
+- 修复共享会话完成后的异步历史刷新误清提示词预测，保留本轮有效建议，同时继续丢弃切换会话、压缩、回滚或其他标签更新后的过期建议。
+- 统一官方 DeepSeek 模型选项为 `deepseek-flash` 与 `deepseek-v4-pro`；旧 Flash/Vision 和已退役名称在官方端点下升级为当前 Flash，实际请求同步更新，第三方模型 ID 保持不变。
+- 新增可选的 DeepSeek 直连 Search 与 Fetch，分别配置并保留旧默认行为；服务请求次数独立计入用量，未知费用不显示为零。
+- 改善上下文超限时的压缩恢复，共享重试预算与截止时间；最终请求仍超限或操作取消时保留原历史。
+- Desktop 与 Web 分页读取长会话，向上滚动加载旧轮次；保留绝对回滚目标，超大内容提供导出提示，只读客户端可浏览历史但不能修改会话。
+- 修复 Agent 前置命令识别的取消延迟：停止会中断识别及本轮辅助请求，阻止过期结果继续执行；未接收消息恢复到草稿，不残留重复回合占位。
+- 改善 Companion Cube 设置预览及图片加载失败回退。
+- 发布流程自动为缺少 macOS 安装指令的说明补上 `sudo xattr -rd com.apple.quarantine /Applications/Jupiter.app`，今后每版说明均可直接查阅。
+
+### English
+
+- Runs independent turns in multiple tabs of the same session and synchronizes completed turns into shared history in commit order. Private staging, commit boundaries and recovery checks preserve per-tab drafts, running state and restart identities.
+- Preserves valid prompt predictions through delayed snapshots of their own committed turn, while still invalidating stale suggestions on session changes, compaction, rollback, or sibling updates.
+- Unifies official DeepSeek choices as `deepseek-flash` and `deepseek-v4-pro`, normalizes legacy Flash/Vision and retired IDs on official requests, and preserves third-party model namespaces.
+- Adds independently configurable direct DeepSeek Search and Fetch while preserving legacy defaults, with service-call accounting separate from model tokens and unknown charges explicit.
+- Bounds compaction recovery by one request budget and deadline, preserving history on cancellation or an oversized final replacement.
+- Pages Desktop and Web transcripts with stable rollback identities, export notices for oversized content and read-only history access without mutation privileges.
+- Cancels Agent command classification and turn-owned auxiliary requests promptly, prevents stale routing, and removes unaccepted message placeholders while restoring the draft.
+- Improves the Companion Cube settings preview and its image-load fallback.
+- Release publishing automatically adds `sudo xattr -rd com.apple.quarantine /Applications/Jupiter.app` when macOS installation instructions are missing, keeping the command available in each release.
+
 ## [1.0.10] — 2026-10-14
 
 ### 中文

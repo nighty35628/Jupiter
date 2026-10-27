@@ -5,12 +5,13 @@ import type {
   TranscriptElisionSegment,
 } from "../../src/desktop/transcript-budget";
 import type { WorkflowEvent, WorkflowRun } from "../../src/workflows/types";
+import type { WebFetchEngine, WebSearchEngine } from "../../src/tools/web-config";
 
 export type { WorkflowRun };
 
 export type ReadyEvent = { type: "$ready" };
 export type ProtocolErrorEvent = { type: "$error"; message: string };
-export type TurnCompleteEvent = { type: "$turn_complete" };
+export type TurnCompleteEvent = { type: "$turn_complete"; unacceptedClientId?: string };
 
 export type PromptPredictionEvent =
   | { type: "$prompt_prediction_eligible"; completionId: string }
@@ -281,6 +282,9 @@ export type StorageCleanupEvent = {
 
 export type TabOpenedEvent = {
   type: "$tab_opened";
+  sessionId?: string;
+  conversationViewId?: string;
+  sessionTitle?: string;
   workspaceDir: string;
   /** True when the frontend should focus this tab (user-opened, or the restored focused tab). */
   active?: boolean;
@@ -424,6 +428,9 @@ export type UsageHistoryDay = {
   costUsd: number;
   claudeEquivUsd: number;
   cacheSavingsUsd: number;
+  costKnown?: boolean;
+  unknownCostCalls?: number;
+  serviceCalls?: number;
 };
 
 export type UsageHistoryMonth = {
@@ -524,7 +531,21 @@ export type LoadedSegment =
       ok?: boolean;
     };
 
-export type LoadedMessage =
+export type RollbackRef = { turn: number; role: "user" | "assistant" };
+
+export type SessionHistory = {
+  generation: string;
+  beforeCursor?: string;
+  hasMore: boolean;
+  totalTurns: number;
+  sourceSize: number;
+};
+
+export type HistoryOmission = { byteLength: number; exportRequired: boolean };
+
+export type ConversationTurnIdentity = { turnId?: string; conversationViewId?: string };
+
+export type LoadedMessage = ConversationTurnIdentity & { rollbackRef?: RollbackRef | null; historyOmission?: HistoryOmission } & (
   | {
       kind: "user";
       attachments?: ImageAttachment[];
@@ -541,12 +562,16 @@ export type LoadedMessage =
       segments: LoadedSegment[];
       pending: false;
       displayTruncated?: boolean;
-    };
+    });
 
 export type LoadedSessionFile = { path: string; status: "c" | "m" };
 
 export type SessionSnapshotMeta = {
   sessionId: string;
+  conversationViewId?: string;
+  defaultConversationViewId?: string;
+  sessionTitle?: string;
+  historyVersion?: number;
   bindingId: number;
   requestId?: string;
   reason: "load" | "restore" | "resync" | "compact" | "rollback" | "new";
@@ -559,6 +584,8 @@ export type SessionLoadedEvent = {
   name: string;
   /** True when this snapshot is rehydrating a session whose turn is still running. */
   busy?: boolean;
+  runtimeReady?: boolean;
+  history?: SessionHistory;
   messages: LoadedMessage[];
   snapshot: SessionSnapshotMeta;
   sessionFiles: LoadedSessionFile[];
@@ -574,6 +601,14 @@ export type SessionReconciledEvent = Omit<SessionLoadedEvent, "type"> & {
   type: "$session_reconciled";
 };
 
+export type SharedSessionUpdatedEvent = {
+  type: "$shared_session_updated";
+  sessionId: string;
+  historyVersion: number;
+  sourceViewId: string;
+  sourceTurnId?: string;
+};
+
 export type SessionTurnLoadedEvent = {
   type: "$session_turn_loaded";
   name: string;
@@ -581,7 +616,21 @@ export type SessionTurnLoadedEvent = {
   bindingId: number;
   requestId: string;
   turn: number;
+  generation?: string;
+  error?: string;
   messages: LoadedMessage[];
+};
+
+export type SessionHistoryPageEvent = {
+  type: "$session_history_page";
+  name: string;
+  sessionId: string;
+  bindingId: number;
+  requestId: string;
+  messages: LoadedMessage[];
+  history?: SessionHistory;
+  error?: string;
+  reset?: boolean;
 };
 
 export type SessionActionLabels = {
@@ -607,6 +656,8 @@ export type TurnCommittedEvent = {
   bindingId: number;
   turn: number;
   clientId?: string;
+  turnId?: string;
+  conversationViewId?: string;
   sessionFiles: LoadedSessionFile[];
   carryover: SessionLoadedEvent["carryover"];
 };
@@ -649,18 +700,7 @@ export function parseReasoningSelection(
   return choices.includes("max") && selection === "medium" ? "low" : selection;
 }
 
-export type WebSearchEngineName =
-  | "bing"
-  | "bing-intl"
-  | "searxng"
-  | "metaso"
-  | "baidu"
-  | "tavily"
-  | "perplexity"
-  | "exa"
-  | "brave"
-  | "ollama"
-  | "deepseek-native";
+export type WebSearchEngineName = WebSearchEngine;
 
 export type DeepSeekNativeCredentialStatus =
   | {
@@ -771,6 +811,7 @@ export type SettingsEvent = {
   editor?: string;
   desktopCloseBehavior?: "closeToTray" | "closeToQuit";
   webSearchEngine?: WebSearchEngineName;
+  webFetchEngine?: WebFetchEngine;
   webSearchEndpoint?: string;
   browserAutomation?: BrowserAutomationStatus;
   optionalComponents?: OptionalComponentStatus[];
@@ -929,6 +970,7 @@ export type SettingsPatch = {
   editor?: string;
   desktopCloseBehavior?: "closeToTray" | "closeToQuit";
   webSearchEngine?: WebSearchEngineName;
+  webFetchEngine?: WebFetchEngine;
   webSearchEndpoint?: string | null;
   metasoApiKey?: string | null;
   baiduApiKey?: string | null;
@@ -972,7 +1014,7 @@ export type DingTalkConfigPatch = {
   requireMentionInGroup?: boolean;
 };
 
-export type UserMessageEvent = {
+export type UserMessageEvent = ConversationTurnIdentity & {
   attachments?: ImageAttachment[];
   type: "user.message";
   id: number;
@@ -982,7 +1024,7 @@ export type UserMessageEvent = {
   clientId?: string;
 };
 
-export type ModelTurnStartedEvent = {
+export type ModelTurnStartedEvent = ConversationTurnIdentity & {
   type: "model.turn.started";
   id: number;
   ts: string;
@@ -992,7 +1034,7 @@ export type ModelTurnStartedEvent = {
   prefixHash: string;
 };
 
-export type ModelDeltaEvent = {
+export type ModelDeltaEvent = ConversationTurnIdentity & {
   type: "model.delta";
   id: number;
   ts: string;
@@ -1010,7 +1052,7 @@ export type Usage = {
   prompt_cache_miss_tokens?: number;
 };
 
-export type ModelFinalEvent = {
+export type ModelFinalEvent = ConversationTurnIdentity & {
   type: "model.final";
   id: number;
   ts: string;
@@ -1022,7 +1064,7 @@ export type ModelFinalEvent = {
   forcedSummary?: boolean;
 };
 
-type ToolEventMetadata = {
+type ToolEventMetadata = ConversationTurnIdentity & {
   requestId?: string;
   localCallId?: string;
   providerCallId?: string;
@@ -1153,6 +1195,8 @@ export type IncomingEvent = { tabId?: string } & (
   | SessionImportResultEvent
   | SessionLoadedEvent
   | SessionReconciledEvent
+  | SharedSessionUpdatedEvent
+  | SessionHistoryPageEvent
   | SessionTurnLoadedEvent
   | SessionActionResultEvent
   | TurnCommittedEvent
@@ -1207,6 +1251,7 @@ export type IncomingEvent = { tabId?: string } & (
 );
 
 export type OutgoingCommand = { tabId?: string } & (
+  | { cmd: "desktop_resync"; historyPaging?: boolean }
   | { cmd: "prompt_prediction_get"; completionId: string }
   | { cmd: "prompt_prediction_dismiss"; completionId: string }
   | {
@@ -1238,8 +1283,10 @@ export type OutgoingCommand = { tabId?: string } & (
       workspaceDir?: string;
       openInNewTab?: boolean;
       requestId?: string;
+      historyPaging?: boolean;
     }
-  | { cmd: "session_turn_load"; name: string; turn: number; requestId: string }
+  | { cmd: "session_turn_load"; name: string; turn: number; requestId: string; generation?: string; sessionId?: string; bindingId?: number }
+  | { cmd: "session_history_page"; name: string; sessionId: string; bindingId: number; requestId: string; cursor?: string; generation?: string }
   | {
       cmd: "session_copy";
       name: string;
@@ -1329,6 +1376,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "workflow_cancel"; runId: string }
   | { cmd: "workflow_save_library"; runId: string }
   | { cmd: "tab_open"; workspaceDir?: string }
+  | { cmd: "tab_parallel" }
   | { cmd: "tab_close" }
   | { cmd: "tab_activate"; tabId: string }
   | { cmd: "mcp_specs_get" }
@@ -1349,7 +1397,7 @@ export type OutgoingCommand = { tabId?: string } & (
   | { cmd: "compact_history" }
   | { cmd: "retry" }
   | { cmd: "retry_api" }
-  | { cmd: "rollback_to_turn"; turn: number; role: "user" | "assistant" }
+  | { cmd: "rollback_to_turn"; turn: number; role: "user" | "assistant"; historyGeneration?: string }
   | { cmd: "slash"; text: string; clientId?: string }
   | { cmd: "btw"; text: string; clientId?: string }
 );

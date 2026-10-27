@@ -36,6 +36,33 @@ function translatedPetDescription(pet: PetDefinition): string {
   return key ? t(key as never) : pet.description;
 }
 
+function PetPreview({ pet, active }: { pet: PetDefinition; active: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (pet.previewUrl && !failed) {
+    return (
+      <img
+        className="pet-preview-portrait"
+        src={pet.previewUrl}
+        width={192}
+        height={208}
+        alt=""
+        decoding="async"
+        draggable={false}
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return (
+    <PetSprite
+      pet={pet}
+      activity="idle"
+      lookAround
+      animationEnabled={active}
+      className="pet-preview-sprite"
+    />
+  );
+}
+
 function PetChoice({
   pet,
   selected,
@@ -128,12 +155,10 @@ export function PagePets({ petUi, active = true }: { petUi: DesktopPetUi; active
       <section className="section pet-preview-section">
         <div className="stitle">{t("pets.previewTitle")}</div>
         <div className="pet-preview-stage">
-          <PetSprite
+          <PetPreview
+            key={`${selectedPet.id}:${selectedPet.previewUrl ?? selectedPet.spriteUrl}`}
             pet={selectedPet}
-            activity="idle"
-            lookAround
-            animationEnabled={active}
-            className="pet-preview-sprite"
+            active={active}
           />
           <div className="pet-preview-copy">
             <div className="pet-preview-name">{translatedPetName(selectedPet)}</div>

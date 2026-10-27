@@ -1,9 +1,15 @@
 import { cacheSavingsUsd } from "../../telemetry/stats.js";
-import { aggregateUsage, formatLogSize, readUsageLog } from "../../telemetry/usage.js";
+import {
+  type UsageCostAwareness,
+  addCostAwareness,
+  aggregateUsage,
+  formatLogSize,
+  readUsageLog,
+} from "../../telemetry/usage.js";
 import type { DashboardContext } from "../context.js";
 import type { ApiResult } from "../router.js";
 
-interface DailyBucket {
+interface DailyBucket extends UsageCostAwareness {
   /** UTC day key, ISO yyyy-mm-dd. Sorted ascending. */
   day: string;
   turns: number;
@@ -37,7 +43,8 @@ function buildSeries(records: ReturnType<typeof readUsageLog>): DailyBucket[] {
       };
       map.set(day, b);
     }
-    b.turns += 1;
+    addCostAwareness(b, r);
+    if (!r.auxiliary?.service) b.turns += 1;
     b.promptTokens += r.promptTokens;
     b.completionTokens += r.completionTokens;
     b.cacheHitTokens += r.cacheHitTokens;

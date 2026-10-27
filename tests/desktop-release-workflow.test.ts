@@ -95,7 +95,12 @@ describe("desktop release packaging", () => {
   it("requires bilingual release notes before publishing a desktop release", () => {
     expect(releaseWorkflow).toContain("release-notes:");
     expect(releaseWorkflow).toContain("needs: bundle");
-    expect(releaseWorkflow).toContain(".github/release-notes/${TAG}.md");
+    expect(releaseWorkflow).toContain(
+      'node ../scripts/prepare-desktop-release-notes.mjs "$TAG" "$notes"',
+    );
+    expect(releaseWorkflow).toContain(
+      'node scripts/prepare-desktop-release-notes.mjs "$TAG" "$notes"',
+    );
     expect(releaseWorkflow).toContain("gh release edit");
     expect(releaseWorkflow).toContain("--notes-file");
 

@@ -92,6 +92,8 @@ export function renderDashboard(agg: UsageAggregate, logPath: string): string {
   for (const b of agg.buckets) {
     lines.push(bucketRow(b));
   }
+  const unknown = agg.buckets.at(-1)?.unknownCostCalls ?? 0;
+  if (unknown) lines.push(`Costs exclude ${unknown} call(s) with unknown charges.`);
   lines.push("");
 
   // Model + session breakdown — both trim to top 3 so a user with 20
@@ -127,15 +129,16 @@ export function renderHistory(history: UsageHistoryAggregate, logPath: string): 
   lines.push(historyHeader("month"));
   lines.push(divider());
   for (const month of history.months) {
-    if (month.total.turns === 0) continue;
+    if (month.total.turns === 0 && !month.total.serviceCalls) continue;
     lines.push(historyRow(month.label, month.total));
   }
-  if (!lines.some((line) => /\$\d/.test(line))) {
+  if (!history.months.some((month) => month.total.turns > 0 || month.total.serviceCalls)) {
     lines.push("(no usage in the selected history window)");
   }
 
   const current = history.months[0];
-  const recentDays = current?.days.filter((day) => day.turns > 0).slice(-14) ?? [];
+  const recentDays =
+    current?.days.filter((day) => day.turns > 0 || day.serviceCalls).slice(-14) ?? [];
   if (recentDays.length > 0) {
     lines.push("", `Recent days — ${current?.label ?? ""}`, historyHeader("day"), divider());
     for (const day of recentDays) {
@@ -171,7 +174,7 @@ function historyRow(label: string, item: UsageHistoryDay): string {
     pad(input.toLocaleString(), 11, "right"),
     pad(item.completionTokens.toLocaleString(), 11, "right"),
     pad(hit, 10, "right"),
-    pad(`$${item.costUsd.toFixed(6)}`, 14, "right"),
+    pad(formatKnownCost(item), 14, "right"),
     pad(item.cacheSavingsUsd > 0 ? `$${item.cacheSavingsUsd.toFixed(4)}` : "—", 14, "right"),
   ].join("  ");
 }
@@ -222,7 +225,7 @@ function bucketRow(b: UsageBucket): string {
     pad(b.label, 10),
     pad(b.turns.toString(), 8, "right"),
     pad(b.turns > 0 ? `${(hit * 100).toFixed(1)}%` : "—", 10, "right"),
-    pad(b.turns > 0 ? `$${b.costUsd.toFixed(6)}` : "—", 14, "right"),
+    pad(b.turns > 0 || b.costKnown === false ? formatKnownCost(b) : "—", 14, "right"),
     pad(
       b.turns > 0 && b.cacheSavingsUsd > 0 ? `$${b.cacheSavingsUsd.toFixed(4)}` : "—",
       14,
@@ -231,6 +234,12 @@ function bucketRow(b: UsageBucket): string {
     pad(b.turns > 0 ? `$${b.claudeEquivUsd.toFixed(4)}` : "—", 14, "right"),
     pad(b.turns > 0 && savings > 0 ? `${(savings * 100).toFixed(1)}%` : "—", 10, "right"),
   ].join("  ");
+}
+
+function formatKnownCost(item: { costUsd: number; costKnown?: boolean }): string {
+  if (item.costKnown === false)
+    return item.costUsd > 0 ? `$${item.costUsd.toFixed(6)} + ?` : "unknown";
+  return `$${item.costUsd.toFixed(6)}`;
 }
 
 function pad(s: string, width: number, align: "left" | "right" = "left"): string {

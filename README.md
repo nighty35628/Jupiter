@@ -68,7 +68,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 桌面安装包发布在 GitHub Releases：
 
-- 当前版本：`desktop-v1.0.10`，2026-10-14 发布
+- 当前版本：`desktop-v1.0.11`，2026-10-27 发布
 - [最新版本](https://github.com/nighty35628/Jupiter/releases/latest)
 - [全部版本](https://github.com/nighty35628/Jupiter/releases)
 
@@ -142,7 +142,14 @@ Web Beta 默认只监听 `127.0.0.1`，复用当前 Desktop 界面、会话与 a
 
 局域网使用 `--access lan`；公网使用 `--access public`，并且必须放在带身份验证的 HTTPS 反向代理后，Jupiter 本身仍只绑定回环地址。公网模式固定关闭终端、MCP 写入、Git 写入和密钥写入。完整命令、能力差异与代理示例见 [Web Beta 访问指南](docs/web-beta.md)。
 
-### 1.0.10 新功能
+### 1.0.11 新功能
+
+- **共享会话标签：** 同一会话可在多个标签中独立执行，完成回合按提交顺序汇入共享历史；各标签保留草稿和运行状态，并支持中断恢复。
+- **长历史分页：** Desktop 与 Web 向上滚动加载较早轮次，回滚目标保持原始轮次身份；超大内容提供导出提示，只读客户端也可浏览历史。
+- **独立 Search/Fetch：** 可分别选择 DeepSeek 直连搜索和网页读取，保留旧默认设置；服务调用次数单独统计，未知费用明确显示。
+- **恢复与取消：** 改善上下文超限时的压缩恢复、前置命令识别取消和共享会话中的提示词预测，避免过期结果继续执行或清除有效建议。
+
+### Desktop 功能
 
 - **Desktop Computer Use Beta：** 在设置中开启后，Agent 可通过 Cua Driver 观察桌面、点击、滚动和输入。需要支持图片的模型、可用驱动及系统授权；默认关闭，CLI 和 Web 不提供原生桌面控制。
 - **下一条消息预测：** 默认开启，可在设置中关闭。对话结束后可生成短建议，Tab 或接受按钮将其填入草稿，Esc 可忽略。建议不会自动发送；辅助请求产生 API 费用并有独立用量记录，输入、会话切换和取消操作会使过期结果失效。
@@ -254,7 +261,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 Desktop installers are published on GitHub Releases:
 
-- Current version: `desktop-v1.0.10`, released on 2026-10-14
+- Current version: `desktop-v1.0.11`, released on 2026-10-27
 - [Latest Release](https://github.com/nighty35628/Jupiter/releases/latest)
 - [All Releases](https://github.com/nighty35628/Jupiter/releases)
 
@@ -332,7 +339,14 @@ Web Beta listens on `127.0.0.1` by default and reuses the current Desktop UI, se
 
 Use `--access lan` on a private network. Public access uses `--access public` behind an authenticated HTTPS reverse proxy while Jupiter remains bound to loopback. Public mode always disables terminals, MCP writes, Git writes, and secret writes. See the [Web Beta access guide](docs/web-beta.md) for commands, capability differences, and proxy configuration.
 
-### New in 1.0.10
+### New in 1.0.11
+
+- **Shared-session tabs:** Run independent turns in multiple tabs of the same session. Completed turns enter shared history in commit order, with per-tab drafts, running state and interrupted-turn recovery.
+- **Paged history:** Scroll upward in Desktop or Web to load earlier turns with stable rollback identities. Oversized content offers export notices, and read-only clients can browse history.
+- **Independent Search/Fetch:** Configure direct DeepSeek search and page fetching separately while preserving existing defaults. Service calls have separate counts and explicit unknown charges.
+- **Recovery and cancellation:** Improves compaction after context-limit errors, cancellation of command classification and prompt predictions in shared sessions, preventing stale routing and accidental loss of valid suggestions.
+
+### Desktop Features
 
 - **Desktop Computer Use Beta:** When enabled in settings, Agent can observe, click, scroll and type through Cua Driver. It requires an image-capable model, an available driver and OS permissions. It is off by default; CLI and Web do not expose native desktop control.
 - **Next-message prediction:** Enabled by default and switchable in settings. A completed conversation can produce a short suggestion. Tab or the accept button copies it into the draft; Esc dismisses it. Accepting never sends it automatically. Auxiliary requests incur API costs with separate usage accounting, and typing, switching sessions or cancelling invalidates stale results.

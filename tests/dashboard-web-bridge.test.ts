@@ -103,6 +103,34 @@ afterEach(() => {
 });
 
 describe("Dashboard Web Beta bridge", () => {
+  it("permits bound history reads while an observer still cannot mutate", async () => {
+    const { bridge, fetchMock, dataset } = await loadWebBridge("", 202, { acquireStatus: 409 });
+    await bridge.invoke("rpc_spawn");
+    expect(dataset.webWriter).toBe("false");
+    fetchMock.mockClear();
+    await bridge.invoke("rpc_send", {
+      line: JSON.stringify({
+        cmd: "session_history_page",
+        name: "history",
+        tabId: "tab-history",
+        sessionId: "session-history",
+        bindingId: 1,
+        requestId: "read-1",
+      }),
+    });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/rpc"]);
+    await expect(
+      bridge.invoke("rpc_send", {
+        line: JSON.stringify({
+          cmd: "user_input",
+          tabId: "tab-history",
+          text: "must not send",
+        }),
+      }),
+    ).rejects.toThrow(/read-only/);
+    expect(fetchMock.mock.calls).toHaveLength(1);
+  });
+
   it("checks prediction eligibility locally after initializing a read-only observer", async () => {
     const { bridge, fetchMock, eventSources, dataset, writerStates } = await loadWebBridge(
       "",

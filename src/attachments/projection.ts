@@ -156,7 +156,14 @@ export async function projectImages(
   };
   for (const [index, message] of messages.entries()) {
     if (message.role !== "tool") flushTools();
-    const { attachments: images, sourceAttachments, clientId: _clientId, ...wire } = message;
+    const {
+      attachments: images,
+      sourceAttachments,
+      clientId: _clientId,
+      turnId: _turnId,
+      conversationViewId: _viewId,
+      ...wire
+    } = message;
     const parts = (images ?? []).flatMap(
       (image, imageIndex): ContentPart[] =>
         selected.get(`${index}:${imageIndex}`) ?? [

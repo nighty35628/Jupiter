@@ -16,6 +16,7 @@ import {
   resolveModelCapability,
   resolveProviderDialect,
 } from "./provider-capabilities.js";
+import { normalizeOfficialDeepSeekModel } from "./provider-models.js";
 import { normalizeProviderBaseUrl } from "./provider-url.js";
 
 export interface ResolvedProviderSnapshot {
@@ -49,8 +50,9 @@ export function resolveProviderSnapshot(
   const baseUrl = normalizeProviderBaseUrl(opts.baseUrl ?? endpoint.baseUrl ?? "");
   const dialectPreference = opts.dialect ?? loadProviderDialect(opts.configPath);
   const dialect = resolveProviderDialect(baseUrl, dialectPreference);
-  const model = opts.model?.trim() || loadModel(opts.configPath);
   const officialDeepSeek = isStrictOfficialDeepSeekEndpoint(baseUrl);
+  const requestedModel = opts.model?.trim() || loadModel(opts.configPath, baseUrl);
+  const model = officialDeepSeek ? normalizeOfficialDeepSeekModel(requestedModel) : requestedModel;
   const endpointIdentity = identityFor(baseUrl, dialect);
   const host = new URL(baseUrl).host;
   return {

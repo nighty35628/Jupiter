@@ -18,14 +18,14 @@ describe("DeepSeekClient.listModels", () => {
       fetch: makeFetch(200, {
         object: "list",
         data: [
-          { id: "deepseek-chat", object: "model", owned_by: "deepseek" },
-          { id: "deepseek-reasoner", object: "model", owned_by: "deepseek" },
+          { id: "deepseek-flash", object: "model", owned_by: "deepseek" },
+          { id: "deepseek-v4-pro", object: "model", owned_by: "deepseek" },
         ],
       }),
     });
     const list = await client.listModels();
     expect(list).not.toBeNull();
-    expect(list!.data.map((m) => m.id)).toEqual(["deepseek-chat", "deepseek-reasoner"]);
+    expect(list!.data.map((m) => m.id)).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
   });
 
   it("returns null on non-2xx (bad key / offline)", async () => {

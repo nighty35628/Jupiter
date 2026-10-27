@@ -47,6 +47,18 @@ function webpDimensions(path: string): { width: number; height: number } {
 }
 
 describe("built-in pet assets", () => {
+  it("provides a transparent high-density settings portrait without enlarging the animation atlas", () => {
+    const root = new URL("../assets/pets/companion-cube/", import.meta.url);
+    const path = fileURLToPath(new URL("preview.webp", root));
+    const dimensions = webpDimensions(path);
+    expect(dimensions.width).toBeGreaterThanOrEqual(348);
+    expect(dimensions.height).toBeGreaterThanOrEqual(378);
+    const bytes = readFileSync(path);
+    expect(bytes.length).toBeLessThan(150_000);
+    expect(bytes.subarray(12, 16).toString("ascii")).toBe("VP8X");
+    expect(bytes[20]! & 0x10).toBe(0x10);
+  });
+
   it.each(BUILTIN_PETS)("packages $packageId with the v2 built-in contract", (pet) => {
     const root = new URL(`../assets/pets/${pet.packageId}/`, import.meta.url);
     const manifest = JSON.parse(

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { type CSSProperties, type ReactNode, forwardRef } from "react";
+import { type CSSProperties, type ReactNode, forwardRef, useImperativeHandle } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauri = vi.hoisted(() => {
@@ -45,6 +45,16 @@ const tauri = vi.hoisted(() => {
 const splashMockState = vi.hoisted(() => ({
   shouldShow: false,
   shouldShowCalls: 0,
+}));
+
+const transcriptMock = vi.hoisted(() => ({
+  initialTopMostItemIndex: undefined as number | undefined,
+  startReached: undefined as undefined | ((index: number) => void),
+  followOutput: undefined as undefined | (() => unknown),
+  atBottomStateChange: undefined as undefined | ((atBottom: boolean) => void),
+  totalListHeightChanged: undefined as undefined | (() => void),
+  scrollTo: vi.fn(),
+  scrollToIndex: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -108,22 +118,42 @@ vi.mock("react-virtuoso", () => ({
   Virtuoso: forwardRef(function VirtuosoMock(
     props: {
       data?: unknown[];
+      scrollerRef?: (element: HTMLElement | Window | null) => void;
       totalCount?: number;
       style?: CSSProperties;
       itemContent: (index: number, item?: unknown) => ReactNode;
+      firstItemIndex?: number;
+      initialTopMostItemIndex?: number;
+      computeItemKey?: (index: number, item: unknown) => string;
+      startReached?: (index: number) => void;
+      followOutput?: () => unknown;
+      atBottomStateChange?: (atBottom: boolean) => void;
+      totalListHeightChanged?: () => void;
       components?: {
-        Header?: () => ReactNode;
+        Item?: (props: { children: ReactNode; style?: CSSProperties }) => ReactNode;
+        Header?: (props: { context?: { historyControl: ReactNode } }) => ReactNode;
         Footer?: () => ReactNode;
       };
+      context?: { historyControl: ReactNode };
     },
-    _ref,
+    ref,
   ) {
+    useImperativeHandle(ref, () => ({ scrollTo: transcriptMock.scrollTo, scrollToIndex: transcriptMock.scrollToIndex }));
+    transcriptMock.startReached = props.startReached;
+    transcriptMock.initialTopMostItemIndex = props.initialTopMostItemIndex;
+    transcriptMock.followOutput = props.followOutput;
+    transcriptMock.atBottomStateChange = props.atBottomStateChange;
+    transcriptMock.totalListHeightChanged = props.totalListHeightChanged;
     const items = props.data ?? Array.from({ length: props.totalCount ?? 0 }, () => undefined);
+    const Item = props.components?.Item ?? "div";
     return (
-      <div data-testid="virtuoso" style={props.style}>
-        {props.components?.Header ? <props.components.Header /> : null}
+      <div ref={props.scrollerRef} data-testid="virtuoso" data-first-item-index={props.firstItemIndex ?? 0} style={props.style}>
+        {props.components?.Header ? <props.components.Header context={props.context} /> : null}
         {items.map((item, index) => (
-          <div key={index}>{props.itemContent(index, item)}</div>
+          <Item key={props.computeItemKey?.(index + (props.firstItemIndex ?? 0), item) ?? index}
+            data-item-index={index + (props.firstItemIndex ?? 0)}>
+            {props.itemContent(index + (props.firstItemIndex ?? 0), item)}
+          </Item>
         ))}
         {props.components?.Footer ? <props.components.Footer /> : null}
       </div>
@@ -186,6 +216,8 @@ Object.defineProperty(window, "matchMedia", {
 });
 
 import { App, shouldSkipInactiveTabRuntimeRender } from "./App";
+import { t } from "./i18n";
+import { HISTORY_INDEX_ORIGIN } from "./ui/history-page-state";
 
 async function emitRpc(line: Record<string, unknown>) {
   await act(async () => {
@@ -292,8 +324,12 @@ beforeEach(() => {
   tauri.listenFailures.clear();
   tauri.invoke.mockReset();
   tauri.invoke.mockImplementation(tauri.defaultInvoke);
+  transcriptMock.scrollTo.mockClear();
+  transcriptMock.scrollToIndex.mockClear();
   vi.mocked(openDialog).mockReset();
   vi.mocked(openDialog).mockResolvedValue(null as never);
+  vi.mocked(saveDialog).mockReset();
+  vi.mocked(saveDialog).mockResolvedValue(null);
   vi.mocked(openUrl).mockReset();
   vi.mocked(openUrl).mockResolvedValue(undefined);
   localStorage.clear();
@@ -307,6 +343,206 @@ afterEach(() => {
   delete document.documentElement.dataset.runtime;
   delete document.documentElement.dataset.nativeWindow;
   Object.defineProperty(window, "innerWidth", { value: originalViewportWidth, configurable: true });
+});
+
+describe("history paging UI wire", () => {
+  const history = { generation: "g1", beforeCursor: "before-50", hasMore: true, totalTurns: 50, sourceSize: 1000 };
+  const user = (turn: number) => ({ kind: "user", text: `history user ${turn}`, messageId: `hu${turn}`, turn, rollbackRef: { turn, role: "user" } });
+  const snapshot = () => ({
+    type: "$session_loaded", tabId: "tab-1", name: "paged", history, runtimeReady: false,
+    snapshot: { sessionId: "sid", bindingId: 2, reason: "load", payloadBytes: 0, truncated: false },
+    messages: [user(50)], sessionFiles: [],
+    carryover: { totalCostUsd: 0, cacheHitTokens: 0, cacheMissTokens: 0, totalCompletionTokens: 0 },
+  });
+  const page = (requestId: unknown) => ({
+    type: "$session_history_page", tabId: "tab-1", name: "paged", sessionId: "sid", bindingId: 2,
+    requestId, messages: [user(49), user(50)], history: { ...history, beforeCursor: "before-49" },
+  });
+  const pageCommands = () => sentRpcCommands().filter((cmd) => cmd.cmd === "session_history_page");
+  const olderButton = () => within(visibleMain()).getByRole("button", { name: t("thread.loadOlderHistory" as Parameters<typeof t>[0]) });
+  const messageText = (turn: number) => within(screen.getByTestId("virtuoso")).getByText(`history user ${turn}`, { selector: ".msg-text" });
+  async function start(overrides: Record<string, unknown> = {}) {
+    render(<App />);
+    await waitFor(() => expect(tauri.listeners.has("rpc:event")).toBe(true));
+    await emitBootstrap();
+    await emitRpc({ ...snapshot(), ...overrides });
+  }
+
+  it("opts into paging resync and waits for runtime readiness", async () => {
+    await start();
+    expect(sentRpcCommands()).toContainEqual({ cmd: "desktop_resync", historyPaging: true });
+    expect(visibleMain().querySelector("textarea")?.disabled).toBe(true);
+    await emitRpc({ type: "$ready", tabId: "tab-1" });
+    expect(visibleMain().querySelector("textarea")?.disabled).toBe(false);
+    expect(visibleMain().querySelector("[data-history-partial]")).not.toBeNull();
+  });
+
+  it("keeps a defined initial index after returning from paged history to a new chat", { retry: 0 }, async () => {
+    await start();
+    await emitRpc({ ...snapshot(), name: "fresh", history: undefined, messages: [], snapshot: { sessionId: "fresh-id", bindingId: 3, reason: "new", payloadBytes: 0, truncated: false } });
+    await emitRpc({ type: "user.message", tabId: "tab-1", id: 1, ts: "now", turn: 1, clientId: "fresh-client", text: "new chat first question" });
+    expect(within(visibleMain()).getByText("new chat first question", { selector: ".msg-text" })).toBeTruthy();
+    expect(transcriptMock.initialTopMostItemIndex).toBe(0);
+    await emitRpc({ type: "model.final", tabId: "tab-1", id: 2, ts: "now", turn: 1, content: "new chat first answer" });
+    expect(within(visibleMain()).getByText("new chat first answer")).toBeTruthy();
+  });
+
+  it("contains transcript margins inside measured Virtuoso rows", async () => {
+    await start();
+    const row = messageText(50).closest<HTMLElement>("[data-item-index]")!;
+    expect(row.style.display).toBe("flow-root");
+  });
+
+  it("keeps the mounted live row through a busy history rewrite", async () => {
+    await start();
+    await emitRpc({ type: "user.message", tabId: "tab-1", id: 1, ts: "now", turn: 51, clientId: "live-client", text: "history user 51" });
+    await emitRpc({ type: "model.delta", tabId: "tab-1", id: 2, ts: "now", turn: 51, channel: "content", text: "active answer" });
+    const row = messageText(51).closest("[data-item-index]");
+    await emitRpc({ ...snapshot(), busy: true, history: { ...history, generation: "g2" }, messages: [user(2)] });
+    expect(messageText(51).closest("[data-item-index]")).toBe(row);
+    expect(within(visibleMain()).getByText("active answer")).toBeTruthy();
+  });
+
+  it("keeps programmatic follow active but lets a wheel gesture reach history paging", async () => {
+    await start();
+    const scroller = screen.getByTestId("virtuoso");
+    Object.defineProperties(scroller, { scrollHeight: { value: 10_000, configurable: true }, clientHeight: { value: 800, configurable: true } });
+    scroller.scrollTop = 9_200;
+    fireEvent.scroll(scroller);
+    scroller.scrollTop = 0;
+    fireEvent.scroll(scroller);
+    expect(transcriptMock.followOutput?.()).toBe("auto");
+    fireEvent.wheel(scroller, { deltaY: -1 });
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    transcriptMock.scrollTo.mockClear();
+    await act(async () => transcriptMock.totalListHeightChanged?.());
+    expect(transcriptMock.followOutput?.()).toBe(false);
+    expect(transcriptMock.scrollTo).not.toHaveBeenCalled();
+    await act(async () => transcriptMock.startReached?.(HISTORY_INDEX_ORIGIN));
+    expect(pageCommands()).toHaveLength(1);
+  });
+
+  it.each([undefined, "Saved session title"])("keeps the session header stable across prepends (saved title: %s)", async (summary) => {
+    await start();
+    if (summary) await emitRpc({ type: "$sessions", tabId: "tab-1", items: [{ name: "paged", summary, messageCount: 100, mtime: "now" }] });
+    const heading = () => visibleMain().querySelector(".main-head h1")!.textContent;
+    expect(heading()).toBe(summary ?? "paged");
+    fireEvent.click(olderButton());
+    await waitFor(() => expect(pageCommands()).toHaveLength(1));
+    await emitRpc(page(pageCommands()[0].requestId));
+    expect(heading()).toBe(summary ?? "paged");
+  });
+
+  it("uses turn one as paged title fallback while preserving legacy first-user titles", async () => {
+    await start({ history: undefined });
+    expect(visibleMain().querySelector(".main-head h1")!.textContent).toBe("history user 50");
+    await emitRpc({ ...snapshot(), messages: [user(1), user(50)] });
+    expect(visibleMain().querySelector(".main-head h1")!.textContent).toBe("history user 1");
+  });
+
+  it("locks top paging to one request, retries the same cursor, and anchors stable rows", async () => {
+    await start();
+    const original = messageText(50).closest("[data-item-index]")!;
+    const oldIndex = original.getAttribute("data-item-index");
+    await act(async () => {
+      transcriptMock.startReached?.(HISTORY_INDEX_ORIGIN);
+      transcriptMock.startReached?.(HISTORY_INDEX_ORIGIN);
+    });
+    expect(pageCommands()).toHaveLength(1);
+    expect(pageCommands()[0]).toMatchObject({ name: "paged", sessionId: "sid", bindingId: 2, cursor: "before-50", generation: "g1" });
+    expect(visibleMain().querySelector("[aria-busy=true]")).not.toBeNull();
+    const firstRequest = pageCommands()[0].requestId;
+    await emitRpc({ ...page(firstRequest), error: "temporary read failure", messages: [], history: undefined });
+    expect(within(visibleMain()).getByRole("alert").textContent).toBe(t("thread.historyLoadFailed" as Parameters<typeof t>[0]));
+    await act(async () => transcriptMock.startReached?.(HISTORY_INDEX_ORIGIN));
+    expect(pageCommands()).toHaveLength(1);
+    fireEvent.click(within(visibleMain()).getByRole("button", { name: t("app.retryApiRequest") }));
+    await waitFor(() => expect(pageCommands()).toHaveLength(2));
+    expect(pageCommands()[1].cursor).toBe("before-50");
+    await emitRpc(page(firstRequest));
+    expect(screen.queryByText("history user 49")).toBeNull();
+    transcriptMock.scrollTo.mockClear();
+    await emitRpc(page(pageCommands()[1].requestId));
+    expect(messageText(50).closest("[data-item-index]")).toBe(original);
+    expect(original.getAttribute("data-item-index")).toBe(oldIndex);
+    expect(screen.getByTestId("virtuoso").getAttribute("data-first-item-index")).toBe(String(HISTORY_INDEX_ORIGIN - 1));
+    await act(async () => {
+      transcriptMock.atBottomStateChange?.(true);
+      transcriptMock.totalListHeightChanged?.();
+    });
+    expect(transcriptMock.followOutput?.()).toBe(false);
+    expect(transcriptMock.scrollTo).not.toHaveBeenCalled();
+    const rollback = messageText(49).closest(".thread-inner")!.querySelector<HTMLButtonElement>(".rollback-btn")!;
+    expect(rollback.disabled).toBe(false);
+    fireEvent.click(rollback);
+    await waitFor(() => expect(sentRpcCommands()).toContainEqual(expect.objectContaining({ cmd: "rollback_to_turn", turn: 49, role: "user", historyGeneration: "g1" })));
+  });
+
+  it("sends binding and generation on detail requests and leaves failed detail retryable", async () => {
+    await start({ messages: [{ ...user(50), displayTruncated: { originalChars: 9999 } }] });
+    fireEvent.click(within(visibleMain()).getByRole("button", { name: t("thread.loadFullTurn") }));
+    await waitFor(() => expect(sentRpcCommands().some((cmd) => cmd.cmd === "session_turn_load")).toBe(true));
+    const detail = sentRpcCommands().find((cmd) => cmd.cmd === "session_turn_load")!;
+    expect(detail).toMatchObject({ name: "paged", sessionId: "sid", bindingId: 2, generation: "g1", turn: 50 });
+    await emitRpc({ type: "$session_turn_loaded", tabId: "tab-1", name: "paged", sessionId: "sid", bindingId: 2,
+      requestId: detail.requestId, generation: "g1", turn: 50, messages: [], error: "Display limit exceeded" });
+    expect(messageText(50)).toBeTruthy();
+    expect(screen.getByText("Display limit exceeded")).toBeTruthy();
+    expect((within(visibleMain()).getByRole("button", { name: t("thread.loadFullTurn") }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("surfaces transport failure while respecting the shared transport lock", async () => {
+    await start();
+    tauri.invoke.mockImplementation((cmd, payload): ReturnType<typeof tauri.defaultInvoke> => {
+      if (cmd === "rpc_send" && JSON.parse((payload as { line: string }).line).cmd === "session_history_page") return Promise.reject<void>(new Error("offline"));
+      return tauri.defaultInvoke(cmd, payload);
+    });
+    fireEvent.click(olderButton());
+    await waitFor(() => expect(within(visibleMain()).getByRole("alert")).toBeTruthy());
+    expect((within(visibleMain()).getByRole("button", { name: t("app.retryApiRequest") }) as HTMLButtonElement).disabled).toBe(true);
+    expect(messageText(50)).toBeTruthy();
+  });
+
+  it("resets old pages on a correlated rewrite", async () => {
+    await start();
+    fireEvent.click(olderButton());
+    await waitFor(() => expect(pageCommands()).toHaveLength(1));
+    await emitRpc({ ...page(pageCommands()[0].requestId), error: "changed", messages: [], history: undefined });
+    fireEvent.click(within(visibleMain()).getByRole("button", { name: t("app.retryApiRequest") }));
+    await waitFor(() => expect(pageCommands()).toHaveLength(2));
+    await emitRpc({ ...page(pageCommands()[1].requestId), reset: true, messages: [user(2)], history: { ...history, generation: "g2" } });
+    expect(screen.queryByText("history user 50")).toBeNull();
+    expect(messageText(2)).toBeTruthy();
+    expect(screen.getByTestId("virtuoso").getAttribute("data-first-item-index")).toBe(String(HISTORY_INDEX_ORIGIN));
+  });
+
+  it.each([false, true])("keeps omitted user previews out of edit and rollback, exportRequired=%s", async (exportRequired) => {
+    await start({ messages: [{ ...user(49), rollbackRef: null, historyOmission: { byteLength: 50_000_000, exportRequired } }, user(50)] });
+    const row = messageText(49).closest(".thread-inner")!;
+    expect(row.querySelector(".edit-btn")).toBeNull();
+    expect(row.querySelector<HTMLButtonElement>(".rollback-btn")!.disabled).toBe(true);
+    const notice = row.querySelector<HTMLElement>("[data-history-omission]")!;
+    expect(within(notice).getByText(t("thread.historyFolded"))).toBeTruthy();
+    if (exportRequired) {
+      expect(within(notice).queryByRole("button", { name: t("thread.loadFullTurn") })).toBeNull();
+      vi.mocked(saveDialog).mockResolvedValue("/tmp/paged-export.md");
+      fireEvent.click(within(notice).getByRole("button", { name: t("app.header.exportMd") }));
+      await waitFor(() => expect(sentRpcCommands()).toContainEqual(expect.objectContaining({ cmd: "session_export", name: "paged", path: "/tmp/paged-export.md" })));
+      expect(sentRpcCommands().some((cmd) => cmd.cmd === "session_turn_load")).toBe(false);
+    } else {
+      fireEvent.click(within(notice).getByRole("button", { name: t("thread.loadFullTurn") }));
+      await waitFor(() => expect(sentRpcCommands()).toContainEqual(expect.objectContaining({ cmd: "session_turn_load", turn: 49 })));
+    }
+  });
+
+  it("carries omitted assistant metadata to an export-only folded notice", async () => {
+    await start({ messages: [user(50), { kind: "assistant", turn: 50, messageId: "a50", pending: false,
+      segments: [{ kind: "text", text: "bounded assistant preview" }], rollbackRef: null,
+      historyOmission: { byteLength: 50_000_000, exportRequired: true } }] });
+    const notice = visibleMain().querySelector<HTMLElement>("[data-history-omission]")!;
+    expect(within(notice).getByRole("button", { name: t("app.header.exportMd") })).toBeTruthy();
+    expect(within(visibleMain()).queryByRole("button", { name: t("thread.loadFullTurn") })).toBeNull();
+  });
 });
 
 describe("Web workbench layout", () => {
@@ -349,6 +585,7 @@ describe("Web workbench layout", () => {
         expect(sentRpcCommands()).toContainEqual(
           expect.objectContaining({
             cmd: "session_load",
+            historyPaging: true,
             name: "target-web-session",
             workspaceDir: workspace ?? "/tmp/web-layout",
             openInNewTab: false,

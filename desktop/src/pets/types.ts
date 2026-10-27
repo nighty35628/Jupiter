@@ -29,6 +29,7 @@ export type PetDefinition = {
   source: "builtin" | "custom";
   spriteUrl: string;
   thumbnailUrl?: string;
+  previewUrl?: string;
   atlasWidth: number;
   atlasHeight: number;
   pixelated: boolean;

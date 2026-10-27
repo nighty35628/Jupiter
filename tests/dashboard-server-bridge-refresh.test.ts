@@ -13,6 +13,7 @@ const settingsResponse = {
   budgetUsd: null,
   model: "deepseek-v4-pro",
   webSearchEngine: "bing",
+  webFetchEngine: "deepseek",
   subagentModels: {},
   baseUrl: "",
   apiKey: "",
@@ -119,6 +120,17 @@ describe("dashboard server bridge refresh", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("preserves the separately selected fetch engine in server settings events", async () => {
+    const { events } = await loadBridge();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "$settings",
+        webSearchEngine: "bing",
+        webFetchEngine: "deepseek",
+      }),
+    );
   });
 
   it("emits the current server session in the session snapshot", async () => {

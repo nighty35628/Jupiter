@@ -442,6 +442,48 @@ describe("Jupiter Web Beta server", () => {
     ]);
   });
 
+  it("allows scoped history reads without a writer lease but keeps mutations fenced", async () => {
+    const { handle, sidecar } = await start();
+    const auth = await authenticate(handle);
+    await connectEvents(handle, auth, "history_reader");
+    const observerAuth = { ...auth, lease: undefined };
+    const headers = { ...mutationHeaders(observerAuth, "history_reader"), origin: handle.origin };
+    const read = {
+      cmd: "session_history_page",
+      tabId: "tab-history",
+      name: "history",
+      sessionId: "session-history",
+      bindingId: 2,
+      requestId: "history_read_1",
+    };
+    const response = await fetch(`${handle.baseUrl}/api/rpc`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ commandId: "command_history_read_1", payload: read }),
+    });
+    expect(response.status).toBe(202);
+    expect(sidecar.commands).toContainEqual(
+      expect.objectContaining({
+        ...read,
+        __web: expect.objectContaining({ access: "read", fence: 0 }),
+      }),
+    );
+    for (const cmd of ["user_input", "rollback_to_turn", "session_delete", "settings_save"]) {
+      const denied = await fetch(`${handle.baseUrl}/api/rpc`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ commandId: `command_history_${cmd}`, payload: { ...read, cmd } }),
+      });
+      expect(denied.status).toBe(409);
+    }
+    const noCsrf = await fetch(`${handle.baseUrl}/api/rpc`, {
+      method: "POST",
+      headers: { ...headers, "x-jupiter-csrf": "wrong" },
+      body: JSON.stringify({ commandId: "command_history_read_2", payload: read }),
+    });
+    expect(noCsrf.status).toBe(403);
+  });
+
   it("protects and serves whitelisted Desktop host reads", async () => {
     const { handle } = await start();
     const auth = await authenticate(handle);

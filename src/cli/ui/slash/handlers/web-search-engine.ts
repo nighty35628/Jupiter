@@ -1,4 +1,6 @@
 import {
+  isWebFetchEngine,
+  isWebSearchEngine,
   loadBaiduApiKey,
   loadBraveApiKey,
   loadExaApiKey,
@@ -8,6 +10,7 @@ import {
   loadTavilyApiKey,
   readConfig,
   resolveDeepSeekSearchCredential,
+  webFetchEngine,
   webSearchEndpoint,
   webSearchEngine,
   writeConfig,
@@ -17,21 +20,17 @@ import type { SlashHandler } from "../dispatch.js";
 
 export const handlers: Record<string, SlashHandler> = {
   "search-engine": (args, _loop, ctx) => {
+    if (args[0] === "fetch") {
+      const mode = args[1];
+      if (!isWebFetchEngine(mode))
+        return { info: t("handlers.webSearchEngine.fetchUsage", { engine: webFetchEngine() }) };
+      const cfg = readConfig();
+      cfg.webFetchEngine = mode;
+      writeConfig(cfg);
+      return { info: t("handlers.webSearchEngine.fetchConfirmed", { engine: mode }) };
+    }
     const engine = args[0];
-    if (
-      !engine ||
-      (engine !== "bing" &&
-        engine !== "bing-intl" &&
-        engine !== "searxng" &&
-        engine !== "metaso" &&
-        engine !== "baidu" &&
-        engine !== "tavily" &&
-        engine !== "perplexity" &&
-        engine !== "exa" &&
-        engine !== "brave" &&
-        engine !== "ollama" &&
-        engine !== "deepseek-native")
-    ) {
+    if (!isWebSearchEngine(engine)) {
       return {
         info: [
           t("handlers.webSearchEngine.currentEngine", { engine: webSearchEngine() }),
@@ -50,6 +49,8 @@ export const handlers: Record<string, SlashHandler> = {
           t("handlers.webSearchEngine.usageOllama"),
           t("handlers.webSearchEngine.usageBrave"),
           t("handlers.webSearchEngine.usageDeepSeekNative"),
+          t("handlers.webSearchEngine.usageDeepSeek"),
+          t("handlers.webSearchEngine.fetchUsage", { engine: webFetchEngine() }),
           "",
           t("handlers.webSearchEngine.alias"),
           "",
@@ -70,6 +71,7 @@ export const handlers: Record<string, SlashHandler> = {
       "ollama",
       "brave",
       "deepseek-native",
+      "deepseek",
     ]);
     if (apiKeyEngines.has(engine)) {
       const KEY_LOADERS: Record<string, () => string | undefined> = {
@@ -81,6 +83,7 @@ export const handlers: Record<string, SlashHandler> = {
         metaso: loadMetasoApiKey,
         baidu: loadBaiduApiKey,
         "deepseek-native": () => resolveDeepSeekSearchCredential().apiKey,
+        deepseek: () => resolveDeepSeekSearchCredential().apiKey,
       };
       const ENV_VARS: Record<string, string> = {
         tavily: "TAVILY_API_KEY",
@@ -91,6 +94,7 @@ export const handlers: Record<string, SlashHandler> = {
         metaso: "METASO_API_KEY",
         baidu: "BAIDU_API_KEY or QIANFAN_API_KEY",
         "deepseek-native": "DEEPSEEK_SEARCH_API_KEY",
+        deepseek: "DEEPSEEK_SEARCH_API_KEY",
       };
       const CONFIG_KEYS: Record<string, string> = {
         tavily: "tavilyApiKey",
@@ -101,6 +105,7 @@ export const handlers: Record<string, SlashHandler> = {
         metaso: "metasoApiKey",
         baidu: "baiduApiKey",
         "deepseek-native": "deepseekSearchApiKey",
+        deepseek: "deepseekSearchApiKey",
       };
       const loadKey = KEY_LOADERS[engine] ?? loadMetasoApiKey;
 

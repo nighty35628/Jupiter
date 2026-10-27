@@ -115,6 +115,235 @@ function initialState(): Parameters<typeof reduce>[0] {
   };
 }
 
+describe("prompt prediction after shared turn commit", { retry: 0 }, () => {
+  const prediction = { completionId: "prediction-1", text: "Run the relevant tests." };
+  const base = () => ({ ...initialState(), ready: true, currentSession: "chat", currentSessionId: "sid", conversationViewId: "view-a", bindingId: 1, historyVersion: 3 });
+  const snapshot = (reason: SessionLoadedEvent["snapshot"]["reason"] = "resync", version = 4, view = "view-a"): SessionLoadedEvent => ({
+    type: "$session_loaded", name: "chat", runtimeReady: true, busy: false,
+    messages: [{ kind: "user", text: "Question", turn: 1, messageId: "u-turn-a", turnId: "turn-a", conversationViewId: view }, { kind: "assistant", turn: 1, messageId: "a-turn-a", turnId: "turn-a", conversationViewId: view, pending: false, segments: [{ kind: "text", text: "Answer" }] }],
+    snapshot: { sessionId: "sid", bindingId: 1, conversationViewId: "view-a", historyVersion: version, reason, payloadBytes: 0, truncated: false },
+    sessionFiles: [], carryover: { totalCostUsd: 0, cacheHitTokens: 0, cacheMissTokens: 0, totalCompletionTokens: 0 },
+  });
+  const completed = (sourceViewId = "view-a") => {
+    let state = reduce(base(), { t: "incoming", event: { type: "$shared_session_updated", sessionId: "sid", historyVersion: 4, sourceViewId, sourceTurnId: "turn-a" } });
+    state = reduce(state, { t: "incoming", event: { type: "$prompt_prediction_eligible", completionId: prediction.completionId } });
+    return state;
+  };
+
+  it.each([false, true])("retains a new own-turn prediction through its delayed committed snapshot (response received=%s)", (received) => {
+    let state = completed();
+    if (received) state = reduce(state, { t: "incoming", event: { type: "$prompt_prediction", ...prediction } });
+    const next = reduce(state, { t: "incoming", event: snapshot() });
+    expect(next.promptPrediction).toEqual(received ? prediction : { completionId: prediction.completionId });
+    expect(next.historyVersion).toBe(4);
+    expect(next.messages).toHaveLength(2);
+  });
+
+  it.each(["load", "compact", "rollback"] as const)("still clears prediction for %s snapshots", (reason) => {
+    expect(reduce(completed(), { t: "incoming", event: snapshot(reason) }).promptPrediction).toBeUndefined();
+  });
+  it("does not retain predictions across a sibling commit or an unproven own snapshot", () => {
+    expect(reduce(completed("view-b"), { t: "incoming", event: snapshot("resync", 4, "view-b") }).promptPrediction).toBeUndefined();
+    expect(reduce(completed(), { t: "incoming", event: { ...snapshot(), messages: [] } }).promptPrediction).toBeUndefined();
+    expect(reduce(completed(), { t: "incoming", event: snapshot("resync", 5) }).promptPrediction).toBeUndefined();
+  });
+  it("accepts older unversioned snapshot events without retaining stale predictions", () => {
+    const { snapshot: _metadata, ...legacy } = snapshot();
+    const next = reduce(completed(), { t: "incoming", event: legacy as SessionLoadedEvent });
+    expect(next.promptPrediction).toBeUndefined();
+  });
+});
+
+describe("history paging", () => {
+  const history = { generation: "g1", beforeCursor: "older", hasMore: true, totalTurns: 50, sourceSize: 1000 };
+  const user = (turn: number) => ({ kind: "user" as const, text: `u${turn}`, turn, messageId: `u${turn}`, rollbackRef: { turn, role: "user" as const } });
+  const snapshot = (generation = "g1", messages = [user(50)]): SessionLoadedEvent => ({
+    type: "$session_loaded", name: "paged", messages,
+    history: { ...history, generation }, runtimeReady: false,
+    snapshot: { sessionId: "sid", bindingId: 1, reason: "load", payloadBytes: 0, truncated: false },
+    sessionFiles: [], carryover: { totalCostUsd: 0, cacheHitTokens: 0, cacheMissTokens: 0, totalCompletionTokens: 0 },
+  });
+  const loaded = () => reduce(initialState(), { t: "incoming", event: snapshot() });
+  const begin = (state = loaded(), requestId = "p1") => reduce(state, { t: "begin_history_page", requestId });
+  const page = (requestId = "p1") => ({
+    type: "$session_history_page" as const, name: "paged", sessionId: "sid", bindingId: 1, requestId,
+    messages: [user(49), user(50)], history: { ...history, beforeCursor: "older-again" },
+  });
+
+  it("prepends unique rows without replacing forms or the live tail, and keeps the anchor", () => {
+    const live = reduce(loaded(), { t: "send_user", text: "live", clientId: "live" });
+    const pending = begin(live);
+    const next = reduce(pending, { t: "incoming", event: page() });
+    expect(next.messages.map((m) => m.kind === "user" && m.text)).toEqual(["u49", "u50", "live"]);
+    expect(next.messages[1]).toBe(live.messages[0]);
+    expect(next.messages[2]).toBe(live.messages[1]);
+    expect(next.history!.firstItemIndex).toBe(pending.history!.firstItemIndex - 1);
+    expect(reduce(next, { t: "incoming", event: page() })).toBe(next);
+  });
+
+  it.each([{ name: "other" }, { sessionId: "other" }, { bindingId: 2 }, { requestId: "old" }, { history: { ...history, generation: "old" } }])(
+    "rejects stale or rebound page %j", (patch) => {
+      const state = begin();
+      expect(reduce(state, { t: "incoming", event: { ...page(), ...patch } })).toBe(state);
+    },
+  );
+
+  it("keeps the cursor after failure and permits one retry", () => {
+    const state = begin();
+    expect(begin(state, "second")).toBe(state);
+    const failed = reduce(state, { t: "incoming", event: { ...page(), messages: [], history: undefined, error: "read failed" } });
+    expect(failed.history).toMatchObject({ beforeCursor: "older", error: "read failed", pending: undefined });
+    const retried = begin(failed, "retry");
+    expect(retried.history!.pending).toMatchObject({ requestId: "retry", cursor: "older", generation: "g1" });
+    expect(reduce(retried, { t: "incoming", event: page("retry") }).messages).toHaveLength(2);
+  });
+
+  it("resets old pages and expanded detail on a new generation snapshot", () => {
+    const state = reduce(begin(), { t: "incoming", event: page() });
+    const pending = reduce(begin(state, "late"), { t: "begin_turn_load", turn: 49, requestId: "detail" });
+    const next = reduce(pending, { t: "incoming", event: { ...snapshot("g2", [user(2)]), type: "$session_reconciled" } });
+    expect(next.messages).toMatchObject([{ turn: 2 }]);
+    expect(next.pendingTurnLoads).toEqual({});
+    expect(next.history!.pending).toBeUndefined();
+    expect(reduce(next, { t: "incoming", event: page("late") })).toBe(next);
+  });
+
+  it("accepts a correlated reset page but rejects its replay", () => {
+    const state = begin();
+    const reset = { ...page(), reset: true, messages: [user(2)], history: { ...history, generation: "g2" } };
+    const next = reduce(state, { t: "incoming", event: reset });
+    expect(next.messages).toMatchObject([{ turn: 2 }]);
+    expect(next.history!.generation).toBe("g2");
+    expect(reduce(next, { t: "incoming", event: reset })).toBe(next);
+  });
+
+  it("preserves older pages across same-generation latest snapshots", () => {
+    const state = reduce(begin(), { t: "incoming", event: page() });
+    const next = reduce(state, { t: "incoming", event: { ...snapshot(), type: "$session_reconciled" } });
+    expect(next.messages).toEqual(state.messages);
+    expect(next.messages[0]).toBe(state.messages[0]);
+    expect(next.history!.beforeCursor).toBe("older-again");
+  });
+
+  it("holds composer readiness until ready after a not-ready snapshot", () => {
+    const next = reduce({ ...initialState(), ready: true }, { t: "incoming", event: snapshot() });
+    expect(next.ready).toBe(false);
+    expect(reduce(next, { t: "incoming", event: { type: "$ready" } }).ready).toBe(true);
+  });
+
+  it("uses absolute rollback refs in partial arrays, including explicit null", () => {
+    const state = loaded();
+    const message = state.messages[0];
+    if (message.kind !== "user") throw new Error("expected user");
+    expect(rollbackTargetForMessage(state.messages, 0)).toEqual({ turn: 50, role: "user" });
+    expect(rollbackTargetForMessage([{ ...message, rollbackRef: null }], 0)).toBeNull();
+    expect(canRollbackMessage([{ ...message, rollbackRef: null }, ...state.messages], 0, false)).toBe(false);
+  });
+
+  it("rejects stale generation details and pages while switching sessions", () => {
+    const state = reduce(loaded(), { t: "begin_turn_load", turn: 50, requestId: "detail" });
+    expect(reduce(state, { t: "incoming", event: { type: "$session_turn_loaded", name: "paged", sessionId: "sid", bindingId: 1, requestId: "detail", turn: 50, generation: "g0", messages: [user(50)] } })).toBe(state);
+    const switching = reduce(begin(state), { t: "begin_session_load", requestId: "switch" });
+    expect(reduce(switching, { t: "incoming", event: page() })).toBe(switching);
+  });
+
+  it("clears a failed detail request without replacing messages or marking it expanded", () => {
+    const state = reduce(loaded(), { t: "begin_turn_load", turn: 50, requestId: "detail" });
+    const next = reduce(state, { t: "incoming", event: {
+      type: "$session_turn_loaded", name: "paged", sessionId: "sid", bindingId: 1,
+      requestId: "detail", turn: 50, generation: "g1", messages: [], error: "Turn exceeds display limit",
+    } });
+    expect(next.pendingTurnLoads).toEqual({});
+    expect(next.expandedTurns).toEqual([]);
+    expect(next.messages[0]).toBe(state.messages[0]);
+    expect(next.messages.at(-1)).toMatchObject({ kind: "error", recoverable: true, message: "Turn exceeds display limit" });
+  });
+
+  it("upserts persisted identities over live aliases without duplicating a streaming turn", () => {
+    const state = reduce(loaded(), { t: "send_user", text: "live", clientId: "client51" });
+    const streaming = reduce(state, { t: "incoming", event: { type: "model.delta", id: 51, ts: "2026-10-26T00:00:00Z", turn: 51, channel: "content", text: "live answer" } });
+    const next = reduce(streaming, { t: "incoming", event: { ...snapshot(), type: "$session_reconciled", messages: [
+      user(50), { ...user(51), clientId: "client51", text: "live" },
+      { kind: "assistant", turn: 51, messageId: "a-51", segments: [{ kind: "text", text: "live" }], pending: false, rollbackRef: { turn: 51, role: "assistant" } },
+    ] } });
+    expect(next.messages).toHaveLength(3);
+    expect(next.messages[2]).toMatchObject({ pending: true, segments: [{ kind: "text", text: "live answer" }] });
+    expect(chatMessageKey(next.messages[1], 1)).toBe(chatMessageKey(streaming.messages[1], 1));
+    expect(chatMessageKey(next.messages[2], 2)).toBe(chatMessageKey(streaming.messages[2], 2));
+    expect(rollbackTargetForMessage(next.messages, 1)).toEqual({ turn: 51, role: "user" });
+  });
+
+  it("uses the authoritative committed turn for new live rollback refs in a paged session", () => {
+    const state = reduce(loaded(), { t: "send_user", text: "live", clientId: "client51" });
+    const next = reduce(state, { t: "incoming", event: {
+      type: "$turn_committed", name: "paged", sessionId: "sid", bindingId: 1, turn: 51,
+      clientId: "client51", sessionFiles: [], carryover: snapshot().carryover,
+    } });
+    expect(rollbackTargetForMessage(next.messages, 1)).toEqual({ turn: 51, role: "user" });
+    expect(next.messages[0]).toBe(state.messages[0]);
+  });
+
+  it.each(["$session_loaded", "$session_reconciled"] as const)("keeps the active live tail and forms across a same-binding busy rewrite (%s)", (type) => {
+    let state = reduce(begin(), { t: "incoming", event: page() });
+    state = reduce(state, { t: "send_user", text: "live question", clientId: "active-client" });
+    state = reduce(state, { t: "incoming", event: { type: "model.delta", id: 1, ts: "now", turn: 51, channel: "content", text: "live answer" } });
+    state = { ...state, pendingConfirms: [{ id: 7, kind: "run_command", command: "pwd", prompt: makeShellPrompt("pwd") }] };
+    const next = reduce(state, { t: "incoming", event: { ...snapshot("g2", [user(2)]), type, busy: true } });
+    expect(next.messages).toHaveLength(3);
+    expect(next.messages[0]).toMatchObject({ turn: 2 });
+    expect(next.messages[1]).toBe(state.messages[2]);
+    expect(next.messages[2]).toBe(state.messages[3]);
+    expect(next.pendingConfirms).toBe(state.pendingConfirms);
+    expect(next.history!.generation).toBe("g2");
+    expect(next.busy).toBe(true);
+  });
+
+  it("deduplicates the rebased live turn in a rewrite and adopts only new-generation rollback refs", () => {
+    let state = reduce(loaded(), { t: "send_user", text: "live question", clientId: "active-client" });
+    state = reduce(state, { t: "incoming", event: { type: "model.delta", id: 1, ts: "now", turn: 51, channel: "content", text: "live answer" } });
+    const next = reduce(state, { t: "incoming", event: { ...snapshot("g2", [user(2)]), busy: true, messages: [
+      user(2), { ...user(3), text: "live question", clientId: "active-client" },
+      { kind: "assistant", messageId: "a3", turn: 3, pending: false, segments: [{ kind: "text", text: "live" }], rollbackRef: { turn: 3, role: "assistant" } },
+    ] } });
+    expect(next.messages).toHaveLength(3);
+    expect(next.messages[1]).toMatchObject({ turn: 3, rollbackRef: { turn: 3, role: "user" } });
+    expect(next.messages[2]).toMatchObject({ turn: 3, pending: true, segments: [{ kind: "text", text: "live answer" }] });
+    expect(chatMessageKey(next.messages[1], 1)).toBe(chatMessageKey(state.messages[1], 1));
+    expect(chatMessageKey(next.messages[2], 2)).toBe(chatMessageKey(state.messages[2], 2));
+  });
+
+  it("preserves the live tail on a correlated history reset page too", () => {
+    const live = reduce(loaded(), { t: "send_user", text: "live question", clientId: "live" });
+    const next = reduce(begin(live), { t: "incoming", event: { ...page(), reset: true, history: { ...history, generation: "g2" }, messages: [user(2)] } });
+    expect(next.messages).toHaveLength(2);
+    expect(next.messages[1]).toBe(live.messages[1]);
+  });
+
+  it.each([false, true])("accepts generation-tagged detail for legacy snapshots and clears pending, error=%s", (error) => {
+    const state = { ...loaded(), history: undefined, pendingTurnLoads: { 50: "legacy-detail" } };
+    const next = reduce(state, { t: "incoming", event: { type: "$session_turn_loaded", name: "paged", sessionId: "sid", bindingId: 1,
+      turn: 50, requestId: "legacy-detail", generation: "g1", messages: [user(50)], ...(error ? { error: "display limit" } : {}) } });
+    expect(next.pendingTurnLoads).toEqual({});
+    expect(next.expandedTurns).toEqual(error ? [] : [50]);
+    if (error) expect(next.messages.at(-1)).toMatchObject({ recoverable: true, message: "display limit" });
+  });
+
+  it("upserts first-turn detail by identity without duplicating or discarding leading orphans", () => {
+    const orphan = (turn: number) => ({ kind: "assistant" as const, messageId: `a-orphan-${turn}`, turn, pending: false as const,
+      segments: [{ kind: "text" as const, text: `orphan ${turn}` }], rollbackRef: null });
+    const state = reduce(initialState(), { t: "incoming", event: { ...snapshot(), messages: [orphan(1), orphan(2), orphan(3), user(1), user(2)] } });
+    const pending = reduce(state, { t: "begin_turn_load", turn: 1, requestId: "detail" });
+    const next = reduce(pending, { t: "incoming", event: { type: "$session_turn_loaded", name: "paged", sessionId: "sid", bindingId: 1,
+      turn: 1, requestId: "detail", generation: "g1", messages: [orphan(1), orphan(2), { ...user(1), text: "full first turn" }] } });
+    expect(next.messages.map((message, index) => chatMessageKey(message, index))).toEqual([
+      "assistant-a-orphan-1", "assistant-a-orphan-2", "assistant-a-orphan-3", "user-u1", "user-u2",
+    ]);
+    expect(next.messages[2]).toBe(state.messages[2]);
+    expect(next.messages[3]).toMatchObject({ text: "full first turn" });
+    expect(next.messages[4]).toBe(state.messages[4]);
+  });
+});
+
 function loadedSnapshot(
   reason: SessionLoadedEvent["snapshot"]["reason"] = "load",
   bindingId = 1,
@@ -454,6 +683,23 @@ describe("Desktop App reducer — usage", () => {
     expect(next.messages).toEqual([
       { kind: "user", text: "older", clientId: "c-1", turn: 1 },
     ]);
+  });
+
+  it("removes only a backend-confirmed unaccepted preflight message on cancellation", () => {
+    const state = reduce(
+      { ...initialState(), messages: [{ kind: "user", text: "saved", clientId: "saved", turn: 1 }] },
+      { t: "send_user", text: "cancel before admission", clientId: "preflight" },
+    );
+    const cancelled = reduce(state, {
+      t: "incoming",
+      event: { type: "$turn_complete", unacceptedClientId: "preflight" },
+    });
+    expect(cancelled.busy).toBe(false);
+    expect(cancelled.messages).toEqual([{ kind: "user", text: "saved", clientId: "saved", turn: 1 }]);
+    const recovered = reduce(cancelled, { t: "send_user", text: "try again", clientId: "recovery" });
+    expect(recovered.messages.at(-1)).toMatchObject({ clientId: "recovery", turn: 2 });
+    const normalCompletion = reduce(state, { t: "incoming", event: { type: "$turn_complete" } });
+    expect(normalCompletion.messages).toHaveLength(2);
   });
 
   it("clears stale approvals when the shared RPC process exits", () => {

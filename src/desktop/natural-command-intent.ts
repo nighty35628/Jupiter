@@ -15,6 +15,7 @@ export async function classifyDesktopNaturalCommandIntent(
   client: DeepSeekClient,
   opts: { model: string; text: string; signal?: AbortSignal },
 ): Promise<DesktopNaturalCommandIntent> {
+  opts.signal?.throwIfAborted();
   const text = opts.text.trim();
   if (!text) return { command: "none" };
   const messages: ChatMessage[] = [
@@ -31,11 +32,13 @@ export async function classifyDesktopNaturalCommandIntent(
       maxTokens: 32,
       signal: opts.signal,
     });
+    opts.signal?.throwIfAborted();
     const parsed = JSON.parse(response.content.trim()) as Partial<DesktopNaturalCommandIntent>;
     return parsed.command === "compact_history"
       ? { command: "compact_history" }
       : { command: "none" };
   } catch {
+    opts.signal?.throwIfAborted();
     return { command: "none" };
   }
 }

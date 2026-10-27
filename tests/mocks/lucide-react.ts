@@ -2,6 +2,7 @@ import { vi } from "vitest";
 
 export const Check = vi.fn(() => null);
 export const ChevronDown = vi.fn(() => null);
+export const ChevronRight = vi.fn(() => null);
 export const ClipboardCopy = vi.fn(() => null);
 export const Copy = vi.fn(() => null);
 export const Download = vi.fn(() => null);

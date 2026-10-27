@@ -18,6 +18,7 @@ import {
   providerHttpErrorFromResponse,
   sanitizeProviderErrorText,
 } from "./provider-http-error.js";
+import { normalizeOfficialDeepSeekModel } from "./provider-models.js";
 import { type RetryOptions, fetchWithRetry } from "./retry.js";
 import { resolveContextTokens } from "./telemetry/stats.js";
 import { countRequestTokens } from "./tokenizer.js";
@@ -180,7 +181,14 @@ export function projectMessagesForDialect(
   dialect: ProviderDialect,
 ): ChatMessage[] {
   return messages.map(
-    ({ attachments: _images, sourceAttachments: _sources, clientId: _id, ...message }) => {
+    ({
+      attachments: _images,
+      sourceAttachments: _sources,
+      clientId: _id,
+      turnId: _turnId,
+      conversationViewId: _viewId,
+      ...message
+    }) => {
       if (dialect === "deepseek") return message;
       const { reasoning_content: _reasoning, prefix: _prefix, ...plain } = message;
       return plain;
@@ -347,7 +355,7 @@ export class DeepSeekClient {
 
   private buildPayload(opts: ChatRequestOptions, stream: boolean, messages?: WireMessage[]) {
     const payload: Record<string, unknown> = {
-      model: opts.model,
+      model: this.officialDeepSeek ? normalizeOfficialDeepSeekModel(opts.model) : opts.model,
       messages: messages ?? projectMessagesForDialect(opts.messages, this.dialect),
       stream,
     };
@@ -512,6 +520,15 @@ export class DeepSeekClient {
       if (!resp.ok) return null;
       const data = (await resp.json()) as ModelList;
       if (!data || !Array.isArray(data.data)) return null;
+      if (this.officialDeepSeek) {
+        const seen = new Set<string>();
+        data.data = data.data.flatMap((entry) => {
+          const id = normalizeOfficialDeepSeekModel(entry.id);
+          if (seen.has(id)) return [];
+          seen.add(id);
+          return [{ ...entry, id }];
+        });
+      }
       return data;
     } catch {
       return null;

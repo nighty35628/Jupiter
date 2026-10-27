@@ -5,6 +5,9 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { parse as parseHtml } from "node-html-parser";
 import {
+  type ResolvedDeepSeekSearchCredential,
+  type WebFetchEngine,
+  type WebSearchEngine,
   loadBaiduApiKey,
   loadBraveApiKey,
   loadExaApiKey,
@@ -12,12 +15,34 @@ import {
   loadOllamaApiKey,
   loadPerplexityApiKey,
   loadTavilyApiKey,
+  webFetchEngine as loadWebFetchEngine,
   webSearchEndpoint as loadWebSearchEndpoint,
   webSearchEngine as loadWebSearchEngine,
   resolveDeepSeekSearchCredential,
 } from "../config.js";
 import { t } from "../i18n/index.js";
-import type { AuxiliaryUsageReport, ToolRegistry } from "../tools.js";
+import type { AuxiliaryUsageReport, ServiceCallReport, ToolRegistry } from "../tools.js";
+import { fetchDeepSeek, searchDeepSeek } from "./deepseek-service.js";
+import { abortable, discardWebBody, readWebBody, withWebDeadline } from "./web-response.js";
+
+/** Captured synchronously before any network await; never stored in logs or results. */
+interface WebCallSnapshot {
+  readonly engine: WebSearchEngine;
+  readonly fetchEngine: WebFetchEngine;
+  readonly endpoint: string;
+  readonly credential: Readonly<ResolvedDeepSeekSearchCredential>;
+  readonly ollamaApiKey?: string;
+}
+
+function snapshotWebCall(configPath?: string): WebCallSnapshot {
+  return Object.freeze({
+    engine: loadWebSearchEngine(configPath),
+    fetchEngine: loadWebFetchEngine(configPath),
+    endpoint: loadWebSearchEndpoint(configPath),
+    credential: Object.freeze(resolveDeepSeekSearchCredential(configPath)),
+    ollamaApiKey: loadOllamaApiKey(configPath),
+  });
+}
 
 export interface SearchResult {
   title: string;
@@ -36,6 +61,9 @@ export interface PageContent {
 }
 
 export interface WebFetchOptions {
+  engine?: WebFetchEngine;
+  snapshot?: WebCallSnapshot;
+  onServiceCall?: (report: ServiceCallReport) => void;
   /** Max bytes of extracted text. Defaults to 32_000 to match tool-result cap. */
   maxChars?: number;
   /** Timeout in ms. Defaults to 15_000. */
@@ -46,23 +74,15 @@ export interface WebFetchOptions {
 }
 
 export interface WebSearchOptions {
+  snapshot?: WebCallSnapshot;
+  timeoutMs?: number;
+  onServiceCall?: (report: ServiceCallReport) => void;
   topK?: number;
   signal?: AbortSignal;
   /** Config path for provider-specific keys. Defaults to ~/.jupiter/config.json. */
   configPath?: string;
   /** Backend engine: "bing" (scrapes cn.bing.com HTML — default, works from CN without proxy), "bing-intl" (www.bing.com, indexes international sites), "searxng" (self-hosted SearXNG), "metaso" (Metaso API), "baidu" (Baidu AI Search API), "tavily" (LLM-friendly JSON API), "perplexity" (Perplexity AI), "exa" (Exa API), "brave" (Brave Search API), or "ollama" (Ollama cloud web search). */
-  engine?:
-    | "bing"
-    | "bing-intl"
-    | "searxng"
-    | "metaso"
-    | "baidu"
-    | "tavily"
-    | "perplexity"
-    | "exa"
-    | "brave"
-    | "ollama"
-    | "deepseek-native";
+  engine?: WebSearchEngine;
   /** Base URL for SearXNG. Default http://localhost:8080. */
   endpoint?: string;
   /** Receives billable usage from search engines that issue an auxiliary model call. */
@@ -162,6 +182,12 @@ function isPrivateIpv6(address: string): boolean {
   const normalized = normalizeIpv6(address);
   const mapped = /^::ffff:(?:0+:)?(\d+\.\d+\.\d+\.\d+)$/i.exec(normalized);
   if (mapped) return isPrivateIpv4(mapped[1]!);
+  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(normalized);
+  if (mappedHex) {
+    const high = Number.parseInt(mappedHex[1]!, 16);
+    const low = Number.parseInt(mappedHex[2]!, 16);
+    return isPrivateIpv4(`${high >>> 8}.${high & 255}.${low >>> 8}.${low & 255}`);
+  }
   return (
     normalized === "::" ||
     normalized === "::1" ||
@@ -188,7 +214,10 @@ async function assertPublicHttpUrl(rawUrl: string): Promise<URL> {
     throw new Error(`web_fetch refuses non-HTTP URL: ${url.protocol}`);
   }
 
-  const host = url.hostname;
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) {
+    throw new Error(`web_fetch refuses internal or reserved host: ${host}`);
+  }
   const literal = isIP(host);
   if (literal) {
     if (isInternalAddress(host)) {
@@ -223,6 +252,14 @@ export async function webSearch(
   query: string,
   opts: WebSearchOptions = {},
 ): Promise<SearchResult[]> {
+  if (opts.engine === "deepseek") {
+    return searchDeepSeek(query, clampInt(opts.topK, 1, 50, DEFAULT_TOPK), {
+      credential: opts.snapshot?.credential ?? resolveDeepSeekSearchCredential(opts.configPath),
+      signal: opts.signal,
+      timeoutMs: opts.timeoutMs,
+      onServiceCall: opts.onServiceCall,
+    });
+  }
   if (opts.engine === "deepseek-native") {
     return searchDeepSeekNative(query, opts);
   }
@@ -411,7 +448,7 @@ async function searchDeepSeekNative(
   opts: WebSearchOptions = {},
 ): Promise<SearchResult[]> {
   const topK = Math.max(1, Math.min(10, opts.topK ?? DEFAULT_TOPK));
-  const credential = resolveDeepSeekSearchCredential(opts.configPath);
+  const credential = opts.snapshot?.credential ?? resolveDeepSeekSearchCredential(opts.configPath);
   if (!credential.apiKey || !credential.source) {
     if (credential.state === "needs_dedicated_key") {
       throw new Error(
@@ -1125,66 +1162,60 @@ async function webFetchOllama(
   url: string,
   opts: WebFetchOptions = {},
 ): Promise<PageContent & { links?: string[] }> {
-  const apiKey = loadOllamaApiKey(opts.configPath);
+  const apiKey = opts.snapshot ? opts.snapshot.ollamaApiKey : loadOllamaApiKey(opts.configPath);
   if (!apiKey) {
     throw new Error(t("webErrors.fetchOllamaMissingKey"));
   }
 
-  const ctrl = new AbortController();
-  const timeout = setTimeout(
-    () =>
-      ctrl.abort(
-        new Error(
-          t("webErrors.fetchTimeout", { ms: opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS, url }),
-        ),
-      ),
+  return withWebDeadline(
     opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+    opts.signal,
+    async (signal) => {
+      const resp = await abortable(
+        fetch(OLLAMA_WEB_FETCH_ENDPOINT, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ url }),
+          signal,
+          redirect: "error",
+        }),
+        signal,
+      );
+
+      if (!resp.ok) {
+        discardWebBody(resp);
+        if (resp.status === 401 || resp.status === 403) {
+          throw new Error(t("webErrors.fetchOllamaUnauthorized"));
+        }
+        if (resp.status === 429) {
+          throw new Error(t("webErrors.fetchOllamaRateLimit"));
+        }
+        throw new Error(t("webErrors.fetchOllamaServerError", { status: resp.status, url }));
+      }
+
+      let data: OllamaFetchResponse;
+      const raw = await readWebBody(resp, FETCH_MAX_BYTES, signal);
+      try {
+        data = JSON.parse(raw) as OllamaFetchResponse;
+      } catch {
+        throw new Error(t("webErrors.fetchOllamaParseError", { status: resp.status, url }));
+      }
+
+      const maxChars = opts.maxChars ?? DEFAULT_FETCH_MAX_CHARS;
+      const text = data.content ?? "";
+      return {
+        url,
+        title: data.title,
+        text: text.length > maxChars ? text.slice(0, maxChars) : text,
+        truncated: text.length > maxChars,
+        links: data.links,
+      };
+    },
   );
-  const signal = opts.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
-
-  let resp: Response;
-  try {
-    resp = await fetch(OLLAMA_WEB_FETCH_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ url }),
-      signal,
-      redirect: "error",
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  if (!resp.ok) {
-    if (resp.status === 401 || resp.status === 403) {
-      throw new Error(t("webErrors.fetchOllamaUnauthorized"));
-    }
-    if (resp.status === 429) {
-      throw new Error(t("webErrors.fetchOllamaRateLimit"));
-    }
-    throw new Error(t("webErrors.fetchOllamaServerError", { status: resp.status, url }));
-  }
-
-  let data: OllamaFetchResponse;
-  try {
-    data = (await resp.json()) as OllamaFetchResponse;
-  } catch {
-    throw new Error(t("webErrors.fetchOllamaParseError", { status: resp.status, url }));
-  }
-
-  const maxChars = opts.maxChars ?? DEFAULT_FETCH_MAX_CHARS;
-  const text = data.content ?? "";
-  return {
-    url,
-    title: data.title,
-    text: text.length > maxChars ? text.slice(0, maxChars) : text,
-    truncated: text.length > maxChars,
-    links: data.links,
-  };
 }
 
 /** Parse SearXNG HTML search results using node-html-parser. */
@@ -1271,95 +1302,81 @@ export function parseBingResults(html: string): SearchResult[] {
 }
 
 export async function webFetch(url: string, opts: WebFetchOptions = {}): Promise<PageContent> {
+  const snapshot = opts.snapshot ?? snapshotWebCall(opts.configPath);
+  const selected = opts.engine ?? snapshot.fetchEngine;
+  const engine =
+    selected === "legacy" ? (snapshot.engine === "ollama" ? "ollama" : "http") : selected;
+  if (engine === "ollama") return webFetchOllama(url, { ...opts, snapshot });
+  if (engine === "deepseek") {
+    return withWebDeadline(
+      opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+      opts.signal,
+      async (signal) => {
+        if (url.length > 8192) throw new Error("DeepSeek fetch URL exceeds 8192 characters");
+        const parsed = new URL(url);
+        if (parsed.username || parsed.password)
+          throw new Error("DeepSeek fetch refuses URL credentials");
+        await abortable(assertPublicHttpUrl(url), signal);
+        const data = await fetchDeepSeek(url, {
+          credential: snapshot.credential,
+          signal,
+          callerSignal: opts.signal ?? null,
+          timeoutMs: opts.timeoutMs,
+          onServiceCall: opts.onServiceCall,
+        });
+        const maxChars = opts.maxChars ?? DEFAULT_FETCH_MAX_CHARS;
+        return {
+          url,
+          title: data.title,
+          text: data.content.slice(0, maxChars),
+          truncated: data.content.length > maxChars,
+        };
+      },
+    );
+  }
   const maxChars = opts.maxChars ?? DEFAULT_FETCH_MAX_CHARS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
-  const ctl = new AbortController();
-  // Track whether the abort came from our internal timer vs the caller's
-  // signal — only the timer-driven abort should produce a "timed out" hint.
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    ctl.abort();
-  }, timeoutMs);
-  // Forward the caller's abort too so an Esc during a long fetch is respected.
-  const cancel = () => ctl.abort();
-  opts.signal?.addEventListener("abort", cancel, { once: true });
-  let resp: Response;
-  let currentUrl = url;
-  try {
-    for (let redirects = 0; ; redirects++) {
-      const parsed = await assertPublicHttpUrl(currentUrl);
-      if (ctl.signal.aborted) throw new DOMException("aborted", "AbortError");
-      resp = await fetch(parsed, {
-        headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain,*/*" },
-        signal: ctl.signal,
-        redirect: "manual",
-      });
-      const nextUrl = redirectLocation(resp, parsed.toString());
-      if (!nextUrl) break;
-      if (redirects >= FETCH_MAX_REDIRECTS) {
-        throw new Error(`web_fetch redirect limit exceeded for ${url}`);
-      }
-      currentUrl = nextUrl;
-    }
-  } catch (err) {
-    if (timedOut) {
-      throw new Error(t("webErrors.fetchTimeout", { ms: timeoutMs, url }));
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-    opts.signal?.removeEventListener("abort", cancel);
-  }
-  if (!resp.ok) throw new Error(fetchStatusError(resp.status, url));
-  const contentType = resp.headers.get("content-type") ?? "";
-  // Pre-check Content-Length when the server provides it. Cheaper to
-  // refuse upfront than to start streaming a 1GB ISO.
-  const declaredLen = Number(resp.headers.get("content-length") ?? "");
-  if (Number.isFinite(declaredLen) && declaredLen > FETCH_MAX_BYTES) {
-    throw new Error(t("webErrors.fetchTooLarge", { len: declaredLen, cap: FETCH_MAX_BYTES, url }));
-  }
-  const raw = await readBodyCapped(resp, FETCH_MAX_BYTES);
-  const title = extractTitle(raw);
-  const text = contentType.includes("text/html") ? htmlToText(raw) : raw;
-  const truncated = text.length > maxChars;
-  const finalText = truncated
-    ? `${text.slice(0, maxChars)}\n\n[… truncated ${text.length - maxChars} chars …]`
-    : text;
-  return { url: currentUrl, title, text: finalText, truncated };
-}
-
-/** Streams + caps so chunked responses (or servers lying about Content-Length) can't balloon the heap. */
-async function readBodyCapped(resp: Response, maxBytes: number): Promise<string> {
-  if (!resp.body) return await resp.text();
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let total = 0;
-  let out = "";
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        try {
-          await reader.cancel();
-        } catch {
-          /* already torn down */
+  return withWebDeadline(
+    timeoutMs,
+    opts.signal,
+    async (signal) => {
+      let resp: Response;
+      let currentUrl = url;
+      for (let redirects = 0; ; redirects++) {
+        const parsed = await abortable(assertPublicHttpUrl(currentUrl), signal);
+        signal.throwIfAborted();
+        resp = await abortable(
+          fetch(parsed, {
+            headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain,*/*" },
+            signal,
+            redirect: "manual",
+          }),
+          signal,
+        );
+        const nextUrl = redirectLocation(resp, parsed.toString());
+        if (!nextUrl) break;
+        discardWebBody(resp);
+        if (redirects >= FETCH_MAX_REDIRECTS) {
+          throw new Error(`web_fetch redirect limit exceeded for ${url}`);
         }
-        throw new Error(t("webErrors.fetchBodyTooLarge", { cap: maxBytes, seen: total }));
+        currentUrl = nextUrl;
       }
-      out += decoder.decode(value, { stream: true });
-    }
-    out += decoder.decode();
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      /* reader already cancelled / released */
-    }
-  }
-  return out;
+      if (!resp.ok) {
+        discardWebBody(resp);
+        throw new Error(fetchStatusError(resp.status, url));
+      }
+      const contentType = resp.headers.get("content-type") ?? "";
+      const raw = await readWebBody(resp, FETCH_MAX_BYTES, signal);
+      const title = extractTitle(raw);
+      const text = contentType.includes("text/html") ? htmlToText(raw) : raw;
+      const truncated = text.length > maxChars;
+      const finalText = truncated
+        ? `${text.slice(0, maxChars)}\n\n[… truncated ${text.length - maxChars} chars …]`
+        : text;
+      return { url: currentUrl, title, text: finalText, truncated };
+    },
+    new Error(t("webErrors.fetchTimeout", { ms: timeoutMs, url })),
+  );
 }
 
 /** Hard cap so the per-request HTML budget stays linear-time even on adversarial pages. */
@@ -1492,15 +1509,16 @@ export function registerWebTools(registry: ToolRegistry, opts: WebToolsOptions =
     },
     fn: async (args: { query: string; topK?: number }, ctx) => {
       // Read at call time, not registration time — `/search-engine` mutates config mid-session (#1309).
-      const engine = loadWebSearchEngine(opts.configPath);
-      const endpoint = loadWebSearchEndpoint(opts.configPath);
+      const snapshot = snapshotWebCall(opts.configPath);
       const results = await webSearch(args.query, {
         topK: args.topK ?? defaultTopK,
         signal: ctx?.signal,
-        engine,
-        endpoint,
+        engine: snapshot.engine,
+        endpoint: snapshot.endpoint,
+        snapshot,
         configPath: opts.configPath,
         onAuxiliaryUsage: ctx?.reportAuxiliaryUsage,
+        onServiceCall: ctx?.reportServiceCall,
       });
       return formatSearchResults(args.query, results);
     },
@@ -1523,19 +1541,16 @@ export function registerWebTools(registry: ToolRegistry, opts: WebToolsOptions =
       if (!/^https?:\/\//i.test(args.url)) {
         throw new Error(t("webErrors.fetchInvalidUrl"));
       }
-      if (loadWebSearchEngine(opts.configPath) === "ollama") {
-        const page = await webFetchOllama(args.url, {
-          maxChars: maxFetchChars,
-          signal: ctx?.signal,
-          configPath: opts.configPath,
-        });
-        const header = page.title ? `${page.title}\n${page.url}` : page.url;
-        const links = page.links?.length ? `\n\nlinks:\n${page.links.join("\n")}` : "";
-        return `${header}\n\n${page.text}${links}`;
-      }
-      const page = await webFetch(args.url, { maxChars: maxFetchChars, signal: ctx?.signal });
+      const page: PageContent & { links?: string[] } = await webFetch(args.url, {
+        maxChars: maxFetchChars,
+        signal: ctx?.signal,
+        configPath: opts.configPath,
+        snapshot: snapshotWebCall(opts.configPath),
+        onServiceCall: ctx?.reportServiceCall,
+      });
       const header = page.title ? `${page.title}\n${page.url}` : page.url;
-      return `${header}\n\n${page.text}`;
+      const links = page.links?.length ? `\n\nlinks:\n${page.links.join("\n")}` : "";
+      return `${header}\n\n${page.text}${links}`;
     },
   });
 
@@ -1569,8 +1584,7 @@ export function registerWebTools(registry: ToolRegistry, opts: WebToolsOptions =
       args: { query: string; topK?: number; maxFetches?: number; maxCharsPerPage?: number },
       ctx,
     ) => {
-      const engine = loadWebSearchEngine(opts.configPath);
-      const endpoint = loadWebSearchEndpoint(opts.configPath);
+      const snapshot = snapshotWebCall(opts.configPath);
       const topK = clampInt(args.topK, 1, 10, defaultTopK);
       const maxFetches = clampInt(args.maxFetches, 0, 8, defaultResearchFetches);
       const maxCharsPerPage = clampInt(args.maxCharsPerPage, 400, maxFetchChars, 2400);
@@ -1578,30 +1592,33 @@ export function registerWebTools(registry: ToolRegistry, opts: WebToolsOptions =
         await webSearch(args.query, {
           topK,
           signal: ctx?.signal,
-          engine,
-          endpoint,
+          engine: snapshot.engine,
+          endpoint: snapshot.endpoint,
+          snapshot,
           configPath: opts.configPath,
           onAuxiliaryUsage: ctx?.reportAuxiliaryUsage,
+          onServiceCall: ctx?.reportServiceCall,
         }),
       );
       const fetchable = results.filter((r) => /^https?:\/\//i.test(r.url)).slice(0, maxFetches);
       const fetched = await Promise.all(
         fetchable.map(async (result) => {
           try {
-            const page =
-              engine === "ollama"
-                ? await webFetchOllama(result.url, {
-                    maxChars: maxCharsPerPage,
-                    signal: ctx?.signal,
-                    configPath: opts.configPath,
-                  })
-                : await webFetch(result.url, { maxChars: maxCharsPerPage, signal: ctx?.signal });
+            const page = await webFetch(result.url, {
+              maxChars: maxCharsPerPage,
+              signal: ctx?.signal,
+              configPath: opts.configPath,
+              snapshot,
+              onServiceCall: ctx?.reportServiceCall,
+            });
             return { result, page };
           } catch (err) {
+            ctx?.signal?.throwIfAborted();
             return { result, error: (err as Error).message };
           }
         }),
       );
+      ctx?.signal?.throwIfAborted();
       return formatResearchResult(args.query, results, fetched);
     },
   });

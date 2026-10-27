@@ -252,13 +252,16 @@ describe("desktop turn cancellation ownership", { retry: 0 }, () => {
     );
     expect(ask).toContain('tab.turnAdmission.begin("ask")');
     expect(agent).toContain('tab.turnAdmission.begin("agent")');
-    const handoff = agent.indexOf("tab.turnAdmission.enterAgentLoop(generation)");
+    const handoff = agent.lastIndexOf("tab.turnAdmission.enterAgentLoop(generation)");
     expect(handoff).toBeGreaterThan(agent.indexOf("const report = await runHooks("));
     expect(agent.lastIndexOf("tab.aborter?.signal.throwIfAborted();", handoff)).toBeGreaterThan(
       agent.indexOf("const report = await runHooks("),
     );
     expect(handoff).toBeLessThan(agent.indexOf("rt.loop.step(modelText"));
     expect(handoff).toBeLessThan(agent.indexOf("rt.loop.retryFailedModelRequest("));
+    const compactHandoff = agent.indexOf("tab.turnAdmission.enterAgentLoop(generation)");
+    expect(compactHandoff).toBeLessThan(agent.indexOf("rt.loop.manualCompactHistory()"));
+    expect(compactHandoff).toBeGreaterThan(agent.indexOf('intent.command === "compact_history"'));
     expect(abort).toContain("abortDesktopTurnControllers(tab, opts)");
   });
 });

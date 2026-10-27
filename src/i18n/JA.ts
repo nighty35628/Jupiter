@@ -1294,6 +1294,11 @@ export const JA: TranslationSchema = {
         "  /search-engine ollama              OllamaクラウドWeb検索を使用 — OLLAMA_API_KEY または configのollamaApiKeyを設定; https://ollama.com/settings/keys で取得",
       usageBrave:
         "  /search-engine brave               Brave Search APIを使用（独立インデックス、月2000回無料 — BRAVE_SEARCH_API_KEY または braveApiKey を設定; https://brave.com/search/api/ で取得）",
+      usageDeepSeek:
+        "  /search-engine deepseek            DeepSeek 直接検索（リクエスト単位の課金）",
+      fetchUsage:
+        "取得: {engine}。/search-engine fetch legacy|http|ollama|deepseek（リモート取得は URL をサービスに送信します）",
+      fetchConfirmed: "取得エンジン: {engine}",
       usageDeepSeekNative:
         "  /search-engine deepseek-native     DeepSeekネイティブ検索を使用（実験的・モデル呼び出し全体が課金対象）",
       alias: "エイリアス: /se",

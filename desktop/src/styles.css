@@ -438,6 +438,12 @@ html[data-native-window="true"][data-platform="macos"] .app {
 .tab + .tab {
   margin-left: -1px;
 }
+.tab-view-number {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
 .tab:hover {
   color: var(--fg-2);
 }
@@ -9574,9 +9580,18 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   background: color-mix(in oklch, var(--panel) 54%, var(--bg));
 }
 
-.pet-preview-sprite {
+.pet-preview-sprite,
+.pet-preview-portrait {
   --pet-width: 116px;
   justify-self: center;
+}
+
+.pet-preview-portrait {
+  display: block;
+  width: var(--pet-width);
+  height: auto;
+  aspect-ratio: 192 / 208;
+  object-fit: contain;
 }
 
 .pet-preview-copy {
@@ -9787,7 +9802,8 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
     grid-template-columns: 104px minmax(0, 1fr);
     padding-inline: 18px;
   }
-  .pet-preview-sprite {
+  .pet-preview-sprite,
+  .pet-preview-portrait {
     --pet-width: 92px;
   }
 }
@@ -15123,6 +15139,68 @@ html[data-native-window="true"][data-platform="macos"] .app {
   margin-left: 2px;
   font-size: var(--font-size-caption);
 }
+
+.shared-tab-menu {
+  width: 320px;
+  max-width: calc(100vw - 16px);
+}
+.shared-tab-menu [role="menuitem"] span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.shared-tab-menu [role="menuitem"]:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.shared-tab-menu [role="menuitem"]:focus-visible,
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.shared-session-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 6px 16px;
+  color: var(--fg-2);
+  font-size: var(--font-size-caption);
+  border-bottom: 1px solid var(--border);
+}
+.shared-session-notice > span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.shared-session-notice > svg,
+.turn-source > svg {
+  flex: 0 0 auto;
+}
+.turn-source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 8px;
+  color: var(--fg-2);
+  font-size: var(--font-size-caption);
+}
+.shared-reply-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+.shared-reply-toggle:hover { color: var(--fg); }
+.shared-reply-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shared-reply-toggle > svg { flex-shrink: 0; }
+.shared-reply-toggle > span { overflow-wrap: anywhere; }
 
 .ctx {
   background: color-mix(in oklch, var(--bg) 82%, var(--bg-2));
