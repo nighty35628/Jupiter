@@ -1,4 +1,5 @@
 import type { ImageAttachment } from "../../src/attachments/types";
+import type { ScheduledCommand, ScheduledTasksEvent } from "../../src/scheduler/types";
 import type { ProviderProbeResult, SettingsSaveResult } from "../../src/desktop/provider-settings-state";
 import type {
   TranscriptDisplayTruncation,
@@ -399,7 +400,12 @@ export type ContextDiagnosticsInfo = {
   inputTokens: number;
   memoryTokens: number;
   summaryTokens: number;
+  /** Total model window; output reserve is separate from system/tool tokens. */
   ctxMax: number;
+  outputReserveTokens?: number;
+  inputLimit?: number;
+  budgetEstimated?: boolean;
+  budgetSource?: string;
   toolsCount: number;
   logMessages: number;
   topTools: Array<{ name: string; tokens: number; turn: number }>;
@@ -832,6 +838,8 @@ export type SettingsEvent = {
   deepseekNativeCredentialStatus?: DeepSeekNativeCredentialStatus;
   subagentModels?: Record<string, "flash" | "pro">;
   contextTokens?: Record<string, number>;
+  /** Undefined uses 160000; null disables early compaction, not capacity recovery. */
+  earlyCompactionTokens?: number | null;
   libraryRetrievalMode?: "off" | "on_demand" | "always";
   showSystemEvents?: boolean;
   showAiVisibleDetails?: boolean;
@@ -984,6 +992,8 @@ export type SettingsPatch = {
   skillPackSources?: SkillPackSourceInfo[];
   /** Per-model context-window override (tokens). Keys are model ids; values are the prompt-side token cap. */
   contextTokens?: Record<string, number>;
+  /** Positive integer >= 1024; null selects capacity-only compaction. */
+  earlyCompactionTokens?: number | null;
   libraryRetrievalMode?: "off" | "on_demand" | "always";
   showSystemEvents?: boolean;
   showAiVisibleDetails?: boolean;
@@ -1181,6 +1191,7 @@ export type KernelErrorEvent = {
 export type WorkflowRunEvent = WorkflowEvent;
 
 export type IncomingEvent = { tabId?: string } & (
+  | ScheduledTasksEvent
   | PromptPredictionEvent
   | ReadyEvent
   | ProtocolErrorEvent
@@ -1251,6 +1262,7 @@ export type IncomingEvent = { tabId?: string } & (
 );
 
 export type OutgoingCommand = { tabId?: string } & (
+  | ScheduledCommand
   | { cmd: "desktop_resync"; historyPaging?: boolean }
   | { cmd: "prompt_prediction_get"; completionId: string }
   | { cmd: "prompt_prediction_dismiss"; completionId: string }

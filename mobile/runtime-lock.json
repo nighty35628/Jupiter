@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "abi": "arm64-v8a",
+  "toolset": {
+    "name": "rootfs-tools.tar.gz",
+    "sha256": "fe02a01b0ed53ff5acea25bdaa27eb96c1f0c79419123ac465d3d3a3fe137800",
+    "snapshot": "20261030T000000Z",
+    "packages": ["git", "ripgrep", "python3", "ca-certificates"]
+  },
+  "inputs": [
+    {
+      "name": "ubuntu-base-24.04.5-base-arm64.tar.gz",
+      "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz",
+      "mirrors": ["https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz"],
+      "sha256": "a91d5a93010193712d346d761372b7c9db6dfcf093893161c64ca107f05914f2",
+      "verification": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/SHA256SUMS"
+    },
+    {
+      "name": "node-v22.23.4-linux-arm64.tar.xz",
+      "url": "https://nodejs.org/dist/v22.23.4/node-v22.23.4-linux-arm64.tar.xz",
+      "mirrors": ["https://npmmirror.com/mirrors/node/v22.23.4/node-v22.23.4-linux-arm64.tar.xz"],
+      "sha256": "6287aa46b6c375d816e63ae66d024fbbfd70404825aabdfdf898a970871d2f4b",
+      "verification": "https://nodejs.org/dist/v22.23.4/SHASUMS256.txt"
+    },
+    {
+      "name": "proot_5.1.107.101_aarch64.deb",
+      "url": "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.101_aarch64.deb",
+      "sha256": "a28355e9be257e1f87f4e9294b3118470d4fd7a5442fed8b278f4443c83407d7",
+      "verification": "https://packages.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages"
+    },
+    {
+      "name": "libtalloc_2.5.0_aarch64.deb",
+      "url": "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb",
+      "sha256": "556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7",
+      "verification": "https://packages.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages"
+    },
+    {
+      "name": "libandroid-shmem_0.7_aarch64.deb",
+      "url": "https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb",
+      "sha256": "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6",
+      "verification": "https://packages.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages"
+    }
+  ]
+}

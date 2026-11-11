@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export type WebFileSource = "workspace" | "upload" | "generated";
@@ -155,9 +156,16 @@ export class WorkspaceRegistry {
     return { ...ref };
   }
 
-  registerRuntimeFile(absolutePath: string, metadata: Omit<HostFileRef, "id">): HostFileRef {
+  registerRuntimeFile(
+    absolutePath: string,
+    metadata: Omit<HostFileRef, "id">,
+    id: string = randomUUID(),
+  ): HostFileRef {
     if (!isAbsolute(absolutePath)) throw new Error("runtime file path must be absolute");
-    const ref: HostFileRef = { ...metadata, id: randomUUID() };
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
+      throw new Error("runtime file id must be a UUID");
+    if (this.files.has(id)) throw new Error("runtime file id is already registered");
+    const ref: HostFileRef = { ...metadata, id };
     this.files.set(ref.id, { ref, absolutePath: resolve(absolutePath) });
     return { ...ref };
   }
@@ -166,6 +174,37 @@ export class WorkspaceRegistry {
     const record = this.files.get(fileId);
     if (!record) throw new Error("unknown or expired file id");
     return { ref: { ...record.ref }, absolutePath: record.absolutePath };
+  }
+
+  /** The caller owns the handle and must read from it, not reopen the cached path. */
+  async openFile(fileId: string) {
+    const record = this.resolveFile(fileId);
+    const absolutePath = await realpath(record.absolutePath);
+    if (record.ref.source === "upload" && absolutePath !== resolve(record.absolutePath))
+      throw new Error("upload path must not contain symbolic links");
+    if (record.ref.source === "workspace") {
+      assertInside(this.require(record.ref.workspaceId ?? "").root, absolutePath);
+    }
+    const before = await lstat(absolutePath);
+    if (!before.isFile()) throw new Error("not a file");
+    const handle = await open(
+      absolutePath,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+    try {
+      const metadata = await handle.stat();
+      if (!metadata.isFile() || metadata.dev !== before.dev || metadata.ino !== before.ino)
+        throw new Error("file changed while opening");
+      if ((await realpath(record.absolutePath)) !== absolutePath)
+        throw new Error("file path changed while opening");
+      const after = await lstat(absolutePath);
+      if (!after.isFile() || after.dev !== metadata.dev || after.ino !== metadata.ino)
+        throw new Error("file changed while opening");
+      return { ref: record.ref, handle, metadata };
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
   }
 
   forgetFile(fileId: string): FileRecord | null {

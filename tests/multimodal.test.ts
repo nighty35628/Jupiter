@@ -10,6 +10,7 @@ import { DeepSeekClient } from "../src/client.js";
 import { runDesktopLightAsk } from "../src/desktop/ask-light.js";
 import { formatSessionMarkdown } from "../src/desktop/session-markdown.js";
 import { CacheFirstLoop } from "../src/loop.js";
+import { compactionCheckpointPath } from "../src/memory/compaction-checkpoint.js";
 import { ImmutablePrefix } from "../src/memory/runtime.js";
 import { loadSessionMessages, rewriteSession, sessionPath } from "../src/memory/session.js";
 import {
@@ -336,21 +337,31 @@ describe("image-aware compaction", () => {
       stream: false,
       session: "fold",
     });
-    loop.log.append({ role: "user", content: "Inspect this diagram", attachments: [image] });
-    loop.log.append({ role: "assistant", content: "visual details ".repeat(100) });
-    rewriteSession("fold", loop.log.toFullHistory());
+    loop.appendAndPersist({ role: "user", content: "Inspect this diagram", attachments: [image] });
+    loop.appendAndPersist({ role: "assistant", content: "visual details ".repeat(100) });
+    const original = loadSessionMessages("fold");
     expect((await loop.compactHistory({ keepRecentTokens: 1 })).folded).toBe(true);
     expect(requests[0].model).toBe(model);
     expect(JSON.stringify(requests[0])).toContain("data:image");
-    expect(loadSessionMessages("fold")[0]?.sourceAttachments).toEqual([image]);
+    expect(loadSessionMessages("fold")).toEqual(original);
+    expect(loop.log.toFullHistory()[0]?.sourceAttachments).toEqual([image]);
     const projected = await projectImages(loop.log.toFullHistory(), {
       supportsImages: false,
       store,
     });
     expect(JSON.stringify(projected.messages)).toContain(image.id);
     expect(JSON.stringify(projected.messages)).not.toContain("data:image");
+    loop.dispose();
+    const restored = new CacheFirstLoop({
+      client: client(async () => response()),
+      prefix: new ImmutablePrefix({ system: "test" }),
+      model,
+      session: "fold",
+    });
+    expect(restored.log.toFullHistory()[0]?.sourceAttachments).toEqual([image]);
+    restored.dispose();
   });
-  it("leaves image history untouched when a fold cannot be committed", async () => {
+  it("keeps image raw history and the private projection when checkpoint publication fails", async () => {
     const image = await fixture();
     const loop = new CacheFirstLoop({
       client: client(async () => response("summary")),
@@ -359,15 +370,16 @@ describe("image-aware compaction", () => {
       stream: false,
       session: "bad-fold",
     });
-    loop.log.append({ role: "user", content: "", attachments: [image] });
-    loop.log.append({ role: "assistant", content: "visual details ".repeat(100) });
+    loop.appendAndPersist({ role: "user", content: "", attachments: [image] });
+    loop.appendAndPersist({ role: "assistant", content: "visual details ".repeat(100) });
     const before = JSON.stringify(loop.log.toFullHistory());
-    await mkdir(sessionPath("bad-fold"), { recursive: true });
+    await mkdir(compactionCheckpointPath("bad-fold"), { recursive: true });
     expect(await loop.compactHistory({ keepRecentTokens: 1 })).toMatchObject({
-      folded: false,
-      reason: "persistence-failed",
+      folded: true,
     });
-    expect(JSON.stringify(loop.log.toFullHistory())).toBe(before);
+    expect(JSON.stringify(loadSessionMessages("bad-fold"))).toBe(before);
+    expect(loop.log.toFullHistory()[0]?.sourceAttachments).toEqual([image]);
+    loop.dispose();
   });
 });
 

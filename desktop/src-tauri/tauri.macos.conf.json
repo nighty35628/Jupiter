@@ -20,6 +20,7 @@
   "bundle": {
     "macOS": {
       "hardenedRuntime": true,
+      "infoPlist": "Info.plist",
       "entitlements": "entitlements/main.plist"
     },
     "resources": {

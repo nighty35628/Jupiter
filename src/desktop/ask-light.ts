@@ -1,6 +1,7 @@
 import type { ImageAttachment } from "../attachments/types.js";
 import type { Usage } from "../client.js";
 import { type JupiterHelpContext, prepareHelpContext } from "../help/index.js";
+import { isCompactionContextError } from "../loop/compaction.js";
 import { costUsd } from "../telemetry/stats.js";
 import type { ChatMessage } from "../types.js";
 
@@ -16,6 +17,7 @@ type LightAskClient = {
     signal?: AbortSignal;
     thinking?: "enabled" | "disabled";
     maxTokens?: number;
+    disableRetry?: boolean;
   }) => Promise<{
     content: string;
     reasoningContent?: string | null;
@@ -68,6 +70,7 @@ export async function runDesktopLightAsk(args: {
   prefixHash?: string;
   text: string;
   history?: ChatMessage[];
+  recoverHistory?: () => Promise<ChatMessage[] | undefined>;
   helpContext?: JupiterHelpContext | (() => JupiterHelpContext);
   onHelpTopic?: (topic?: string) => void;
   attachments?: ImageAttachment[];
@@ -118,7 +121,7 @@ export async function runDesktopLightAsk(args: {
     ...context,
   });
   args.onHelpTopic?.(prepared.nextTopic);
-  const response = await args.client.chat({
+  const request: Parameters<LightAskClient["chat"]>[0] = {
     model: args.model,
     messages: [
       { role: "system", content: LIGHT_ASK_SYSTEM_PROMPT },
@@ -130,11 +133,29 @@ export async function runDesktopLightAsk(args: {
       },
       ...(prepared.content ? [{ role: "system" as const, content: prepared.content }] : []),
     ],
-    tools: [],
-    thinking: "disabled",
+    tools: [] as [],
+    thinking: "disabled" as const,
     maxTokens: 1200,
     signal: args.signal,
-  });
+  };
+  let response: Awaited<ReturnType<LightAskClient["chat"]>>;
+  try {
+    response = await args.client.chat(request);
+  } catch (error) {
+    if (!isCompactionContextError(error) || args.signal?.aborted || !args.recoverHistory)
+      throw error;
+    const history = await args.recoverHistory();
+    if (!history || args.signal?.aborted) throw error;
+    response = await args.client.chat({
+      ...request,
+      messages: [
+        request.messages[0]!,
+        ...history,
+        ...request.messages.slice(1 + (args.history?.length ?? 0)),
+      ],
+      disableRetry: true,
+    });
+  }
   const content = response.content.trim() || "(no answer)";
   if (args.recordExchange) {
     args.recordExchange({

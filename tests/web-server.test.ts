@@ -265,6 +265,158 @@ function connectEvents(
 }
 
 describe("Jupiter Web Beta server", () => {
+  it("does not expose Android idle controls as browser RPC commands", async () => {
+    const { handle, sidecar } = await start();
+    const auth = await authenticate(handle);
+    await connectEvents(handle, auth, "controller_idle");
+    for (const cmd of ["android_activity", "android_guarded_idle_stop"]) {
+      const response = await fetch(`${handle.baseUrl}/api/rpc`, {
+        method: "POST",
+        headers: { ...mutationHeaders(auth, "controller_idle"), origin: handle.baseUrl },
+        body: JSON.stringify({ commandId: `private_${cmd}`, payload: { cmd } }),
+      });
+      expect(response.status).toBe(400);
+      expect(sidecar.commands.some((command) => command.cmd === cmd)).toBe(false);
+    }
+  });
+  it("fences new HTTP and WebSocket work throughout the asynchronous idle check", async () => {
+    const { handle, sidecar } = await start();
+    let answer!: (idle: boolean) => void;
+    const guard = handle.guardedClose(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    expect((await fetch(handle.baseUrl)).status).toBe(503);
+    for (const [method, path] of [
+      ["POST", "/api/lease/renew"],
+      ["GET", "/api/session"],
+      ["GET", "/api/events"],
+    ]) {
+      expect((await fetch(`${handle.baseUrl}${path}`, { method })).status).toBe(503);
+    }
+    const status = await new Promise<number>((resolveStatus, rejectStatus) => {
+      const socket = new WebSocket(`${handle.baseUrl.replace(/^http/, "ws")}/api/terminal`);
+      socket.once("unexpected-response", (_request, response) => {
+        response.resume();
+        resolveStatus(response.statusCode ?? 0);
+      });
+      socket.once("open", () => rejectStatus(Error("upgrade crossed the close fence")));
+      socket.once("error", () => {});
+    });
+    expect(status).toBe(503);
+    expect(await handle.guardedClose(async () => true)).toBe(false);
+    answer(false);
+    expect(await guard).toBe(false);
+    expect((await fetch(handle.baseUrl)).status).toBe(200);
+    expect(sidecar.closeMock).not.toHaveBeenCalled();
+  });
+
+  it("restores admission after an unknown owner result, without forced close", async () => {
+    const { handle, sidecar } = await start();
+    await expect(
+      handle.guardedClose(async () => {
+        throw Error("owner timeout");
+      }),
+    ).rejects.toThrow(/timeout/);
+    expect((await fetch(handle.baseUrl)).status).toBe(200);
+    expect(sidecar.closeMock).not.toHaveBeenCalled();
+    expect(await handle.guardedClose(async () => true)).toBe(true);
+    expect(sidecar.closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses idle close while an admitted HTTP body is still pending", async () => {
+    const { handle, sidecar } = await start();
+    const req = request(`${handle.baseUrl}/api/bootstrap`, {
+      method: "POST",
+      headers: {
+        origin: handle.baseUrl,
+        "content-type": "application/json",
+        "content-length": "2",
+      },
+    });
+    const response = new Promise<void>((resolveResponse) =>
+      req.on("response", (res) => {
+        res.resume();
+        res.on("end", resolveResponse);
+      }),
+    );
+    req.write("{");
+    await vi.waitFor(() => expect(handle.activityCount()).toBeGreaterThan(0));
+    const prepare = vi.fn(async () => true);
+    expect(await handle.guardedClose(prepare)).toBe(false);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(sidecar.closeMock).not.toHaveBeenCalled();
+    req.end("}");
+    await response;
+    await vi.waitFor(() => expect(handle.activityCount()).toBe(0));
+  });
+
+  it("protects a meaningful delayed RPC after authentication and before sidecar send settles", async () => {
+    const { handle, sidecar } = await start();
+    const auth = await authenticate(handle);
+    await connectEvents(handle, auth, "controller_delayed_rpc");
+    let finish!: () => void;
+    const send = sidecar.send.bind(sidecar);
+    vi.spyOn(sidecar, "send").mockImplementation(async (command) => {
+      await send(command);
+      if (command.cmd === "user_input")
+        await new Promise<void>((done) => {
+          finish = done;
+        });
+    });
+    const pending = fetch(`${handle.baseUrl}/api/rpc`, {
+      method: "POST",
+      headers: { ...mutationHeaders(auth, "controller_delayed_rpc"), origin: handle.baseUrl },
+      body: JSON.stringify({
+        commandId: "delayed_meaningful_rpc",
+        payload: {
+          cmd: "user_input",
+          tabId: "tab-real",
+          text: "Synthetic idle accounting check",
+        },
+      }),
+    });
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    expect(handle.activityCount()).toBeGreaterThan(0);
+    const prepare = vi.fn(async () => true);
+    expect(await handle.guardedClose(prepare)).toBe(false);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(sidecar.closeMock).not.toHaveBeenCalled();
+    finish();
+    expect((await pending).status).toBe(202);
+    await vi.waitFor(() => expect(handle.activityCount()).toBe(0));
+  });
+
+  it("preserves authentication, Origin and CSRF checks on idle-neutral routes", async () => {
+    const { handle } = await start();
+    const auth = await authenticate(handle);
+    for (const [method, path] of [
+      ["POST", "/api/lease/renew"],
+      ["GET", "/api/session"],
+      ["GET", "/api/events"],
+    ]) {
+      const url = `${handle.baseUrl}${path}`;
+      expect((await fetch(url, { method, headers: { origin: handle.baseUrl } })).status).toBe(401);
+      expect(
+        (
+          await fetch(url, {
+            method,
+            headers: { cookie: auth.cookie, origin: "https://wrong-origin.example" },
+          })
+        ).status,
+      ).toBe(403);
+    }
+    expect(
+      (
+        await fetch(`${handle.baseUrl}/api/lease/renew`, {
+          method: "POST",
+          headers: { cookie: auth.cookie, origin: handle.baseUrl },
+        })
+      ).status,
+    ).toBe(403);
+  });
   it("serves a Web-mode shell while keeping the bootstrap token in the fragment only", async () => {
     const { handle } = await start();
     expect(handle.url).toBe(`${handle.baseUrl}/#bootstrap=${BOOTSTRAP_TOKEN}`);
@@ -700,12 +852,17 @@ describe("Jupiter Web Beta server", () => {
           apiKey: "private-key",
           providerDialect: "openai-compatible",
           model: "remote-model",
+          earlyCompactionTokens: null,
         },
       }),
     });
     expect(save.status).toBe(202);
     const command = sidecar.commands.find((item) => item.cmd === "settings_save");
-    expect(command).toMatchObject({ cmd: "settings_save", model: "remote-model" });
+    expect(command).toMatchObject({
+      cmd: "settings_save",
+      model: "remote-model",
+      earlyCompactionTokens: null,
+    });
     expect(command).not.toHaveProperty("baseUrl");
     expect(command).not.toHaveProperty("apiKey");
     expect(command).not.toHaveProperty("providerDialect");
@@ -750,6 +907,11 @@ describe("Jupiter Web Beta server", () => {
     );
     await ready;
 
+    expect(handle.activityCount()).toBeGreaterThan(0);
+    const idlePrepare = vi.fn(async () => true);
+    expect(await handle.guardedClose(idlePrepare)).toBe(false);
+    expect(idlePrepare).not.toHaveBeenCalled();
+
     const output = waitForSocketMessage(
       socket,
       (message) =>
@@ -766,6 +928,7 @@ describe("Jupiter Web Beta server", () => {
     );
     expect(await output).toEqual(expect.objectContaining({ id: "test-terminal" }));
     socket.close();
+    await vi.waitFor(() => expect(handle.activityCount()).toBe(0));
   });
 
   it("rejects terminal WebSockets in LAN mode until high-risk access is explicit", async () => {

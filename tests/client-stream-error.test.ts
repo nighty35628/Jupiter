@@ -23,7 +23,7 @@ function makeStreamThatErrors(error: Error): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-describe("DeepSeekClient.stream() mid-stream error wrapping", () => {
+describe("DeepSeekClient.stream() mid-stream error wrapping", { retry: 0 }, () => {
   it("wraps body-reader errors with phase and original code", async () => {
     const err = Object.assign(new Error("terminated"), { code: "UND_ERR_ABORTED" });
     const fetch = makeStreamThatErrors(err);
@@ -74,5 +74,55 @@ describe("DeepSeekClient.stream() mid-stream error wrapping", () => {
       phase: "stream_body_read",
       code: undefined,
     });
+  });
+
+  it("preserves reader error name, status and code, sanitizing the wrapper and cause", async () => {
+    const secret = "opaque/SYNTHETIC+key=42";
+    const error = Object.assign(new Error(`connection failed: ${secret}`), {
+      name: "UpstreamReadError",
+      status: 502,
+      code: "ECONNRESET",
+    });
+    const fetch = makeStreamThatErrors(error);
+    const client = new DeepSeekClient({ apiKey: secret, fetch, retry: { maxAttempts: 1 } });
+    let failure: unknown;
+    try {
+      for await (const _chunk of client.stream({
+        model: "deepseek-chat",
+        messages: [{ role: "user", content: "test" }],
+      })) {
+        /* drain */
+      }
+    } catch (value) {
+      failure = value;
+    }
+    expect(failure).toMatchObject({
+      name: "UpstreamReadError",
+      status: 502,
+      code: "ECONNRESET",
+      phase: "stream_body_read",
+      cause: { name: "UpstreamReadError", status: 502, code: "ECONNRESET" },
+    });
+    expect(
+      `${(failure as Error).message} ${(failure as Error).stack} ${JSON.stringify(failure)} ${(failure as Error).cause}`,
+    ).not.toContain(secret);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not turn a reader AbortError into an ordinary stream error", async () => {
+    const error = Object.assign(new Error("cancelled"), { name: "AbortError", code: "ABORT_ERR" });
+    const fetch = makeStreamThatErrors(error);
+    const client = new DeepSeekClient({ apiKey: "synthetic", fetch, retry: { maxAttempts: 1 } });
+    await expect(
+      (async () => {
+        for await (const _chunk of client.stream({
+          model: "deepseek-chat",
+          messages: [{ role: "user", content: "test" }],
+        })) {
+          /* drain */
+        }
+      })(),
+    ).rejects.toMatchObject({ name: "AbortError", code: "ABORT_ERR" });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

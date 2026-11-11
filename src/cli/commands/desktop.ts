@@ -37,6 +37,8 @@ import {
   type LoadedDingTalkConfig,
   type LoadedFeishuConfig,
   type ProviderDialectPreference,
+  type SemanticEmbeddingConfigView,
+  type SemanticEmbeddingUserConfig,
   bridgeEndpointEnv,
   clearApiKey,
   disableDesktopUpdatePrompts,
@@ -73,6 +75,7 @@ import {
   loadReasoningEffort,
   loadRecentWorkspaces,
   loadResolvedSkillPaths,
+  loadSemanticEmbeddingUserConfig,
   loadShowAiVisibleDetails,
   loadShowSystemEvents,
   loadSkillPackSources,
@@ -85,6 +88,7 @@ import {
   readConfig,
   webSearchEndpoint as readWebSearchEndpoint,
   webSearchEngine as readWebSearchEngine,
+  redactSemanticEmbeddingConfig,
   saveApiKey,
   saveComputerUseEnabled,
   saveComputerUsePermissionMode,
@@ -103,6 +107,7 @@ import {
   savePromptPredictionsEnabled,
   saveProviderSettings,
   saveReasoningEffort,
+  saveSemanticEmbeddingConfig,
   saveShowAiVisibleDetails,
   saveShowSystemEvents,
   saveSkillPackSources,
@@ -281,6 +286,7 @@ import {
   type SharedTurnStorage,
   hasSharedTurnRecovery,
 } from "../../memory/shared-session.js";
+import { getAndroidRuntimeContext } from "../../mobile/runtime-context.js";
 import {
   displayReasoningSelection,
   normalizeOfficialDeepSeekEffort,
@@ -292,6 +298,11 @@ import {
   resolveProviderSnapshot,
 } from "../../provider-runtime.js";
 import { QQChannel } from "../../qq/channel.js";
+import { ScheduledTaskEngine } from "../../scheduler/engine.js";
+import { createScheduledExecutor } from "../../scheduler/executor.js";
+import { handleScheduledCommand } from "../../scheduler/service.js";
+import { ScheduledTaskStore } from "../../scheduler/store.js";
+import type { ScheduledCommand, ScheduledTasksEvent } from "../../scheduler/types.js";
 import {
   type ExternalSessionSource,
   discoverExternalSessionApps,
@@ -410,6 +421,12 @@ type WebCommandMetadata = {
 };
 
 type InMessage = { tabId?: string; __web?: WebCommandMetadata } & (
+  | {
+      cmd: "android_activity" | "android_guarded_idle_stop";
+      requestId: string;
+      runtimeEpoch: string;
+    }
+  | ScheduledCommand
   | { cmd: "prompt_prediction_get"; completionId: string }
   | { cmd: "prompt_prediction_dismiss"; completionId: string }
   | { cmd: "attachment_import"; path: string; requestId: string }
@@ -561,9 +578,11 @@ type InMessage = { tabId?: string; __web?: WebCommandMetadata } & (
       ollamaApiKey?: string | null;
       braveApiKey?: string | null;
       deepseekSearchApiKey?: string | null;
+      semanticEmbedding?: SemanticEmbeddingUserConfig;
       subagentModels?: Record<string, "flash" | "pro">;
       skillPackSources?: ReturnType<typeof loadSkillPackSources>;
       contextTokens?: Record<string, number>;
+      earlyCompactionTokens?: number | null;
       libraryRetrievalMode?: LibraryRetrievalMode;
       showSystemEvents?: boolean;
       showAiVisibleDetails?: boolean;
@@ -675,6 +694,7 @@ interface SettingsEvent {
   webSearchEngine?: WebSearchEngine;
   webFetchEngine?: WebFetchEngine;
   webSearchEndpoint?: string;
+  semanticEmbedding?: SemanticEmbeddingConfigView;
   browserAutomation?:
     | {
         state: "available";
@@ -702,6 +722,7 @@ interface SettingsEvent {
   deepseekNativeCredentialStatus?: DeepSeekNativeRuntimeCredentialStatus;
   subagentModels?: Record<string, "flash" | "pro">;
   contextTokens?: Record<string, number>;
+  earlyCompactionTokens?: number | null;
   libraryRetrievalMode?: LibraryRetrievalMode;
   showSystemEvents?: boolean;
   showAiVisibleDetails?: boolean;
@@ -1311,6 +1332,7 @@ type UpdateCheckEvent =
  *  block buffering) so every JSON line reaches Rust the moment it's
  *  produced, not whenever the next 8 KB flushes. */
 type EmittableEvent =
+  | ScheduledTasksEvent
   | {
       type: "$shared_session_updated";
       sessionId: string;
@@ -1497,6 +1519,7 @@ async function emitAtomicDesktopSnapshot(run: () => Promise<void>): Promise<void
 }
 
 async function emitDesktopUpdateCheck(manual: boolean): Promise<void> {
+  if (getAndroidRuntimeContext()) return;
   const mode = manual ? "manual" : "auto";
   emit({
     type: "$update_check",
@@ -1782,6 +1805,7 @@ const providerVersions = createProviderVersionTracker();
 
 let optionalComponentsCache: ReturnType<typeof detectOptionalComponents> | undefined;
 function desktopOptionalComponents(refresh = false): ReturnType<typeof detectOptionalComponents> {
+  if (getAndroidRuntimeContext()) return [];
   if (refresh || !optionalComponentsCache) optionalComponentsCache = detectOptionalComponents();
   return optionalComponentsCache;
 }
@@ -1834,6 +1858,9 @@ function emitSettings(tab: Tab, requestId?: string): void {
       webSearchEngine: readWebSearchEngine(),
       webFetchEngine: readConfig().webFetchEngine ?? "legacy",
       webSearchEndpoint: readConfig().webSearchEndpoint,
+      ...(getAndroidRuntimeContext()
+        ? { semanticEmbedding: redactSemanticEmbeddingConfig(loadSemanticEmbeddingUserConfig()) }
+        : {}),
       browserAutomation: browserResolution
         ? {
             state: "available",
@@ -1844,7 +1871,7 @@ function emitSettings(tab: Tab, requestId?: string): void {
           }
         : { state: "unavailable", reason: "no-browser" },
       optionalComponents,
-      computerUseEnabled: loadComputerUseEnabled(),
+      computerUseEnabled: !getAndroidRuntimeContext() && loadComputerUseEnabled(),
       computerUsePermissionMode: loadComputerUsePermissionMode(),
       computerUseStatus: tab.computerUse?.status(),
       skillPackSources: loadSkillPackSources(),
@@ -1852,6 +1879,7 @@ function emitSettings(tab: Tab, requestId?: string): void {
       deepseekNativeCredentialStatus: deepSeekNativeCredentialStatus(),
       subagentModels: loadSubagentModels(),
       contextTokens: readConfig().contextTokens,
+      earlyCompactionTokens: readConfig().earlyCompactionTokens,
       libraryRetrievalMode: loadLibraryRetrievalMode(),
       showSystemEvents: loadShowSystemEvents(),
       showAiVisibleDetails: loadShowAiVisibleDetails(),
@@ -1870,7 +1898,14 @@ function emitSettingsToAll(tabs: ReadonlyMap<string, Tab>, requestId?: string): 
 }
 
 function loadDesktopEditMode(): EditMode {
-  if (process.env.JUPITER_RUNTIME_SURFACE === "web-beta") {
+  if (
+    getAndroidRuntimeContext()?.role === "scheduled" ||
+    process.env.JUPITER_SCHEDULE_CHILD === "1"
+  ) {
+    const mode = process.env.JUPITER_SCHEDULE_EDIT_MODE;
+    return mode === "plan" || mode === "auto" || mode === "yolo" ? mode : "review";
+  }
+  if (getAndroidRuntimeContext() || process.env.JUPITER_RUNTIME_SURFACE === "web-beta") {
     const access = process.env.JUPITER_WEB_ACCESS_MODE ?? "local";
     if (access === "public") return "plan";
     if (access === "lan" && process.env.JUPITER_WEB_HIGH_RISK !== "1") return "review";
@@ -2072,8 +2107,11 @@ async function loadSessionIntoTab(
     if (page) {
       const restored = await readSessionHistoryPage(name);
       if (tab.bindingId !== loadedBinding || tab.currentSession !== name) return;
-      if (restored.generation !== page.generation)
-        emit(await currentSessionSnapshot(tab, "$session_loaded", "resync"), tab.id);
+      if (
+        restored.generation !== page.generation &&
+        !(await emitCurrentSessionLoaded(tab, "resync"))
+      )
+        return;
     }
     emit({ type: "$ready" }, tab.id);
   }
@@ -2109,9 +2147,13 @@ async function currentSessionSnapshot(
   const records = page?.records ?? loadSessionMessages(name);
   const messages = buildLoadedMessages(records, { startTurn: page?.startTurn });
   if (tab.currentSession !== name || tab.bindingId !== bindingId)
-    throw new Error("Session changed during history read");
+    throw Object.assign(new Error("Session changed during history read"), {
+      code: "SESSION_SNAPSHOT_STALE",
+    });
   if (tab.sharedSession?.version !== historyVersion)
-    throw new Error("Shared history changed during history read");
+    throw Object.assign(new Error("Shared history changed during history read"), {
+      code: "SESSION_SNAPSHOT_STALE",
+    });
   if (!page) tab.sessionFiles = collectSessionFiles(records);
   return {
     type,
@@ -2152,17 +2194,23 @@ function emitCurrentSessionLoaded(
   reason: SessionSnapshotReason = "resync",
   requestId?: string,
   retries = 1,
-): void {
-  void currentSessionSnapshot(tab, "$session_loaded", reason, requestId)
+): Promise<boolean> {
+  const bindingId = tab.bindingId;
+  const name = tab.currentSession;
+  return currentSessionSnapshot(tab, "$session_loaded", reason, requestId)
     .then((snapshot) => {
       if (snapshot.snapshot.bindingId !== tab.bindingId || snapshot.name !== tab.currentSession)
-        return;
+        return false;
       emit(snapshot, tab.id);
       emitPendingGateEvents(tab);
+      return true;
     })
     .catch((error) => {
-      if (retries > 0) emitCurrentSessionLoaded(tab, reason, requestId, retries - 1);
-      else emit({ type: "$error", message: String(error) }, tab.id);
+      if (tab.bindingId !== bindingId || tab.currentSession !== name) return false;
+      if (retries > 0) return emitCurrentSessionLoaded(tab, reason, requestId, retries - 1);
+      if (error?.code === "SESSION_SNAPSHOT_STALE") return false;
+      emit({ type: "$error", message: String(error) }, tab.id);
+      return false;
     });
 }
 
@@ -2685,6 +2733,8 @@ function desktopUnifiedBlockDiff(block: EditBlock): string[] {
 }
 
 interface Tab {
+  unconfiguredSkeleton?: boolean;
+  initializing?: boolean;
   conversationViewId: string;
   sharedSession?: SharedSessionCoordinator;
   sharedStorage?: SharedTurnStorage;
@@ -2712,6 +2762,7 @@ interface Tab {
   toolset: Awaited<ReturnType<typeof buildCodeToolset>> | null;
   /** Empty while bootstrapping; populated together with `toolset`. */
   system: string;
+  runtimeIdentity?: string;
   runtime: RuntimeState | null;
   computerUse: DesktopComputerUse | null;
   runtimeRefreshPending?: boolean;
@@ -3103,6 +3154,8 @@ async function coordinateDesktopCommand(
 }
 
 async function startComputerUse(tab: Tab): Promise<void> {
+  if (getAndroidRuntimeContext()) return;
+  if (process.env.JUPITER_SCHEDULE_CHILD === "1") return;
   if (!tab.toolset) return;
   tab.computerUse ??= new DesktopComputerUse({
     owner: `desktop:${tab.id}`,
@@ -3129,7 +3182,7 @@ async function startComputerUse(tab: Tab): Promise<void> {
 
 function desktopHelpContext(tab: Tab, mode = "Agent"): JupiterHelpContext {
   const status = tab.computerUse?.status();
-  const enabled = loadComputerUseEnabled();
+  const enabled = !getAndroidRuntimeContext() && loadComputerUseEnabled();
   const vision =
     tab.runtime?.loop.client.supportsImages(tab.runtime.loop.model) ??
     resolveProviderSnapshot({ model: tab.currentModel }).capability.supportsImages;
@@ -3138,7 +3191,11 @@ function desktopHelpContext(tab: Tab, mode = "Agent"): JupiterHelpContext {
       (spec) => spec.function.name === "computer_use_get_desktop_state",
     ) ?? false;
   return {
-    surface: process.env.JUPITER_RUNTIME_SURFACE === "web-beta" ? "web" : "desktop",
+    surface:
+      getAndroidRuntimeContext() || process.env.JUPITER_RUNTIME_SURFACE === "web-beta"
+        ? "web"
+        : "desktop",
+    ...(tab.runtimeIdentity ? { runtimeIdentity: tab.runtimeIdentity } : {}),
     mode,
     model: tab.runtime?.loop.model ?? tab.currentModel,
     provider: tab.runtime?.loop.client.providerId,
@@ -3292,9 +3349,34 @@ export function installDesktopCrashGuards(
   });
 }
 
+function desktopRuntimePolicy() {
+  const android = getAndroidRuntimeContext();
+  const trustedAndroid = android !== undefined;
+  const scheduledChild =
+    android?.role === "scheduled" || process.env.JUPITER_SCHEDULE_CHILD === "1";
+  // Android keeps Web transport permissions, fencing, leases and path checks.
+  const isWebSurface = trustedAndroid || process.env.JUPITER_RUNTIME_SURFACE === "web-beta";
+  return {
+    trustedAndroid,
+    scheduledChild,
+    isWebSurface,
+    desktopIntegrationsAllowed: !isWebSurface && !scheduledChild,
+  };
+}
+
+function androidRuntimeIdentity(): string | undefined {
+  const android = getAndroidRuntimeContext();
+  if (!android) return undefined;
+  return `Current host: Jupiter Android, running locally on this phone (role=${android.role}). Files and commands refer only to this phone's app-accessible workspace and runtime, not a connected computer. No desktop filesystem access, desktop pets/updater, or native Computer Use is available. External websites open through links in the mobile UI, not guest shell browser-launch commands or an open_url tool. Packaged Desktop instructions do not grant these capabilities.`;
+}
+
 export async function desktopCommand(opts: DesktopOptions): Promise<void> {
-  const runtimeSurface = process.env.JUPITER_RUNTIME_SURFACE ?? "desktop";
-  const isWebSurface = runtimeSurface === "web-beta";
+  const { trustedAndroid, scheduledChild, isWebSurface, desktopIntegrationsAllowed } =
+    desktopRuntimePolicy();
+  const scheduledStore = new ScheduledTaskStore();
+  let androidIdleClosing = false;
+  // Detached promise work can outlive its originating view; this is not a task registry.
+  let androidBackgroundOperations = 0;
   const webRuntimeEpoch = process.env.JUPITER_WEB_RUNTIME_EPOCH ?? "";
   let activeWebFence = 0;
   const recentWebCommands = new Map<string, "running" | "completed" | "rejected">();
@@ -3310,20 +3392,49 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     return isRetiredNoWorkspacePath(candidate) ? defaultDesktopRoot() : candidate;
   }
 
-  loadDotenv();
-  // Tauri spawns the bundled Node from the GUI process, which never runs the
-  // user's shell init (`.bashrc` / `.zshrc` / profile). Probe the login shell
-  // once so nvm / asdf / fnm / volta / mise PATH entries reach `run_command`
-  // children too (#1252). No-op on Windows — system PATH already covers GUI apps.
-  const augmented = augmentProcessPath();
-  if (augmented.added.length > 0) {
-    process.stderr.write(
-      `[desktop] augmented PATH with ${augmented.added.length} login-shell entries\n`,
-    );
+  if (!trustedAndroid) {
+    loadDotenv();
+    // Tauri spawns the bundled Node from the GUI process, which never runs the
+    // user's shell init (`.bashrc` / `.zshrc` / profile). Probe the login shell
+    // once so nvm / asdf / fnm / volta / mise PATH entries reach `run_command`
+    // children too (#1252). No-op on Windows — system PATH already covers GUI apps.
+    const augmented = augmentProcessPath();
+    if (augmented.added.length > 0) {
+      process.stderr.write(
+        `[desktop] augmented PATH with ${augmented.added.length} login-shell entries\n`,
+      );
+    }
   }
   installDesktopCrashGuards();
 
   const tabs = new Map<string, Tab>();
+  const scheduledExecutor = createScheduledExecutor();
+  const remoteSchedulingAllowed =
+    !isWebSurface ||
+    (process.env.JUPITER_WEB_ACCESS_MODE !== "public" &&
+      ((process.env.JUPITER_WEB_ACCESS_MODE ?? "local") === "local" ||
+        process.env.JUPITER_WEB_HIGH_RISK === "1"));
+  const scheduledEngine =
+    scheduledChild || !remoteSchedulingAllowed
+      ? undefined
+      : new ScheduledTaskEngine(
+          scheduledStore,
+          async (task, signal, onSession) => {
+            const result = await scheduledExecutor(task, signal, onSession);
+            for (const tab of tabs.values())
+              if (tab.rootDir === task.workspaceDir) emitSessions(tab);
+            return result;
+          },
+          Date.now,
+          (error) => process.stderr.write(`[scheduler] ${String(error)}\n`),
+          (task) =>
+            !androidIdleClosing &&
+            (!isWebSurface ||
+              ((process.env.JUPITER_WEB_ACCESS_MODE ?? "local") !== "public" &&
+                ((process.env.JUPITER_WEB_ACCESS_MODE ?? "local") === "local" ||
+                  process.env.JUPITER_WEB_HIGH_RISK === "1") &&
+                [...tabs.values()].some((tab) => tab.rootDir === task.workspaceDir))),
+        );
   desktopLiveTabs = tabs;
   const tabContext = new AsyncLocalStorage<string>();
   // Frontend-reported focused tab — persisted so a restart reopens on it (#1244).
@@ -3754,6 +3865,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       if (ownsMainTurn) emit({ type: "$turn_complete" }, tab.id);
       return;
     }
+    androidBackgroundOperations++;
     void (async () => {
       try {
         const reply = await tab.runtime!.loop.client.chat({
@@ -3784,6 +3896,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         emit({ type: "$error", message }, tab.id);
         hooks?.onError?.(message);
       } finally {
+        androidBackgroundOperations--;
         if (ownsMainTurn) emit({ type: "$turn_complete" }, tab.id);
       }
     })();
@@ -3858,7 +3971,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab: Tab,
   ): Promise<Awaited<ReturnType<CacheFirstLoop["manualCompactHistory"]>>> {
     if (!tab.runtime) throw new Error("Runtime is not ready");
-    if (!tab.sharedSession) return tab.runtime.loop.manualCompactHistory();
+    if (!tab.sharedSession) {
+      androidBackgroundOperations++;
+      try {
+        return await tab.runtime.loop.manualCompactHistory();
+      } finally {
+        androidBackgroundOperations--;
+      }
+    }
     const owner = tab.sharedSession;
     if (
       owner.activeTurns ||
@@ -3873,10 +3993,13 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     const loop = tab.runtime.loop;
     const version = owner.version;
     sharedCompactions.set(tab.sessionId, loop);
+    androidBackgroundOperations++;
     try {
       const result = await loop.manualCompactHistory();
       if (result.folded) {
-        owner.replaceHistory(loop.log.toFullHistory(), version);
+        if (tab.runtime?.loop !== loop || tab.sharedSession !== owner || owner.version !== version)
+          return { ...result, folded: false, reason: "session-changed" };
+        tab.sharedStorage?.publishCompaction();
         for (const peer of tabs.values())
           if (peer.sessionId === tab.sessionId) {
             peer.prediction?.invalidate();
@@ -3885,6 +4008,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       }
       return result;
     } finally {
+      androidBackgroundOperations--;
       if (sharedCompactions.get(tab.sessionId) === loop) sharedCompactions.delete(tab.sessionId);
     }
   }
@@ -3979,6 +4103,14 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           prefixHash: rt.ctx.prefixHash,
           text: askText,
           history: turnStore ? rt.loop.log.toFullHistory().slice(0, -1) : undefined,
+          recoverHistory: async () => {
+            const folded = await rt.loop.compactHistory({
+              requireTailBoundary: true,
+              keepRecentTokens: 0,
+              signal: tab.aborter?.signal,
+            });
+            return folded.folded ? rt.loop.log.toFullHistory().slice(0, -1) : undefined;
+          },
           helpContext: () => desktopHelpContext(tab, "Ask"),
           onHelpTopic: (topic) => {
             tab.recentHelpTopic = topic;
@@ -4546,6 +4678,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     saveModel(next);
     if (tab.toolset) {
       tab.system = codeSystemPrompt(tab.rootDir, {
+        systemAppend: tab.runtimeIdentity,
         hasSemanticSearch: tab.toolset.semantic.enabled,
         engineeringLifecycleMode: loadEngineeringLifecycleMode(),
         libraryRetrievalMode: loadLibraryRetrievalMode(),
@@ -5435,7 +5568,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   /** Synchronous tab construction — no I/O. All cheap, disk-only events (`$settings`, `$sessions`, `$memory`, `$skills`, `$mcp_specs`) can fire against this immediately. The heavy bits (`buildCodeToolset`, MCP probes, runtime construction) happen in `initTabToolset` so the UI shell paints without waiting for them. */
   function createTabSkeleton(initialDir?: string): Tab {
     const dir = resolveDesktopRoot(initialDir);
-    pushRecentWorkspace(dir);
+    if (!scheduledChild) pushRecentWorkspace(dir);
     const model = opts.model || loadModel() || DEFAULT_MODEL;
     const tab: Tab = {
       id: nextTabId(),
@@ -5450,7 +5583,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       budgetUsd: opts.budgetUsd,
       toolset: null,
       system: "",
+      runtimeIdentity: androidRuntimeIdentity(),
       runtime: null,
+      unconfiguredSkeleton: trustedAndroid && !loadApiKey(),
       computerUse: null,
       aborter: null,
       fileIndex: null,
@@ -5484,6 +5619,59 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     return tab;
   }
 
+  function bindAndroidUnconfiguredModel(tab: Tab): boolean {
+    if (
+      !trustedAndroid ||
+      !tab.unconfiguredSkeleton ||
+      tab.runtime ||
+      tab.aborter ||
+      tab.turnAdmission.running ||
+      tab.sharedTurnDone ||
+      tab.sharedStorage?.hasRecords
+    )
+      return false;
+    try {
+      if (loadSessionMessages(tab.currentSession).length || hasSharedTurnRecovery(tab.sessionId))
+        return false;
+      const provider = resolveProviderSnapshot();
+      if (!provider.apiKey) return false;
+      tab.currentModel = provider.model;
+      if (tab.toolset)
+        tab.system = codeSystemPrompt(tab.rootDir, {
+          systemAppend: tab.runtimeIdentity,
+          hasSemanticSearch: tab.toolset.semantic.enabled,
+          engineeringLifecycleMode: loadEngineeringLifecycleMode(),
+          libraryRetrievalMode: loadLibraryRetrievalMode(),
+          modelId: tab.currentModel,
+        });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function activateAndroidUnconfiguredTabs(): void {
+    for (const tab of tabs.values()) {
+      if (!bindAndroidUnconfiguredModel(tab) || !tab.toolset || tab.initializing) continue;
+      try {
+        replaceRuntimeFor(tab);
+        tab.unconfiguredSkeleton = false;
+        tab.runtimeInitializationError = undefined;
+        emit({ type: "$ready" }, tab.id);
+        void bridgeTabMcp(tab);
+      } catch (error) {
+        tab.runtimeInitializationError = String(error);
+        emit(
+          {
+            type: "$error",
+            message: "Provider saved, but the local conversation could not initialize.",
+          },
+          tab.id,
+        );
+      }
+    }
+  }
+
   /** Builds the toolset / system prompt / runtime / MCP bridge for a freshly-created skeleton. Reads `tab.currentModel` at call time so model changes during the wait are honored. */
   async function initTabToolset(tab: Tab): Promise<void> {
     const toolset = await buildCodeToolset({
@@ -5498,6 +5686,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     tab.toolset = toolset;
     installDesktopEditInterceptor(tab);
     tab.system = codeSystemPrompt(tab.rootDir, {
+      systemAppend: tab.runtimeIdentity,
       hasSemanticSearch: toolset.semantic.enabled,
       engineeringLifecycleMode: loadEngineeringLifecycleMode(),
       libraryRetrievalMode: loadLibraryRetrievalMode(),
@@ -5509,7 +5698,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     if (!tabs.has(tab.id)) return;
     if (loadApiKey()) {
       bridgeEndpointEnv();
+      bindAndroidUnconfiguredModel(tab);
       replaceRuntimeFor(tab);
+      tab.unconfiguredSkeleton = false;
       tab.runtimeInitializationError = undefined;
       void bridgeTabMcp(tab);
     }
@@ -5604,7 +5795,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
 
   /** Snapshot of every open tab — workspace dir, loaded session and focus, in tab order. Persisted after open/close/switch so a restart restores the full tab set and each conversation (issues #933, #1244). */
   function persistOpenTabs(): void {
-    if (isWebSurface) return;
+    if ((isWebSurface && !trustedAndroid) || scheduledChild) return;
     try {
       saveDesktopOpenTabs(
         Array.from(tabs.values()).map((t) => ({
@@ -5766,7 +5957,6 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         return;
       }
     }
-    await startComputerUse(tab);
     const duplicateTurn = acceptedClientTurn(tab.currentSession, clientId);
     if (duplicateTurn !== undefined) {
       const accepted = tab.runtime.eventizer.emitUserMessage(
@@ -5815,6 +6005,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       tab.currentModel === preparationModel;
     let lastLoopTurn: number | undefined;
     try {
+      await startComputerUse(tab);
+      aborter.signal.throwIfAborted();
+      if (!isCurrent()) return;
       const modelText = opts.planOneShot ? buildOneShotPlanPrompt(text) : text;
       tab.currentTurnEditEntry = null;
       computerUseTurn = computerUse?.beginTurn(aborter.signal);
@@ -6291,6 +6484,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     });
     installDesktopEditInterceptor(tab);
     tab.system = codeSystemPrompt(target, {
+      systemAppend: tab.runtimeIdentity,
       hasSemanticSearch: tab.toolset.semantic.enabled,
       engineeringLifecycleMode: loadEngineeringLifecycleMode(),
       libraryRetrievalMode: loadLibraryRetrievalMode(),
@@ -6433,6 +6627,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   async function gracefulShutdown(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
+    await scheduledEngine?.stop();
     for (const tab of tabs.values()) abortTurn(tab);
     await Promise.allSettled([...tabs.values()].map((tab) => stopComputerUse(tab)));
     await stopDesktopQQ(false).catch(() => undefined);
@@ -6731,12 +6926,15 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
             tab.sessionId = ensureSessionId(restore.session);
             tab.bindingId += 1;
             restoredSession = restore.session;
+            tab.unconfiguredSkeleton = false;
           }
         }
       } catch {
         // unreadable jsonl — fall back to the freshly minted session
       }
     }
+    const bootstrapSession = tab.currentSession;
+    const bootstrapBinding = tab.bindingId;
     if (!loadSessionMeta(tab.currentSession).defaultConversationViewId) {
       patchSessionMeta(tab.currentSession, { defaultConversationViewId: tab.conversationViewId });
     }
@@ -6758,7 +6956,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     emitQQSettings(tab);
     emitUsageHistory(tab);
     if (restoredSession) {
-      tab.historyRestore = currentSessionSnapshot(
+      const historyRestore: Promise<void> = currentSessionSnapshot(
         tab,
         "$session_loaded",
         "restore",
@@ -6780,13 +6978,34 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           emit(snapshot, tab.id);
           emitPendingGateEvents(tab);
         })
-        .catch((error) => emit({ type: "$error", message: String(error) }, tab.id));
+        .catch((error) => {
+          if (
+            !tabs.has(tab.id) ||
+            tab.bindingId !== bootstrapBinding ||
+            tab.currentSession !== bootstrapSession
+          )
+            return;
+          if (error?.code === "SESSION_SNAPSHOT_STALE")
+            return emitCurrentSessionLoaded(tab, "restore", restore?.requestId).then(
+              () => undefined,
+            );
+          emit({ type: "$error", message: String(error) }, tab.id);
+        })
+        .finally(() => {
+          if (tab.historyRestore === historyRestore) tab.historyRestore = undefined;
+        });
+      tab.historyRestore = historyRestore;
     }
     if (!loadApiKey()) emit({ type: "$needs_setup", reason: "no_api_key" }, tab.id);
     void emitBalance(tab);
+    tab.initializing = true;
+    androidBackgroundOperations++;
     void initTabToolset(tab)
-      .then(() => {
-        if (restoredSession) emitCurrentSessionLoaded(tab, "resync");
+      .then(async () => {
+        if (scheduledChild || (!restoredSession && tab.currentSession === bootstrapSession))
+          emit(emptySessionLoadedEvent(tab), tab.id);
+        else if (!(await emitCurrentSessionLoaded(tab, "resync"))) return;
+        if (!tabs.has(tab.id)) return;
         if (loadApiKey()) emit({ type: "$ready" }, tab.id);
         emitCtxBreakdown(tab);
       })
@@ -6829,6 +7048,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           },
           tab.id,
         );
+      })
+      .finally(() => {
+        tab.initializing = false;
+        androidBackgroundOperations--;
       });
     return tab;
   }
@@ -6885,7 +7108,9 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   // Restore the full tab set from the previous session — workspace dir,
   // loaded session and focused tab (issues #933, #1244). Missing dirs
   // are silently skipped — a deleted workspace shouldn't break boot.
-  const savedTabs = (isWebSurface ? [] : loadDesktopOpenTabs())
+  const savedTabs = (
+    (isWebSurface && !trustedAndroid) || scheduledChild ? [] : loadDesktopOpenTabs()
+  )
     .map((t) => ({ ...t, dir: resolveDesktopRoot(t.dir) }))
     .filter((t) => {
       try {
@@ -6896,7 +7121,10 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     });
   // When launched with --dir, find the matching saved tab so the user's
   // previous session is restored automatically.
-  const restorePlan = planDesktopTabRestore(savedTabs, opts.dir);
+  const restorePlan = planDesktopTabRestore(
+    savedTabs,
+    trustedAndroid && !scheduledChild && savedTabs.length > 0 ? undefined : opts.dir,
+  );
   const startupTab = restorePlan.tabs[0];
   first = bootstrapTab(startupTab?.dir ?? opts.dir, startupTab);
   const restored: Tab[] = [first];
@@ -6907,20 +7135,25 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   ).id;
   persistOpenTabs();
   const qqConfig = loadQQConfig();
-  if (!isWebSurface && qqConfig.enabled && qqConfig.appId && qqConfig.appSecret) {
+  if (desktopIntegrationsAllowed && qqConfig.enabled && qqConfig.appId && qqConfig.appSecret) {
     void startDesktopQQ(false).catch(() => undefined);
   } else {
     broadcastQQSettings();
   }
   const feishuConfig = loadFeishuConfig();
-  if (!isWebSurface && feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
+  if (
+    desktopIntegrationsAllowed &&
+    feishuConfig.enabled &&
+    feishuConfig.appId &&
+    feishuConfig.appSecret
+  ) {
     void startDesktopFeishu(false).catch(() => undefined);
   } else {
     broadcastFeishuSettings();
   }
   const dingtalkConfig = loadDingTalkConfig();
   if (
-    !isWebSurface &&
+    desktopIntegrationsAllowed &&
     dingtalkConfig.enabled &&
     dingtalkConfig.clientId &&
     dingtalkConfig.clientSecret
@@ -6929,10 +7162,77 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   } else {
     broadcastDingTalkSettings();
   }
-  if (!isWebSurface) void emitDesktopUpdateCheck(false).catch(() => undefined);
+  if (desktopIntegrationsAllowed) void emitDesktopUpdateCheck(false).catch(() => undefined);
+  scheduledEngine?.start();
+  if (scheduledChild) {
+    const parentPid = Number(process.env.JUPITER_SCHEDULE_PARENT_PID);
+    if (Number.isSafeInteger(parentPid) && parentPid > 0) {
+      const watch = setInterval(() => {
+        try {
+          process.kill(parentPid, 0);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH") void gracefulShutdown();
+        }
+      }, 1000);
+      watch.unref();
+    }
+  }
 
   const rl = createInterface({ input: stdin });
   let rpcDispatchChain = Promise.resolve();
+  let pendingRpc = 0;
+
+  function readAndroidActivity(): number {
+    let active = pendingRpc + sharedCompactions.size + androidBackgroundOperations;
+    for (const tab of tabs.values()) {
+      if (
+        tab.turnAdmission.running ||
+        tab.aborter ||
+        tab.sharedTurnDone ||
+        tab.switching ||
+        tab.sharedClosing ||
+        tab.initializing ||
+        tab.historyRestore
+      )
+        active++;
+      active += tab.toolset?.jobs.runningCount() ?? 0;
+    }
+    if (scheduledEngine?.hasPendingActivity()) active++;
+    return active;
+  }
+
+  function handleAndroidActivity(
+    msg: Extract<InMessage, { cmd: "android_activity" | "android_guarded_idle_stop" }>,
+  ): void {
+    if (
+      !trustedAndroid ||
+      scheduledChild ||
+      msg.__web ||
+      msg.runtimeEpoch !== webRuntimeEpoch ||
+      typeof msg.requestId !== "string"
+    )
+      return;
+    let active = 1;
+    let idleReady = false;
+    try {
+      active = readAndroidActivity();
+      idleReady = active === 0 && !shuttingDown && !androidIdleClosing;
+    } catch {
+      /* Unknown owner state is never permission to stop. */
+    }
+    const stopped = msg.cmd === "android_guarded_idle_stop" && idleReady;
+    // No await between the owner-state check and fencing dispatch/scheduler claims.
+    if (stopped) androidIdleClosing = true;
+    writeDesktopEvent({
+      type: "$android_activity",
+      requestId: msg.requestId,
+      runtimeEpoch: webRuntimeEpoch,
+      active,
+      idleReady,
+      ...(msg.cmd === "android_guarded_idle_stop" ? { stopped } : {}),
+    });
+    if (stopped) void gracefulShutdown();
+  }
   const immediateCommands = new Set<InMessage["cmd"]>([
     "abort",
     "confirm_response",
@@ -6956,7 +7256,18 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
 
-    const dispatch = () => dispatchRpcMessage(msg);
+    if (msg.cmd === "android_activity" || msg.cmd === "android_guarded_idle_stop") {
+      handleAndroidActivity(msg);
+      return;
+    }
+    pendingRpc++;
+    const dispatch = async () => {
+      try {
+        if (!androidIdleClosing) await dispatchRpcMessage(msg);
+      } finally {
+        pendingRpc--;
+      }
+    };
     if (immediateCommands.has(msg.cmd)) {
       void dispatch();
       return;
@@ -7031,6 +7342,28 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
   }
 
   async function handleRpcMessage(msg: InMessage): Promise<void> {
+    if (
+      msg.cmd === "scheduled_list" ||
+      msg.cmd === "scheduled_save" ||
+      msg.cmd === "scheduled_action"
+    ) {
+      const tab = (msg.tabId ? tabs.get(msg.tabId) : undefined) ?? first;
+      try {
+        emit(handleScheduledCommand(scheduledStore, msg, tab.rootDir), tab.id);
+      } catch (error) {
+        emit(
+          {
+            type: "$scheduled_tasks",
+            requestId: msg.requestId,
+            workspaceDir: tab.rootDir,
+            tasks: [],
+            error: String(error),
+          },
+          tab.id,
+        );
+      }
+      return;
+    }
     if (msg.cmd === "tab_open") {
       try {
         // A user-opened tab takes focus.
@@ -7090,7 +7423,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
       return;
     }
     if (msg.cmd === "setup_save_key") {
-      if (isWebSurface) {
+      if (isWebSurface && !trustedAndroid) {
         emit(
           {
             type: "$error",
@@ -7113,15 +7446,17 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         bridgeEndpointEnv();
         providerVersions.observe(resolveProviderSnapshot());
         for (const tab of tabs.values()) {
+          bindAndroidUnconfiguredModel(tab);
           // Skeleton tabs still mid-bootstrap pick up the new key inside
           // initTabToolset's tail when buildCodeToolset settles — don't
           // try to construct a runtime against a null toolset here.
-          if (!tab.toolset) {
+          if (!tab.toolset || tab.initializing) {
             emitSettings(tab);
             void emitBalance(tab);
             continue;
           }
           replaceRuntimeFor(tab);
+          tab.unconfiguredSkeleton = false;
           emit({ type: "$ready" }, tab.id);
           emitSettings(tab);
           void emitBalance(tab);
@@ -7136,7 +7471,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
     }
 
     if (msg.cmd === "settings_sign_out") {
-      if (isWebSurface) {
+      if (isWebSurface && !trustedAndroid) {
         emit(
           {
             type: "$error",
@@ -7198,23 +7533,18 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           emitQQSettings(t);
           emitUsageHistory(t);
           if (!hasKey) emit({ type: "$needs_setup", reason: "no_api_key" }, t.id);
-          else if (t.toolset) emit({ type: "$ready" }, t.id);
           balanceOps.push(emitBalance(t));
           if (t.currentSession) {
-            try {
-              emit(await currentSessionSnapshot(t, "$session_loaded", "resync"), t.id);
-              emitPendingGateEvents(t);
-            } catch {
-              // unreadable jsonl — skip re-emit
-            }
+            if (!(await emitCurrentSessionLoaded(t, "resync"))) continue;
           }
+          if (hasKey && t.runtime) emit({ type: "$ready" }, t.id);
           emitCtxBreakdown(t);
           const identity = predictionIdentity(t);
           const completionId = identity ? t.prediction?.replay(identity) : null;
           if (completionId) emit({ type: "$prompt_prediction_eligible", completionId }, t.id);
         }
         await Promise.allSettled(balanceOps);
-        if (!isWebSurface) await emitDesktopUpdateCheck(false).catch(() => undefined);
+        if (desktopIntegrationsAllowed) await emitDesktopUpdateCheck(false).catch(() => undefined);
         emit({ type: "$snapshot_end", snapshotId, requestId: msg.requestId });
         emit({ type: "$resync_complete", requestId: msg.requestId });
       });
@@ -8304,7 +8634,7 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         await probeDesktopProvider(msg, {
           resolve: resolveProviderSnapshot,
           tracker: providerVersions,
-          web: isWebSurface,
+          web: isWebSurface && !trustedAndroid,
           createClient: createProviderClient,
         }),
         tab.id,
@@ -8370,10 +8700,11 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           sources: inspectEndpointSources,
           bindLegacy: bindLegacySessionsToCurrentProvider,
           save: saveProviderSettings,
-          web: isWebSurface,
+          web: isWebSurface && !trustedAndroid,
         });
         if (providerResult.status === "success") {
           settingsRevision++;
+          activateAndroidUnconfiguredTabs();
           emitStatus(tab, "Provider saved. It will be used by new conversations.");
           emitSettingsToAll(tabs, msg.requestId);
         }
@@ -8396,6 +8727,12 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
         return;
       }
       try {
+        if (msg.semanticEmbedding !== undefined) {
+          if (isWebSurface && !trustedAndroid)
+            throw new Error("Embedding credentials cannot be changed on the Web surface.");
+          // Replace the complete embedding tuple in the existing encrypted config.
+          saveSemanticEmbeddingConfig(msg.semanticEmbedding);
+        }
         const computerUseSettingsChanged =
           msg.computerUseEnabled !== undefined || msg.computerUsePermissionMode !== undefined;
         if (computerUseSettingsChanged && isWebSurface) {
@@ -8560,10 +8897,23 @@ export async function desktopCommand(opts: DesktopOptions): Promise<void> {
           cfg.contextTokens = msg.contextTokens;
           writeConfig(cfg);
         }
+        if (msg.earlyCompactionTokens !== undefined) {
+          if (
+            msg.earlyCompactionTokens !== null &&
+            (!Number.isSafeInteger(msg.earlyCompactionTokens) || msg.earlyCompactionTokens < 1024)
+          )
+            throw new Error(
+              "Early compaction threshold must be null or an integer of at least 1024 tokens.",
+            );
+          const cfg = readConfig();
+          cfg.earlyCompactionTokens = msg.earlyCompactionTokens;
+          writeConfig(cfg);
+        }
         if (msg.libraryRetrievalMode !== undefined) {
           saveLibraryRetrievalMode(msg.libraryRetrievalMode);
           if (tab.toolset) {
             tab.system = codeSystemPrompt(tab.rootDir, {
+              systemAppend: tab.runtimeIdentity,
               hasSemanticSearch: tab.toolset.semantic.enabled,
               engineeringLifecycleMode: loadEngineeringLifecycleMode(),
               libraryRetrievalMode: loadLibraryRetrievalMode(),

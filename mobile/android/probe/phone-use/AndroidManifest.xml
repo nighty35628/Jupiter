@@ -1,0 +1,19 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.jupiter.phoneuse.probe">
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="36" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_CALCULATOR" />
+        </intent>
+    </queries>
+    <application android:label="Jupiter Phone Use Probe" android:allowBackup="false"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name=".ProbeActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

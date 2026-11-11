@@ -1,5 +1,8 @@
 import type { Usage } from "../client.js";
 import { loadContextTokens, loadPricingOverride } from "../config.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../context-budget.js";
+
+export { DEFAULT_CONTEXT_TOKENS } from "../context-budget.js";
 
 /** Current DeepSeek off-peak USD rates per 1M tokens. */
 export const DEEPSEEK_PRICING: Record<
@@ -68,7 +71,7 @@ export function pricingFor(
 /** Reference Claude Sonnet 4.6 pricing (USD per 1M tokens). */
 export const CLAUDE_SONNET_PRICING = { input: 3.0, output: 15.0 };
 
-/** Prompt-side window only; completion caps live server-side and don't affect this gauge. */
+/** Legacy prompt-side caps, NOT total-window specifications. Use request budgeting for C - R - S. */
 export const DEEPSEEK_CONTEXT_TOKENS: Record<string, number> = {
   "deepseek-flash": 1_000_000,
   "deepseek-v4-flash": 1_000_000,
@@ -78,10 +81,17 @@ export const DEEPSEEK_CONTEXT_TOKENS: Record<string, number> = {
   "deepseek-reasoner": 1_000_000,
 };
 
-/** Fallback when the caller's model id isn't in the table — safe lower bound. */
-export const DEFAULT_CONTEXT_TOKENS = 131_072;
+/** Resolve the legacy input cap: user config -> compatibility table -> estimated fallback. */
+const builtinContextCaps = new Map(Object.entries(DEEPSEEK_CONTEXT_TOKENS));
 
-/** Resolve context-window size: user config → built-in table → 131 K default. */
+/** Only declared/extended caps constrain a provider; built-in names do not establish its capacity. */
+export function declaredContextInputLimit(model: string, configPath?: string): number | undefined {
+  const configured = loadContextTokens(configPath)[model];
+  if (typeof configured === "number" && configured > 0) return configured;
+  const extended = DEEPSEEK_CONTEXT_TOKENS[model];
+  return extended !== builtinContextCaps.get(model) ? extended : undefined;
+}
+
 export function resolveContextTokens(model: string, configPath?: string): number {
   const userOverride = loadContextTokens(configPath)[model];
   if (userOverride && userOverride > 0) return userOverride;

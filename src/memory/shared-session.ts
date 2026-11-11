@@ -13,7 +13,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { ChatMessage } from "../types.js";
-import type { LoopSessionStorage } from "./loop-session-storage.js";
+import { CompactionProjection } from "./compaction-checkpoint.js";
+import type { LoopSessionStorage, SemanticFold } from "./loop-session-storage.js";
 import { SessionWriterLease } from "./session-writer-lock.js";
 import {
   type SessionMeta,
@@ -76,7 +77,9 @@ function writePrivate(path: string, value: unknown): void {
 export class SharedTurnStorage implements LoopSessionStorage {
   readonly journal: ToolExecutionJournal;
   readonly path: string;
-  private projection: ChatMessage[];
+  private projection: CompactionProjection;
+  private base: ChatMessage[];
+  private compactionRules: string | undefined;
   private metaPatch: Partial<SessionMeta> = {};
   readonly staged: StagedTurn;
   private baseMeta: SessionMeta;
@@ -101,7 +104,9 @@ export class SharedTurnStorage implements LoopSessionStorage {
       records: [],
       state: "running",
     };
-    this.projection = [...base, ...this.staged.records];
+    this.base = structuredClone(base);
+    this.projection = new CompactionProjection(base, owner.name);
+    for (const record of this.staged.records) this.projection.append(record);
     this.journal = new ToolExecutionJournal({
       path: this.path.replace(/\.json$/, ".tool-executions.v2.journal"),
       sessionId: owner.sessionId,
@@ -118,8 +123,29 @@ export class SharedTurnStorage implements LoopSessionStorage {
   get hasRecords(): boolean {
     return this.staged.records.length > 0;
   }
+  get rawUserTurns(): number {
+    return this.projection.rawUserTurns;
+  }
+  beginRules(fingerprint: string): void {
+    this.compactionRules = fingerprint;
+    this.owner.compactionRules = fingerprint;
+    this.projection.beginRules(this.owner.name, this.owner.sessionId, fingerprint);
+  }
+  recordFold(fold: SemanticFold): boolean {
+    return this.projection.recordFold(fold);
+  }
+  publishCompaction(signal?: AbortSignal): boolean {
+    return this.owner.publishCompaction(this, signal);
+  }
+  publishCandidate(signal?: AbortSignal): boolean {
+    if (this.owner.compactionRules !== this.compactionRules) return false;
+    return this.projection.publish(this.owner.name, this.owner.sessionId, signal);
+  }
+  discardCompaction(): void {
+    this.projection.discardCandidate();
+  }
   loadMessages(): ChatMessage[] {
-    return structuredClone(this.projection);
+    return this.projection.loadMessages();
   }
   loadMeta(): SessionMeta {
     return { ...this.baseMeta, ...this.metaPatch };
@@ -149,20 +175,23 @@ export class SharedTurnStorage implements LoopSessionStorage {
     });
     writePrivate(this.path, { ...this.staged, records: [...this.staged.records, retained] });
     this.staged.records.push(retained);
-    this.projection.push(retained);
+    this.projection.append(retained);
     return retained;
   }
 
   rewriteMessages(messages: ChatMessage[], reason: "context" | "history"): void {
     const projection = structuredClone(messages);
     if (reason === "history") {
-      const records = messages
+      const records = this.projection
+        .historyMessages(messages)
         .filter((m) => m.turnId === this.turnId)
         .map((m) => structuredClone(m));
       writePrivate(this.path, { ...this.staged, records });
       this.staged.records = records;
+      this.projection.resetRaw([...this.base, ...records], projection);
+      return;
     }
-    this.projection = projection;
+    this.projection.rewrite(projection);
   }
 
   replaceTailMessage(message: ChatMessage): ChatMessage {
@@ -180,24 +209,25 @@ export class SharedTurnStorage implements LoopSessionStorage {
       }
     };
     const records = [...this.staged.records];
-    const projection = [...this.projection];
+    const projection = this.projection.loadMessages();
     replace(records);
     replace(projection);
     writePrivate(this.path, { ...this.staged, records });
     this.staged.records = records;
-    this.projection = projection;
+    this.projection.resetRaw([...this.base, ...records], projection);
     return retained;
   }
 
   discardCurrentTurn(): void {
     writePrivate(this.path, { ...this.staged, records: [] });
     this.staged.records = [];
-    this.projection = this.projection.filter((m) => m.turnId !== this.turnId);
+    this.projection.discardTurn();
   }
 
   markFailed(): void {
     writePrivate(this.path, { ...this.staged, state: "failed" });
     this.staged.state = "failed";
+    this.projection.discardCandidate();
   }
 
   statsDelta(current: SessionMeta): Partial<SessionMeta> {
@@ -215,6 +245,34 @@ export class SharedTurnStorage implements LoopSessionStorage {
     if (this.metaPatch.lastPromptTokens !== undefined)
       result.lastPromptTokens = this.metaPatch.lastPromptTokens;
     if (this.metaPatch.provider) result.provider = this.metaPatch.provider;
+    if (this.metaPatch.contextLimits) {
+      const limits = new Map(Object.entries(current.contextLimits ?? {}));
+      const positive = (value: number | undefined): number | undefined =>
+        value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+      const smaller = (a: number | undefined, b: number | undefined): number | undefined => {
+        const values = [positive(a), positive(b)].filter((value) => value !== undefined);
+        return values.length ? Math.min(...values) : undefined;
+      };
+      for (const [model, patch] of Object.entries(this.metaPatch.contextLimits)) {
+        if (!patch.binding) continue;
+        const previous = limits.get(model);
+        const sameBinding = previous?.binding === patch.binding;
+        const contextWindowTokens = smaller(
+          sameBinding ? previous.contextWindowTokens : undefined,
+          patch.contextWindowTokens,
+        );
+        const inputTokenLimit = smaller(
+          sameBinding ? previous.inputTokenLimit : undefined,
+          patch.inputTokenLimit,
+        );
+        limits.set(model, {
+          binding: patch.binding,
+          ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
+          ...(inputTokenLimit !== undefined ? { inputTokenLimit } : {}),
+        });
+      }
+      result.contextLimits = Object.fromEntries(limits);
+    }
     return result;
   }
 }
@@ -225,6 +283,7 @@ export class SharedSessionCoordinator {
   private history: ChatMessage[] = [];
   private stores = new Map<string, SharedTurnStorage>();
   private disposed = false;
+  compactionRules: string | undefined;
   version = 0;
   historySha256 = digest(Buffer.alloc(0));
   constructor(
@@ -264,7 +323,24 @@ export class SharedSessionCoordinator {
   }
 
   releaseEmptyTurn(store: SharedTurnStorage | undefined): void {
-    if (store?.owner === this && !store.hasRecords) this.stores.delete(store.turnId);
+    if (store?.owner === this && !store.hasRecords) {
+      store.discardCompaction();
+      this.stores.delete(store.turnId);
+    }
+  }
+
+  publishCompaction(store: SharedTurnStorage, signal?: AbortSignal): boolean {
+    if (
+      this.disposed ||
+      store.owner !== this ||
+      this.stores.get(store.turnId) !== store ||
+      store.staged.state === "cancelled" ||
+      store.staged.state === "failed"
+    ) {
+      store.discardCompaction();
+      return false;
+    }
+    return store.publishCandidate(signal);
   }
 
   hasCommitted(turnId: string): boolean {
@@ -297,6 +373,7 @@ export class SharedSessionCoordinator {
   }
 
   prepareCommit(store: SharedTurnStorage): boolean {
+    if (this.disposed) throw new Error("Shared session has been disposed");
     if (store.owner !== this) throw new Error("Turn belongs to another session");
     if (store.staged.state === "committed" || this.history.some((m) => m.turnId === store.turnId))
       return false;
@@ -328,6 +405,8 @@ export class SharedSessionCoordinator {
   }
 
   commit(store: SharedTurnStorage): boolean {
+    if (this.disposed || store.owner !== this)
+      throw new Error("Turn belongs to an inactive session");
     const pending = readPendingSharedCommit(sessionPath(this.name));
     if (pending) {
       this.recover();
@@ -370,6 +449,7 @@ export class SharedSessionCoordinator {
     const completed = this.stores.get(pending.turnId);
     if (completed) {
       completed.staged.state = "committed";
+      this.publishCompaction(completed);
       rmSync(completed.path, { force: true });
       this.stores.delete(pending.turnId);
     }

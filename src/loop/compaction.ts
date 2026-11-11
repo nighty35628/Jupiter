@@ -1,7 +1,7 @@
 import { projectImages } from "../attachments/projection.js";
 import { type DeepSeekClient, projectMessagesForDialect } from "../client.js";
 import { truncateForModelByTokens } from "../mcp/registry.js";
-import { ProviderHttpError } from "../provider-http-error.js";
+import { ProviderHttpError, ProviderStreamError } from "../provider-http-error.js";
 import { countRequestTokens } from "../tokenizer.js";
 import type { ChatMessage, ChatRequestOptions } from "../types.js";
 import {
@@ -20,8 +20,11 @@ export function isCompactionContextError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const { code, status } = error as Error & { code?: string; status?: number };
   if (status !== undefined && status !== 400 && status !== 413) return false;
-  if (code === "CONTEXT_WINDOW_EXCEEDED") return true;
-  if (!(error instanceof ProviderHttpError)) return false;
+  if (!(error instanceof ProviderHttpError || error instanceof ProviderStreamError))
+    return code === "CONTEXT_WINDOW_EXCEEDED";
+  if (code === "context_length_exceeded") return true;
+  if (/\b(?:bytes?|[kmgt]i?b)\b/i.test(error.safeDetail) && !/\btokens?\b/i.test(error.safeDetail))
+    return false;
   return /\bcontext_length_exceeded\b|\b(?:maximum|max) (?:context|input|prompt) (?:length|tokens?)\b|\bcontext (?:window|length|limit)\b.{0,80}\b(?:exceed|too long)|\b(?:input|prompt)\b.{0,40}\b(?:exceeds? (?:the )?(?:maximum|context)|too many tokens)\b/i.test(
     error.safeDetail,
   );
@@ -36,7 +39,11 @@ export function providerContextBudget(
   error: unknown,
   request: ChatRequestOptions,
 ): ProviderCompactionBudget | undefined {
-  if (!(error instanceof ProviderHttpError)) return undefined;
+  if (
+    !(error instanceof ProviderHttpError || error instanceof ProviderStreamError) ||
+    !isCompactionContextError(error)
+  )
+    return undefined;
   const match =
     /\b(?:maximum|max) (context|input|prompt) (?:length|tokens?)(?: is| of|:)?\s*([\d,]+)\s*tokens?\b/i.exec(
       error.safeDetail,

@@ -14,6 +14,12 @@ import {
   resolveIndexConfig,
 } from "./index/config.js";
 import { type McpServerSpec, parseMcpSpec } from "./mcp/spec.js";
+import { decodeConfigEnvelope, encodeConfigEnvelope } from "./mobile/config-envelope.js";
+import {
+  getAndroidRuntimeContext,
+  isAndroidManagedConfigPath,
+  withAndroidConfigKey,
+} from "./mobile/runtime-context.js";
 import { isStrictOfficialDeepSeekEndpoint } from "./provider-capabilities.js";
 import {
   DEEPSEEK_DEFAULT_MODEL,
@@ -246,6 +252,8 @@ export interface JupiterConfig {
   deepSeekAutoContinue?: boolean;
   /** Total semantic history-summary deadline, milliseconds; 1s to 5min. */
   historySummaryTimeoutMs?: number;
+  /** Optional cost-oriented early fold. Missing keeps 160k; null leaves capacity protection only. */
+  earlyCompactionTokens?: number | null;
   reasoningEffort?: ReasoningEffort;
   /** Default workspace root for the desktop client. CLI uses cwd. */
   workspaceDir?: string;
@@ -458,16 +466,22 @@ export function memoryTypeDefaults(
   return out;
 }
 
+// A trusted Android bootstrap owns credentials, never dotenv or inherited env.
+function credentialEnv(name: string): string | undefined {
+  return getAndroidRuntimeContext() ? undefined : process.env[name];
+}
+
 export function loadMetasoApiKey(path: string = defaultConfigPath()): string | undefined {
-  if (process.env.METASO_API_KEY) return process.env.METASO_API_KEY.trim();
+  const env = credentialEnv("METASO_API_KEY");
+  if (env) return env.trim();
   const cfg = readConfig(path).metasoApiKey;
   if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
   return undefined;
 }
 
 export function loadBaiduApiKey(path: string = defaultConfigPath()): string | undefined {
-  if (process.env.BAIDU_API_KEY) return process.env.BAIDU_API_KEY.trim();
-  if (process.env.QIANFAN_API_KEY) return process.env.QIANFAN_API_KEY.trim();
+  const env = credentialEnv("BAIDU_API_KEY") || credentialEnv("QIANFAN_API_KEY");
+  if (env) return env.trim();
   const cfg = readConfig(path).baiduApiKey;
   if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
   return undefined;
@@ -475,7 +489,8 @@ export function loadBaiduApiKey(path: string = defaultConfigPath()): string | un
 
 /** Tavily API key — env > config > undefined. Returning undefined means the caller must error out with a clear "go get one at tavily.com" message; we deliberately ship no default because the free 1000/mo quota wouldn't survive being shared. */
 export function loadTavilyApiKey(path: string = defaultConfigPath()): string | undefined {
-  if (process.env.TAVILY_API_KEY) return process.env.TAVILY_API_KEY.trim();
+  const env = credentialEnv("TAVILY_API_KEY");
+  if (env) return env.trim();
   const cfg = readConfig(path).tavilyApiKey;
   if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
   return undefined;
@@ -483,7 +498,8 @@ export function loadTavilyApiKey(path: string = defaultConfigPath()): string | u
 
 /** Perplexity API key — env > config > undefined. Get one at https://perplexity.ai/settings/api */
 export function loadPerplexityApiKey(path: string = defaultConfigPath()): string | undefined {
-  if (process.env.PERPLEXITY_API_KEY) return process.env.PERPLEXITY_API_KEY.trim();
+  const env = credentialEnv("PERPLEXITY_API_KEY");
+  if (env) return env.trim();
   const cfg = readConfig(path).perplexityApiKey;
   if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
   return undefined;
@@ -491,7 +507,8 @@ export function loadPerplexityApiKey(path: string = defaultConfigPath()): string
 
 /** Exa API key — env > config > undefined. Free 1000/mo signup at https://exa.ai */
 export function loadExaApiKey(path: string = defaultConfigPath()): string | undefined {
-  if (process.env.EXA_API_KEY) return process.env.EXA_API_KEY.trim();
+  const env = credentialEnv("EXA_API_KEY");
+  if (env) return env.trim();
   const cfg = readConfig(path).exaApiKey;
   if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
   return undefined;
@@ -499,8 +516,8 @@ export function loadExaApiKey(path: string = defaultConfigPath()): string | unde
 
 /** Ollama cloud API key — env > config > undefined. */
 export function loadOllamaApiKey(path: string = defaultConfigPath()): string | undefined {
-  if (process.env.OLLAMA_API_KEY) return process.env.OLLAMA_API_KEY.trim();
-  if (process.env.ollamaApiKey) return process.env.ollamaApiKey.trim();
+  const env = credentialEnv("OLLAMA_API_KEY") || credentialEnv("ollamaApiKey");
+  if (env) return env.trim();
   const cfg = readConfig(path).ollamaApiKey;
   if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
   return undefined;
@@ -508,15 +525,16 @@ export function loadOllamaApiKey(path: string = defaultConfigPath()): string | u
 
 /** Brave Search API key — env > config > undefined. Free 2000/mo signup at https://brave.com/search/api/ */
 export function loadBraveApiKey(path: string = defaultConfigPath()): string | undefined {
-  if (process.env.BRAVE_SEARCH_API_KEY) return process.env.BRAVE_SEARCH_API_KEY.trim();
-  if (process.env.BRAVE_API_KEY) return process.env.BRAVE_API_KEY.trim();
+  const env = credentialEnv("BRAVE_SEARCH_API_KEY") || credentialEnv("BRAVE_API_KEY");
+  if (env) return env.trim();
   const cfg = readConfig(path).braveApiKey;
   if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
   return undefined;
 }
 
 export function loadDeepSeekSearchApiKey(path: string = defaultConfigPath()): string | undefined {
-  if (process.env.DEEPSEEK_SEARCH_API_KEY) return process.env.DEEPSEEK_SEARCH_API_KEY.trim();
+  const env = credentialEnv("DEEPSEEK_SEARCH_API_KEY");
+  if (env) return env.trim();
   const cfg = readConfig(path).deepseekSearchApiKey;
   if (cfg && typeof cfg === "string" && cfg.trim()) return cfg.trim();
   return undefined;
@@ -558,7 +576,7 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_BATCH_SIZE = 10;
 
 export function defaultConfigPath(): string {
-  return join(homedir(), ".jupiter", "config.json");
+  return getAndroidRuntimeContext()?.configPath ?? join(homedir(), ".jupiter", "config.json");
 }
 
 const PROMPT_HISTORY_CAP = 100;
@@ -619,6 +637,21 @@ function sanitizeStringArrayField(
 const _configCache = new Map<string, { mtimeMs: number; cfg: JupiterConfig }>();
 
 export function readConfig(path: string = defaultConfigPath()): JupiterConfig {
+  if (isAndroidManagedConfigPath(path)) {
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      throw new Error("Android config read failed");
+    }
+    // Never reuse a desktop/mtime cache entry: every managed read authenticates.
+    const cfg = JSON.parse(withAndroidConfigKey(path, (dek) => decodeConfigEnvelope(raw, dek)));
+    for (const segments of STRING_ARRAY_FIELDS) {
+      sanitizeStringArrayField(cfg, segments, "Android config");
+    }
+    return cfg as JupiterConfig;
+  }
   let fd: number | undefined;
   try {
     // Open the file descriptor first, then fstat + read from the same fd.
@@ -707,6 +740,20 @@ export function clearDashboardToken(path: string = defaultConfigPath()): void {
 }
 
 export function writeConfig(cfg: JupiterConfig, path: string = defaultConfigPath()): void {
+  const managed = isAndroidManagedConfigPath(path);
+  // Refuse to overwrite corrupt, wrong-key, or legacy plaintext data, including
+  // direct writeConfig callers. This synchronous guard is not a CAS protocol.
+  if (managed) readConfig(path);
+  let body: string | undefined;
+  if (managed) {
+    let json: string;
+    try {
+      json = JSON.stringify(cfg, null, 2);
+    } catch {
+      throw new Error("Invalid Android config JSON");
+    }
+    body = withAndroidConfigKey(path, (dek) => encodeConfigEnvelope(json, dek));
+  }
   mkdirSync(dirname(path), { recursive: true });
   // Atomic — write to a sibling tmp then rename. A torn write (process
   // killed mid-write, or another reader catching the file before
@@ -715,7 +762,7 @@ export function writeConfig(cfg: JupiterConfig, path: string = defaultConfigPath
   // saveX would silently overwrite every other field with that empty
   // baseline (issue #1535).
   const tmp = `${path}.${randomBytes(8).toString("hex")}.tmp`;
-  atomicWriteSync(path, JSON.stringify(cfg, null, 2), tmp);
+  atomicWriteSync(path, body ?? JSON.stringify(cfg, null, 2), tmp);
   _configCache.delete(path);
 }
 
@@ -917,12 +964,12 @@ export interface ResolvedEndpointSources extends ResolvedEndpoint {
 // DEEPSEEK_BASE_URL is the original name; DEEPSEEK_API_BASE_URL is accepted as an
 // alias so users who copy the OPENAI_BASE_URL pattern land on a working name (#1876).
 export function resolveBaseUrlEnv(): string | undefined {
-  return process.env.DEEPSEEK_BASE_URL || process.env.DEEPSEEK_API_BASE_URL || undefined;
+  return credentialEnv("DEEPSEEK_BASE_URL") || credentialEnv("DEEPSEEK_API_BASE_URL") || undefined;
 }
 
 function resolveBaseUrlEnvSource(): string | undefined {
-  if (process.env.DEEPSEEK_BASE_URL) return "env:DEEPSEEK_BASE_URL";
-  if (process.env.DEEPSEEK_API_BASE_URL) return "env:DEEPSEEK_API_BASE_URL";
+  if (credentialEnv("DEEPSEEK_BASE_URL")) return "env:DEEPSEEK_BASE_URL";
+  if (credentialEnv("DEEPSEEK_API_BASE_URL")) return "env:DEEPSEEK_API_BASE_URL";
   return undefined;
 }
 
@@ -931,7 +978,7 @@ function resolveBaseUrlEnvSource(): string | undefined {
 export function loadEndpoint(path: string = defaultConfigPath()): ResolvedEndpoint {
   const envBaseUrl = resolveBaseUrlEnv();
   if (envBaseUrl) {
-    return { baseUrl: envBaseUrl, apiKey: process.env.DEEPSEEK_API_KEY };
+    return { baseUrl: envBaseUrl, apiKey: credentialEnv("DEEPSEEK_API_KEY") };
   }
   const cfg = readConfig(path);
   if (cfg.baseUrl) {
@@ -939,7 +986,7 @@ export function loadEndpoint(path: string = defaultConfigPath()): ResolvedEndpoi
   }
   return {
     baseUrl: undefined,
-    apiKey: process.env.DEEPSEEK_API_KEY ?? cfg.apiKey,
+    apiKey: credentialEnv("DEEPSEEK_API_KEY") ?? cfg.apiKey,
   };
 }
 
@@ -948,7 +995,7 @@ export function inspectEndpointSources(
 ): ResolvedEndpointSources {
   const envBaseUrl = resolveBaseUrlEnv();
   const envBaseUrlSource = resolveBaseUrlEnvSource();
-  const envApiKey = process.env.DEEPSEEK_API_KEY;
+  const envApiKey = credentialEnv("DEEPSEEK_API_KEY");
   const cfg = readConfig(path);
 
   if (envBaseUrl) {
@@ -1438,7 +1485,7 @@ export function saveApiKey(key: string, path: string = defaultConfigPath()): voi
   writeConfig(cfg, path);
   // A stale process env (User-level Windows env, `.env`, shell rc) shadows config in
   // loadEndpoint's fallback branch — an explicit UI save must win for the current run.
-  if (trimmed) process.env.DEEPSEEK_API_KEY = trimmed;
+  if (trimmed && !getAndroidRuntimeContext()) process.env.DEEPSEEK_API_KEY = trimmed;
 }
 
 export function clearApiKey(path: string = defaultConfigPath()): void {
@@ -1447,6 +1494,7 @@ export function clearApiKey(path: string = defaultConfigPath()): void {
   delete cfg.apiKey;
   cfg.setupCompleted = false;
   writeConfig(cfg, path);
+  if (getAndroidRuntimeContext()) return;
   // biome-ignore lint/performance/noDelete: process.env coerces undefined to the string "undefined".
   delete process.env.DEEPSEEK_API_KEY;
 }
@@ -2122,8 +2170,8 @@ export function loadQQConfig(path: string = defaultConfigPath()): LoadedQQConfig
   const envSandbox = process.env.QQ_SANDBOX;
   const envAllowlist = normalizeQQAllowlist(process.env.QQ_ALLOWLIST);
   const fromEnv = {
-    appId: process.env.QQ_APPID,
-    appSecret: process.env.QQ_SECRET,
+    appId: credentialEnv("QQ_APPID"),
+    appSecret: credentialEnv("QQ_SECRET"),
     sandbox: envSandbox === "1" ? true : envSandbox === "0" ? false : undefined,
     ownerOpenId: normalizeQQOpenId(process.env.QQ_OWNER_OPENID),
     allowlist: envAllowlist,
@@ -2174,8 +2222,8 @@ function boolFromEnv(value: string | undefined): boolean | undefined {
 export function loadFeishuConfig(path: string = defaultConfigPath()): LoadedFeishuConfig {
   const fromCfg = readConfig(path).feishu ?? {};
   return {
-    appId: process.env.FEISHU_APP_ID ?? fromCfg.appId,
-    appSecret: process.env.FEISHU_APP_SECRET ?? fromCfg.appSecret,
+    appId: credentialEnv("FEISHU_APP_ID") ?? fromCfg.appId,
+    appSecret: credentialEnv("FEISHU_APP_SECRET") ?? fromCfg.appSecret,
     enabled: fromCfg.enabled === true,
     requireMentionInGroup:
       boolFromEnv(process.env.FEISHU_REQUIRE_MENTION_IN_GROUP) ??
@@ -2208,9 +2256,12 @@ export interface LoadedDingTalkConfig {
 export function loadDingTalkConfig(path: string = defaultConfigPath()): LoadedDingTalkConfig {
   const fromCfg = readConfig(path).dingtalk ?? {};
   return {
-    clientId: process.env.DINGTALK_CLIENT_ID ?? process.env.DINGTALK_APP_KEY ?? fromCfg.clientId,
+    clientId:
+      credentialEnv("DINGTALK_CLIENT_ID") ?? credentialEnv("DINGTALK_APP_KEY") ?? fromCfg.clientId,
     clientSecret:
-      process.env.DINGTALK_CLIENT_SECRET ?? process.env.DINGTALK_APP_SECRET ?? fromCfg.clientSecret,
+      credentialEnv("DINGTALK_CLIENT_SECRET") ??
+      credentialEnv("DINGTALK_APP_SECRET") ??
+      fromCfg.clientSecret,
     enabled: fromCfg.enabled === true,
     requireMentionInGroup:
       boolFromEnv(process.env.DINGTALK_REQUIRE_MENTION_IN_GROUP) ??
@@ -2243,7 +2294,7 @@ export interface LoadedTelegramConfig {
 export function loadTelegramConfig(path: string = defaultConfigPath()): LoadedTelegramConfig {
   const envAllowlist = normalizeTelegramAllowlist(process.env.TELEGRAM_ALLOWLIST);
   const fromEnv = {
-    botToken: process.env.TELEGRAM_BOT_TOKEN,
+    botToken: credentialEnv("TELEGRAM_BOT_TOKEN"),
     ownerUserId: normalizeTelegramUserId(process.env.TELEGRAM_OWNER_USER_ID),
     allowlist: envAllowlist,
   };

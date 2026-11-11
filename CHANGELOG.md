@@ -5,6 +5,26 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.12] — 2026-11-11
+
+### 中文
+
+- 统一模型上下文窗口、请求预算与诊断快照；引入独立压缩检查点，保留原始历史，改善超限恢复、跨轮次状态、共享会话压缩基线和取消后的数据保护。
+- 新增 Desktop 本地多语言 Whisper 语音转写、模型下载与校验、录音取消和麦克风权限处理；模型需另行下载，识别效果依赖设备与音频条件。
+- 新增 Android QA 本地运行工程及持久化文件上传、分享接收、导出、工作区与语音桥接；本次不发布正式 Android 安装包。
+- 改善 Web 文件选择与下载、空闲连接保活、终端及会话快照一致性，并更新语音依赖许可与跨平台构建配置。
+- macOS 安装受阻时，将应用移入“应用程序”后运行 `sudo xattr -rd com.apple.quarantine /Applications/Jupiter.app`。
+- 新增持久化定时任务：设置页支持单次、固定间隔、每天及每周执行，独立会话记录结果，可暂停、恢复、手动执行及取消；复用现有权限、预算和会话机制。需要主机 Jupiter 运行，公网 Web 仅可查看，不自动批准需要确认的操作。
+
+### English
+
+- Unifies model context windows, request budgets and diagnostic snapshots. Separate compaction checkpoints preserve raw history and improve overflow recovery, cross-turn state, shared-session baselines and cancellation safety.
+- Adds local multilingual Whisper dictation on Desktop, model download/verification, recording cancellation and microphone permissions. Models are downloaded separately; recognition quality depends on hardware and audio conditions.
+- Adds the Android QA on-device runtime project with durable uploads, share intake, export, workspaces and speech bridges. No public Android installer is included in this release.
+- Improves browser file picking/downloads, idle connections, terminals and session snapshot consistency, and updates speech dependency licenses and cross-platform build configuration.
+- If macOS blocks installation, move the app to Applications and run `sudo xattr -rd com.apple.quarantine /Applications/Jupiter.app`.
+- Adds persistent scheduled tasks with one-time, interval, daily and weekly schedules, isolated result sessions, pause/resume, manual runs and cancellation. Reuses existing permissions, budgets and session storage. The host runtime must remain running; public Web is read-only and unattended runs never auto-approve pending confirmations.
+
 ## [1.0.11] — 2026-10-27
 
 ### 中文

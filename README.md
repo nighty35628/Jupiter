@@ -68,7 +68,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 桌面安装包发布在 GitHub Releases：
 
-- 当前版本：`desktop-v1.0.11`，2026-10-27 发布
+- 当前版本：`desktop-v1.0.12`，2026-11-11 发布
 - [最新版本](https://github.com/nighty35628/Jupiter/releases/latest)
 - [全部版本](https://github.com/nighty35628/Jupiter/releases)
 
@@ -141,6 +141,13 @@ reasoning 和缓存统计等扩展字段；普通兼容端点不会收到这些�
 Web Beta 默认只监听 `127.0.0.1`，复用当前 Desktop 界面、会话与 agent 运行时。浏览器文件通过授权工作区和上传/下载流转；多个已配对设备可以观察，但同一时刻只有一个设备持有写入租约。Desktop 与 Web 同时打开同一会话时也会启用跨进程单写保护。
 
 局域网使用 `--access lan`；公网使用 `--access public`，并且必须放在带身份验证的 HTTPS 反向代理后，Jupiter 本身仍只绑定回环地址。公网模式固定关闭终端、MCP 写入、Git 写入和密钥写入。完整命令、能力差异与代理示例见 [Web Beta 访问指南](docs/web-beta.md)。
+
+### 1.0.12 新功能
+
+- **上下文可靠性：** 统一请求预算和模型窗口信息，压缩检查点与原始历史分离，改善超限恢复、跨轮次状态和取消后的历史保护。
+- **定时任务：** 支持单次、间隔、每天及每周任务，独立结果会话、暂停、恢复与取消；主机须保持运行，公网 Web 仅可查看。
+- **语音输入：** Desktop 新增本地多语言 Whisper 转写、模型管理和麦克风权限处理；识别模型须另行下载。
+- **Android QA：** 新增手机端本地运行工程、文件分享和语音桥接；仍属 QA 构建，本次不提供正式 APK。
 
 ### 1.0.11 新功能
 
@@ -261,7 +268,7 @@ FEISHU_REQUIRE_MENTION_IN_GROUP=true
 
 Desktop installers are published on GitHub Releases:
 
-- Current version: `desktop-v1.0.11`, released on 2026-10-27
+- Current version: `desktop-v1.0.12`, released on 2026-11-11
 - [Latest Release](https://github.com/nighty35628/Jupiter/releases/latest)
 - [All Releases](https://github.com/nighty35628/Jupiter/releases)
 
@@ -338,6 +345,13 @@ DeepSeek prices to third-party usage when pricing is unknown.
 Web Beta listens on `127.0.0.1` by default and reuses the current Desktop UI, sessions, and agent runtime. Browser files flow through approved workspaces and upload/download APIs. Multiple paired devices may observe, while only one device holds the writer lease at a time. A cross-process single-writer lock also protects a session opened by Desktop and Web simultaneously.
 
 Use `--access lan` on a private network. Public access uses `--access public` behind an authenticated HTTPS reverse proxy while Jupiter remains bound to loopback. Public mode always disables terminals, MCP writes, Git writes, and secret writes. See the [Web Beta access guide](docs/web-beta.md) for commands, capability differences, and proxy configuration.
+
+### New in 1.0.12
+
+- **Context reliability:** Unifies request budgets and model-window metadata, separates compaction checkpoints from raw history, and improves overflow recovery, cross-turn state and cancellation safety.
+- **Scheduled tasks:** One-time, interval, daily and weekly tasks with isolated result sessions, pause/resume and cancellation. The host must remain running; public Web is read-only.
+- **Voice input:** Desktop adds local multilingual Whisper transcription, model management and microphone permission handling. The recognition model is downloaded separately.
+- **Android QA:** Adds the on-device runtime project, file sharing and native speech bridges. It remains a QA build; this release does not ship a public APK.
 
 ### New in 1.0.11
 

@@ -30,6 +30,7 @@ const contentB = "JUPITER-SYNTHETIC-B\n" + "b9876543210\\\"\n".repeat(4096);
 const models = ["smoke-model", "smoke-empty-models", "smoke-fault-models"];
 const help = `Local-only production acceptance. Node >=22; no install/build/API payment.
   node scripts/update-reliability-smoke.mjs self-check
+  node scripts/update-reliability-smoke.mjs provider-only
   node scripts/update-reliability-smoke.mjs web [--cli dist/cli/index.js] [--no-keep]
   node scripts/update-reliability-smoke.mjs prepare-native
   node scripts/update-reliability-smoke.mjs native --driver /tmp/.../target/debug/jupiter-smoke-native [--cli dist/cli/index.js]
@@ -60,7 +61,7 @@ if (mode === "--help" || argv.includes("--help")) {
   console.log(help);
   process.exit(0);
 }
-assert(["self-check", "web", "prepare-native", "native", "native-ui", "stop"].includes(mode), help);
+assert(["self-check", "web", "prepare-native", "native", "native-ui", "provider-only", "stop"].includes(mode), help);
 assert(Number(process.versions.node.split(".")[0]) >= 22, "Node 22+ required");
 
 async function contained(path) {
@@ -298,6 +299,11 @@ if (mode === "prepare-native") {
   process.exit(0);
 }
 
+const androidValidationCommand = `/bin/bash -lc 'set -eu
+python3 check.py
+node -e "if(40+2!==42)process.exit(1);console.log(42)"
+git status --short
+git diff --stat'`;
 const receipts = [];
 const tries = new Map();
 let providerPort;
@@ -322,17 +328,19 @@ async function serveProvider(req, res) {
   const last = users.at(-1)?.content;
   const text = typeof last === "string" ? last : JSON.stringify(last ?? "");
   const marker = text.match(/SMOKE:[a-z0-9-]+/)?.[0] ?? "SMOKE:probe";
+  const compaction = text.startsWith("Summarize the conversation above");
   const toolArgumentChunkDelayMs = marker.includes("ui-tools") ? 30 : 5;
   const previous = tries.get(marker) ?? 0;
   tries.set(marker, previous + 1);
   const receipt = { id: randomUUID(), marker, route: url.pathname, method: req.method, model: body.model,
     remoteAddress: req.socket.remoteAddress, remotePort: req.socket.remotePort,
-    stream: body.stream === true, authenticatedSynthetic: req.headers.authorization === `Bearer ${syntheticKey}`,
+    stream: body.stream === true, compaction, authenticatedSynthetic: req.headers.authorization === `Bearer ${syntheticKey}`,
     bytes, tools: (body.tools ?? []).map((t) => t.function?.name),
     historyMarkers: (body.messages ?? []).map((message) => ({ role: message.role,
       markers: String(typeof message.content === "string" ? message.content : "").match(/SMOKE:[a-z0-9-]+/g) ?? [] })),
     localMetadataLeak: (body.messages ?? []).some((message) => "turnId" in message || "conversationViewId" in message || "clientId" in message),
     toolResults: (body.messages ?? []).filter((m) => m.role === "tool").map((m) => ({ id: m.tool_call_id, contentHash: hash(JSON.stringify(m.content)) })),
+    imageCount: (body.messages ?? []).reduce((count, message) => count + (Array.isArray(message.content) ? message.content.filter((part) => part.type === "image_url").length : 0), 0),
     attempt: previous + 1, start: Date.now(), toolArgumentChunkDelayMs };
   receipts.push(receipt);
   journal("provider.jsonl", { kind: "request", ...receipt });
@@ -349,6 +357,10 @@ async function serveProvider(req, res) {
     return;
   }
   if (!url.pathname.endsWith("/chat/completions")) { json(404, { error: { message: "unsupported synthetic route" } }); return; }
+  if (compaction) {
+    json(200, { choices: [{ message: { content: "Durable synthetic facts. Preserve the original objective and continue the pending task." }, finish_reason: "stop" }], usage: { prompt_tokens: 300, completion_tokens: 20, total_tokens: 320 } });
+    return;
+  }
   if (body.messages?.[0]?.content?.startsWith("Predict one short next message")) {
     receipt.prediction = true;
     journal("provider.jsonl", { kind: "prediction", id: receipt.id, marker, tools: receipt.tools });
@@ -359,27 +371,40 @@ async function serveProvider(req, res) {
     return;
   }
   if (marker.includes("auth-fault")) { json(401, { error: { message: `synthetic auth denial ${syntheticKey}`, code: "invalid_api_key" } }); return; }
+  if (marker.includes("context-overflow") && (marker.includes("ask") || receipt.tools.length > 0)) {
+    const key = `${marker}:main-overflow`;
+    if (!tries.has(key)) {
+      tries.set(key, 1);
+      json(400, { error: { message: "Synthetic context is full", code: "context_length_exceeded" } });
+      return;
+    }
+  }
   if (marker.includes("retry") && previous === 0) { res.setHeader("retry-after", "0"); json(429, { error: { message: "synthetic retryable fault" } }); return; }
   if (marker.includes("delay")) await sleep(900);
   if (marker.includes("cancel")) await sleep(12000);
   if (res.destroyed) return;
   const isTools = marker.includes("tools");
-  const toolIds = ["smoke-provider-a", "smoke-provider-b", "smoke-provider-read"];
+  const isAndroidCommand = marker.includes("android-command");
+  const toolIds = isAndroidCommand ? ["smoke-android-command"] : ["smoke-provider-a", "smoke-provider-b", "smoke-provider-read"];
   const lastUserIndex = (body.messages ?? []).findLastIndex((m) => m.role === "user");
   const currentToolResults = (body.messages ?? []).slice(lastUserIndex + 1).filter((m) => m.role === "tool");
   const hasResults = toolIds.every((id) => currentToolResults.some((t) => t.tool_call_id === id));
   // User text also appears in no-tool routing/classification calls. Those must remain valid chat.
-  const toolCalls = isTools && !hasResults && receipt.tools.includes("write_file") && receipt.tools.includes("read_file") ? [
+  const toolCalls = isAndroidCommand && !hasResults && receipt.tools.includes("run_command") ? [
+    { id: toolIds[0], type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: androidValidationCommand }) } },
+  ] : isTools && !hasResults && receipt.tools.includes("write_file") && receipt.tools.includes("read_file") ? [
     { id: toolIds[0], type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "long-a.txt", content: contentA }) } },
     { id: toolIds[1], type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "long-b.txt", content: contentB }) } },
     { id: toolIds[2], type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "seed.txt" }) } },
   ] : [];
   const usage = { prompt_tokens: 100, completion_tokens: toolCalls.length ? 40000 : 16, total_tokens: toolCalls.length ? 40100 : 116, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 100 };
+  const commandResult = currentToolResults.find((tool) => tool.tool_call_id === "smoke-android-command")?.content;
+  const commandVerified = !isAndroidCommand || (typeof commandResult === "string" && commandResult.includes("[exit 0]") && commandResult.includes("ANDROID_PROJECT_TEST_OK") && /(?:^|\n)42(?:\n|$)/.test(commandResult));
   const content = marker.includes("long-transcript")
     ? `LOCAL_OK ${marker}\n\n` + Array.from({ length: 240 }, (_, index) =>
       `LOCAL_LINE_${String(index + 1).padStart(3, "0")} Synthetic transcript paragraph for real scroll and rendering checks.`,
     ).join("\n\n")
-    : `LOCAL_OK ${marker} ${hasResults ? "TOOLS_VERIFIED" : ""}`.trim();
+    : `LOCAL_OK ${marker} ${hasResults ? (commandVerified ? "TOOLS_VERIFIED" : "TOOL_RESULTS_FAILED") : ""}`.trim();
   if (!body.stream) {
     json(200, { id: receipt.id, object: "chat.completion", created: Math.floor(Date.now() / 1000), model: body.model,
       choices: [{ index: 0, message: { role: "assistant", content, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }, finish_reason: toolCalls.length ? "tool_calls" : "stop" }], usage });
@@ -416,13 +441,24 @@ async function serveProvider(req, res) {
   res.write(`data: ${JSON.stringify({ choices: [], usage })}\n\n`);
   res.end("data: [DONE]\n\n");
 }
-async function listen(server) {
-  await new Promise((done, fail) => { server.once("error", fail); server.listen(0, "127.0.0.1", done); });
+async function listen(server, port = 0) {
+  await new Promise((done, fail) => { server.once("error", fail); server.listen(port, "127.0.0.1", done); });
   return server.address().port;
 }
-providerPort = await listen(provider);
+const fixedProviderPort = mode === "provider-only" ? Number(process.env.JUPITER_SMOKE_PROVIDER_PORT ?? 0) : 0;
+assert(Number.isInteger(fixedProviderPort) && fixedProviderPort >= 0 && fixedProviderPort <= 65535, "invalid synthetic provider port");
+providerPort = await listen(provider, fixedProviderPort);
 await save("allowed-ports.json", [providerPort]);
 const providerUrl = `http://127.0.0.1:${providerPort}/v1`;
+if (mode === "provider-only") {
+  await save("state.json", { mode, status: "synthetic_provider_only", providerUrl, syntheticKey, run, providerPid });
+  console.log(JSON.stringify({ providerUrl, run, providerPid }));
+  await new Promise((done) => {
+    const stop = () => { provider.closeAllConnections(); provider.close(done); };
+    process.once("SIGINT", stop); process.once("SIGTERM", stop);
+  });
+  process.exit(0);
+}
 await writeFile(join(workspace, "seed.txt"), "isolated real tool read\n");
 const isolationWitness = { name: `isolation-${randomUUID()}.txt`, content: `owned-workspace-${randomUUID()}\n` };
 await writeFile(join(workspace, isolationWitness.name), isolationWitness.content);

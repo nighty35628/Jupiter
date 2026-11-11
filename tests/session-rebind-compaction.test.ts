@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeepSeekClient } from "../src/client.js";
 import { CacheFirstLoop } from "../src/loop.js";
+import { compactionCheckpointPath } from "../src/memory/compaction-checkpoint.js";
 import { ImmutablePrefix } from "../src/memory/runtime.js";
 import {
   listSessions,
@@ -108,7 +109,8 @@ describe("session rebinding during compaction", () => {
     expect(result.folded).toBe(true);
     expect(existsSync(sessionPath(oldName))).toBe(false);
     expect(existsSync(sessionPath(newName))).toBe(true);
-    expect(readFileSync(`${sessionPath(newName)}.bak`, "utf8")).toBe(beforeFold);
+    expect(readFileSync(sessionPath(newName), "utf8")).toBe(beforeFold);
+    expect(existsSync(compactionCheckpointPath(newName))).toBe(true);
     expect(listSessions().map((session) => session.name)).toEqual([newName]);
   });
 

@@ -1,20 +1,149 @@
 import {
   emitRuntimeEvent,
   getWebWorkspaceChoices,
+  resolveWebWorkspaceFile,
   uploadWebFile,
 } from "./runtime-transport";
+import {
+  type AndroidShare, callAndroid, consumeAndroidShare, discardAndroidShare, downloadAndroidFile,
+  fetchAndroidShareFiles, isAndroidLocal,
+} from "./android-native";
+import { findImageDraftIntake } from "../../../desktop/src/ui/image-draft-store";
 
 type UnlistenFn = () => void;
 type EventCallback<T = any> = (event: { payload: T; event: string }) => void;
 
 export type WebDragDropEvent = {
-  payload: { type: "enter" | "leave" } | { type: "drop"; paths?: string[]; files?: File[] };
+  payload: { type: "enter" | "leave" } | {
+    type: "drop"; paths?: string[]; files?: File[]; text?: string; intakeId?: string;
+    complete?: (persistDraft: () => void) => void;
+  };
 };
 
-type WebDragDropCallback = (event: WebDragDropEvent) => void;
+type WebDragDropCallback = (event: WebDragDropEvent) => void | Promise<void>;
 
 const webDragDropCallbacks = new Set<WebDragDropCallback>();
 let webDragDropDepth = 0;
+let androidShareChecked = false;
+let androidShareNeedsReceiver = false;
+let androidShareReadyPending = false;
+let androidShareRunning = false;
+let androidShareDisconnected = false;
+let androidShareAbort: AbortController | undefined;
+let androidSharePending: { share: AndroidShare; files?: File[]; persist?: () => void } | undefined;
+let androidShareStatus: { error: string | null; busy: boolean } = { error: null, busy: false };
+
+function publishAndroidShareStatus(): void {
+  window.dispatchEvent(new CustomEvent("jupiter:android-share-status", { detail: androidShareStatus }));
+}
+
+async function intakeAndroidShare(explicit = false): Promise<void> {
+  if (!isAndroidLocal || androidShareDisconnected || androidShareRunning || !webDragDropCallbacks.size ||
+      (!explicit && !androidShareReadyPending && androidShareChecked && !androidShareNeedsReceiver)) return;
+  androidShareReadyPending = false;
+  androidShareChecked = true;
+  androidShareNeedsReceiver = false;
+  androidShareRunning = true;
+  androidShareStatus = { ...androidShareStatus, busy: true };
+  publishAndroidShareStatus();
+  try {
+    const seen = new Set<string>();
+    while (!androidShareDisconnected) {
+      if (!androidSharePending) {
+        if (!webDragDropCallbacks.size) { androidShareNeedsReceiver = true; return; }
+        androidShareReadyPending = false;
+        const share = await consumeAndroidShare();
+        if (!share) {
+          if (androidShareReadyPending) continue;
+          androidShareStatus = { error: null, busy: true };
+          return;
+        }
+        // A host replay after a successful ack must not cause an unbounded drain loop.
+        if (seen.has(share.id)) return;
+        androidSharePending = { share };
+      }
+      const pending = androidSharePending;
+      if (!pending.persist && findImageDraftIntake(pending.share.id) === undefined) {
+        androidShareAbort = new AbortController();
+        pending.files ??= await fetchAndroidShareFiles(pending.share, androidShareAbort.signal);
+        if (androidShareDisconnected) return;
+        const event: WebDragDropEvent = { payload: {
+          type: "drop", text: pending.share.text, files: pending.files, intakeId: pending.share.id,
+          complete: (persist) => { pending.persist = persist; },
+        } };
+        let claimed = false;
+        for (const callback of webDragDropCallbacks) {
+          const handled = callback(event);
+          if (handled) { claimed = true; await handled; break; }
+        }
+        if (!claimed) { androidShareNeedsReceiver = true; return; }
+        if (!pending.persist) throw new Error("Android share draft intake did not complete");
+      }
+      if (androidShareDisconnected) return;
+      if (findImageDraftIntake(pending.share.id) === undefined) pending.persist?.();
+      if (findImageDraftIntake(pending.share.id) === undefined) throw new Error("Android share draft receipt was not persisted");
+      await callAndroid("acknowledgeShare", { id: pending.share.id });
+      seen.add(pending.share.id);
+      androidSharePending = undefined;
+      androidShareStatus = { error: null, busy: true };
+      // Drain only after success. A failure stops here until an explicit retry or ready event.
+    }
+  } catch (error) {
+    androidShareReadyPending = false;
+    androidShareStatus = { error: error instanceof Error ? error.message : String(error), busy: true };
+    console.error("Android share intake failed; retry on the next share intake", error);
+  } finally {
+    androidShareAbort = undefined;
+    androidShareRunning = false;
+    androidShareStatus = { ...androidShareStatus, busy: false };
+    publishAndroidShareStatus();
+    // A ready event during a receiver gap is a new request, not a retry of a failed intake.
+    if (androidShareReadyPending && !androidSharePending) void intakeAndroidShare();
+  }
+}
+
+function onAndroidShareReady(): void {
+  androidShareReadyPending = true;
+  void intakeAndroidShare(true);
+}
+
+async function discardPendingAndroidShare(): Promise<void> {
+  if (!isAndroidLocal || androidShareDisconnected || androidShareRunning) return;
+  const target = androidSharePending;
+  let advance = false;
+  androidShareRunning = true;
+  androidShareStatus = { ...androidShareStatus, busy: true };
+  publishAndroidShareStatus();
+  try {
+    const discarded = await discardAndroidShare(target?.share.id);
+    if (androidShareDisconnected) return;
+    if (discarded && androidSharePending === target) {
+      androidSharePending = undefined;
+      androidShareNeedsReceiver = false;
+      androidShareStatus = { error: null, busy: true };
+      advance = true;
+    }
+  } catch (error) {
+    androidShareReadyPending = false;
+    androidShareStatus = { error: error instanceof Error ? error.message : String(error), busy: true };
+  } finally {
+    androidShareRunning = false;
+    androidShareStatus = { ...androidShareStatus, busy: false };
+    publishAndroidShareStatus();
+  }
+  if (advance) await intakeAndroidShare(true);
+}
+
+if (isAndroidLocal) {
+  window.addEventListener("jupiter:android-share-ready", onAndroidShareReady);
+  window.addEventListener("jupiter:android-share-retry", onAndroidShareReady);
+  window.addEventListener("jupiter:android-share-discard", () => { void discardPendingAndroidShare(); });
+  window.addEventListener("jupiter:android-share-status-request", publishAndroidShareStatus);
+  window.addEventListener("pagehide", () => {
+    androidShareDisconnected = true;
+    androidShareAbort?.abort();
+  });
+}
 
 function dispatchWebDragDrop(event: WebDragDropEvent): void {
   for (const callback of webDragDropCallbacks) callback(event);
@@ -62,12 +191,14 @@ function removeWebDragDropListeners(): void {
 }
 
 export function getCurrentWebview(): {
-  onDragDropEvent(callback: (event: WebDragDropEvent) => void): Promise<UnlistenFn>;
+  onDragDropEvent(callback: WebDragDropCallback): Promise<UnlistenFn>;
 } {
   return {
-    onDragDropEvent: async (callback: (event: WebDragDropEvent) => void): Promise<UnlistenFn> => {
+    onDragDropEvent: async (callback: WebDragDropCallback): Promise<UnlistenFn> => {
       if (webDragDropCallbacks.size === 0) installWebDragDropListeners();
       webDragDropCallbacks.add(callback);
+      if (isAndroidLocal) publishAndroidShareStatus();
+      void intakeAndroidShare();
       return () => {
         webDragDropCallbacks.delete(callback);
         if (webDragDropCallbacks.size === 0) removeWebDragDropListeners();
@@ -215,6 +346,11 @@ export async function requestPermission(): Promise<NotificationPermission> {
 }
 
 export function sendNotification(options: string | { title: string; body?: string }): void {
+  if (isAndroidLocal) {
+    const args = typeof options === "string" ? { title: options } : options;
+    void callAndroid("notify", args).catch(() => undefined);
+    return;
+  }
   if (
     typeof Notification === "undefined" ||
     Notification.permission !== "granted" ||
@@ -244,6 +380,7 @@ export async function save(options?: any): Promise<any> {
 }
 
 export async function openUrl(url: string): Promise<void> {
+  if (isAndroidLocal) { await callAndroid("openExternal", { url }); return; }
   console.log(`[tauri-bridge] open url -> ${url}`);
   window.open(url, "_blank", "noopener,noreferrer");
   return Promise.resolve();
@@ -251,6 +388,12 @@ export async function openUrl(url: string): Promise<void> {
 
 export async function openPath(path: string, _openWith?: string): Promise<void> {
   const fileId = webFileId(path);
+  if (isAndroidLocal && fileId) { await downloadAndroidFile(fileId, "jupiter-export"); return; }
+  if (isAndroidLocal) {
+    const file = await resolveWebWorkspaceFile(path);
+    await downloadAndroidFile(file.id, file.name);
+    return;
+  }
   if (fileId) window.open(`/api/files/${encodeURIComponent(fileId)}`, "_blank", "noopener,noreferrer");
   return Promise.resolve();
 }
@@ -294,21 +437,34 @@ function pickBrowserFiles(options: any): Promise<File[]> {
     input.style.display = "none";
     document.body.appendChild(input);
     let settled = false;
+    let focusTimer: number | undefined;
     const finish = (files: File[]) => {
       if (settled) return;
       settled = true;
       window.removeEventListener("focus", onFocus);
+      if (focusTimer !== undefined) window.clearTimeout(focusTimer);
+      input.removeEventListener("change", onChange);
+      input.removeEventListener("cancel", onCancel);
       input.remove();
       resolveFiles(files);
     };
-    const onFocus = () => window.setTimeout(() => finish(Array.from(input.files ?? [])), 300);
-    input.addEventListener("change", () => finish(Array.from(input.files ?? [])), { once: true });
+    const onFocus = () => { focusTimer = window.setTimeout(() => finish(Array.from(input.files ?? [])), 300); };
+    const onChange = () => finish(Array.from(input.files ?? []));
+    const onCancel = () => finish([]);
+    input.addEventListener("change", onChange, { once: true });
+    input.addEventListener("cancel", onCancel, { once: true });
     window.addEventListener("focus", onFocus, { once: true });
     input.click();
   });
 }
 
 async function pickApprovedWorkspace(): Promise<string> {
+  if (isAndroidLocal) {
+    const workspace = await callAndroid<{ id: string } | null>("chooseWorkspace");
+    if (!workspace?.id) return "";
+    await getWebWorkspaceChoices(true);
+    return `workspace://${workspace.id}`;
+  }
   const workspaces = await getWebWorkspaceChoices();
   if (workspaces.length === 0) return "";
   return new Promise<string>((resolveChoice) => {

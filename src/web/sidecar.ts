@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { writeAndroidChildBootstrap } from "../mobile/bootstrap.js";
+import { getAndroidRuntimeContext } from "../mobile/runtime-context.js";
 
 export type WebDownlinkPacket =
   | { channel: "rpc:event"; payload: { data: string } }
@@ -317,6 +319,25 @@ export class DesktopSidecar implements WebSidecar {
       this.exited = true;
       this.buffer.append({ channel: "rpc:exit", payload: { code } });
     });
+    if (getAndroidRuntimeContext()) {
+      this.child.stdin.on("error", () => {
+        this.buffer.append({
+          channel: "rpc:stderr",
+          payload: { data: "[android] private child channel closed" },
+        });
+      });
+      this.writeChain = writeAndroidChildBootstrap(this.child.stdin, "interactive").catch(
+        (error) => {
+          this.buffer.append({
+            channel: "rpc:stderr",
+            payload: { data: "[android] child initialization failed" },
+          });
+          this.child.kill("SIGTERM");
+          throw error;
+        },
+      );
+      void this.writeChain.catch(() => undefined); // send() still observes the failed initialization.
+    }
   }
 
   get latestSequence(): number {
@@ -379,7 +400,14 @@ function spawnDesktopProcess(opts: DesktopSidecarOptions): ChildProcessWithoutNu
   const nodeArgs = cliEntry.endsWith(".ts")
     ? process.execArgv.filter((arg) => !arg.startsWith("--inspect"))
     : [];
-  const args = [...nodeArgs, cliEntry, "desktop", "--dir", resolve(opts.dir)];
+  const args = [
+    ...nodeArgs,
+    ...(getAndroidRuntimeContext() ? ["--max-old-space-size=768"] : []),
+    cliEntry,
+    "desktop",
+    "--dir",
+    resolve(opts.dir),
+  ];
   if (opts.model) args.push("--model", opts.model);
   if (opts.budgetUsd !== undefined) args.push("--budget", String(opts.budgetUsd));
   return spawn(process.execPath, args, {

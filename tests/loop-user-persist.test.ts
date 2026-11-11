@@ -150,7 +150,7 @@ describe("loop persists user message at step entry (issue #943)", () => {
     expect(onUserPersistFailed).toHaveBeenCalledWith(1);
   });
 
-  it("persists send-time healing of dangling tool_calls so the session does not stay poisoned", async () => {
+  it("heals send-time model context without deleting original dangling tool-call evidence", async () => {
     const requestMessages: ChatMessage[][] = [];
     const client = new DeepSeekClient({
       apiKey: "sk-test",
@@ -199,7 +199,23 @@ describe("loop persists user message at step entry (issue #943)", () => {
       loadSessionMessages(sessionName).some(
         (m) => m.role === "assistant" && (m.tool_calls?.length ?? 0) > 0,
       ),
-    ).toBe(false);
+    ).toBe(true);
+    loop.dispose();
+    const restored = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+      session: sessionName,
+    });
+    await restored.run("continue once more");
+    const sent = requestMessages.at(-1)!;
+    const calls = sent.flatMap((message) => message.tool_calls ?? []);
+    expect(
+      calls.every((call) =>
+        sent.some((message) => message.role === "tool" && message.tool_call_id === call.id),
+      ),
+    ).toBe(true);
+    restored.dispose();
   });
 
   it("can discard an explicitly aborted prompt before the next request (#1593)", async () => {

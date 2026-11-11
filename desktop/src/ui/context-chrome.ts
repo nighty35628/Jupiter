@@ -36,8 +36,8 @@ export function nextContextTabOpenVisibility({
   infoOpen: boolean;
 }) {
   return {
-    collapseBottom: !bottomCollapsed,
-    expandSidebar: sidebarCollapsed,
+    collapseBottom: false,
+    expandSidebar: bottomCollapsed && sidebarCollapsed,
     infoOpen: infoOpen ? false : infoOpen,
   };
 }

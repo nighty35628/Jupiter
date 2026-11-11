@@ -46,6 +46,116 @@ describe("prompt prediction behavior setting", () => {
   });
 });
 
+describe("early compaction policy", { retry: 0 }, () => {
+  it("shows the unchanged default and a bounded integer input without saving it", () => {
+    const onSave = vi.fn();
+    renderSettings({ onSave });
+    fireEvent.click(screen.getByText("Models"));
+    expect(screen.getByRole("switch", { name: "Early compaction" }).getAttribute("aria-checked")).toBe("true");
+    const input = screen.getByRole("spinbutton", { name: "Early threshold (tokens)" }) as HTMLInputElement;
+    expect(input.value).toBe("160000");
+    expect(input.min).toBe("1024");
+    expect(input.step).toBe("1");
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("roundtrips a custom threshold and null through the existing save callback", () => {
+    const onSave = vi.fn();
+    const view = renderSettings({ onSave });
+    fireEvent.click(screen.getByText("Models"));
+    const input = screen.getByRole("spinbutton", { name: "Early threshold (tokens)" });
+    fireEvent.change(input, { target: { value: "32000" } });
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(onSave).toHaveBeenLastCalledWith({ earlyCompactionTokens: 32000 });
+    view.rerenderSettings({ earlyCompactionTokens: 32000 } as Partial<SettingsType>);
+    const toggle = screen.getByRole("switch", { name: "Early compaction" });
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenLastCalledWith({ earlyCompactionTokens: null });
+    view.rerenderSettings({ earlyCompactionTokens: null } as Partial<SettingsType>);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect((input as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenLastCalledWith({ earlyCompactionTokens: 32000 });
+  });
+
+  it("loads a disabled policy and reenables it with the default threshold", () => {
+    const onSave = vi.fn();
+    renderSettings({ onSave, settings: { earlyCompactionTokens: null } as Partial<SettingsType> });
+    fireEvent.click(screen.getByText("Models"));
+    const toggle = screen.getByRole("switch", { name: "Early compaction" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect((screen.getByRole("spinbutton", { name: "Early threshold (tokens)" }) as HTMLInputElement).disabled).toBe(true);
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenCalledWith({ earlyCompactionTokens: 160000 });
+  });
+
+  it.each(["", "0", "1023", "1024.5", "-1", "9007199254740992"])("does not save invalid threshold %s", (value) => {
+    const onSave = vi.fn();
+    renderSettings({ onSave });
+    fireEvent.click(screen.getByText("Models"));
+    const input = screen.getByRole("spinbutton", { name: "Early threshold (tokens)" });
+    fireEvent.change(input, { target: { value } });
+    fireEvent.blur(input);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByRole("alert").textContent).toContain("1024");
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("accepts the minimum integer threshold", () => {
+    const onSave = vi.fn();
+    renderSettings({ onSave });
+    fireEvent.click(screen.getByText("Models"));
+    const input = screen.getByRole("spinbutton", { name: "Early threshold (tokens)" });
+    fireEvent.change(input, { target: { value: "1024" } });
+    fireEvent.blur(input);
+    expect(onSave).toHaveBeenCalledWith({ earlyCompactionTokens: 1024 });
+  });
+
+  it.each(["en", "zh-CN", "de", "ja"] as const)("localizes policy controls in %s", (lang) => {
+    setLang(lang);
+    renderSettings();
+    fireEvent.click(screen.getByText(t("settings.pageModelsLabel")));
+    expect(screen.getByRole("switch", { name: t("settings.earlyCompaction") })).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: t("settings.earlyCompactionTokens") })).toBeTruthy();
+    expect(document.body.textContent).not.toContain("settings.earlyCompaction");
+  });
+
+  it.runIf(Boolean(process.env.JUPITER_UI_VISUAL_QA))("fits policy controls at desktop and mobile widths", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const { chromium } = await import("playwright-core");
+    const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+    const browser = await chromium.launch({ executablePath: process.env.JUPITER_QA_BROWSER, headless: true });
+    try {
+      const page = await browser.newPage();
+      for (const lang of ["en", "de"] as const) {
+        setLang(lang);
+        renderSettings();
+        fireEvent.click(screen.getByText(t("settings.pageModelsLabel")));
+        const markup = document.body.innerHTML;
+        for (const width of [1280, 390]) {
+          await page.setViewportSize({ width, height: 900 });
+          await page.setContent(`<html lang="${lang}" data-theme="dark" data-runtime="web"><head><style>${css}</style></head><body>${markup}</body></html>`);
+          await page.locator("#early-compaction-tokens").scrollIntoViewIfNeeded();
+          const overflow = await page.locator("#early-compaction-tokens").evaluate((input) => {
+            const row = input.closest(".setting-row")!;
+            const box = row.getBoundingClientRect();
+            return [...row.querySelectorAll("input, label")].some((item) => {
+              const rect = item.getBoundingClientRect();
+              return rect.right > box.right + 1 || rect.left < box.left - 1;
+            });
+          });
+          expect(overflow).toBe(false);
+          await page.screenshot({ path: `/tmp/jupiter-compaction-settings-${lang}-${width}.png` });
+        }
+        cleanup();
+      }
+    } finally { await browser.close(); }
+  }, 20000);
+});
+
 const settings: SettingsType = {
   reasoningEffort: "high",
   editMode: "review",

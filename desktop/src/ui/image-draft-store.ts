@@ -4,32 +4,80 @@ import type { ComposerSendPayload, QueuedComposerDraft } from "./composer";
 
 const PREFIX = "jupiter.image-draft.v1:";
 export interface ImageDraftRecord extends MessageDraft {
+  shareIntakeIds?: string[];
   queue?: (string | QueuedComposerDraft)[];
   pending?: { clientId: string; draft: MessageDraft; ask: boolean; plan: boolean };
 }
 const cache = new Map<string, ImageDraftRecord>();
 const listeners = new Map<string, Set<() => void>>();
+const textRevisions = new Map<string, number>();
+
+/** Runtime-only revision catches ABA edits without changing the persisted draft format. */
+export function imageDraftTextRevision(key: string): number {
+  return textRevisions.get(key) ?? 0;
+}
+type IntakeBinding = { key: string; next?: IntakeBinding };
+// Live setter generations follow handoffs; a reused new-tab key gets a fresh generation.
+const intakeBindings = new Map<string, IntakeBinding>();
+
+function intakeBinding(key: string): IntakeBinding {
+  let binding = intakeBindings.get(key);
+  if (!binding) { binding = { key }; intakeBindings.set(key, binding); }
+  return binding;
+}
+
+function resolveIntakeBinding(binding: IntakeBinding): string {
+  let target = binding;
+  while (target.next) target = target.next;
+  return target.key;
+}
+
+function forwardIntakeBinding(sourceKey: string, targetKey: string): void {
+  const source = intakeBindings.get(sourceKey);
+  if (source) source.next = intakeBinding(targetKey);
+  intakeBindings.delete(sourceKey);
+}
 
 export function conversationDraftKey(sessionId: string, conversationViewId: string): string {
   return `conversation:${JSON.stringify([sessionId, conversationViewId])}`;
 }
 
-function hasDraftContent(draft: ImageDraftRecord): boolean {
+function hasDraftPayload(draft: ImageDraftRecord): boolean {
   return !!(draft.text || draft.attachments?.length || draft.queue?.length || draft.pending);
+}
+
+function hasDraftContent(draft: ImageDraftRecord): boolean {
+  return hasDraftPayload(draft) || !!draft.shareIntakeIds?.length;
+}
+
+function sameDraftPayload(source: ImageDraftRecord, target: ImageDraftRecord): boolean {
+  return JSON.stringify({ ...source, shareIntakeIds: undefined }) === JSON.stringify({ ...target, shareIntakeIds: undefined });
+}
+
+function mergeDraftReceipts(source: ImageDraftRecord, target: ImageDraftRecord): ImageDraftRecord | undefined {
+  if (hasDraftPayload(source) && hasDraftPayload(target) && !sameDraftPayload(source, target)) return undefined;
+  const value = hasDraftPayload(source) ? source : target;
+  const ids = [...new Set([...(source.shareIntakeIds ?? []), ...(target.shareIntakeIds ?? [])])];
+  return ids.length ? { ...value, shareIntakeIds: ids } : value;
 }
 
 /** A new tab's local draft belongs to that tab, not to the legacy default view. */
 export function handoffImageDraft(sourceKey: string, targetKey: string): boolean {
   if (sourceKey === targetKey) return true;
-  const source = readImageDraft(sourceKey);
-  if (!hasDraftContent(source)) return true;
-  const target = readImageDraft(targetKey);
-  if (hasDraftContent(target) && JSON.stringify(source) !== JSON.stringify(target)) return false;
+  const sourceDraft = readImageDraft(sourceKey);
+  if (!hasDraftContent(sourceDraft)) {
+    forwardIntakeBinding(sourceKey, targetKey);
+    return true;
+  }
+  const targetDraft = readImageDraft(targetKey);
+  const merged = mergeDraftReceipts(sourceDraft, targetDraft);
+  if (!merged) return false;
   try {
-    localStorage.setItem(PREFIX + targetKey, JSON.stringify(source));
-    cache.set(targetKey, source);
+    localStorage.setItem(PREFIX + targetKey, JSON.stringify(merged));
+    cache.set(targetKey, merged);
     localStorage.removeItem(PREFIX + sourceKey);
     cache.delete(sourceKey);
+    forwardIntakeBinding(sourceKey, targetKey);
     syncImageDraftReferences();
     return true;
   } catch {
@@ -48,10 +96,17 @@ export function migrateConversationDraft(sessionId: string, conversationViewId: 
     const keys = [...new Set([sessionId, ...legacyKeys])].filter((old) => old !== key);
     const source = keys.find((old) => hasDraftContent(readImageDraft(old)));
     const target = readImageDraft(key);
-    const value = source ? readImageDraft(source) : target;
+    let value = source ? mergeDraftReceipts(readImageDraft(source), target) : target;
     // An empty placeholder is not a claimed draft. Conflicting real drafts
     // both survive; only successful migration consumes the legacy copy.
-    if (source && hasDraftContent(target) && JSON.stringify(target) !== JSON.stringify(value)) return false;
+    if (!value) return false;
+    const ids = new Set(value.shareIntakeIds);
+    for (const old of keys) {
+      const legacy = readImageDraft(old);
+      if (hasDraftPayload(legacy) && !sameDraftPayload(legacy, value)) continue;
+      for (const id of legacy.shareIntakeIds ?? []) ids.add(id);
+    }
+    if (ids.size) value = { ...value, shareIntakeIds: [...ids] };
     if (source || localStorage.getItem(PREFIX + key) === null) {
       localStorage.setItem(PREFIX + key, JSON.stringify(value));
       cache.set(key, value);
@@ -60,7 +115,7 @@ export function migrateConversationDraft(sessionId: string, conversationViewId: 
     localStorage.setItem(marker, "1");
     for (const old of keys) {
       const legacy = readImageDraft(old);
-      if (hasDraftContent(legacy) && JSON.stringify(legacy) !== JSON.stringify(value)) continue;
+      if (hasDraftPayload(legacy) && !sameDraftPayload(legacy, value)) continue;
       localStorage.removeItem(PREFIX + old);
       cache.delete(old);
     }
@@ -140,6 +195,10 @@ export function readImageDraft(key: string): ImageDraftRecord {
     if (validDraft(value)) {
       draft = { text: value.text, attachments: value.attachments ?? [] };
       const record = value as ImageDraftRecord;
+      if (Array.isArray(record.shareIntakeIds))
+        draft.shareIntakeIds = [...new Set(record.shareIntakeIds.filter(
+          (id) => typeof id === "string" && id.length > 0 && id.length <= 128,
+        ))];
       if (Array.isArray(record.queue))
         draft.queue = record.queue.filter(
           (item) =>
@@ -164,11 +223,15 @@ export function readImageDraft(key: string): ImageDraftRecord {
 export function writeImageDraft(
   key: string,
   change: (draft: ImageDraftRecord) => ImageDraftRecord,
+  options: { requirePersistence?: boolean } = {},
 ): void {
-  const next = change(readImageDraft(key));
+  const previous = readImageDraft(key);
+  const next = change(previous);
+  if (options.requirePersistence) localStorage.setItem(PREFIX + key, JSON.stringify(next));
   cache.set(key, next);
+  if (next.text !== previous.text) textRevisions.set(key, imageDraftTextRevision(key) + 1);
   try {
-    localStorage.setItem(PREFIX + key, JSON.stringify(next));
+    if (!options.requirePersistence) localStorage.setItem(PREFIX + key, JSON.stringify(next));
   } catch {
     /* The live copy remains available. */
   }
@@ -178,6 +241,49 @@ export function writeImageDraft(
     if (cache.size <= 64) break;
     if (cachedKey !== key && !listeners.get(cachedKey)?.size) cache.delete(cachedKey);
   }
+}
+
+/** Commit the content and receipt in one storage write, before notifying live draft readers. */
+export function writeImageDraftIntake(
+  key: string, intakeId: string, change: (draft: ImageDraftRecord) => ImageDraftRecord,
+): void {
+  if (!intakeId || intakeId.length > 128) throw new Error("Invalid Android share intake id");
+  writeImageDraft(key, (draft) => {
+    if (draft.shareIntakeIds?.includes(intakeId)) return draft;
+    const next = change(draft);
+    if (!validDraft(next)) throw new Error("Android share draft is too large or invalid");
+    return { ...next, shareIntakeIds: [...(draft.shareIntakeIds ?? []), intakeId] };
+  }, { requirePersistence: true });
+}
+
+export function imageDraftIntakePersisted(key: string, intakeId: string): boolean {
+  const serialized = localStorage.getItem(PREFIX + key);
+  if (!serialized) return false;
+  try {
+    const value = JSON.parse(serialized) as ImageDraftRecord;
+    return validDraft(value) && Array.isArray(value.shareIntakeIds) && value.shareIntakeIds.includes(intakeId);
+  } catch {
+    return false;
+  }
+}
+
+/** Receipts travel with their draft, including when another tab owns the restored draft. */
+export function findImageDraftIntake(intakeId: string): string | undefined {
+  for (let index = 0; index < localStorage.length; index++) {
+    const key = localStorage.key(index);
+    if (key?.startsWith(PREFIX) && imageDraftIntakePersisted(key.slice(PREFIX.length), intakeId))
+      return key.slice(PREFIX.length);
+  }
+  return undefined;
+}
+
+export function bindImageDraftIntake(key: string) {
+  const binding = intakeBinding(key);
+  return {
+    setIntake: (id: string, change: (draft: ImageDraftRecord) => ImageDraftRecord) =>
+      writeImageDraftIntake(resolveIntakeBinding(binding), id, change),
+    intakePersisted: (id: string) => imageDraftIntakePersisted(resolveIntakeBinding(binding), id),
+  };
 }
 
 export function subscribeImageDraft(key: string, listener: () => void): () => void {

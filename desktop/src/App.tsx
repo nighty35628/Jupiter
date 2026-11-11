@@ -263,6 +263,7 @@ export type AssistantSegment =
 import { type ImageAttachment, imageToken } from "../../src/attachments/types";
 import type { QueuedComposerDraft } from "./ui/composer";
 import { importImage, useImageDraft } from "./ui/image-attachments";
+import { cancelSpeechDraft, useSpeechDraft } from "./speech/use-speech-draft";
 import {
   acknowledgeImageSubmission,
   conversationDraftKey,
@@ -484,6 +485,7 @@ export type Settings = {
   subagentModels?: Record<string, "flash" | "pro">;
   /** Per-model context-window override (tokens). */
   contextTokens?: Record<string, number>;
+  earlyCompactionTokens?: number | null;
   libraryRetrievalMode?: "off" | "on_demand" | "always";
   showSystemEvents?: boolean;
   showAiVisibleDetails?: boolean;
@@ -522,6 +524,8 @@ type MentionPreviewState = {
 
 type State = {
   promptPrediction?: { completionId: string; text?: string | null };
+  scheduledTasks?: import("../../src/scheduler/types").ScheduledTasksEvent;
+  scheduledTaskResults?: Record<string, import("../../src/scheduler/types").ScheduledTaskReceipt>;
   ready: boolean;
   needsSetup: boolean;
   busy: boolean;
@@ -1913,6 +1917,8 @@ function numericProgress(value: unknown): number | undefined {
 
 function applyIncomingRaw(state: State, ev: IncomingEvent): State {
   switch (ev.type) {
+    case "$scheduled_tasks":
+      return { ...state, scheduledTasks: ev, scheduledTaskResults: Object.fromEntries([...Object.entries(state.scheduledTaskResults ?? {}), [ev.requestId, { requestId: ev.requestId, workspaceDir: ev.workspaceDir, error: ev.error }]].slice(-32)) };
     case "$tab_opened":
       return {
         ...state,
@@ -2199,6 +2205,10 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           memoryTokens: ev.memoryTokens,
           summaryTokens: ev.summaryTokens,
           ctxMax: ev.ctxMax,
+          outputReserveTokens: ev.outputReserveTokens,
+          inputLimit: ev.inputLimit,
+          budgetEstimated: ev.budgetEstimated,
+          budgetSource: ev.budgetSource,
           toolsCount: ev.toolsCount,
           logMessages: ev.logMessages,
           topTools: ev.topTools ?? [],
@@ -2438,6 +2448,7 @@ function applyIncomingRaw(state: State, ev: IncomingEvent): State {
           deepseekNativeCredentialStatus: ev.deepseekNativeCredentialStatus,
           subagentModels: ev.subagentModels,
           contextTokens: ev.contextTokens,
+          earlyCompactionTokens: ev.earlyCompactionTokens,
           libraryRetrievalMode: ev.libraryRetrievalMode,
           showSystemEvents: ev.showSystemEvents,
           showAiVisibleDetails: ev.showAiVisibleDetails,
@@ -3207,9 +3218,19 @@ function TabRuntimeInner({
     setDraft,
     images: draftImages,
     setImages: setDraftImages,
+    setIntake: setDraftIntake,
+    intakePersisted,
     pending: pendingImageDraft,
   } = useImageDraft(draftKey);
   const [dropIntakes, setDropIntakes] = useState<Record<string, number>>({});
+  const [androidShareStatus, setAndroidShareStatus] = useState<{ error: string | null; busy: boolean }>({ error: null, busy: false });
+  useEffect(() => {
+    if (document.documentElement.dataset.hostPlatform !== "android") return;
+    const update = (event: Event) => setAndroidShareStatus((event as CustomEvent<{ error: string | null; busy: boolean }>).detail);
+    window.addEventListener("jupiter:android-share-status", update);
+    window.dispatchEvent(new Event("jupiter:android-share-status-request"));
+    return () => window.removeEventListener("jupiter:android-share-status", update);
+  }, []);
   const [expandedSharedReplies, setExpandedSharedReplies] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     // Explicit enqueue already persists its own payload in onQueueWhileBusy.
@@ -3248,6 +3269,7 @@ function TabRuntimeInner({
     { top?: number; bottom?: number; left: number } | undefined
   >(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const speech = useSpeechDraft(draftKey, active, draftStorageReady, composerRef, state.bindingId);
   const contextTabIdRef = useRef(0);
   const browserRequestIdRef = useRef(0);
   const turnLoadRequestIdRef = useRef(0);
@@ -3265,6 +3287,15 @@ function TabRuntimeInner({
   }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPageId>("general");
+  useEffect(() => {
+    if (!active) return;
+    const openSpeechSettings = () => {
+      setSettingsPage("general");
+      setSettingsOpen(true);
+    };
+    window.addEventListener("jupiter:open-speech-settings", openSpeechSettings);
+    return () => window.removeEventListener("jupiter:open-speech-settings", openSpeechSettings);
+  }, [active]);
   const [settingsCardOpen, setSettingsCardOpen] = useState(false);
   const [predictionLocalOff, setPredictionLocalOff] = useState(false);
   const [predictionPreferenceRequest, setPredictionPreferenceRequest] = useState<string | null>(null);
@@ -3337,6 +3368,22 @@ function TabRuntimeInner({
   }, []);
   const palette = useCommandPalette(active);
   const setPaletteOpen = palette.setOpen;
+  useEffect(() => {
+    if (!active || document.documentElement.dataset.hostPlatform !== "android") return;
+    const back = (event: Event) => {
+      if (event.defaultPrevented) return;
+      if (settingsOpen) setSettingsOpen(false);
+      else if (settingsCardOpen) setSettingsCardOpen(false);
+      else if (aboutOpen) setAboutOpen(false);
+      else if (jobsOpen) setJobsOpen(false);
+      else if (wdOpen) setWdOpen(false);
+      else if (palette.open) setPaletteOpen(false);
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener("jupiter:android-back", back);
+    return () => window.removeEventListener("jupiter:android-back", back);
+  }, [active, settingsOpen, settingsCardOpen, aboutOpen, jobsOpen, wdOpen, palette.open, setPaletteOpen]);
   useEffect(() => {
     onRuntimeSnapshot(tabId, {
       currentSession: state.currentSession,
@@ -3823,7 +3870,7 @@ function TabRuntimeInner({
   const predictionUi = usePromptPrediction({
     candidate: state.promptPrediction, active, ready: state.ready && draftIdentityReady, busy: state.busy,
     enabled: !predictionLocalOff && state.settings?.promptPredictionsEnabled !== false,
-    blocked: settingsOpen || settingsCardOpen || state.pendingConfirms.length > 0 ||
+    blocked: speech.pending || settingsOpen || settingsCardOpen || state.pendingConfirms.length > 0 ||
       state.pendingChoices.length > 0 || state.pendingPlans.length > 0 || state.pendingPathAccess.length > 0 ||
       state.pendingCheckpoints.length > 0 || state.pendingRevisions.length > 0,
     hasDraft: !!draft || draftImages.length > 0 || !!pendingImageDraft || (dropIntakes[draftKey] ?? 0) > 0 || state.queuedSends.length > 0,
@@ -3831,10 +3878,12 @@ function TabRuntimeInner({
   });
   useEffect(() => {
     if (settingsOpen) {
+      cancelSpeechDraft(draftKey);
       sendRpc({ cmd: "settings_get" });
       sendRpc({ cmd: "context_diagnostics_get" });
     }
-  }, [settingsOpen, sendRpc]);
+    if (active) window.dispatchEvent(new Event("jupiter:speech-settings"));
+  }, [settingsOpen, sendRpc, draftKey, active]);
   const loadQQSettings = useCallback(() => sendRpc({ cmd: "qq_status_get" }), [sendRpc]);
   const connectQQ = useCallback(() => sendRpc({ cmd: "qq_connect" }), [sendRpc]);
   const disconnectQQ = useCallback(() => sendRpc({ cmd: "qq_disconnect" }), [sendRpc]);
@@ -4038,12 +4087,15 @@ function TabRuntimeInner({
     dropActiveRef.current = active;
   }, [active]);
   useEffect(() => {
+    if (document.documentElement.dataset.hostPlatform === "android" &&
+        (!active || !state.ready || !draftStorageReady)) return;
     const ws = state.settings?.workspaceDir;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     void (async () => {
       try {
         const mod = await import("@tauri-apps/api/webview");
+        if (cancelled) return;
         const webview = mod.getCurrentWebview();
         const handle = await webview.onDragDropEvent((event) => {
           if (!dropActiveRef.current) return;
@@ -4059,31 +4111,41 @@ function TabRuntimeInner({
           if (event.payload.type !== "drop") return;
           delete document.body.dataset.dragOver;
           const initialPaths = event.payload.paths ?? [];
-          const webFiles = (event.payload as { files?: File[] }).files ?? [];
-          if (!initialPaths.length && !webFiles.length) return;
+          const drop = event.payload as typeof event.payload & {
+            files?: File[]; text?: string; intakeId?: string; complete?: (persistDraft: () => void) => void;
+          };
+          const webFiles = drop.files ?? [];
+          const sharedText = drop.text ?? "";
+          if (drop.intakeId && intakePersisted(drop.intakeId)) {
+            drop.complete?.(() => {
+              if (!intakePersisted(drop.intakeId!)) throw new Error("Android share draft receipt is missing");
+            });
+            return Promise.resolve();
+          }
+          if (!initialPaths.length && !webFiles.length && !sharedText) return;
           if (initialPaths.length + webFiles.length + draftImages.length > 12) {
             flashToast(
               getLang() === "zh-CN" ? "一次最多添加 12 个附件" : "At most 12 attachments per drop",
             );
-            return;
+            return drop.intakeId ? Promise.resolve() : undefined;
           }
           setDropIntakes((counts) => ({ ...counts, [draftKey]: (counts[draftKey] ?? 0) + 1 }));
+          const uploadedTokens: string[] = [];
           // The bound draft setters belong to the session active at drop time.
-          void (async () => {
+          return (async () => {
             const paths = [...initialPaths];
-            for (const file of webFiles)
-              paths.push(await invoke<string>("web_upload_file", { file }));
-            const imagePaths = paths.filter(
-              (path) => /^jupiter-image:/.test(path) || /\.(png|jpe?g|webp|gif)$/i.test(path),
-            );
-            for (const path of imagePaths.slice(0, 12)) {
-              const image = await importImage(path, tabId);
-              setDraftImages((current) =>
-                current.some((item) => item.id === image.id)
-                  ? current
-                  : [...current, image].slice(0, 12),
-              );
+            const webImages = new Set<string>();
+            for (const file of webFiles) {
+              const path = await invoke<string>("web_upload_file", { file });
+              if (drop.intakeId && /^jupiter-file:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path)) uploadedTokens.push(path);
+              paths.push(path);
+              if (file.type.startsWith("image/")) webImages.add(path);
             }
+            const imagePaths = paths.filter(
+              (path) => webImages.has(path) || /^jupiter-image:/.test(path) || /\.(png|jpe?g|webp|gif)$/i.test(path),
+            );
+            const images: ImageAttachment[] = [];
+            for (const path of imagePaths.slice(0, 12)) images.push(await importImage(path, tabId));
             const mentions = paths
               .filter((path) => !imagePaths.includes(path))
               .map((p) => {
@@ -4096,17 +4158,51 @@ function TabRuntimeInner({
                 }
                 return norm;
               });
-            if (mentions.length)
-              setDraft((d) => {
-                const prefix = d.trim() ? `${d.replace(/\s+$/, "")} ` : "";
-                return `${prefix}${mentions.map((m) => `@${m}`).join(" ")} `;
+            const appendImages = (current: ImageAttachment[]) => {
+              const next = [...current, ...images.filter((image) => !current.some((item) => item.id === image.id))];
+              if (drop.intakeId && next.length > 12) throw new Error("At most 12 attachments per drop");
+              return next.slice(0, 12);
+            };
+            const appendText = (d: string) => {
+              const text = sharedText ? `${d}${d ? "\n" : ""}${sharedText}` : d;
+              const prefix = text.trim() ? `${text.replace(/\s+$/, "")} ` : "";
+              const next = mentions.length ? `${prefix}${mentions.map((m) => `@${m}`).join(" ")} ` : text;
+              if (drop.intakeId && next.length > 2 * 1024 * 1024) throw new Error("Android share draft is too large");
+              return next;
+            };
+            if (drop.intakeId) {
+              let applied = false;
+              setDraftIntake(drop.intakeId, (current) => {
+                const next = { ...current, text: appendText(current.text), attachments: appendImages(current.attachments ?? []) };
+                applied = true;
+                return next;
               });
+              if (!applied) throw new Error("Android share draft setter did not complete");
+              drop.complete?.(() => {
+                if (!intakePersisted(drop.intakeId!)) throw new Error("Android share draft receipt is missing");
+              });
+            } else {
+              if (images.length) setDraftImages(appendImages);
+              if (sharedText || mentions.length) setDraft(appendText);
+            }
             for (const m of mentions) markMentionPicked(m);
             composerRef.current?.focus();
           })()
-            .catch((error) =>
-              flashToast(`Image/file attachment failed: ${(error as Error).message}`),
-            )
+            .catch(async (error) => {
+              let cleanupError: unknown;
+              if (drop.intakeId) {
+                for (const path of uploadedTokens) {
+                  try {
+                    // Receipt persistence transfers ownership to the draft, even if later UI/ack work fails.
+                    if (intakePersisted(drop.intakeId)) break;
+                    await invoke("web_upload_remove", { path });
+                  } catch (failure) {
+                    cleanupError = failure;
+                  }
+                }
+              }
+              flashToast(`Image/file attachment failed: ${(error as Error).message}${cleanupError ? `; upload cleanup failed: ${String(cleanupError)}` : ""}`);
+            })
             .finally(() =>
               setDropIntakes((counts) => ({
                 ...counts,
@@ -4130,14 +4226,20 @@ function TabRuntimeInner({
     markMentionPicked,
     setDraft,
     setDraftImages,
+    setDraftIntake,
+    intakePersisted,
     tabId,
     flashToast,
     draftKey,
     draftImages.length,
+    active,
+    state.ready,
+    draftStorageReady,
   ]);
 
   const send = useCallback(
     (override?: string, payload?: ComposerSendPayload) => {
+      cancelSpeechDraft(draftKey);
       const text = (override ?? draft).trim();
       const hiddenMentions = payload?.hiddenMentions?.filter(Boolean) ?? [];
       const images = payload?.attachments ?? [];
@@ -5418,6 +5520,7 @@ function TabRuntimeInner({
       onPredictionNoticeSeen={predictionUi.markNoticeSeen}
       onDisablePredictions={() => { predictionUi.dismiss(); applySettingsPatch({ promptPredictionsEnabled: false }); }}
       key={draftKey}
+      speech={speech}
       tabId={tabId}
       images={draftImages}
       onImagesChange={setDraftImages}
@@ -5460,6 +5563,7 @@ function TabRuntimeInner({
       onOpenWorkspacePicker={variant === "hero" ? openWorkspacePickerFromComposer : undefined}
       queuedSends={state.queuedSends}
       onQueueWhileBusy={(text, payload) => {
+        cancelSpeechDraft(draftKey);
         const frozen = { ...payload, clientId: `q-${crypto.randomUUID()}` };
         writeImageDraft(draftKey, (value) => ({
           ...value,
@@ -5639,6 +5743,19 @@ function TabRuntimeInner({
           className="main"
           style={{ display: active ? undefined : "none", position: "relative" }}
         >
+          {androidShareStatus.error && <div className="shared-session-notice" role="alert" style={{ flexWrap: "wrap" }}>
+            <span style={{ flexBasis: "100%" }}>{getLang() === "zh-CN" ? "分享处理未完成，原始内容已保留。" : "Share processing is incomplete. The original is retained."} {androidShareStatus.error}</span>
+            <button type="button" className="btn" style={{ minHeight: 44 }} disabled={androidShareStatus.busy || !state.ready || !draftStorageReady}
+              title={getLang() === "zh-CN" ? "重试分享" : "Retry share"}
+              onClick={() => window.dispatchEvent(new Event("jupiter:android-share-retry"))}>
+              <I.refresh size={14} />{getLang() === "zh-CN" ? "重试分享" : "Retry share"}
+            </button>
+            <button type="button" className="btn" style={{ minHeight: 44 }} disabled={androidShareStatus.busy}
+              title={getLang() === "zh-CN" ? "丢弃暂存分享" : "Discard staged share"}
+              onClick={() => window.dispatchEvent(new Event("jupiter:android-share-discard"))}>
+              <I.trash size={14} />{getLang() === "zh-CN" ? "丢弃暂存分享" : "Discard staged share"}
+            </button>
+          </div>}
           <div role="group" aria-label={state.history?.hasMore ? t("thread.historyPartial" as Parameters<typeof t>[0]) : undefined}
             title={state.history?.hasMore ? t("thread.historyPartial" as Parameters<typeof t>[0]) : undefined}>
             <JumpBar messages={jumpMessages} virtuosoRef={virtuosoRef} />
@@ -6256,6 +6373,10 @@ function TabRuntimeInner({
                 customFontFamily={customFontFamily}
                 onSetCustomFontFamily={onSetCustomFontFamily}
                 petUi={petUi}
+                scheduledTasks={state.scheduledTasks}
+                scheduledTaskResults={state.scheduledTaskResults}
+                onScheduledCommand={sendRpc}
+                onOpenScheduledSession={(name) => { setSettingsOpen(false); void sendRpc({ cmd: "session_load", name, workspaceDir: state.settings!.workspaceDir }); }}
                 active={active}
                 initialPage={settingsPage}
                 mcpSpecs={state.mcpSpecs}
@@ -7346,6 +7467,18 @@ export function App() {
           ? "ctx"
           : null;
   useWebDrawer(webDrawer, closeWebDrawers, activeRuntimeSnapshot?.overlayOpen ?? false);
+  useEffect(() => {
+    if (document.documentElement.dataset.hostPlatform !== "android") return;
+    const back = (event: Event) => {
+      if (event.defaultPrevented) return;
+      if (webDrawer) closeWebDrawers();
+      else if (!bottomCollapsed) onToggleBottom();
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener("jupiter:android-back", back);
+    return () => window.removeEventListener("jupiter:android-back", back);
+  }, [webDrawer, closeWebDrawers, bottomCollapsed, onToggleBottom]);
   useEffect(() => {
     if (!webSurface) return;
     const selectors = [

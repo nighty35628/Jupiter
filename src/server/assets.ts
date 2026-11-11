@@ -1,6 +1,7 @@
 import { closeSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getAndroidRuntimeContext } from "../mobile/runtime-context.js";
 
 /** Resolve dashboard/ across tsx-dev and tsup-bundled layouts. */
 function resolveAssetDir(): string {
@@ -133,7 +134,12 @@ export function renderIndexHtml(token: string, mode: "standalone" | "attached" |
   // token, the asset URLs keep the placeholder and the browser hits a
   // 401 on every asset fetch. Same trap for __JUPITER_MODE__ if it
   // ever appears more than once.
-  return tpl.replaceAll("__JUPITER_TOKEN__", safeToken).replaceAll("__JUPITER_MODE__", mode);
+  const android = getAndroidRuntimeContext();
+  return tpl
+    .replaceAll("__JUPITER_TOKEN__", safeToken)
+    .replaceAll("__JUPITER_MODE__", mode)
+    .replaceAll("__JUPITER_PLATFORM__", android ? "android" : "web")
+    .replaceAll("__JUPITER_RUN__", android?.runId ?? "");
 }
 
 /** MIME types for static files we serve from dist/. */

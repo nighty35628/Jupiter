@@ -34,6 +34,7 @@ const SESSION_SIDECAR_EXTS = [
   ".plan.json",
   ".jsonl.bak",
   ".shared-commit.json",
+  ".compaction.json",
 ] as const;
 
 /** Best-effort git branch sniff; returns undefined if not a git repo or git missing. */
@@ -63,6 +64,10 @@ export interface SessionInfo {
 }
 
 export interface SessionMeta {
+  contextLimits?: Record<
+    string,
+    { binding: string; contextWindowTokens?: number; inputTokenLimit?: number }
+  >;
   sharedHistoryVersion?: number;
   defaultConversationViewId?: string;
   /** Stable desktop identity; unlike the filename, this survives automatic title renames. */

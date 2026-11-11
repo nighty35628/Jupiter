@@ -561,6 +561,31 @@ describe("Web workbench layout", () => {
     await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   }
 
+  it.each([375, 727, 1440])("keeps tool selection in the open bottom panel at width %s", { retry: 0 }, async (width) => {
+    await startWeb(width);
+    const app = activeApp();
+    fireEvent.click(screen.getByRole("button", { name: "Toggle bottom bar" }));
+    const assertBottom = (mode?: string) => {
+      expect(app.dataset.bottomCollapsed).toBe("false");
+      expect(app.dataset.ctxCollapsed).toBe("true");
+      expect(app.dataset.webDrawerOpen).toBe("false");
+      expect(app.querySelector(".ctx")?.getAttribute("data-placement")).toBe("bottom");
+      if (mode) expect(app.querySelector(".ctx")?.getAttribute("data-mode")).toBe(mode);
+    };
+    assertBottom();
+    fireEvent.click(within(app.querySelector(".ctx") as HTMLElement).getByText("Files"));
+    assertBottom("files");
+    for (const [label, mode] of [["Library", "library"], ["Side Chat", "sidechat"], ["Review", "review"], ["Terminal", "terminal"]]) {
+      fireEvent.click(screen.getByRole("button", { name: "Add panel" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: label }));
+      assertBottom(mode);
+    }
+    clickContextTab("Files");
+    assertBottom("files");
+    closeActiveContextTab();
+    assertBottom("terminal");
+  });
+
   it.each(["/tmp/target-workspace", undefined])(
     "includes workspace context when loading a sidebar session (workspace: %s)",
     async (workspace) => {

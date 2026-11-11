@@ -6,10 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const bridge = vi.hoisted(() => ({
   handlers: new Map<string, Set<(event: { payload: unknown }) => void>>(),
-  invoke: vi.fn(async () => undefined),
+  invoke: vi.fn(async (_command: string, _args?: unknown): Promise<unknown> => undefined),
   scrollToIndex: vi.fn(),
 }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: bridge.invoke, convertFileSrc: (path: string) => path }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: bridge.invoke, convertFileSrc: (path: string) => path,
+  Channel: class<T> {
+    constructor(public onmessage: (message: T) => void) {}
+  },
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   emitTo: vi.fn(async () => undefined),
   listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
@@ -44,6 +49,7 @@ vi.mock("react-virtuoso", () => ({
 import { App, TabBar } from "./App";
 import { setLang, t } from "./i18n";
 import { conversationDraftKey, readImageDraft, writeImageDraft } from "./ui/image-draft-store";
+import type { SpeechCapabilities, SpeechEvent } from "./speech/controller";
 
 const commands = () => bridge.invoke.mock.calls.flatMap((args) => {
   const [cmd, payload] = args as unknown as [string, { line?: string }?];
@@ -309,5 +315,131 @@ describe("shared tabs real App routing", { retry: 0 }, () => {
       sessionFiles: [], carryover: { totalCostUsd: 0, cacheHitTokens: 0, cacheMissTokens: 0, totalCompletionTokens: 0 } });
     expect(composer().value).toBe("next draft while running");
     expect(readImageDraft(conversationDraftKey(sid, "default")).text).toBe("next draft while running");
+  });
+});
+
+describe("speech through the real App composer", { retry: 0 }, () => {
+  beforeEach(() => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    localStorage.setItem("jupiter:prediction-cost-notice:v1", "seen");
+    const capabilities: SpeechCapabilities = {
+      available: true, backend: "whisper", localAvailable: true, networkAvailable: false,
+      autoLanguage: true, modelReady: true, modelBytes: 147951465,
+    };
+    bridge.invoke.mockImplementation(async command => command === "speech_capabilities" ? capabilities : undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals(); vi.restoreAllMocks();
+    bridge.invoke.mockReset().mockResolvedValue(undefined);
+  });
+
+  async function startSpeech() {
+    const offset = bridge.invoke.mock.calls.length;
+    fireEvent.click(await within(main()).findByRole("button", { name: "Start dictation" }));
+    await waitFor(() => expect(bridge.invoke.mock.calls.slice(offset).some(([command]) => command === "speech_start")).toBe(true));
+    const [, args] = bridge.invoke.mock.calls.slice(offset).find(([command]) => command === "speech_start")!;
+    const { sessionId, onEvent } = args as { sessionId: string; onEvent: { onmessage: (event: SpeechEvent) => void } };
+    // Retain the native channel to exercise delivery after cancellation.
+    expect(onEvent.onmessage).toBeTypeOf("function");
+    const receive = async (state: SpeechEvent["state"], text?: string) => {
+      await act(async () => {
+        onEvent.onmessage({ sessionId, state, text });
+      });
+    };
+    await receive("recording");
+    expect(within(main()).getByRole("button", { name: "Finish dictation" }).getAttribute("aria-pressed")).toBe("true");
+    return { sessionId, receive };
+  }
+
+  it("blocks prediction RPC admission when new eligibility arrives during recording, then resumes after cancel", async () => {
+    render(<App />); await waitFor(() => expect(bridge.handlers.has("rpc:event")).toBe(true));
+    await bootstrap("speech-prediction", crypto.randomUUID(), "default");
+    await emit({ type: "user.message", tabId: "speech-prediction", id: 1, turn: 1, text: "running task" });
+    await startSpeech();
+    expect(commands().filter(command => command.cmd === "prompt_prediction_get")).toHaveLength(0);
+
+    await emit({ type: "$turn_complete", tabId: "speech-prediction" });
+    await emit({ type: "$prompt_prediction_eligible", tabId: "speech-prediction", completionId: "completed-during-recording" });
+    expect(within(main()).getByRole("button", { name: "Finish dictation" })).toBeTruthy();
+    expect(composer().value).toBe("");
+    expect(commands().filter(command => command.cmd === "prompt_prediction_get")).toHaveLength(0);
+    expect(commands().filter(command => command.cmd === "user_input")).toHaveLength(0);
+
+    fireEvent.click(within(main()).getByRole("button", { name: "Cancel dictation" }));
+    await waitFor(() => expect(commands().filter(command => command.cmd === "prompt_prediction_get")).toEqual([
+      { cmd: "prompt_prediction_get", tabId: "speech-prediction", completionId: "completed-during-recording" },
+    ]));
+  });
+
+  it("keeps IME active across same-key binding changes until the textarea ends composition", async () => {
+    const sessionId = crypto.randomUUID(), tabId = "speech-ime-binding";
+    const key = conversationDraftKey(sessionId, "default");
+    render(<App />); await waitFor(() => expect(bridge.handlers.has("rpc:event")).toBe(true));
+    await bootstrap(tabId, sessionId, "default");
+    const textarea = composer();
+    const previous = await startSpeech();
+    fireEvent.compositionStart(textarea);
+
+    await emit({ type: "$session_loaded", tabId, name: "shared-task", runtimeReady: true, messages: [],
+      snapshot: { sessionId, conversationViewId: "default", defaultConversationViewId: "default", bindingId: 2, reason: "resync", payloadBytes: 0, truncated: false },
+      history: { generation: "g1", sourceSize: 0, totalTurns: 0, hasMore: false },
+      sessionFiles: [], carryover: { totalCostUsd: 0, cacheHitTokens: 0, cacheMissTokens: 0, totalCompletionTokens: 0 } });
+    expect(composer()).toBe(textarea);
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith("speech_cancel", { sessionId: previous.sessionId }));
+    await previous.receive("result", "old binding words");
+    expect(readImageDraft(key).text).toBe("");
+    expect(within(main()).queryByRole("button", { name: "Insert" })).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(within(main()).getByRole("button", { name: "Start dictation" }));
+    });
+    expect(bridge.invoke.mock.calls.filter(([command]) => command === "speech_start")).toHaveLength(1);
+    expect(textarea.value).toBe("");
+
+    fireEvent.compositionEnd(textarea);
+    const current = await startSpeech();
+    expect(current.sessionId).not.toBe(previous.sessionId);
+    await current.receive("result", "words after composition ends");
+    expect(textarea.value).toBe("words after composition ends");
+    expect(readImageDraft(key).text).toBe("words after composition ends");
+    expect(commands().filter(command => command.cmd === "user_input")).toHaveLength(0);
+  });
+
+  it.each(["send", "queue"])("discards late speech callbacks after a real %s and admits the message once", async mode => {
+    const sessionId = crypto.randomUUID(), tabId = `speech-${mode}`;
+    const key = conversationDraftKey(sessionId, "default");
+    const text = `${mode} this message once`;
+    render(<App />); await waitFor(() => expect(bridge.handlers.has("rpc:event")).toBe(true));
+    await bootstrap(tabId, sessionId, "default");
+    if (mode === "queue") await emit({ type: "user.message", tabId, id: 1, turn: 1, text: "running task" });
+    fireEvent.change(composer(), { target: { value: text } });
+    const speech = await startSpeech();
+    fireEvent.click(within(main()).getByRole("button", { name: "Finish dictation" }));
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith("speech_finish", { sessionId: speech.sessionId }));
+
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith("speech_cancel", { sessionId: speech.sessionId }));
+    expect(composer().value).toBe("");
+    if (mode === "queue") {
+      expect(readImageDraft(key).queue).toEqual([expect.objectContaining({ text })]);
+      expect(commands().filter(command => command.cmd === "user_input")).toHaveLength(0);
+    } else {
+      await waitFor(() => expect(commands().filter(command => command.cmd === "user_input")).toHaveLength(1));
+    }
+
+    await speech.receive("result", "late words must be discarded");
+    await speech.receive("result", "duplicate late words must be discarded");
+    expect(composer().value).toBe("");
+    expect(readImageDraft(key).text).toBe("");
+    expect(within(main()).queryByRole("button", { name: "Insert" })).toBeNull();
+    expect(main().textContent).not.toContain("late words");
+
+    await emit({ type: "$turn_complete", tabId });
+    await waitFor(() => expect(commands().filter(command => command.cmd === "user_input")).toEqual([
+      expect.objectContaining({ tabId, text }),
+    ]));
+    await waitFor(() => expect(readImageDraft(key).queue ?? []).toHaveLength(0));
+    expect(composer().value).toBe("");
   });
 });

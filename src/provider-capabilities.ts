@@ -1,5 +1,5 @@
 import type { ProviderDialectPreference, ReasoningEffort } from "./config.js";
-import { DEEPSEEK_FLASH_ALIASES } from "./provider-models.js";
+import { DEEPSEEK_FLASH_ALIASES, normalizeOfficialDeepSeekModel } from "./provider-models.js";
 export {
   DEEPSEEK_FLASH_ALIASES,
   DEEPSEEK_MODELS,
@@ -16,6 +16,12 @@ export interface ModelCapability {
   thinkingLevels: readonly ReasoningSelection[];
   supportsPrefixContinuation: boolean;
   contextWindowTokens?: number;
+  maxOutputTokens?: number;
+  defaultOutputTokens?: Readonly<{
+    nonThinking: number;
+    thinking: number;
+    maxThinking: number;
+  }>;
   supportsThinking: boolean;
   supportsReasoningEffort: boolean;
   supportsStreamUsage: boolean;
@@ -72,13 +78,25 @@ export function resolveModelCapability(
   visionOverride?: boolean,
 ): ModelCapability {
   const dialect = resolveProviderDialect(baseUrl, preference);
-  const officialDeepSeekV4 = dialect === "deepseek" && isOfficialDeepSeekV4Model(model);
+  const officialModel =
+    isStrictOfficialDeepSeekEndpoint(baseUrl) &&
+    isOfficialDeepSeekV4Model(normalizeOfficialDeepSeekModel(model));
+  const officialDeepSeekV4 = dialect === "deepseek" && officialModel;
+  // Preserve explicit DeepSeek wire controls on relays without granting official limits or Beta.
+  const v4ThinkingControls =
+    dialect === "deepseek" &&
+    isOfficialDeepSeekV4Model(officialModel ? normalizeOfficialDeepSeekModel(model) : model);
   return {
     dialect,
     officialDeepSeekV4,
-    thinkingLevels: officialDeepSeekV4 ? DEEPSEEK_THINKING_LEVELS : STANDARD_THINKING_LEVELS,
+    thinkingLevels: v4ThinkingControls ? DEEPSEEK_THINKING_LEVELS : STANDARD_THINKING_LEVELS,
     supportsPrefixContinuation: officialDeepSeekV4,
-    contextWindowTokens: officialDeepSeekV4 ? 1_048_576 : undefined,
+    contextWindowTokens: officialModel ? 1_048_576 : undefined,
+    // https://api-docs.deepseek.com/api/create-chat-completion/ (2026-11-11)
+    maxOutputTokens: officialModel ? 393_216 : undefined,
+    defaultOutputTokens: officialModel
+      ? { nonThinking: 8_192, thinking: 65_536, maxThinking: 131_072 }
+      : undefined,
     supportsThinking: dialect === "deepseek",
     supportsReasoningEffort: dialect === "deepseek",
     supportsStreamUsage: dialect === "deepseek",

@@ -39,7 +39,7 @@ describe("nextContextSidebarToggle", () => {
 });
 
 describe("nextContextTabOpenVisibility", () => {
-  it("moves context-tab content back to the right sidebar when the bottom panel is open", () => {
+  it("keeps context-tab content in the bottom panel when it is open", () => {
     expect(
       nextContextTabOpenVisibility({
         bottomCollapsed: false,
@@ -47,7 +47,21 @@ describe("nextContextTabOpenVisibility", () => {
         infoOpen: true,
       }),
     ).toEqual({
-      collapseBottom: true,
+      collapseBottom: false,
+      expandSidebar: false,
+      infoOpen: false,
+    });
+  });
+
+  it("opens the sidebar when neither tool panel is visible", () => {
+    expect(
+      nextContextTabOpenVisibility({
+        bottomCollapsed: true,
+        sidebarCollapsed: true,
+        infoOpen: false,
+      }),
+    ).toEqual({
+      collapseBottom: false,
       expandSidebar: true,
       infoOpen: false,
     });

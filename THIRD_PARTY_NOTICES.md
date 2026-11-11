@@ -32,3 +32,18 @@ SOFTWARE.
 
 These packages execute locally in a bounded worker. They do not send images
 to an external service.
+
+## Local Voice Input
+
+- `whisper-rs` 0.15.1 / `whisper-rs-sys` 0.14.1: Unlicense; their embedded
+  whisper.cpp 1.7.6 engine is MIT. Desktop uses local, CPU-only inference.
+- `cpal` 0.16.0: Apache-2.0. The checked-in copy contains a small macOS input
+  activation patch documented in `desktop/src-tauri/vendor/cpal/JUPITER-PATCH.md`;
+  its upstream license is preserved.
+- `rubato` 0.16.2: MIT. Used for local audio resampling.
+- The optional multilingual Whisper base model is downloaded separately from
+  `ggerganov/whisper.cpp`, with a pinned SHA-256. It is not part of the installer.
+  Whisper code and weights are released under the MIT License by OpenAI.
+
+Android uses the device's installed speech-recognition service. That service's
+terms and any network processing are independent of Jupiter.

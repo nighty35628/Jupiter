@@ -1,0 +1,16 @@
+[env]
+# Use the binding crate's checked-in ABI and static, baseline CPU code on CI.
+# No libclang, GPU SDK, or compiler-host-specific instruction set is required.
+WHISPER_DONT_GENERATE_BINDINGS = "1"
+CMAKE_PROJECT_INCLUDE = { value = "cmake/speech-portable.cmake", relative = true }
+# ggml's ARM backend rejects cl.exe. LLVM/Ninja are present on the existing
+# Windows runners; target-scoped values do not change macOS/Linux compilers.
+CMAKE_GENERATOR_aarch64_pc_windows_msvc = "Ninja"
+CC_aarch64_pc_windows_msvc = "clang-cl --target=aarch64-pc-windows-msvc"
+CXX_aarch64_pc_windows_msvc = "clang-cl --target=aarch64-pc-windows-msvc"
+CXXFLAGS_aarch64_pc_windows_msvc = "/EHsc"
+# Use the same LLVM codegen on x64 (ggml's non-OpenMP MSVC barrier is unsafe).
+CMAKE_GENERATOR_x86_64_pc_windows_msvc = "Ninja"
+CC_x86_64_pc_windows_msvc = "clang-cl --target=x86_64-pc-windows-msvc"
+CXX_x86_64_pc_windows_msvc = "clang-cl --target=x86_64-pc-windows-msvc"
+CXXFLAGS_x86_64_pc_windows_msvc = "/EHsc"

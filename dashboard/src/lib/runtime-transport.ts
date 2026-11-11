@@ -2,10 +2,19 @@
 
 import { createWebHostServices } from "./host-services";
 import { runtimeMode } from "./surface-capabilities";
+import { callAndroid, downloadAndroidFile, isAndroidLocal, subscribeAndroidSpeech } from "./android-native";
 import { isHistoryReadCommand } from "../../../src/web/history-read";
+import { setWorkspaceDisplayNames } from "../../../desktop/src/workspace-display";
 
 type UnlistenFn = () => void;
 type EventCallback<T = any> = (event: { payload: T; event: string }) => void;
+
+/** Native IPC channels are deliberately unavailable to browser/Android callers. */
+export class Channel<T> {
+  constructor(_callback?: (message: T) => void) {
+    throw new Error("Desktop IPC channels require Tauri");
+  }
+}
 
 // 事件监听中心
 const listeners = new Map<string, Set<EventCallback>>();
@@ -31,6 +40,9 @@ function broadcast(eventName: string, payload: any) {
 export function emitRuntimeEvent(eventName: string, payload: unknown): void {
   broadcast(eventName, payload);
 }
+
+// Speech events are native device events, never model-provider or server traffic.
+if (isAndroidLocal) subscribeAndroidSpeech(event => broadcast("jupiter:speech", event));
 
 function emitEvent(event: Record<string, any>) {
   broadcast("rpc:event", { data: JSON.stringify(event) });
@@ -223,6 +235,7 @@ function applyWebSession(body: any): void {
           Boolean(item) && typeof item === "object" && typeof (item as WebWorkspace).id === "string",
       )
     : [];
+  if (isAndroidLocal) setWorkspaceDisplayNames(webWorkspaces);
   if (body?.capabilities && typeof body.capabilities === "object") {
     document.documentElement.dataset.webMode = String(body.capabilities.mode ?? "local");
     document.documentElement.dataset.webTerminal = String(body.capabilities.terminal === true);
@@ -295,7 +308,8 @@ async function deliverWebPacket(packet: WebPacket): Promise<void> {
           pendingWebCopies.delete(event.requestId);
           event.action = "export";
           if (event.ok && typeof event.content === "string") {
-            downloadBrowserText(filename, event.content);
+            try { await downloadBrowserText(filename, event.content); }
+            catch (error) { event.ok = false; event.error = error instanceof Error ? error.message : "Export failed"; }
           } else if (event.ok) {
             event.ok = false;
             event.error = "Web export returned no content";
@@ -407,6 +421,30 @@ function workspaceForLegacyPath(value: unknown): WebWorkspace | null {
   );
 }
 
+export async function resolveWebWorkspaceFile(path: string): Promise<{ id: string; name: string }> {
+  await webInit();
+  const candidates = webWorkspaces.flatMap((workspace) => {
+    if (typeof workspace.root !== "string" || !workspace.root.startsWith("/")) return [];
+    const root = workspace.root.replace(/\/+$/, "");
+    return path === root || path.startsWith(`${root}/`) ? [{ workspace, root }] : [];
+  }).sort((a, b) => b.root.length - a.root.length);
+  const match = candidates[0];
+  if (!match) throw new Error("File is outside the approved workspaces");
+  const response = await fetch("/api/files/resolve", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json", ...webMutationHeaders() },
+    body: JSON.stringify({ workspaceId: match.workspace.id, path: path.slice(match.root.length + 1) || "." }),
+  });
+  if (response.status === 409) reportInactiveWebController();
+  const body = await readJsonResponse(response);
+  const file = body?.file;
+  if (!file || typeof file.id !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(file.id) ||
+      typeof file.name !== "string" || !file.name) throw new Error("File resolve returned invalid file metadata");
+  return { id: file.id, name: file.name };
+}
+
 export async function uploadWebFile(file: Blob, name: string): Promise<WebUploadedFile> {
   await webInit();
   if (!webLease) throw new Error("This browser is connected in read-only mode");
@@ -448,13 +486,15 @@ export async function removeWebFile(fileId: string): Promise<void> {
   await readJsonResponse(response);
 }
 
-export async function getWebWorkspaceChoices(): Promise<WebWorkspace[]> {
+export async function getWebWorkspaceChoices(refresh = false): Promise<WebWorkspace[]> {
   await webInit();
+  if (refresh) await authenticateWebSession();
   return webWorkspaces.map((workspace) => ({ ...workspace }));
 }
 
 function normalizeWebRpcPayload(payload: Record<string, any>): Record<string, any> {
-  if (!["tab_open", "new_chat", "session_load"].includes(payload.cmd)) return payload;
+  if (!["tab_open", "new_chat", "session_load"].includes(payload.cmd) &&
+    !(isAndroidLocal && payload.cmd === "settings_save")) return payload;
   if (typeof payload.workspaceId === "string") return payload;
   const workspace = workspaceForLegacyPath(payload.workspaceDir);
   if (!workspace) return payload;
@@ -629,8 +669,14 @@ function closeWebTerminal(id: string): void {
   connection.socket.close();
 }
 
-function downloadBrowserText(filename: string, content: string): void {
+async function downloadBrowserText(filename: string, content: string): Promise<void> {
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  if (isAndroidLocal) {
+    const file = await uploadWebFile(blob, filename || "jupiter-export.md");
+    try { await downloadAndroidFile(file.id, filename || "jupiter-export.md"); }
+    finally { await removeWebFile(file.id); }
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -1546,6 +1592,16 @@ async function serverRpc(payload: Record<string, any>): Promise<void> {
 // // ═══ 导出接口（Mock + Server 双模式）
 // Tauri core API
 export async function invoke<T = unknown>(cmd: string, args?: any): Promise<T> {
+  if (cmd.startsWith("speech_")) {
+    if (!isAndroidLocal) throw new Error("Voice input requires a native host");
+    const commands: Record<string, string> = {
+      speech_capabilities: "speechCapabilities", speech_start: "speechStart",
+      speech_finish: "speechFinish", speech_cancel: "speechCancel",
+    };
+    const native = commands[cmd];
+    if (!native) throw new Error("Unsupported Android speech operation");
+    return await callAndroid<T>(native, args);
+  }
   console.log(`[tauri-bridge] invoke -> cmd: ${cmd}`);
 
   if (cmd === "prompt_prediction_can_request") {
@@ -1555,6 +1611,8 @@ export async function invoke<T = unknown>(cmd: string, args?: any): Promise<T> {
   }
 
   if (MODE === "web") {
+    if (isAndroidLocal && cmd === "android_notifications_status") return await callAndroid<boolean>("notificationStatus") as T;
+    if (isAndroidLocal && cmd === "android_notifications_enable") return await callAndroid<boolean>("notificationPermission") as T;
     if (cmd === "rpc_spawn") {
       await webInit();
       return undefined as T;
@@ -1625,7 +1683,7 @@ export async function invoke<T = unknown>(cmd: string, args?: any): Promise<T> {
     if (cmd === "write_text_file" && typeof args?.path === "string") {
       const match = /^jupiter-download:(.+)$/.exec(args.path);
       if (!match) throw new Error("write_text_file is not available in Jupiter Web Beta");
-      downloadBrowserText(decodeURIComponent(match[1]!), String(args?.content ?? ""));
+      await downloadBrowserText(decodeURIComponent(match[1]!), String(args?.content ?? ""));
       return undefined as T;
     }
     if (cmd === "terminal_spawn") {

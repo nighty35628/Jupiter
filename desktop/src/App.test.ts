@@ -53,6 +53,29 @@ import {
 } from "./App";
 import { getThreadMaxWidth, getVisibleContextWidth } from "./ui/thread-layout";
 
+describe("early compaction settings transport", { retry: 0 }, () => {
+  it.each([undefined, null, 32000])("retains the acknowledged policy %s in application state", (value) => {
+    const state = reduce(initialState(), { t: "incoming", event: {
+      type: "$settings", model: "synthetic", workspaceDir: "/qa", recentWorkspaces: [],
+      reasoningEffort: "high", thinkingEnabled: false, reasoningChoices: ["low", "medium", "high"],
+      editMode: "review", budgetUsd: null, version: "qa",
+      earlyCompactionTokens: value,
+    } });
+    expect(state.settings).toHaveProperty("earlyCompactionTokens", value);
+  });
+});
+
+describe("scheduled task receipts", { retry: 0 }, () => {
+  it("retains only the latest task snapshot and bounded lightweight acknowledgments", () => {
+    let state = initialState();
+    for (let i = 0; i < 40; i++) state = reduce(state, { t: "incoming", event: { type: "$scheduled_tasks", requestId: `poll-${i}`, workspaceDir: "/qa", tasks: [] } });
+    expect(state.scheduledTasks?.requestId).toBe("poll-39");
+    expect(Object.keys(state.scheduledTaskResults ?? {})).toHaveLength(32);
+    expect(state.scheduledTaskResults?.["poll-39"]).toEqual({ requestId: "poll-39", workspaceDir: "/qa", error: undefined });
+    expect(state.scheduledTaskResults?.["poll-39"]).not.toHaveProperty("tasks");
+  });
+});
+
 function initialState(): Parameters<typeof reduce>[0] {
   return {
     ready: false,

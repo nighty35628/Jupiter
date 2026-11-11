@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DeepSeekClient } from "../src/client.js";
+import { CacheFirstLoop } from "../src/loop.js";
+import { ImmutablePrefix } from "../src/memory/runtime.js";
 import { loadSessionMessages } from "../src/memory/session.js";
 import { SharedSessionCoordinator } from "../src/memory/shared-session.js";
 
@@ -109,19 +112,47 @@ describe("desktop shared history command entrances", { retry: 0 }, () => {
   });
   it("routes slash compaction through the canonical versioned helper", async () => {
     const { owner, a, tabs } = setup();
-    let projected = loadSessionMessages("chat");
-    Object.assign(a.runtime.loop, {
-      log: { toFullHistory: () => projected },
-      manualCompactHistory: vi.fn(async () => {
-        projected = [{ role: "assistant", content: "summary" }];
-        return { folded: true };
+    owner.replaceHistory(
+      [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "Long retained source evidence. ".repeat(8000) },
+        { role: "user", content: "second" },
+        { role: "assistant", content: "answer second" },
+      ],
+      owner.version,
+    );
+    owner.releaseEmptyTurn(a.sharedStorage);
+    a.sharedStorage = owner.beginTurn("a");
+    const prefix = new ImmutablePrefix({ system: "Synthetic rules" });
+    const loop = new CacheFirstLoop({
+      client: new DeepSeekClient({
+        apiKey: "synthetic",
+        baseUrl: "https://synthetic.invalid/v1",
+        fetch: vi.fn(async () =>
+          Response.json({
+            choices: [{ message: { content: "Durable facts." }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 20, completion_tokens: 5 },
+          }),
+        ),
       }),
+      prefix,
+      session: "chat",
+      sessionStorage: a.sharedStorage,
+      model: "mock-model",
     });
-    const finish = vi.fn();
+    Object.assign(a.runtime, { loop });
+    const raw = loadSessionMessages("chat");
+    const version = owner.version;
+    let finished!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    const finish = vi.fn(finished);
     const emit = vi.fn();
     const handleSlash = vi.fn();
     const compact = compile(["compactSharedHistory", "handleDesktopSlash"], {
       tabs,
+      androidBackgroundOperations: 0,
       sharedCompactions: new Map(),
       parseSlash: () => ({ cmd: "compact", args: [] }),
       resolveSlashAlias: (name: string) => name,
@@ -134,13 +165,18 @@ describe("desktop shared history command entrances", { retry: 0 }, () => {
       finishDesktopCommand: finish,
     });
     compact(a, "/compact");
-    await vi.waitFor(() => expect(finish).toHaveBeenCalledTimes(1));
+    await completion;
+    expect(finish).toHaveBeenCalledTimes(1);
     expect(emit).not.toHaveBeenCalled();
     expect(handleSlash).not.toHaveBeenCalled();
-    expect(owner.version).toBe(3);
-    expect(loadSessionMessages("chat")).toEqual([{ role: "assistant", content: "summary" }]);
+    expect(owner.version).toBe(version);
+    expect(loadSessionMessages("chat")).toEqual(raw);
     const next = owner.beginTurn("c");
-    expect(next.loadMessages()).toEqual([{ role: "assistant", content: "summary" }]);
+    next.beginRules(JSON.stringify({ system: prefix.system, shots: prefix.fewShots }));
+    expect(next.loadMessages()).toEqual(loop.log.toFullHistory());
+    expect(next.loadMessages()[0]?.content).toContain("Durable facts.");
+    expect(a.sharedStorage.hasRecords).toBe(false);
+    loop.dispose();
   });
   it("refuses slash compaction while the tab is busy and completes the command", async () => {
     const { a } = setup();

@@ -60,7 +60,24 @@ function setupKeyHandler(web: boolean, plausible = true, failRuntime = false) {
   const replaceRuntimeFor = vi.fn(() => {
     throw new Error("mock runtime rebuild failure");
   });
-  const tabs = failRuntime ? new Map([["mock-tab", { toolset: {} }]]) : new Map();
+  // These are existing Desktop tabs, not Android's first unconfigured skeleton.
+  const bindAndroidUnconfiguredModel = vi.fn(() => false);
+  const tabs = failRuntime
+    ? new Map([
+        [
+          "mock-tab",
+          {
+            id: "mock-tab",
+            toolset: {},
+            initializing: false,
+            unconfiguredSkeleton: false,
+            currentModel: "mock-model",
+            runtime: null,
+            turnAdmission: { running: false },
+          },
+        ],
+      ])
+    : new Map();
   const handle = new Function(
     "saveApiKey",
     "bridgeEndpointEnv",
@@ -68,12 +85,14 @@ function setupKeyHandler(web: boolean, plausible = true, failRuntime = false) {
     "tabs",
     "emit",
     "isWebSurface",
+    "trustedAndroid",
     "first",
     "providerVersions",
     "resolveProviderSnapshot",
     "replaceRuntimeFor",
     "emitSettings",
     "emitBalance",
+    "bindAndroidUnconfiguredModel",
     `${code}; return handle;`,
   )(
     saveApiKey,
@@ -82,6 +101,7 @@ function setupKeyHandler(web: boolean, plausible = true, failRuntime = false) {
     tabs,
     emit,
     web,
+    false,
     {
       id: "mock-tab",
     },
@@ -90,6 +110,7 @@ function setupKeyHandler(web: boolean, plausible = true, failRuntime = false) {
     replaceRuntimeFor,
     emitSettings,
     emitBalance,
+    bindAndroidUnconfiguredModel,
   ) as (msg: { cmd: "setup_save_key"; key: string }) => Promise<void>;
   return {
     handle,

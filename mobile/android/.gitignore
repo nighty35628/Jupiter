@@ -1,0 +1,9 @@
+.gradle/
+**/build/
+local.properties
+.externalNativeBuild/
+captures/
+*.jks
+*.keystore
+*.p12
+*.password

@@ -29,7 +29,7 @@ function extractPinnedConstraints(systemPrompt: string): string {
 }
 
 /** Auto-fold when a turn's response shows promptTokens above this fraction of ctxMax. */
-export const HISTORY_FOLD_THRESHOLD = 0.75;
+export const HISTORY_FOLD_THRESHOLD = 0.85;
 /** Tail budget after a normal fold, as a fraction of ctxMax. */
 export const HISTORY_FOLD_TAIL_FRACTION = 0.2;
 /** Above this fraction the normal fold's tail budget didn't buy enough headroom — fold harder. */
@@ -46,7 +46,7 @@ export const COST_AWARE_FOLD_PROMPT_TOKENS = 160_000;
 export const COST_AWARE_FOLD_TAIL_TOKENS = 16_000;
 /** Turn-start local estimate above this fraction triggers a pre-iter fold. Covers cases the
  * post-response fold can't (terminal prior turn, fresh session restore, huge user paste). */
-export const TURN_START_FOLD_THRESHOLD = 0.9;
+export const TURN_START_FOLD_THRESHOLD = 0.85;
 /** Hard deadline for semantic fold summaries so a hung request cannot stall the turn loop. */
 export const HISTORY_FOLD_SUMMARY_TIMEOUT_MS = 15_000;
 /** Manual /compact keeps a much smaller tail than automatic model-window compaction.
@@ -75,6 +75,9 @@ export interface ContextManagerDeps {
   getSessionBinding: () => { sessionName: string | null; epoch: number };
   getAbortSignal: () => AbortSignal;
   getCurrentTurn: () => number;
+  getInputLimit?: (model: string) => number;
+  getProtectedHistoryStart?: () => number | undefined;
+  getEarlyCompactionTokens?: () => number | null;
   getSystemPrompt: () => string;
   /** Reuses the live prefix → fold summary call shares the cached bytes the main agent already paid for. */
   getToolSpecs?: () => readonly ToolSpec[];
@@ -87,13 +90,20 @@ export interface ContextManagerDeps {
   summaryTimeoutMs?: number;
   /** Fired when the message log was rewritten by fold; lets the loop drop session-scoped caches whose validity rested on the elided history (e.g. read-before-edit tracker). */
   onLogRewrite?: () => void;
+  onFold?: (
+    before: ChatMessage[],
+    head: ChatMessage[],
+    summary: ChatMessage,
+    signal: AbortSignal,
+  ) => void;
+  onSummaryUsage?: (model: string, usage: Usage, complete: boolean) => void;
   /** Run-local persistence override; context folds must not rewrite raw turn records. */
   persistMessages?: (messages: ChatMessage[], reason: "context" | "history") => void;
   /** Forced summaries are raw assistant output, unlike a history fold. */
   persistForcedSummary?: (summary: ChatMessage, replacesTail: boolean) => ChatMessage | undefined;
 }
 
-export type PostUsageDecisionKind = "none" | "fold" | "exit-with-summary";
+export type PostUsageDecisionKind = "none" | "fold";
 
 export interface PostUsageDecision {
   kind: PostUsageDecisionKind;
@@ -243,23 +253,12 @@ export class ContextManager {
     model: string,
     alreadyFoldedThisTurn: boolean,
   ): PostUsageDecision {
-    const ctxMax = resolveContextTokens(model);
+    const ctxMax = this.deps.getInputLimit?.(model) ?? resolveContextTokens(model);
     if (!usage) return { kind: "none", promptTokens: 0, ctxMax, ratio: 0 };
     const ratio = usage.promptTokens / ctxMax;
     const base = { promptTokens: usage.promptTokens, ctxMax, ratio };
-    if (ratio > FORCE_SUMMARY_THRESHOLD) {
-      return { kind: "exit-with-summary", ...base };
-    }
     if (alreadyFoldedThisTurn) return { kind: "none", ...base };
-    if (ratio > HISTORY_FOLD_AGGRESSIVE_THRESHOLD) {
-      return {
-        kind: "fold",
-        ...base,
-        tailBudget: Math.floor(ctxMax * HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION),
-        aggressive: true,
-      };
-    }
-    if (ratio > HISTORY_FOLD_THRESHOLD) {
+    if (ratio >= HISTORY_FOLD_THRESHOLD) {
       return {
         kind: "fold",
         ...base,
@@ -267,7 +266,11 @@ export class ContextManager {
         aggressive: false,
       };
     }
-    if (usage.promptTokens >= COST_AWARE_FOLD_PROMPT_TOKENS) {
+    const early =
+      this.deps.getEarlyCompactionTokens?.() === undefined
+        ? COST_AWARE_FOLD_PROMPT_TOKENS
+        : this.deps.getEarlyCompactionTokens?.();
+    if (early != null && usage.promptTokens >= early) {
       return {
         kind: "fold",
         ...base,
@@ -285,7 +288,7 @@ export class ContextManager {
     toolSpecs: ReadonlyArray<unknown> | undefined | null,
     model: string,
   ): { estimateTokens: number; ctxMax: number; ratio: number } {
-    const ctxMax = resolveContextTokens(model);
+    const ctxMax = this.deps.getInputLimit?.(model) ?? resolveContextTokens(model);
     const visible = this.deps.client.supportsImages(model)
       ? messages
       : messages.map((message) => {
@@ -305,7 +308,7 @@ export class ContextManager {
     opts?: { keepRecentTokens?: number; requireTailBoundary?: boolean; signal?: AbortSignal },
   ): Promise<FoldResult> {
     const deadline = Date.now() + (this.deps.summaryTimeoutMs ?? HISTORY_FOLD_SUMMARY_TIMEOUT_MS);
-    const ctxMax = resolveContextTokens(model);
+    const ctxMax = this.deps.getInputLimit?.(model) ?? resolveContextTokens(model);
     const tailBudget = opts?.keepRecentTokens ?? Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION);
     const bindingAtStart = this.deps.getSessionBinding();
     const logRevisionAtStart = this.deps.log.revision;
@@ -338,6 +341,13 @@ export class ContextManager {
       cumTokens += tokenCounts[i]!;
       if (all[i]!.role === "user") boundary = i;
     }
+    const protectedStart = this.deps.getProtectedHistoryStart?.();
+    if (protectedStart !== undefined) boundary = Math.min(boundary, protectedStart);
+    else if (opts?.requireTailBoundary && boundary === all.length) {
+      const newestUser = all.findLastIndex((message) => message.role === "user");
+      if (newestUser >= 0) boundary = newestUser;
+    }
+    cumTokens = tokenCounts.slice(boundary).reduce((sum, value) => sum + value, 0);
     if (boundary <= 0) {
       return {
         ...noop,
@@ -429,7 +439,7 @@ export class ContextManager {
             activeImageIds: this.deps.getActiveImageIds?.() ?? [],
             signal,
           }),
-        )) > Math.min(resolveContextTokens(model), summary.promptBudget ?? Number.POSITIVE_INFINITY)
+        )) > Math.min(ctxMax, summary.promptBudget ?? Number.POSITIVE_INFINITY)
       )
         replacementFailure = "replacement-over-limit";
     } catch (error) {
@@ -504,6 +514,7 @@ export class ContextManager {
       };
     }
     this.deps.log.compactInPlace(replacement);
+    this.deps.onFold?.(all, head, summaryMsg, turnSignal);
     if (summary.outputCap !== undefined) this.deps.onFoldOutputCap?.(model, summary.outputCap);
     this.deps.onLogRewrite?.();
     return {
@@ -608,7 +619,13 @@ export class ContextManager {
         deadline - Date.now(),
         { historyStart: 1 + fewShots.length, historyEnd: messages.length - 1 },
       );
-      this.deps.stats.record(this.deps.getCurrentTurn(), summaryModel, resp.usage ?? new Usage());
+      const summaryUsage = resp.usage ?? new Usage();
+      this.deps.stats.recordExternal(summaryModel, summaryUsage);
+      this.deps.onSummaryUsage?.(
+        summaryModel,
+        summaryUsage,
+        resp.usageComplete !== false && !!resp.usage,
+      );
       const contextBudget =
         resp.contextBudget?.model === activeModel ? resp.contextBudget : undefined;
       return {

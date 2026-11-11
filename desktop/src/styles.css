@@ -17,6 +17,10 @@ body,
   overflow: hidden;
 }
 
+#root {
+  overflow: clip;
+}
+
 body {
   font-family: var(--font-sans, "Geist", system-ui, sans-serif);
   font-size: var(--font-size-body, 13.5px);
@@ -9477,6 +9481,35 @@ html:not([data-platform="macos"]) .cmdk-row .kb .shortcut kbd[data-key="mod"] {
   opacity: 0;
 }
 
+.scheduled-toolbar, .scheduled-actions, .scheduled-row-head, .scheduled-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scheduled-toolbar, .scheduled-row-head { justify-content: space-between; }
+.scheduled-scope { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: var(--font-size-ui-sm); }
+.scheduled-runtime, .scheduled-meta { color: var(--muted); font-size: var(--font-size-ui-sm); line-height: 1.5; }
+.scheduled-meta { flex-wrap: wrap; margin-top: 5px; overflow-wrap: anywhere; }
+.scheduled-editor { border-block: 1px solid var(--border); padding: 18px 0; margin-block: 16px; }
+.scheduled-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.scheduled-editor label { display: grid; gap: 6px; margin-bottom: 14px; font-size: var(--font-size-ui-sm); }
+.scheduled-editor .field { width: 100%; min-width: 0; }
+.scheduled-editor textarea { resize: vertical; min-height: 92px; }
+.scheduled-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+.scheduled-editor .scheduled-enabled { display: flex; align-items: center; gap: 8px; }
+.scheduled-actions { flex-wrap: wrap; flex-shrink: 0; }
+.scheduled-row { padding: 18px 0; border-bottom: 1px solid var(--border); }
+.scheduled-row-head > div:first-child { min-width: 0; }
+.scheduled-row h3 { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.scheduled-row details { margin-top: 12px; font-size: var(--font-size-ui-sm); }
+.scheduled-row summary { cursor: pointer; }
+.scheduled-prompt, .scheduled-run pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 240px; overflow: auto; }
+.scheduled-run { padding-block: 10px; border-bottom: 1px solid var(--border); }
+@media (max-width: 620px) {
+  .scheduled-grid { grid-template-columns: minmax(0, 1fr); }
+  .scheduled-row-head { align-items: flex-start; flex-direction: column; }
+}
+
 .pet-settings-page {
   min-width: 0;
 }
@@ -15817,6 +15850,103 @@ html[data-runtime="web"] .app[data-web-layout="narrow"] .settings-card {
   max-height: calc(100% - 24px);
   overflow-y: auto;
 }
+
+/* Android keeps the shared workbench, with touch-sized controls. */
+html[data-host-platform="android"] .app {
+  --web-title-height: 50px;
+}
+
+html[data-host-platform="android"] .titlebar {
+  height: var(--web-title-height);
+  padding-inline: 4px;
+}
+
+html[data-host-platform="android"] .titlebar .tb-left,
+html[data-host-platform="android"] .titlebar .brand {
+  min-width: 0;
+  gap: 4px;
+  padding: 0;
+}
+
+html[data-host-platform="android"] .titlebar .tb-right {
+  flex: 0 0 auto;
+  padding-right: 0;
+}
+
+html[data-host-platform="android"] .titlebar .brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-host-platform="android"] .titlebar .iconbtn {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  align-self: center;
+}
+
+html[data-host-platform="android"] .settings-head > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+html[data-host-platform="android"] .settings-head .close-btn {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+}
+
+html[data-host-platform="android"] .settings :is(.btn, .field, .seg-ctrl button, .pet-toggle) {
+  min-height: 48px;
+  min-width: 48px;
+}
+
+html[data-host-platform="android"] .settings .seg-ctrl {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+html[data-host-platform="android"] .settings .seg-ctrl button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  html[data-host-platform="android"] .titlebar .crumbs {
+    display: none;
+  }
+
+  html[data-host-platform="android"] .settings {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  html[data-host-platform="android"] .settings-side {
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    overflow-y: hidden;
+  }
+
+  /* Override the desktop button's full-width rule in the existing scroll strip. */
+  html[data-host-platform="android"] .settings-side button.row {
+    width: auto;
+    flex: 0 0 auto;
+    min-width: 48px;
+    min-height: 48px;
+    white-space: nowrap;
+  }
+
+  html[data-host-platform="android"] .settings-head {
+    flex-shrink: 0;
+    padding: 8px 12px;
+  }
+
+  html[data-host-platform="android"] .settings-body {
+    padding-inline: 12px;
+  }
+}
+
 /* Durable image previews reserve their layout before lazy decoding completes. */
 .image-attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
 .msg.assistant[data-pending="true"] { min-height: 24px; }

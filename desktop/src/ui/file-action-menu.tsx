@@ -43,6 +43,56 @@ export function positionFileActionMenu(
   };
 }
 
+type SaveNotice = { error: boolean; message: string } | null;
+
+export function useAndroidFileSave() {
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<SaveNotice>(null);
+  const inFlight = useRef(false);
+  const save = async (path: string, workspaceDir?: string, onSaved?: () => void) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setSaving(true);
+    setNotice(null);
+    try {
+      await openDefaultFile(path, path.startsWith("jupiter-file:") ? undefined : workspaceDir);
+      onSaved?.();
+    } catch (error) {
+      const cancelled = (error as Error)?.name === "AbortError";
+      setNotice({
+        error: !cancelled,
+        message: cancelled
+          ? t("fileActions.saveCancelled")
+          : t("fileActions.saveError", {
+              message: error instanceof Error ? error.message : String(error),
+            }),
+      });
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
+    }
+  };
+  return { saving, notice, save };
+}
+
+export function FileSaveNotice({ notice }: { notice: SaveNotice }) {
+  if (!notice) return null;
+  return (
+    <div
+      role={notice.error ? "alert" : "status"}
+      className="file-action-title"
+      style={{
+        whiteSpace: "normal",
+        overflowWrap: "anywhere",
+        maxHeight: "4em",
+        overflowY: "auto",
+      }}
+    >
+      {notice.message}
+    </div>
+  );
+}
+
 export function FileActionMenu({
   anchor,
   path,
@@ -63,11 +113,13 @@ export function FileActionMenu({
   onClose: () => void;
 }) {
   useLang();
+  const android = document.documentElement.dataset.hostPlatform === "android";
+  const { saving, notice: saveNotice, save } = useAndroidFileSave();
   const [openWithShown, setOpenWithShown] = useState(false);
   const [app, setApp] = useState(editor?.trim() ?? "");
   const openWithRef = useRef<HTMLInputElement | null>(null);
   const positionedAnchor = useMemo(
-    () => positionFileActionMenu(anchor),
+    () => positionFileActionMenu({ left: anchor.left, top: anchor.top }),
     [anchor.left, anchor.top],
   );
 
@@ -80,6 +132,10 @@ export function FileActionMenu({
     onClose();
   };
   const openDefault = () => {
+    if (android) {
+      void save(path, workspaceDir, onClose);
+      return;
+    }
     if (isHtmlFilePath(path) && onOpenHtmlFile) {
       onOpenHtmlFile({ path, line });
       onClose();
@@ -110,29 +166,43 @@ export function FileActionMenu({
           <I.file size={13} />
           <span>{t("fileActions.preview")}</span>
         </button>
-        <button type="button" onClick={openDefault}>
-          <I.link size={13} />
-          <span>{t("fileActions.openDefault")}</span>
+        <button
+          type="button"
+          onClick={openDefault}
+          disabled={saving}
+          aria-busy={saving || undefined}
+        >
+          {android ? <I.download size={13} /> : <I.link size={13} />}
+          <span>
+            {android
+              ? t(saving ? "fileActions.savingFile" : "fileActions.saveFile")
+              : t("fileActions.openDefault")}
+          </span>
         </button>
-        <button type="button" onClick={reveal}>
-          <I.folder size={13} />
-          <span>{t("fileActions.reveal")}</span>
-        </button>
-        <button type="button" onClick={() => setOpenWithShown((v) => !v)}>
-          <I.pencil size={13} />
-          <span>{t("fileActions.openWith")}</span>
-        </button>
-        {openWithShown ? (
-          <form className="file-action-open-with" onSubmit={submitOpenWith}>
-            <input
-              ref={openWithRef}
-              value={app}
-              onChange={(event) => setApp(event.currentTarget.value)}
-              placeholder={t("fileActions.openWithPlaceholder")}
-            />
-            <button type="submit">{t("fileActions.open")}</button>
-          </form>
-        ) : null}
+        {android && <FileSaveNotice notice={saveNotice} />}
+        {!android && (
+          <>
+            <button type="button" onClick={reveal}>
+              <I.folder size={13} />
+              <span>{t("fileActions.reveal")}</span>
+            </button>
+            <button type="button" onClick={() => setOpenWithShown((v) => !v)}>
+              <I.pencil size={13} />
+              <span>{t("fileActions.openWith")}</span>
+            </button>
+            {openWithShown ? (
+              <form className="file-action-open-with" onSubmit={submitOpenWith}>
+                <input
+                  ref={openWithRef}
+                  value={app}
+                  onChange={(event) => setApp(event.currentTarget.value)}
+                  placeholder={t("fileActions.openWithPlaceholder")}
+                />
+                <button type="submit">{t("fileActions.open")}</button>
+              </form>
+            ) : null}
+          </>
+        )}
         <button type="button" onClick={copy}>
           <I.copy size={13} />
           <span>{t("fileActions.copyPath")}</span>

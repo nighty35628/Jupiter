@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import { attachments } from "../attachments/store.js";
+import { getAndroidRuntimeContext } from "../mobile/runtime-context.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 
 export type WebAccessMode = "local" | "lan" | "public";
@@ -32,6 +33,9 @@ export interface SurfaceCapabilities {
 }
 
 const ALL_COMMANDS = new Set([
+  "scheduled_list",
+  "scheduled_save",
+  "scheduled_action",
   "prompt_prediction_get",
   "prompt_prediction_dismiss",
   "attachment_import",
@@ -133,6 +137,8 @@ const ALL_COMMANDS = new Set([
 ]);
 
 const HIGH_RISK_COMMANDS = new Set([
+  "scheduled_save",
+  "scheduled_action",
   "dingtalk_config_save",
   "dingtalk_connect",
   "dingtalk_disconnect",
@@ -164,6 +170,7 @@ const HIGH_RISK_COMMANDS = new Set([
 const PATH_OUTPUT_COMMANDS = new Set(["session_export"]);
 
 const PUBLIC_ALLOWED_COMMANDS = new Set([
+  "scheduled_list",
   "prompt_prediction_get",
   "prompt_prediction_dismiss",
   "attachment_import",
@@ -227,6 +234,7 @@ const SAFE_SETTINGS_KEYS = new Set([
   "budgetUsd",
   "model",
   "contextTokens",
+  "earlyCompactionTokens",
   "libraryRetrievalMode",
   "showSystemEvents",
   "showAiVisibleDetails",
@@ -281,7 +289,10 @@ export async function authorizeDesktopCommand(
 ): Promise<{ command: Record<string, unknown>; risk: WebRisk }> {
   const cmd = typeof input.cmd === "string" ? input.cmd : "";
   if (!ALL_COMMANDS.has(cmd)) throw new Error(`unsupported Web command: ${cmd || "(missing)"}`);
-  if (cmd === "setup_save_key") {
+  if (
+    cmd === "setup_save_key" &&
+    !(opts.mode === "local" && getAndroidRuntimeContext()?.role === "host")
+  ) {
     throw new Error("Provider credentials can only be changed in Jupiter Desktop.");
   }
   if (opts.mode === "public" && !PUBLIC_ALLOWED_COMMANDS.has(cmd)) {
@@ -310,7 +321,19 @@ export async function authorizeDesktopCommand(
   if (cmd === "tab_open" || cmd === "new_chat" || cmd === "session_load") {
     await normalizeWorkspace(command, opts);
   }
-  if (cmd === "settings_save") sanitizeSettings(command, opts);
+  if (cmd === "settings_save") {
+    // The private Android picker returns registered IDs, not arbitrary host paths.
+    const androidWorkspace =
+      opts.mode === "local" &&
+      getAndroidRuntimeContext()?.role === "host" &&
+      (command.workspaceId !== undefined || command.workspaceDir !== undefined);
+    if (androidWorkspace) {
+      await normalizeWorkspace(command, opts);
+      const workspaceDir = command.workspaceDir;
+      sanitizeSettings(command, opts);
+      command.workspaceDir = workspaceDir;
+    } else sanitizeSettings(command, opts);
+  }
   resolveFileReferences(command, opts);
   if (cmd === "attachment_draft_refs") {
     if (

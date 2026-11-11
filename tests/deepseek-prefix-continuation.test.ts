@@ -40,7 +40,7 @@ function fakeChat(replies: Reply[]) {
   return { fetch, requests };
 }
 
-describe("DeepSeek Beta prefix continuation", () => {
+describe("DeepSeek Beta prefix continuation", { retry: 0 }, () => {
   it("resolves standard and beta URLs for root and /v1 base URLs", () => {
     expect(chatCompletionsUrl("https://api.deepseek.com")).toBe(
       "https://api.deepseek.com/chat/completions",

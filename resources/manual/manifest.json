@@ -8,6 +8,6 @@
     { "id": "planning", "title": "Plans, compression and rollback", "keywords": ["plan", "compact", "rollback", "计划", "压缩", "回滚", "撤销", "上下文"] },
     { "id": "memory-library", "title": "Memory and workspace library", "keywords": ["memory", "library", "记忆", "资料库"] },
     { "id": "skills-mcp", "title": "Skills and MCP", "keywords": ["skill", "MCP", "技能", "插件"] },
-    { "id": "sessions", "title": "Surfaces, sessions and settings", "keywords": ["session", "setting", "CLI", "Desktop", "Web", "会话", "设置", "多端", "终端"] }
+    { "id": "sessions", "title": "Surfaces, sessions and settings", "keywords": ["session", "setting", "CLI", "Desktop", "Web", "会话", "设置", "多端", "终端", "scheduled task", "schedule", "automation", "定时", "周期任务", "voice", "dictation", "speech", "语音", "听写"] }
   ]
 }

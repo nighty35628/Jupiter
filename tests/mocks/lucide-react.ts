@@ -1,6 +1,9 @@
 import { vi } from "vitest";
 
 export const Check = vi.fn(() => null);
+export const Clock = vi.fn(() => null);
+export const Pause = vi.fn(() => null);
+export const Save = vi.fn(() => null);
 export const ChevronDown = vi.fn(() => null);
 export const ChevronRight = vi.fn(() => null);
 export const ClipboardCopy = vi.fn(() => null);
@@ -17,5 +20,6 @@ export const Search = vi.fn(() => null);
 export const Settings = vi.fn(() => null);
 export const SquareX = vi.fn(() => null);
 export const StopCircle = vi.fn(() => null);
+export const Mic = vi.fn(() => null);
 export const Trash2 = vi.fn(() => null);
 export const Undo2 = vi.fn(() => null);

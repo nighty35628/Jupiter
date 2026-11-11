@@ -137,7 +137,34 @@ function fixture(ignoreAbort = false) {
     await dispatch;
     await Promise.all(handlers.tasks);
   };
-  return { tab, loop, pending, chat, emit, classify, send, settle, handlers, dependencies };
+  const activitySource = ts.transpileModule(
+    `${extract((node) => ts.isFunctionDeclaration(node) && node.name?.text === "readAndroidActivity")}
+    return readAndroidActivity;`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const activityBindings = {
+    tabs,
+    pendingRpc: 0,
+    androidBackgroundOperations: 0,
+    sharedCompactions: new Map(),
+    scheduledEngine: undefined,
+  };
+  const readActivity = new Function(...Object.keys(activityBindings), activitySource)(
+    ...Object.values(activityBindings),
+  ) as () => number;
+  return {
+    tab,
+    loop,
+    pending,
+    chat,
+    emit,
+    classify,
+    send,
+    settle,
+    handlers,
+    dependencies,
+    readActivity,
+  };
 }
 
 describe("production Agent preflight cancellation", { retry: 0 }, () => {
@@ -147,6 +174,8 @@ describe("production Agent preflight cancellation", { retry: 0 }, () => {
     await vi.waitFor(() => expect(f.pending).toHaveLength(1));
     expect(f.tab.turnAdmission.kind).toBe("agent");
     expect(f.tab.aborter).not.toBeNull();
+    expect(f.readActivity()).toBeGreaterThan(0);
+    expect(f.emit.mock.calls.some(([event]) => event.type === "model.turn.started")).toBe(false);
     abortDesktopTurnControllers(f.tab);
     expect(f.pending[0].signal?.aborted).toBe(true);
     await f.settle(dispatch);
@@ -156,6 +185,7 @@ describe("production Agent preflight cancellation", { retry: 0 }, () => {
     expect(f.loop.abort).not.toHaveBeenCalled();
     expect(f.tab.turnAdmission.running).toBe(false);
     expect(f.tab.aborter).toBeNull();
+    expect(f.readActivity()).toBe(0);
     expect(f.emit.mock.calls.filter(([e]) => e.type === "$turn_complete")).toHaveLength(1);
     expect(f.emit).toHaveBeenCalledWith(
       { type: "$turn_complete", unacceptedClientId: "cancelled-client" },

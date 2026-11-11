@@ -1,6 +1,6 @@
 [package]
 name = "jupiter-desktop"
-version = "1.0.11"
+version = "1.0.12"
 edition = "2021"
 publish = false
 autobins = false
@@ -35,6 +35,27 @@ portable-pty = "0.9.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Linux builders need libasound2-dev in addition to the existing Tauri packages.
+[target.'cfg(all(any(target_os = "macos", target_os = "windows", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
+cpal = "=0.16.0"
+whisper-rs = { version = "=0.15.1", default-features = false }
+whisper-rs-sys = { version = "=0.14.1", default-features = false }
+rubato = "=0.16.2"
+reqwest = { version = "=0.12.24", default-features = false, features = ["rustls-tls", "stream"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "sync", "time"] }
+fs2 = "=0.4.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-av-foundation = { version = "=0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
+objc2 = "0.6"
+block2 = "0.6"
+
+[dev-dependencies]
+hound = "=3.5.1"
+
+[patch.crates-io]
+cpal = { path = "vendor/cpal" }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

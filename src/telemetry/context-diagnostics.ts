@@ -7,6 +7,10 @@ import type { ChatMessage, ToolSpec } from "../types.js";
 import { type SessionSummary, resolveContextTokens } from "./stats.js";
 
 export interface ContextDiagnostics {
+  outputReserveTokens?: number;
+  inputLimit?: number;
+  budgetEstimated?: boolean;
+  budgetSource?: string;
   images?: {
     attached: number;
     retained: number;
@@ -43,6 +47,13 @@ export interface ContextDiagnosticsInput {
 }
 
 export interface ContextDiagnosticsLoopLike {
+  getRequestBudget?: () => {
+    contextWindowTokens: number;
+    outputReserveTokens: number;
+    inputLimit: number;
+    estimated: boolean;
+    source: string;
+  };
   client?: { lastImageRequest?: ImageRequestSnapshot | null };
   prefix: {
     system: string;
@@ -99,6 +110,14 @@ export function computeContextDiagnosticsFromLoop(
     summary,
     lastUsage,
   });
+  const budget = loop.getRequestBudget?.();
+  if (budget) {
+    result.ctxMax = budget.contextWindowTokens;
+    result.outputReserveTokens = budget.outputReserveTokens;
+    result.inputLimit = budget.inputLimit;
+    result.budgetEstimated = budget.estimated;
+    result.budgetSource = budget.source;
+  }
   const messages = loop.log.toFullHistory();
   const attached = messages.reduce(
     (count, message) => count + (message.attachments?.length ?? 0),

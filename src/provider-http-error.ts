@@ -225,6 +225,8 @@ export function extractProviderErrorDetail(
 }
 
 export class ProviderHttpError extends Error {
+  readonly source = "http";
+  readonly code: string | undefined;
   readonly status: number;
   readonly providerHost: string;
   readonly retryable: boolean;
@@ -243,11 +245,70 @@ export class ProviderHttpError extends Error {
     const label = providerHost === "api.deepseek.com" ? "DeepSeek" : `Upstream ${providerHost}`;
     super(`${label} ${input.status}${safeDetail ? `: ${safeDetail}` : ""}`);
     this.name = "ProviderHttpError";
+    this.code = extractProviderErrorCode(input.rawBody ?? "", input.knownSecrets);
     this.status = input.status;
     this.providerHost = providerHost;
     this.retryable = input.status === 429 || input.status >= 500;
     this.safeDetail = safeDetail;
   }
+}
+
+export class ProviderStreamError extends Error {
+  readonly source = "sse";
+  readonly code: string | undefined;
+  readonly status: number | undefined;
+  readonly providerHost: string;
+  readonly safeDetail: string;
+
+  constructor(input: { baseUrl: string; rawBody: string; knownSecrets?: readonly string[] }) {
+    const providerHost = safeHost(input.baseUrl);
+    const safeDetail = extractProviderErrorDetail(input.rawBody, {
+      knownSecrets: input.knownSecrets,
+    });
+    super(`Provider stream error from ${providerHost}${safeDetail ? `: ${safeDetail}` : ""}`);
+    this.name = "ProviderStreamError";
+    this.code = extractProviderErrorCode(input.rawBody, input.knownSecrets);
+    this.status = extractProviderErrorStatus(input.rawBody);
+    this.providerHost = providerHost;
+    this.safeDetail = safeDetail;
+  }
+}
+
+function extractProviderErrorCode(
+  rawBody: string,
+  knownSecrets?: readonly string[],
+): string | undefined {
+  try {
+    const body: unknown = JSON.parse(rawBody);
+    for (const path of [["error", "code"], ["code"], ["error", "type"], ["type"]]) {
+      const raw = readStringPath(body, path)?.trim();
+      if (!raw || raw.length > 128) continue;
+      if (sanitizeProviderErrorText(raw, { knownSecrets }) !== raw) continue;
+      const code = raw.toLowerCase();
+      if (/^[a-z][a-z0-9_.:-]*$/.test(code)) return code;
+    }
+  } catch {
+    // Plain-text errors have no trusted machine code.
+  }
+  return undefined;
+}
+
+function extractProviderErrorStatus(rawBody: string): number | undefined {
+  try {
+    const body = JSON.parse(rawBody);
+    for (const value of [
+      body?.error?.status,
+      body?.status,
+      body?.error?.status_code,
+      body?.status_code,
+    ]) {
+      const status = typeof value === "string" && /^\d{3}$/.test(value) ? Number(value) : value;
+      if (Number.isInteger(status) && status >= 400 && status <= 599) return status;
+    }
+  } catch {
+    // SSE status is optional; HTTP status is supplied by the response itself.
+  }
+  return undefined;
 }
 
 export async function providerHttpErrorFromResponse(

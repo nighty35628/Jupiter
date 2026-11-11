@@ -2,6 +2,7 @@
 
 mod pets;
 mod rpc;
+mod speech;
 mod terminal;
 
 use rpc::{rpc_kill, rpc_send, rpc_spawn, RpcState};
@@ -1372,9 +1373,26 @@ fn main() {
                 .with_state_flags(persisted_window_state_flags())
                 .build(),
         )
+        .on_page_load(|webview, payload| {
+            if let Some(speech) = webview.app_handle().try_state::<speech::SpeechState>() {
+                speech.page_load(
+                    webview.label(),
+                    payload.event() == tauri::webview::PageLoadEvent::Started,
+                );
+            }
+        })
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
+            }
+            if let Some(speech) = window.app_handle().try_state::<speech::SpeechState>() {
+                match event {
+                    tauri::WindowEvent::Focused(focused) => speech.set_foreground(*focused),
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                        speech.set_foreground(false);
+                    }
+                    _ => {}
+                }
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let close_behavior = desktop_close_behavior();
@@ -1394,6 +1412,12 @@ fn main() {
         .manage(RpcState::default())
         .manage(TerminalState::default())
         .invoke_handler(tauri::generate_handler![
+            speech::speech_capabilities,
+            speech::speech_start,
+            speech::speech_finish,
+            speech::speech_cancel,
+            speech::speech_download_model,
+            speech::speech_remove_model,
             rpc_spawn,
             rpc_send,
             rpc_kill,
@@ -1423,6 +1447,7 @@ fn main() {
             image_attachment_path
         ])
         .setup(|app| {
+            speech::initialize(app.handle())?;
             append_native_diagnostic("native_started");
             std::thread::spawn(|| purge_old_pasted_images(Duration::from_secs(24 * 60 * 60)));
             install_tray(app)?;
@@ -1466,6 +1491,9 @@ fn main() {
             // don't always run. ExitRequested fires before that, so we kill the
             // Node child here too — belt-and-braces vs the Drop on RpcHandle.
             tauri::RunEvent::ExitRequested { .. } => {
+                if let Some(speech) = app.try_state::<speech::SpeechState>() {
+                    speech.shutdown();
+                }
                 append_native_diagnostic("native_exit_requested");
                 let state = app.state::<RpcState>();
                 let _ = rpc::rpc_kill(state);

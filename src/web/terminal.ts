@@ -38,6 +38,17 @@ export class WebTerminalManager {
     perMessageDeflate: false,
   });
   private readonly connectionsByDevice = new Map<string, Set<TerminalConnection>>();
+  private pendingMessages = 0;
+  private liveTerminals = 0;
+  private accepting = true;
+
+  get activityCount(): number {
+    return this.pendingMessages + this.liveTerminals;
+  }
+
+  setAccepting(accepting: boolean): void {
+    this.accepting = accepting;
+  }
 
   accept(
     request: IncomingMessage,
@@ -74,9 +85,17 @@ export class WebTerminalManager {
 
     let queue = Promise.resolve();
     socket.on("message", (raw, isBinary) => {
+      if (!this.accepting) {
+        this.sendError(connection, "terminal", "Local runtime is checking idle shutdown");
+        return;
+      }
+      this.pendingMessages++;
       queue = queue
         .then(() => this.handleMessage(connection, raw, isBinary))
-        .catch((error) => this.sendError(connection, "terminal", terminalError(error)));
+        .catch((error) => this.sendError(connection, "terminal", terminalError(error)))
+        .finally(() => {
+          this.pendingMessages--;
+        });
     });
     socket.on("close", () => this.removeConnection(connection));
     socket.on("error", () => this.removeConnection(connection));
@@ -124,6 +143,11 @@ export class WebTerminalManager {
       throw new Error("terminal connection limit reached");
     }
     const root = await connection.authorization.resolveWorkspace(input.workspaceId);
+    if (
+      connection.socket.readyState !== WebSocket.OPEN ||
+      !this.connectionsByDevice.get(connection.authorization.deviceId)?.has(connection)
+    )
+      return;
     connection.terminals.get(input.id)?.kill();
 
     const shell =
@@ -137,6 +161,8 @@ export class WebTerminalManager {
       cwd: root,
       env: terminalEnvironment(),
     });
+    this.liveTerminals++;
+    let exited = false;
     connection.terminals.set(input.id, terminal);
     terminal.onData((data) => {
       if (connection.terminals.get(input.id) !== terminal) return;
@@ -147,6 +173,10 @@ export class WebTerminalManager {
       this.send(connection, { type: "output", id: input.id, data });
     });
     terminal.onExit(({ exitCode }) => {
+      if (!exited) {
+        exited = true;
+        this.liveTerminals--;
+      }
       if (connection.terminals.get(input.id) !== terminal) return;
       connection.terminals.delete(input.id);
       this.send(connection, { type: "exit", id: input.id, code: exitCode });

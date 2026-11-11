@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "linuxBuildImage": {
+    "name": "ubuntu-minimal-arm64-20261027.img",
+    "url": "https://cloud-images.ubuntu.com/minimal/releases/noble/release-20261027/ubuntu-24.04-minimal-cloudimg-arm64.img",
+    "sha256": "6e971c7935c62c8ea7796b085e4ea038e2301a067f8c853e154133f8df192c85",
+    "verificationUrl": "https://cloud-images.ubuntu.com/minimal/releases/noble/release/SHA256SUMS"
+  },
+  "gradle": "9.3.1",
+  "androidGradlePlugin": "9.1.1",
+  "jdk": 17,
+  "compileSdk": 36,
+  "buildTools": "36.0.0",
+  "ndk": "28.2.13676358"
+}

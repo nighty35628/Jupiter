@@ -1,0 +1,63 @@
+import { getLang } from "../i18n";
+
+const en = {
+  title: "Voice input", start: "Start dictation", finish: "Finish dictation", cancel: "Cancel dictation",
+  recording: "Listening", preparing: "Preparing microphone", transcribing: "Transcribing",
+  insert: "Insert", discard: "Discard", language: "Recognition language", automatic: "Automatic",
+  local: "On-device only", system: "System provider (may use network)", mode: "Recognition mode",
+  unavailable: "System speech recognition is unavailable. Your keyboard's dictation may still work.",
+  model: "Multilingual Whisper model", download: "Download model", remove: "Remove model",
+  downloading: "Downloading model", installed: "Ready on this device", missing: "Model not downloaded",
+  privacy: "System recognition may send audio to its provider. Jupiter cannot control that provider's retention.",
+  localPrivacy: "Audio is processed on this device. Jupiter does not save recordings.",
+  error: "Dictation did not complete. Check microphone permission, language and recognition service, then retry.",
+  downloadError: "Model operation failed. Check your connection and free disk space, then retry.",
+  limit: "60 s maximum", consent: "Download the displayed model to this device?",
+};
+type Copy = typeof en;
+const translations: Record<string, Copy> = {
+  en,
+  "zh-CN": {
+    title: "语音输入", start: "开始听写", finish: "结束听写", cancel: "取消听写",
+    recording: "正在聆听", preparing: "准备麦克风", transcribing: "正在转写",
+    insert: "插入", discard: "丢弃", language: "识别语言", automatic: "自动",
+    local: "仅在设备上识别", system: "系统提供方（可能联网）", mode: "识别方式",
+    unavailable: "系统语音识别不可用，仍可尝试键盘自带的语音输入。",
+    model: "Whisper 多语言模型", download: "下载模型", remove: "删除模型",
+    downloading: "正在下载模型", installed: "已在本机就绪", missing: "尚未下载模型",
+    privacy: "系统识别可能将音频发送给提供方，Jupiter 无法控制其保留方式。",
+    localPrivacy: "音频在本机处理，Jupiter 不保存录音。",
+    error: "听写未完成，请检查麦克风权限、语言和识别服务后重试。",
+    downloadError: "模型操作失败，请检查网络和磁盘空间后重试。",
+    limit: "最长 60 秒", consent: "将显示的模型下载到本机？",
+  },
+  de: {
+    title: "Spracheingabe", start: "Diktat starten", finish: "Diktat beenden", cancel: "Diktat abbrechen",
+    recording: "Aufnahme", preparing: "Mikrofon vorbereiten", transcribing: "Transkription",
+    insert: "Einfügen", discard: "Verwerfen", language: "Erkennungssprache", automatic: "Automatisch",
+    local: "Nur auf dem Gerät", system: "Systemanbieter (ggf. online)", mode: "Erkennungsmodus",
+    unavailable: "Systemerkennung nicht verfügbar. Die Diktierfunktion der Tastatur kann verfügbar sein.",
+    model: "Mehrsprachiges Whisper-Modell", download: "Modell herunterladen", remove: "Modell entfernen",
+    downloading: "Modell wird heruntergeladen", installed: "Auf diesem Gerät bereit", missing: "Modell nicht heruntergeladen",
+    privacy: "Die Systemerkennung kann Audio an den Anbieter senden. Jupiter kontrolliert dessen Speicherung nicht.",
+    localPrivacy: "Audio wird lokal verarbeitet. Jupiter speichert keine Aufnahmen.",
+    error: "Diktat fehlgeschlagen. Mikrofonberechtigung, Sprache und Erkennungsdienst prüfen.",
+    downloadError: "Modellvorgang fehlgeschlagen. Verbindung und freien Speicher prüfen.",
+    limit: "Maximal 60 s", consent: "Das angezeigte Modell auf dieses Gerät herunterladen?",
+  },
+  ja: {
+    title: "音声入力", start: "音声入力を開始", finish: "音声入力を終了", cancel: "音声入力をキャンセル",
+    recording: "録音中", preparing: "マイクを準備中", transcribing: "文字起こし中",
+    insert: "挿入", discard: "破棄", language: "認識言語", automatic: "自動",
+    local: "端末内のみ", system: "システム提供元（通信の可能性あり）", mode: "認識方式",
+    unavailable: "システム音声認識は利用できません。キーボードの音声入力は使える場合があります。",
+    model: "Whisper 多言語モデル", download: "モデルをダウンロード", remove: "モデルを削除",
+    downloading: "モデルをダウンロード中", installed: "この端末で利用可能", missing: "未ダウンロード",
+    privacy: "システム認識は音声を提供元に送信する場合があります。Jupiter は提供元の保存を制御できません。",
+    localPrivacy: "音声は端末内で処理され、Jupiter は録音を保存しません。",
+    error: "音声入力に失敗しました。マイクの権限、言語、認識サービスを確認してください。",
+    downloadError: "モデル操作に失敗しました。接続と空き容量を確認してください。",
+    limit: "最長60秒", consent: "表示中のモデルをこの端末にダウンロードしますか？",
+  },
+};
+export function speechCopy(): Copy { return translations[getLang()] ?? en; }

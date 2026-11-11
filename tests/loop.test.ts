@@ -2,10 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeepSeekClient, Usage } from "../src/client.js";
-import {
-  HISTORY_FOLD_AGGRESSIVE_THRESHOLD,
-  HISTORY_FOLD_THRESHOLD,
-} from "../src/context-manager.js";
+import { HISTORY_FOLD_THRESHOLD } from "../src/context-manager.js";
 import { type ConfirmationChoice, PauseGate } from "../src/core/pause-gate.js";
 import { CacheFirstLoop } from "../src/loop.js";
 import { ImmutablePrefix } from "../src/memory/runtime.js";
@@ -555,7 +552,7 @@ describe("CacheFirstLoop (non-streaming)", () => {
     expect(summary?.content).toMatch(/stuck on a repeated tool call/);
   });
 
-  it("context-guard diverts to summary when promptTokens > 80% of the window, tagging forcedSummary", async () => {
+  it("continues the task and executes tools above the former 80% capacity exit", async () => {
     const reg = new ToolRegistry();
     reg.register({
       name: "probe",
@@ -599,15 +596,14 @@ describe("CacheFirstLoop (non-streaming)", () => {
     // auto-compact-saved-us variant and the nothing-to-compact variant
     // — the message format shifted in 0.4.11 when we added the
     // auto-compact attempt before forcing summary.
-    const warn = events.find((e) => e.role === "warning");
-    expect(warn).toBeDefined();
-    expect(warn!.content).toMatch(/context [\d,]+\/[\d,]+/);
+    expect(events.some((event) => event.role === "tool")).toBe(true);
 
     // The final assistant_final must be tagged forcedSummary and carry the context-guard prefix.
     const finals = events.filter((e) => e.role === "assistant_final");
     const summary = finals[finals.length - 1];
-    expect(summary!.forcedSummary).toBe(true);
-    expect(summary!.content).toMatch(/context budget running low/);
+    expect(summary!.forcedSummary).not.toBe(true);
+    expect(summary!.content).toBe("based on what I saw, X.");
+    expect(events.some((event) => event.forcedSummary)).toBe(false);
   });
 
   it("force-summary calls the active model, not a hard-coded one (third-party endpoint compat)", async () => {
@@ -741,10 +737,7 @@ describe("CacheFirstLoop (non-streaming)", () => {
     // so fold has a meaningful head to compact. The mocked usage trips post-
     // response auto-fold without preflight stealing the work.
     DEEPSEEK_CONTEXT_TOKENS[FOLD_TEST_MODEL] = 200_000;
-    const tripPrompt = Math.ceil(
-      200_000 *
-        (HISTORY_FOLD_THRESHOLD + (HISTORY_FOLD_AGGRESSIVE_THRESHOLD - HISTORY_FOLD_THRESHOLD) / 2),
-    );
+    const tripPrompt = Math.ceil(200_000 * HISTORY_FOLD_THRESHOLD);
     const reg = new ToolRegistry();
     reg.register({
       name: "probe",
@@ -854,11 +847,9 @@ describe("CacheFirstLoop (non-streaming)", () => {
     expect(events[events.length - 1]?.role).toBe("done");
   }, 30_000);
 
-  it("uses the aggressive fold tier when promptTokens crosses the aggressive threshold", async () => {
+  it("uses the same capacity fold policy above the old aggressive threshold", async () => {
     DEEPSEEK_CONTEXT_TOKENS[FOLD_TEST_MODEL] = 200_000;
-    const tripPrompt = Math.ceil(
-      200_000 * (HISTORY_FOLD_AGGRESSIVE_THRESHOLD + (0.8 - HISTORY_FOLD_AGGRESSIVE_THRESHOLD) / 2),
-    );
+    const tripPrompt = Math.ceil(200_000 * (HISTORY_FOLD_THRESHOLD + 0.01));
     const reg = new ToolRegistry();
     reg.register({
       name: "probe",
@@ -910,13 +901,12 @@ describe("CacheFirstLoop (non-streaming)", () => {
 
     // The warning should call out the aggressive tier explicitly.
     const foldWarn = events.find(
-      (e) => e.role === "warning" && /aggressively folded/.test(e.content ?? ""),
+      (e) => e.role === "warning" && /folded \d+ messages/.test(e.content ?? ""),
     );
     expect(foldWarn).toBeDefined();
     // And the status line should advertise it too, so users know why
     // recent context got trimmed harder than usual.
-    const status = events.find((e) => e.role === "status" && /aggressive/.test(e.content ?? ""));
-    expect(status).toBeDefined();
+    expect(events.some((e) => /aggressive/.test(e.content ?? ""))).toBe(false);
   }, 30_000);
 
   it("pre-clips new tool results at dispatch so they never enter the log oversized", async () => {

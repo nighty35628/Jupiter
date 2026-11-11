@@ -29,6 +29,7 @@ export interface ComputerUseHelpStatus {
 }
 export interface JupiterHelpContext {
   surface?: "desktop" | "cli" | "web" | "unknown";
+  runtimeIdentity?: string;
   mode?: string;
   model?: string;
   provider?: string;
@@ -105,6 +106,7 @@ function runtimeFacts(context: JupiterHelpContext): string {
   const facts = [
     `surface=${surface}; mode=${clean(live.mode)}; model=${clean(live.model)}; provider=${clean(live.provider)}`,
   ];
+  if (live.runtimeIdentity) facts.push(`Runtime identity: ${clean(live.runtimeIdentity)}`);
   if (surface === "cli" || surface === "web")
     facts.push(`Native Computer Use: unavailable on ${surface} (Desktop-only).`);
   else {

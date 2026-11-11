@@ -6,12 +6,13 @@ import { invoke } from "@tauri-apps/api/core";
 import * as eventApi from "@tauri-apps/api/event";
 import * as webviewApi from "@tauri-apps/api/webview";
 import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings, UsageStats } from "../App";
 import type { FilePreview } from "../file-preview";
-import { setLang } from "../i18n";
+import { setLang, t } from "../i18n";
+import type { ContextDiagnosticsInfo } from "../protocol";
 import { ContextInfoPopover, ContextPanel } from "./context-panel";
 
 const xtermMockState = vi.hoisted(() => {
@@ -135,6 +136,92 @@ function renderPanel(overrides: Record<string, unknown> = {}) {
     />,
   );
 }
+
+describe("context request budget", { retry: 0 }, () => {
+  beforeEach(() => setLang("en"));
+  afterEach(cleanup);
+
+  function renderBudget(budget: Partial<ContextDiagnosticsInfo>) {
+    return render(<ContextInfoPopover open settings={settings} usage={{
+      ...usage, reservedTokens: 100, liveLogTokens: 200,
+      contextDiagnostics: {
+        systemTokens: 50, toolsTokens: 50, logTokens: 200, inputTokens: 0,
+        memoryTokens: 0, summaryTokens: 0, ctxMax: 1000, toolsCount: 0, logMessages: 2,
+        topTools: [], lastPromptTokens: 0, lastCacheHitTokens: 0, lastCacheMissTokens: 0,
+        sessionCacheHitRatio: 0, totalCostUsd: 0, turns: 1, ...budget,
+      },
+    }} mcpSpecs={[]} mcpBridged={false} subagents={[]} sessionFiles={[]} memory={[]}
+      memoryDetail={null} onOpenSubagent={() => {}} onReadMemory={() => {}} />);
+  }
+
+  it("uses the total window and shows output reserve separately from system/tools", () => {
+    renderBudget({ outputReserveTokens: 200, inputLimit: 750, budgetEstimated: true, budgetSource: "fallback" });
+    const panel = document.querySelector(".ctx-body-tokens") as HTMLElement;
+    expect(within(panel).getByText("300 / 1,000")).toBeTruthy();
+    expect(within(panel).getByText("Output reserve (estimate)").parentElement?.textContent).toContain("200");
+    expect(within(panel).getByText("Input limit").parentElement?.textContent).toContain("750");
+    expect(within(panel).getByText("free").parentElement?.textContent).toContain("450");
+    expect(within(panel).getByText("reserved").parentElement?.textContent).toContain("100");
+    expect(within(panel).getByText("Estimated budget")).toBeTruthy();
+    expect(within(panel).getByText("Fallback estimate")).toBeTruthy();
+    expect((panel.querySelector(".rsvd") as HTMLElement).style.width).toBe("10%");
+  });
+
+  it("does not invent an output reserve or exact provider usage for legacy telemetry", () => {
+    renderBudget({});
+    const panel = document.querySelector(".ctx-body-tokens") as HTMLElement;
+    expect(within(panel).getByText("300 / 1,000")).toBeTruthy();
+    expect(within(panel).queryByText("Output reserve (estimate)")).toBeNull();
+    expect(within(panel).queryByText("Input limit")).toBeNull();
+    expect(within(panel).queryByText("Estimated budget")).toBeNull();
+  });
+
+  it("subtracts output reserve only once when no input limit is supplied", () => {
+    renderBudget({ outputReserveTokens: 200 });
+    const panel = document.querySelector(".ctx-body-tokens") as HTMLElement;
+    expect(within(panel).getByText("free").parentElement?.textContent).toContain("500");
+  });
+
+  it.each(["en", "zh-CN", "de", "ja"] as const)("localizes budget labels in %s", (lang) => {
+    setLang(lang);
+    renderBudget({ outputReserveTokens: 200, inputLimit: 750, budgetEstimated: true, budgetSource: "official" });
+    expect(screen.getByText(t("contextPanel.outputReserve"))).toBeTruthy();
+    expect(screen.getByText(t("contextPanel.budgetEstimated"))).toBeTruthy();
+    expect(screen.getByText(t("contextPanel.budgetOfficial"))).toBeTruthy();
+    expect(document.body.textContent).not.toContain("contextPanel.budget");
+  });
+
+  it.each(["__proto__", "opaque-synthetic-private-source"])("ignores unknown source %s", (budgetSource) => {
+    renderBudget({ budgetSource, outputReserveTokens: 0, inputLimit: 0 });
+    const panel = document.querySelector(".ctx-body-tokens") as HTMLElement;
+    expect(panel.textContent).not.toContain(budgetSource);
+    expect(within(panel).getByText("free").parentElement?.textContent).toContain("0");
+  });
+
+  it.runIf(Boolean(process.env.JUPITER_UI_VISUAL_QA))("fits the budget panel at desktop and mobile widths", async () => {
+    const { chromium } = await import("playwright-core");
+    const css = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+    const browser = await chromium.launch({ executablePath: process.env.JUPITER_QA_BROWSER, headless: true });
+    try {
+      const page = await browser.newPage();
+      for (const lang of ["en", "de"] as const) {
+        setLang(lang);
+        renderBudget({ outputReserveTokens: 200, inputLimit: 750, budgetEstimated: true, budgetSource: "fallback" });
+        const markup = document.body.innerHTML;
+        for (const width of [1280, 390]) {
+          await page.setViewportSize({ width, height: 900 });
+          const panelWidth = Math.min(330, width * 0.86);
+          await page.setContent(`<html lang="${lang}" data-theme="dark" data-runtime="web"><head><style>${css}</style></head><body><main style="width:${panelWidth}px;height:900px">${markup}</main></body></html>`);
+          await page.waitForTimeout(250);
+          const overflow = await page.locator(".ctx-body-tokens").evaluate((panel) => panel.scrollWidth > panel.clientWidth + 1);
+          expect(overflow).toBe(false);
+          await page.locator(".context-info-popover").screenshot({ path: `/tmp/jupiter-context-budget-${lang}-${width}.png` });
+        }
+        cleanup();
+      }
+    } finally { await browser.close(); }
+  }, 20000);
+});
 
 describe("ContextPanel files", () => {
   beforeEach(() => {
@@ -792,6 +879,69 @@ describe("ContextPanel files", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open file: src/new-file.ts" }));
 
     await waitFor(() => expect(openPath).toHaveBeenCalledWith("/repo/src/new-file.ts"));
+  });
+
+  describe("Android direct file actions", { retry: 0 }, () => {
+    beforeEach(() => { document.documentElement.dataset.hostPlatform = "android"; });
+    afterEach(() => { delete document.documentElement.dataset.hostPlatform; });
+
+    function renderFile(entry: "tracked" | "search", path = "docs/report.html") {
+      const onPreviewFile = vi.fn();
+      const onOpenHtmlFile = vi.fn();
+      renderPanel({
+        settings: { ...settings, editor: "cursor --goto" },
+        sessionFiles: entry === "tracked" ? [{ path, status: "m" }] : [],
+        ...(entry === "search" ? { onMentionQuery: vi.fn(), mentionResults: { nonce: 1, query: "", results: [path] } } : {}),
+        onPreviewFile, onOpenHtmlFile,
+      });
+      return { onPreviewFile, onOpenHtmlFile, path };
+    }
+
+    it.each(["tracked", "search"] as const)("saves HTML directly from the %s icon and shows failures without an unhandled rejection", async (entry) => {
+      vi.mocked(openPath).mockRejectedValueOnce(new Error("Native export failed"));
+      const props = renderFile(entry);
+      const save = screen.queryByRole("button", { name: `Save File: ${props.path}` });
+      expect(save).not.toBeNull();
+      expect(save!.getAttribute("title")).toBe(`Save File: ${props.path}`);
+      expect(save!.querySelector("svg")).toBeTruthy();
+      await act(async () => { fireEvent.click(save!); });
+      expect(openPath).toHaveBeenCalledWith("/repo/docs/report.html");
+      expect(screen.getByRole("alert").textContent).toContain("Native export failed");
+      expect(props.onOpenHtmlFile).not.toHaveBeenCalled();
+      expect(props.onPreviewFile).not.toHaveBeenCalled();
+      expect(invoke).not.toHaveBeenCalledWith("open_in_editor", expect.anything());
+      vi.mocked(openPath).mockResolvedValue(undefined);
+      await act(async () => { fireEvent.click(save!); });
+      expect(openPath).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it.each(["tracked", "search"] as const)("handles Native cancellation from the %s icon as a non-error", async (entry) => {
+      vi.mocked(openPath).mockRejectedValueOnce(new DOMException("Export cancelled", "AbortError"));
+      const props = renderFile(entry);
+      const save = screen.queryByRole("button", { name: `Save File: ${props.path}` });
+      expect(save).not.toBeNull();
+      await act(async () => { fireEvent.click(save!); });
+      expect(screen.getByRole("status").textContent).toBe("Save cancelled.");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(openPath).toHaveBeenCalledOnce();
+      expect(props.onOpenHtmlFile).not.toHaveBeenCalled();
+    });
+
+    it("does not change row Preview behavior on Android", () => {
+      const props = renderFile("tracked");
+      fireEvent.click(screen.getByText("report.html"));
+      expect(props.onPreviewFile).toHaveBeenCalledWith({ path: props.path });
+      expect(openPath).not.toHaveBeenCalled();
+    });
+
+    it.each(["browser", "desktop"])("keeps the direct editor action on %s", async (platform) => {
+      document.documentElement.dataset.hostPlatform = platform;
+      renderFile("tracked", "docs/report.txt");
+      fireEvent.click(screen.getByRole("button", { name: "Open file: docs/report.txt" }));
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_in_editor", { command: "cursor --goto", path: "/repo/docs/report.txt", line: null }));
+      expect(openPath).not.toHaveBeenCalled();
+    });
   });
 
   it("adds a tracked file to the library from the files panel", () => {

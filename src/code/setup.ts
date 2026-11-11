@@ -16,6 +16,7 @@ import {
 } from "../config.js";
 import type { JupiterHelpContext } from "../help/index.js";
 import { bootstrapSemanticSearchInCodeMode } from "../index/semantic/tool.js";
+import { getAndroidRuntimeContext } from "../mobile/runtime-context.js";
 import { createProviderClient, resolveProviderSnapshot } from "../provider-runtime.js";
 import { ToolRegistry } from "../tools.js";
 import { registerChoiceTool } from "../tools/choice.js";
@@ -115,7 +116,8 @@ export async function buildCodeToolset(opts: CodeToolsetOpts): Promise<CodeTools
   registerPlanTool(tools);
   registerChoiceTool(tools);
   registerTodoTool(tools);
-  registerOpenUrlTool(tools);
+  // Android opens UI links through Native; the guest has no OS browser launcher.
+  if (!getAndroidRuntimeContext()) registerOpenUrlTool(tools);
   registerScaffoldTools(tools, { projectRoot: opts.rootDir });
   if (searchEnabled(opts.configPath)) {
     registerWebTools(tools, { configPath: opts.configPath });

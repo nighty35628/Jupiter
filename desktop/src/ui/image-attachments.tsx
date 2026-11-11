@@ -1,10 +1,10 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { type ImageAttachment, isImageAttachment } from "../../../src/attachments/types";
 import { getLang } from "../i18n";
 import { I } from "../icons";
-import { readImageDraft, subscribeImageDraft, writeImageDraft } from "./image-draft-store";
+import { bindImageDraftIntake, readImageDraft, subscribeImageDraft, writeImageDraft } from "./image-draft-store";
 
 export async function importImage(path: string, tabId: string): Promise<ImageAttachment> {
   const requestId = crypto.randomUUID();
@@ -67,11 +67,13 @@ export function useImageDraft(key: string) {
       })),
     [key],
   );
+  const intake = useMemo(() => bindImageDraftIntake(key), [key]);
   return {
     draft: current.text,
     setDraft: setText,
     images: current.attachments ?? [],
     setImages,
+    ...intake,
     pending: current.pending,
   };
 }

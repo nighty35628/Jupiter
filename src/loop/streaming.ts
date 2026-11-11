@@ -40,6 +40,25 @@ export interface StreamModelResult {
   toolArgsChars: number;
 }
 
+export interface StreamFailureState {
+  requestId: string;
+  sawContent: boolean;
+  sawReasoning: boolean;
+  sawToolDelta: boolean;
+  outputChars: number;
+  reasoningChars: number;
+  toolArgsChars: number;
+}
+
+const streamFailures = new WeakMap<object, Readonly<StreamFailureState>>();
+
+/** Failure-only metadata, without changing error identity or retaining output. */
+export function getStreamFailureState(error: unknown): Readonly<StreamFailureState> | undefined {
+  return error !== null && (typeof error === "object" || typeof error === "function")
+    ? streamFailures.get(error)
+    : undefined;
+}
+
 export async function* streamModelResponse(
   opts: StreamModelOptions,
 ): AsyncGenerator<LoopEvent, StreamModelResult, void> {
@@ -66,6 +85,9 @@ export async function* streamModelResponse(
   let outputChars = 0;
   let reasoningChars = 0;
   let toolArgsChars = 0;
+  let sawContent = false;
+  let sawReasoning = false;
+  let sawToolDelta = false;
   const pendingIndices = new Set<number>();
   const announcedIndices = new Set<number>();
   let lastProgressAt = Date.now();
@@ -107,6 +129,9 @@ export async function* streamModelResponse(
       disableRetry,
       activeImageIds: opts.activeImageIds,
     })) {
+      sawContent ||= Boolean(chunk.contentDelta);
+      sawReasoning ||= Boolean(chunk.reasoningDelta);
+      sawToolDelta ||= Boolean(chunk.toolCallDeltas?.length);
       if (chunk.reasoningDelta) {
         reasoningContent += chunk.reasoningDelta;
         reasoningChars += chunk.reasoningDelta.length;
@@ -150,6 +175,14 @@ export async function* streamModelResponse(
     }
     signal.throwIfAborted();
   } catch (error) {
+    const failure =
+      error !== null && (typeof error === "object" || typeof error === "function")
+        ? error
+        : new Error("Model stream failed");
+    streamFailures.set(
+      failure,
+      Object.freeze({ ...counters(), sawContent, sawReasoning, sawToolDelta }),
+    );
     yield* flushProgress();
     for (const call of callBuf.values()) {
       yield {
@@ -163,7 +196,7 @@ export async function* streamModelResponse(
         terminalState: signal.aborted ? "cancelled" : "dropped",
       };
     }
-    throw error;
+    throw failure;
   }
   yield* flushProgress();
 

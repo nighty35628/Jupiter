@@ -1,0 +1,12 @@
+.speech-mic[aria-pressed="true"] { color: var(--accent); background: var(--surface-hover, #eeeeee); }
+.speech-status { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; line-height: 1.5; }
+.speech-status > span { min-width: 0; overflow-wrap: anywhere; }
+.speech-status > .icon-btn { margin-left: auto; flex: 0 0 28px; width: 28px; height: 28px; }
+.speech-candidate > span { flex: 1; max-height: 100px; overflow: auto; white-space: pre-wrap; }
+.speech-preview { flex: 1; max-height: 64px; overflow: auto; }
+.speech-settings select { max-width: 230px; min-width: 0; }
+.speech-settings .btn { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+@media (max-width: 480px) {
+  .speech-settings .setting-row { flex-wrap: wrap; gap: 8px; }
+  .speech-settings select { max-width: 100%; }
+}

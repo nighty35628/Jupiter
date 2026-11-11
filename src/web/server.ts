@@ -1,12 +1,13 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { Duplex } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { attachments, readImageSnapshot } from "../attachments/store.js";
+import { getAndroidRuntimeContext } from "../mobile/runtime-context.js";
 import { renderIndexHtml, serveAsset } from "../server/assets.js";
 import { type DeviceSession, DeviceSessionStore, WriterLeaseStore } from "./auth.js";
 import { isHistoryReadCommand } from "./history-read.js";
@@ -63,6 +64,8 @@ export interface WebServerHandle {
   port: number;
   runtimeEpoch: string;
   close(): Promise<void>;
+  activityCount(): number;
+  guardedClose(prepare: () => Promise<boolean>): Promise<boolean>;
 }
 
 interface ObserverConnection {
@@ -170,6 +173,24 @@ class WebServerRuntime {
   private readonly terminals = new WebTerminalManager();
   private expectedHost = "";
   private expectedOrigin = "";
+  private pendingRequests = 0;
+  private accepting = true;
+
+  activityCount(): number {
+    return this.pendingRequests + this.terminals.activityCount;
+  }
+
+  beginIdleClose(): boolean {
+    if (!this.accepting || this.activityCount() > 0) return false;
+    this.accepting = false;
+    this.terminals.setAccepting(false);
+    return true;
+  }
+
+  cancelIdleClose(): void {
+    this.accepting = true;
+    this.terminals.setAccepting(true);
+  }
 
   constructor(
     private readonly sidecar: WebSidecar,
@@ -199,6 +220,27 @@ class WebServerRuntime {
   }
 
   async dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.accepting) {
+      applySecurityHeaders(res, this.mode);
+      respondJson(res, 503, { error: "Local runtime is checking idle shutdown" });
+      return;
+    }
+    const pathname = new URL(req.url ?? "/", this.expectedOrigin || "http://127.0.0.1").pathname;
+    const method = (req.method ?? "GET").toUpperCase();
+    // Transport heartbeats must not continually reset Android's background idle grace.
+    const tracksActivity = !(
+      (method === "POST" && pathname === "/api/lease/renew") ||
+      (method === "GET" && (pathname === "/api/session" || pathname === "/api/events"))
+    );
+    if (tracksActivity) this.pendingRequests++;
+    try {
+      await this.dispatchAccepted(req, res);
+    } finally {
+      if (tracksActivity) this.pendingRequests--;
+    }
+  }
+
+  private async dispatchAccepted(req: IncomingMessage, res: ServerResponse): Promise<void> {
     applySecurityHeaders(res, this.mode);
     if (!this.networkAllowed(req)) {
       respondJson(res, 403, { error: "request is outside the configured Web access boundary" });
@@ -320,6 +362,10 @@ class WebServerRuntime {
   }
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (!this.accepting) {
+      rejectUpgrade(socket, 503, "local runtime is checking idle shutdown");
+      return;
+    }
     const url = new URL(req.url ?? "/", this.expectedOrigin || "http://127.0.0.1");
     if (url.pathname !== "/api/terminal") {
       rejectUpgrade(socket, 404, "not found");
@@ -706,16 +752,17 @@ class WebServerRuntime {
     fileId: string,
     method: string,
   ): Promise<void> {
+    let handle: FileHandle | undefined;
     try {
-      const record = this.workspaces.resolveFile(fileId);
-      const metadata = await stat(record.absolutePath);
-      if (!metadata.isFile()) throw new Error("not a file");
+      const opened = await this.workspaces.openFile(fileId);
+      handle = opened.handle;
+      const { ref, metadata } = opened;
       const range = parseRange(headerValue(req.headers.range), metadata.size);
-      const disposition = safeInlineMime(record.ref.mime) ? "inline" : "attachment";
+      const disposition = safeInlineMime(ref.mime) ? "inline" : "attachment";
       const headers: Record<string, string | number> = {
         "accept-ranges": "bytes",
-        "content-disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(record.ref.name)}`,
-        "content-type": record.ref.mime ?? "application/octet-stream",
+        "content-disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(ref.name)}`,
+        "content-type": ref.mime ?? "application/octet-stream",
         "content-length": range ? range.end - range.start + 1 : metadata.size,
         "content-security-policy": "sandbox",
       };
@@ -725,11 +772,12 @@ class WebServerRuntime {
         res.end();
         return;
       }
-      const stream = createReadStream(record.absolutePath, range ?? undefined);
-      stream.once("error", () => res.destroy());
-      stream.pipe(res);
+      await pipeline(handle.createReadStream(range ?? undefined), res);
     } catch (error) {
-      respondJson(res, 404, { error: this.errorForClient(error) });
+      if (res.headersSent) res.destroy();
+      else respondJson(res, 404, { error: this.errorForClient(error) });
+    } finally {
+      await handle?.close();
     }
   }
 
@@ -875,7 +923,13 @@ export async function startWebServer(opts: StartWebServerOptions): Promise<WebSe
   validateStartOptions(mode, listenHost, opts.origin, opts.proxySecret);
   const workspaces =
     opts.workspaces ?? (await WorkspaceRegistry.create(opts.workspaceRoots ?? [process.cwd()]));
-  const uploads = await UploadStore.create(workspaces);
+  const android = getAndroidRuntimeContext();
+  const uploads = await UploadStore.create(
+    workspaces,
+    android?.role === "host"
+      ? { persistentRoot: join(dirname(android.configPath), "uploads") }
+      : {},
+  );
   const runtime = new WebServerRuntime(
     opts.sidecar,
     workspaces,
@@ -927,6 +981,19 @@ export async function startWebServer(opts: StartWebServerOptions): Promise<WebSe
         port,
         runtimeEpoch: opts.sidecar.runtimeEpoch,
         close,
+        activityCount: () => runtime.activityCount(),
+        guardedClose: async (prepare) => {
+          if (closePromise || !runtime.beginIdleClose()) return false;
+          let committed = false;
+          try {
+            if (!(await prepare())) return false;
+            committed = true;
+            await close();
+            return true;
+          } finally {
+            if (!committed && !closePromise) runtime.cancelIdleClose();
+          }
+        },
       });
     });
   });

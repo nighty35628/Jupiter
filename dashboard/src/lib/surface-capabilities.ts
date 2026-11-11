@@ -29,4 +29,7 @@ export function initializeWebSurface(): void {
   document.body.dataset.runtime = "web";
   document.documentElement.dataset.nativeWindow = "false";
   document.body.dataset.nativeWindow = "false";
+  const android = document.querySelector('meta[name="jupiter-platform"]')?.getAttribute("content") === "android";
+  document.documentElement.dataset.hostPlatform = android ? "android" : "browser";
+  document.body.dataset.hostPlatform = android ? "android" : "browser";
 }

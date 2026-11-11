@@ -1,5 +1,12 @@
-/** Read-only history queries never acquire or advance a writer lease. */
+/** Observer-safe queries never acquire or advance a writer lease. */
 export function isHistoryReadCommand(value: Record<string, unknown>): boolean {
+  if (value.cmd === "scheduled_list") {
+    return (
+      typeof value.requestId === "string" &&
+      /^[a-f0-9-]{36}$/i.test(value.requestId) &&
+      Object.keys(value).every((key) => ["cmd", "tabId", "requestId", "__web"].includes(key))
+    );
+  }
   if (value.cmd !== "session_history_page" && value.cmd !== "session_turn_load") return false;
   if (
     typeof value.name !== "string" ||

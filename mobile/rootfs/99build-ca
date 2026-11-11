@@ -1,0 +1,1 @@
+Acquire::https::CaInfo "/tmp/jupiter-build-ca.pem";

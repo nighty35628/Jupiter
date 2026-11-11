@@ -12,7 +12,7 @@ export default defineConfig([
     noExternal: ["@jupiter/core-utils", "ink"],
   },
   {
-    entry: ["src/cli/index.ts"],
+    entry: { index: "src/cli/index.ts", android: "src/mobile/entry.ts" },
     format: ["esm"],
     dts: false,
     clean: false,

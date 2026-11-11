@@ -2,6 +2,7 @@ import { type ChatFinishReason, type DeepSeekClient, Usage } from "./client.js";
 import {
   type ReasoningEffort,
   loadHistorySummaryTimeoutMs,
+  readConfig,
   resolveHistorySummaryTimeoutMs,
 } from "./config.js";
 import type { PauseGate } from "./core/pause-gate.js";
@@ -23,6 +24,11 @@ import {
 } from "./context-manager.js";
 import { InflightSet } from "./core/inflight.js";
 import { t } from "./i18n/index.js";
+import {
+  compactionRequestTokens,
+  isCompactionContextError,
+  providerContextBudget,
+} from "./loop/compaction.js";
 import { addUsage, planPrefixContinuation } from "./loop/continuation.js";
 import { type RunOneToolCallResult, dispatchToolCallsChunked } from "./loop/dispatch.js";
 import {
@@ -49,7 +55,7 @@ import {
   shrinkOversizedToolResults,
   shrinkOversizedToolResultsByTokens,
 } from "./loop/shrink.js";
-import { streamModelResponse } from "./loop/streaming.js";
+import { getStreamFailureState, streamModelResponse } from "./loop/streaming.js";
 import {
   isThinkingModeModel,
   stripHallucinatedToolMarkup,
@@ -62,6 +68,7 @@ import {
   getToolCallIdentity,
   toolCallEventFields,
 } from "./loop/types.js";
+import { PersistentLoopSessionStorage } from "./memory/compaction-checkpoint.js";
 import type { LoopSessionStorage } from "./memory/loop-session-storage.js";
 import { AppendOnlyLog, type ImmutablePrefix, VolatileScratch } from "./memory/runtime.js";
 import { SessionWriterLease } from "./memory/session-writer-lock.js";
@@ -83,8 +90,9 @@ import {
   toolExecutionOutcomeFromResult,
 } from "./memory/tool-execution-journal.js";
 import { sanitizeProviderErrorText } from "./provider-http-error.js";
+import { createProviderModelMetadataIdentity } from "./provider-model-metadata.js";
 import { type RepairReport, ToolCallRepair } from "./repair/index.js";
-import { SessionStats, type TurnStats, costUsd } from "./telemetry/stats.js";
+import { SessionStats, type TurnStats, costUsd, pricingFor } from "./telemetry/stats.js";
 import { appendServiceCall, appendUsage } from "./telemetry/usage.js";
 import { type AuxiliaryUsageReport, type ToolDefinitionSnapshot, ToolRegistry } from "./tools.js";
 import { ReadTracker } from "./tools/read-tracker.js";
@@ -215,6 +223,7 @@ export class CacheFirstLoop {
   private turnDefinitions: ReadonlyMap<string, ToolDefinitionSnapshot> | null = null;
   private requestContext: LoopStepOptions["requestContext"];
   private stepActive = false;
+  private activeTurnUser: ChatMessage | null = null;
   private manualCompaction: { controller: AbortController; promise: Promise<FoldResult> } | null =
     null;
   private readonly activeImageIds = new Set<string>();
@@ -235,7 +244,7 @@ export class CacheFirstLoop {
   /** One-shot 80% warning latch — cleared by setBudget so a bump re-arms at the new boundary. */
   private _budgetWarned = false;
   private _sessionName: string | null;
-  private readonly sessionStorage: LoopSessionStorage | null;
+  private sessionStorage: LoopSessionStorage | null;
   private readonly toolExecutionScope: CacheFirstLoopOptions["toolExecutionScope"];
   private _sessionWriterKey: string | null;
   private readonly _sessionWriterOwnerId: string | null;
@@ -327,7 +336,17 @@ export class CacheFirstLoop {
         label: this._sessionName,
       });
     }
+    if (!this.sessionStorage && this._sessionName)
+      this.sessionStorage = new PersistentLoopSessionStorage(this._sessionName, {
+        ownerId: this._sessionWriterOwnerId ?? undefined,
+      });
+    this.sessionStorage?.beginRules?.(
+      JSON.stringify({ system: this.prefix.system, shots: this.prefix.fewShots }),
+    );
     this.bindToolJournal(this._sessionName);
+    for (const [model, limit] of Object.entries(this.loadMeta().contextLimits ?? {})) {
+      if (limit.binding === this.contextLimitBinding()) this.client.learnContextLimit(model, limit);
+    }
     this.log = new AppendOnlyLog({
       ...(this.sessionStorage
         ? { fullHistory: [] }
@@ -371,13 +390,17 @@ export class CacheFirstLoop {
         : loadSessionMessages(this.sessionName!);
       let prior = loadedPrior;
       let recoveredToolResults = 0;
-      if (this._toolJournal && !this.sessionStorage) {
+      if (
+        this._toolJournal &&
+        (!this.sessionStorage || this.sessionStorage instanceof PersistentLoopSessionStorage)
+      ) {
         try {
           this._toolJournal.recoverIncompleteExecutions();
           const repaired = this._toolJournal.repairDanglingToolCalls(prior);
           prior = repaired.messages;
           recoveredToolResults = repaired.repairedCount;
-        } catch (err) {
+        } catch (requestError) {
+          const err = requestError;
           this._toolJournal = null;
           this._toolJournalError = (err as Error).message;
         }
@@ -392,7 +415,7 @@ export class CacheFirstLoop {
       const tokensSaved = shrunk.tokensSaved;
       this.log.initWindow(messages);
       this.resumedMessageCount = messages.length;
-      this._turn = countUserTurns(messages);
+      this._turn = this.sessionStorage?.rawUserTurns ?? countUserTurns(messages);
       // Carry forward cumulative cost / turn count so the TUI's session
       // total continues across resumes; otherwise each restart resets to $0.
       if (messages.length > 0) {
@@ -437,6 +460,30 @@ export class CacheFirstLoop {
       }),
       getAbortSignal: () => this._turnAbort.signal,
       getCurrentTurn: () => this._turn,
+      getInputLimit: (model) => this.getRequestBudget(model).inputLimit,
+      getEarlyCompactionTokens: () => {
+        const value = readConfig().earlyCompactionTokens;
+        return value === null
+          ? null
+          : typeof value === "number" && Number.isSafeInteger(value) && value >= 1024
+            ? value
+            : 160_000;
+      },
+      getProtectedHistoryStart: () => {
+        if (!this.stepActive || !this.activeTurnUser) return undefined;
+        const user = this.activeTurnUser;
+        const rows = this.log.toFullHistory();
+        const index = user.turnId
+          ? rows.findIndex((message) => message.turnId === user.turnId)
+          : rows.findLastIndex(
+              (message) =>
+                message.role === "user" &&
+                (user.clientId
+                  ? message.clientId === user.clientId
+                  : JSON.stringify(message) === JSON.stringify(user)),
+            );
+        return index < 0 ? 0 : index;
+      },
       getSystemPrompt: () => this.prefix.system,
       getToolSpecs: () => this.prefix.toolSpecs,
       getFewShots: () => this.prefix.fewShots,
@@ -468,6 +515,34 @@ export class CacheFirstLoop {
           }
         : {}),
       onLogRewrite: () => this.readTracker.reset(),
+      onFold: (before, head, summary, signal) => {
+        this.sessionStorage?.recordFold?.({ before, head, summary, signal });
+        if (this.sessionStorage instanceof PersistentLoopSessionStorage)
+          this.sessionStorage.publishCompaction(signal);
+      },
+      onSummaryUsage: (model, usage, complete) => {
+        this.patchMeta({
+          totalCostUsd: this.stats.totalCost,
+          cacheHitTokens: this.stats.cumulativeCacheHitTokens,
+          cacheMissTokens: this.stats.cumulativeCacheMissTokens,
+          totalCompletionTokens: this.stats.cumulativeCompletionTokens,
+        });
+        appendUsage({
+          session: this.sessionName,
+          model,
+          providerId: this.client.providerId,
+          usage,
+          usageKnown: complete,
+          costKnown:
+            complete && !!pricingFor(model, undefined, { providerId: this.client.providerId }),
+          kind: "auxiliary",
+          auxiliary: {
+            provider: this.client.providerId ?? "provider",
+            operation: "compaction",
+            requestId: createModelRequestId(),
+          },
+        });
+      },
     });
   }
 
@@ -480,6 +555,8 @@ export class CacheFirstLoop {
     sessionName: string | null,
     opts: { logicalSessionChanged?: boolean; sessionWriterKey?: string } = {},
   ): void {
+    if (sessionName && this.sessionStorage instanceof PersistentLoopSessionStorage)
+      this.sessionStorage.rebind(sessionName);
     if (opts.logicalSessionChanged) {
       this.manualCompaction?.controller.abort();
       this.activeImageIds.clear();
@@ -511,6 +588,14 @@ export class CacheFirstLoop {
     this._sessionWriterLease = nextLease;
     this._sessionWriterKey = nextWriterKey;
     this._sessionName = sessionName;
+    if (this.sessionStorage instanceof PersistentLoopSessionStorage) {
+      if (sessionName) {
+        this.bindToolJournal(sessionName);
+      } else {
+        this.sessionStorage.dispose();
+        this.sessionStorage = null;
+      }
+    }
     if (this.sessionStorage) return;
     this.log.setSessionPath(sessionName ? sessionPath(sessionName) : null);
     if (sessionName && this._toolJournal && !opts.logicalSessionChanged) {
@@ -523,6 +608,7 @@ export class CacheFirstLoop {
 
   dispose(): void {
     this.abort();
+    if (this.sessionStorage instanceof PersistentLoopSessionStorage) this.sessionStorage.dispose();
     this._sessionWriterLease?.release();
     this._sessionWriterLease = null;
   }
@@ -703,11 +789,15 @@ export class CacheFirstLoop {
   /** "New chat" — drops in-memory messages, archives the on-disk transcript so it survives in Sessions, keeps sessionName so the prefix cache stays warm. Re-runs the system-prompt builder if one was wired (issue #778: JUPITER.md edits otherwise need a restart). */
   clearLog(): { dropped: number; archived: string | null; systemRebuilt: boolean } {
     const dropped = this.log.totalLength;
-    if (this.sessionStorage) this.sessionStorage.rewriteMessages([], "history");
+    if (this.sessionStorage && !(this.sessionStorage instanceof PersistentLoopSessionStorage))
+      this.sessionStorage.rewriteMessages([], "history");
     this.log.compactInPlace([]);
     let archived: string | null = null;
     const priorToolJournal = this._toolJournal;
-    if (this.sessionName && !this.sessionStorage) {
+    if (
+      this.sessionName &&
+      (!this.sessionStorage || this.sessionStorage instanceof PersistentLoopSessionStorage)
+    ) {
       try {
         archived = archiveSession(this.sessionName);
         if (archived === null) rewriteSession(this.sessionName, []);
@@ -716,8 +806,15 @@ export class CacheFirstLoop {
       }
       if (archived !== null) {
         priorToolJournal?.rebindPath(toolExecutionJournalPath(archived));
-        this.bindToolJournal(this.sessionName);
       }
+      if (this.sessionStorage instanceof PersistentLoopSessionStorage) {
+        this.sessionStorage.dispose();
+        this.sessionStorage = new PersistentLoopSessionStorage(this.sessionName, {
+          ownerId: this._sessionWriterOwnerId ?? undefined,
+        });
+        this.sessionStorage.rewriteMessages([], "history");
+      }
+      this.bindToolJournal(this.sessionName);
     }
     this.scratch.reset();
     this._inflight.clear();
@@ -737,16 +834,23 @@ export class CacheFirstLoop {
         /* builder threw — keep prior system rather than crash /new */
       }
     }
+    this.sessionStorage?.beginRules?.(
+      JSON.stringify({ system: this.prefix.system, shots: this.prefix.fewShots }),
+    );
     return { dropped, archived, systemRebuilt };
   }
 
   /** `/cwd` follow-through — archives the previous session, drops in-memory state, repoints sessionName, and rebuilds the system prompt against whatever the rebuilder closure now resolves (the caller is expected to have already updated the root the closure reads). */
   switchWorkspace(opts: { sessionName: string }): { dropped: number; archived: string | null } {
     const dropped = this.log.totalLength;
-    if (this.sessionStorage) this.sessionStorage.rewriteMessages([], "history");
+    if (this.sessionStorage && !(this.sessionStorage instanceof PersistentLoopSessionStorage))
+      this.sessionStorage.rewriteMessages([], "history");
     let archived: string | null = null;
     const priorToolJournal = this._toolJournal;
-    if (this.sessionName && !this.sessionStorage) {
+    if (
+      this.sessionName &&
+      (!this.sessionStorage || this.sessionStorage instanceof PersistentLoopSessionStorage)
+    ) {
       try {
         archived = archiveSession(this.sessionName);
         if (archived === null) rewriteSession(this.sessionName, []);
@@ -770,6 +874,9 @@ export class CacheFirstLoop {
         /* builder threw — keep prior system rather than crash /cwd */
       }
     }
+    this.sessionStorage?.beginRules?.(
+      JSON.stringify({ system: this.prefix.system, shots: this.prefix.fewShots }),
+    );
     return { dropped, archived };
   }
 
@@ -1053,6 +1160,38 @@ export class CacheFirstLoop {
     return learned === undefined ? requested : Math.min(learned, requested ?? learned);
   }
 
+  getRequestBudget(model = this.model, maxTokens = this.compactionMaxTokens(model)) {
+    return this.client.getRequestBudget({
+      model,
+      maxTokens,
+      thinking: thinkingModeForModel(model, this.thinkingEnabled),
+      reasoningEffort: this.reasoningEffort,
+    });
+  }
+
+  private contextLimitBinding(): string {
+    return createHash("sha256")
+      .update(JSON.stringify(createProviderModelMetadataIdentity(this.client)))
+      .digest("hex");
+  }
+
+  private rememberContextLimit(
+    model: string,
+    limit: { contextWindowTokens?: number; inputTokenLimit?: number },
+  ): void {
+    this.client.learnContextLimit(model, limit);
+    const limits = this.loadMeta().contextLimits ?? {};
+    const binding = this.contextLimitBinding();
+    const previous = limits[model]?.binding === binding ? limits[model] : undefined;
+    const merged = { ...previous, binding };
+    for (const key of ["contextWindowTokens", "inputTokenLimit"] as const) {
+      const value = limit[key];
+      if (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+        merged[key] = Math.min(previous?.[key] ?? Number.POSITIVE_INFINITY, value);
+    }
+    this.patchMeta({ contextLimits: { ...limits, [model]: merged } });
+  }
+
   private healActiveLogBeforeSend(): ChatMessage[] {
     const current = this.log.toFullHistory();
     const healed = healLoadedMessages(current, DEFAULT_MAX_RESULT_CHARS);
@@ -1089,7 +1228,7 @@ export class CacheFirstLoop {
       this.sessionStorage.discardCurrentTurn();
       const preserved = this.sessionStorage.loadMessages();
       this.log.compactInPlace(preserved);
-      this._turn = countUserTurns(preserved);
+      this._turn = this.sessionStorage?.rawUserTurns ?? countUserTurns(preserved);
       return;
     }
     const preserved = this.log
@@ -1098,7 +1237,7 @@ export class CacheFirstLoop {
       .map((m) => ({ ...m }));
     this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
-    this._turn = countUserTurns(preserved);
+    this._turn = this.sessionStorage?.rawUserTurns ?? countUserTurns(preserved);
   }
 
   /** Drop the last user message + everything after; caller re-sends. Persists to session file. */
@@ -1108,7 +1247,7 @@ export class CacheFirstLoop {
 
   retryLastDraft(): import("./attachments/types.js").MessageDraft | null {
     this._retryableModelFailure = null;
-    const entries = this.log.toFullHistory();
+    const entries = this.sessionStorage?.loadRawMessages?.() ?? this.log.toFullHistory();
     let lastUserIdx = -1;
     for (let i = entries.length - 1; i >= 0; i--) {
       if (entries[i]!.role === "user") {
@@ -1123,7 +1262,7 @@ export class CacheFirstLoop {
       this.sessionStorage.discardCurrentTurn();
       const preserved = this.sessionStorage.loadMessages();
       this.log.compactInPlace(preserved);
-      this._turn = countUserTurns(preserved);
+      this._turn = this.sessionStorage?.rawUserTurns ?? countUserTurns(preserved);
       return {
         text: userText,
         ...(entries[lastUserIdx]!.attachments?.length
@@ -1134,7 +1273,7 @@ export class CacheFirstLoop {
     const preserved = entries.slice(0, lastUserIdx).map((m) => ({ ...m }));
     this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
-    this._turn = countUserTurns(preserved);
+    this._turn = this.sessionStorage?.rawUserTurns ?? countUserTurns(preserved);
     return {
       text: userText,
       ...(entries[lastUserIdx]!.attachments?.length
@@ -1146,7 +1285,7 @@ export class CacheFirstLoop {
   /** Drop the latest user prompt and everything after it. Persists to session file. */
   rollbackLatestTurn(): boolean {
     this._retryableModelFailure = null;
-    const entries = this.log.toFullHistory();
+    const entries = this.sessionStorage?.loadRawMessages?.() ?? this.log.toFullHistory();
     let lastUserIdx = -1;
     for (let i = entries.length - 1; i >= 0; i--) {
       if (entries[i]!.role === "user") {
@@ -1158,7 +1297,7 @@ export class CacheFirstLoop {
     const preserved = entries.slice(0, lastUserIdx).map((m) => ({ ...m }));
     this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
-    this._turn = countUserTurns(preserved);
+    this._turn = this.sessionStorage?.rawUserTurns ?? countUserTurns(preserved);
     return true;
   }
 
@@ -1173,7 +1312,7 @@ export class CacheFirstLoop {
   }): boolean {
     this._retryableModelFailure = null;
     if (!Number.isInteger(target.turn) || target.turn < 1) return false;
-    const entries = this.log.toFullHistory();
+    const entries = this.sessionStorage?.loadRawMessages?.() ?? this.log.toFullHistory();
     let turn = 0;
     let targetUserIdx = -1;
     let nextUserIdx = entries.length;
@@ -1198,7 +1337,7 @@ export class CacheFirstLoop {
     const preserved = entries.slice(0, cutoff).map((m) => ({ ...m }));
     this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
-    this._turn = countUserTurns(preserved);
+    this._turn = this.sessionStorage?.rawUserTurns ?? countUserTurns(preserved);
     return true;
   }
 
@@ -1209,7 +1348,7 @@ export class CacheFirstLoop {
 
   rewindToUserDraft(userTurnIndex: number): import("./attachments/types.js").MessageDraft | null {
     this._retryableModelFailure = null;
-    const entries = this.log.toFullHistory();
+    const entries = this.sessionStorage?.loadRawMessages?.() ?? this.log.toFullHistory();
     let count = 0;
     let targetIdx = -1;
     for (let i = 0; i < entries.length; i++) {
@@ -1226,7 +1365,7 @@ export class CacheFirstLoop {
     const preserved = entries.slice(0, targetIdx).map((m) => ({ ...m }));
     this.persistRewrite(preserved, "history");
     this.log.compactInPlace(preserved);
-    this._turn = countUserTurns(preserved);
+    this._turn = this.sessionStorage?.rawUserTurns ?? countUserTurns(preserved);
     return {
       text: userText,
       ...(entries[targetIdx]!.attachments?.length
@@ -1236,7 +1375,7 @@ export class CacheFirstLoop {
   }
 
   lastUserText(): string | null {
-    const entries = this.log.toFullHistory();
+    const entries = this.sessionStorage?.loadRawMessages?.() ?? this.log.toFullHistory();
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i]!;
       if (entry.role !== "user") continue;
@@ -1273,7 +1412,14 @@ export class CacheFirstLoop {
       for (const spec of [...this.prefix.toolSpecs]) this.prefix.removeTool(spec.function.name);
       for (const spec of specs) this.prefix.addTool(spec);
     }
-    if (system !== undefined) this.prefix.replaceSystem(system);
+    if (system !== undefined && this.prefix.replaceSystem(system)) {
+      this.manualCompaction?.controller.abort();
+      this.sessionStorage?.beginRules?.(
+        JSON.stringify({ system: this.prefix.system, shots: this.prefix.fewShots }),
+      );
+      if (this.sessionStorage) this.log.compactInPlace(this.sessionStorage.loadMessages());
+      this.readTracker.reset();
+    }
     this.allowedToolNames.clear();
     for (const spec of specs) this.allowedToolNames.add(spec.function.name);
   }
@@ -1416,6 +1562,7 @@ export class CacheFirstLoop {
       } catch {
         // A UI acknowledgement failure must not cancel the turn.
       }
+      this.activeTurnUser = this.log.toFullHistory().at(-1) ?? null;
     }
     const toolSpecs = this.prefix.tools();
     const rateLimitState = { shown: false };
@@ -1556,6 +1703,29 @@ export class CacheFirstLoop {
         };
       }
 
+      if (iter > 0) {
+        const pressure = this.context.estimateTurnStart(messages, toolSpecs, this.model);
+        if (pressure.ratio >= TURN_START_FOLD_THRESHOLD) {
+          yield {
+            turn: this._turn,
+            role: "status",
+            content: t("loop.turnStartFoldStatus"),
+            activity: "compaction",
+            activityState: "running",
+          };
+          const folded = await this.context.fold(this.model, { requireTailBoundary: true, signal });
+          if (folded.folded) this._foldedThisTurn = true;
+          messages = this.buildMessages();
+          yield {
+            turn: this._turn,
+            role: "status",
+            content: folded.folded ? "Context compacted." : t("loop.compactionUnchanged"),
+            activity: "compaction",
+            activityState: "complete",
+          };
+        }
+      }
+
       let assistantContent = "";
       let reasoningContent = "";
       let toolCalls: ToolCall[] = [];
@@ -1563,110 +1733,199 @@ export class CacheFirstLoop {
       let usageComplete = false;
       let finishReason: ChatFinishReason = "unknown";
       const modelRequestId = createModelRequestId();
+      let contextRecoveryAttempted = false;
+      let requestMaxTokens = this.getRequestBudget().maxTokens;
 
-      try {
-        if (this.stream) {
-          const result = yield* streamModelResponse({
-            client: this.client,
-            model: this.model,
-            messages,
-            toolSpecs,
-            signal,
-            activeImageIds: [...this.activeImageIds],
-            thinkingEnabled: this.thinkingEnabled,
-            reasoningEffort: this.reasoningEffort,
-            turn: this._turn,
-            requestId: modelRequestId,
-            maxTokens: this.compactionMaxTokens(this.model),
-          });
-          assistantContent = result.assistantContent;
-          reasoningContent = result.reasoningContent;
-          toolCalls = result.toolCalls;
-          usage = result.usage;
-          usageComplete = result.usageComplete;
-          finishReason = result.finishReason;
-        } else {
-          const callModel = this.model;
-          const resp = await this.client.chat({
-            model: callModel,
-            maxTokens: this.compactionMaxTokens(callModel),
-            messages,
-            tools: toolSpecs.length ? toolSpecs : undefined,
-            signal,
-            activeImageIds: [...this.activeImageIds],
-            thinking: thinkingModeForModel(callModel, this.thinkingEnabled),
-            reasoningEffort: this.thinkingEnabled ? this.reasoningEffort : undefined,
-          });
-          assistantContent = resp.content;
-          reasoningContent = resp.reasoningContent ?? "";
-          toolCalls = resp.toolCalls;
-          usage = resp.usage;
-          usageComplete = resp.usageComplete;
-          finishReason = resp.finishReason;
-        }
-      } catch (err) {
-        // An aborted signal here is almost always our own doing —
-        // either Esc, or App.tsx calling `loop.abort()` to switch to a
-        // queued synthetic input (ShellConfirm "always allow", PlanConfirm
-        // approve, etc.). The DeepSeek client's fetch path translates
-        // the abort into a generic `AbortError("This operation was
-        // aborted")`, which used to bubble up here and render as a
-        // scary red "error" row even though nothing actually broke.
-        // Treat it as a clean early-exit instead: the next turn (queued
-        // synthetic OR user re-prompt) starts immediately and gets to
-        // produce its own answer.
-        if (signal.aborted) {
-          // Reset in finally — same rationale as the iter-start handler:
-          // if the consumer breaks the for-await before draining `done`,
-          // generator.return() would skip a bare post-yield reset and
-          // leave carryAbort locked on the next step().
-          if (this._discardAbortRequested) this.discardLogFrom(turnStartLogIndex);
-          try {
-            yield { turn: this._turn, role: "done", content: "" };
-          } finally {
-            this.resetAbortState();
+      for (;;) {
+        try {
+          if (this.stream) {
+            const result = yield* streamModelResponse({
+              client: this.client,
+              model: this.model,
+              messages,
+              toolSpecs,
+              signal,
+              activeImageIds: [...this.activeImageIds],
+              thinkingEnabled: this.thinkingEnabled,
+              reasoningEffort: this.reasoningEffort,
+              turn: this._turn,
+              requestId: modelRequestId,
+              maxTokens: requestMaxTokens,
+              disableRetry: contextRecoveryAttempted,
+            });
+            assistantContent = result.assistantContent;
+            reasoningContent = result.reasoningContent;
+            toolCalls = result.toolCalls;
+            usage = result.usage;
+            usageComplete = result.usageComplete;
+            finishReason = result.finishReason;
+          } else {
+            const callModel = this.model;
+            const resp = await this.client.chat({
+              model: callModel,
+              maxTokens: requestMaxTokens,
+              disableRetry: contextRecoveryAttempted,
+              messages,
+              tools: toolSpecs.length ? toolSpecs : undefined,
+              signal,
+              activeImageIds: [...this.activeImageIds],
+              thinking: thinkingModeForModel(callModel, this.thinkingEnabled),
+              reasoningEffort: this.thinkingEnabled ? this.reasoningEffort : undefined,
+            });
+            assistantContent = resp.content;
+            reasoningContent = resp.reasoningContent ?? "";
+            toolCalls = resp.toolCalls;
+            usage = resp.usage;
+            usageComplete = resp.usageComplete;
+            finishReason = resp.finishReason;
           }
+          break;
+        } catch (requestError) {
+          let err = requestError;
+          // An aborted signal here is almost always our own doing —
+          // either Esc, or App.tsx calling `loop.abort()` to switch to a
+          // queued synthetic input (ShellConfirm "always allow", PlanConfirm
+          // approve, etc.). The DeepSeek client's fetch path translates
+          // the abort into a generic `AbortError("This operation was
+          // aborted")`, which used to bubble up here and render as a
+          // scary red "error" row even though nothing actually broke.
+          // Treat it as a clean early-exit instead: the next turn (queued
+          // synthetic OR user re-prompt) starts immediately and gets to
+          // produce its own answer.
+          if (signal.aborted) {
+            // Reset in finally — same rationale as the iter-start handler:
+            // if the consumer breaks the for-await before draining `done`,
+            // generator.return() would skip a bare post-yield reset and
+            // leave carryAbort locked on the next step().
+            if (this._discardAbortRequested) this.discardLogFrom(turnStartLogIndex);
+            try {
+              yield { turn: this._turn, role: "done", content: "" };
+            } finally {
+              this.resetAbortState();
+            }
+            this._steerQueue.length = 0;
+            return;
+          }
+          const contextError = isCompactionContextError(err);
+          const progress = getStreamFailureState(err);
+          const emitted = !!(
+            progress?.sawContent ||
+            progress?.sawReasoning ||
+            progress?.sawToolDelta
+          );
+          if (contextError && !emitted && !contextRecoveryAttempted) {
+            contextRecoveryAttempted = true;
+            try {
+              yield {
+                turn: this._turn,
+                role: "status",
+                content: t("loop.turnStartFoldStatus"),
+                activity: "compaction",
+                activityState: "running",
+              };
+              const failedRequest = { model: this.model, messages, maxTokens: requestMaxTokens };
+              const learned = providerContextBudget(err, failedRequest);
+              if (learned)
+                this.rememberContextLimit(
+                  this.model,
+                  learned.kind === "total"
+                    ? { contextWindowTokens: learned.totalTokens }
+                    : { inputTokenLimit: learned.promptTokens },
+                );
+              const before = await compactionRequestTokens(this.client, {
+                ...failedRequest,
+                tools: toolSpecs,
+                signal,
+              });
+              const reducedOutput =
+                learned?.kind === "total" && failedRequest.maxTokens !== requestMaxTokens;
+              if (reducedOutput) requestMaxTokens = failedRequest.maxTokens;
+              const folded = await this.context.fold(this.model, {
+                requireTailBoundary: true,
+                keepRecentTokens: 0,
+                signal,
+              });
+              messages = this.buildMessages();
+              const after = await compactionRequestTokens(this.client, {
+                model: this.model,
+                messages,
+                tools: toolSpecs,
+                signal,
+              });
+              yield {
+                turn: this._turn,
+                role: "status",
+                content: folded.folded
+                  ? "Context compacted; retrying the same request."
+                  : t("loop.compactionUnchanged"),
+                activity: "compaction",
+                activityState: "complete",
+              };
+              if (
+                !signal.aborted &&
+                this._sessionEpoch === turnSessionEpoch &&
+                this._turn === turnNumber &&
+                (after < before || reducedOutput)
+              )
+                continue;
+            } catch (recoveryError) {
+              if (!signal.aborted) err = recoveryError;
+            }
+            if (signal.aborted) {
+              if (this._discardAbortRequested) this.discardLogFrom(turnStartLogIndex);
+              try {
+                yield { turn: this._turn, role: "done", content: "" };
+              } finally {
+                this.resetAbortState();
+              }
+              this._steerQueue.length = 0;
+              return;
+            }
+          }
+          const upstreamHost = this.client.baseUrl;
+          const dsHost = isDeepSeekHost(upstreamHost);
+          const probe =
+            is5xxError(err) && dsHost ? await probeDeepSeekReachable(this.client) : undefined;
+          const cause = err instanceof Error ? err : new Error(String(err));
+          const status = (cause as Error & { status?: number }).status;
+          const retryable =
+            !emitted &&
+            (contextError || !is4xxError(cause) || status === 408 || status === 429) &&
+            cause.name !== "AbortError";
+          if (retryable && this._sessionEpoch === turnSessionEpoch && this._turn === turnNumber) {
+            this._retryableModelFailure = {
+              turn: turnNumber,
+              sessionEpoch: turnSessionEpoch,
+            };
+          }
+          const { code, phase } = errorMeta(cause);
+          const safeCauseMessage = sanitizeProviderErrorText(cause.message, {
+            knownSecrets: [this.client.apiKey],
+            maxChars: 4096,
+          });
+          yield {
+            turn: this._turn,
+            role: "error",
+            content: "",
+            error: sanitizeProviderErrorText(
+              formatLoopError(err as Error, probe, { upstreamHost }),
+              {
+                knownSecrets: [this.client.apiKey],
+                maxChars: 4096,
+              },
+            ),
+            errorDetail: {
+              name: cause.name,
+              message: safeCauseMessage,
+              phase,
+              code,
+              retryable,
+              recoverable: false,
+            },
+          };
           this._steerQueue.length = 0;
           return;
         }
-        const upstreamHost = this.client.baseUrl;
-        const dsHost = isDeepSeekHost(upstreamHost);
-        const probe =
-          is5xxError(err) && dsHost ? await probeDeepSeekReachable(this.client) : undefined;
-        const cause = err instanceof Error ? err : new Error(String(err));
-        const status = (cause as Error & { status?: number }).status;
-        const retryable =
-          (!is4xxError(cause) || status === 408 || status === 429) && cause.name !== "AbortError";
-        if (retryable && this._sessionEpoch === turnSessionEpoch && this._turn === turnNumber) {
-          this._retryableModelFailure = {
-            turn: turnNumber,
-            sessionEpoch: turnSessionEpoch,
-          };
-        }
-        const { code, phase } = errorMeta(cause);
-        const safeCauseMessage = sanitizeProviderErrorText(cause.message, {
-          knownSecrets: [this.client.apiKey],
-          maxChars: 4096,
-        });
-        yield {
-          turn: this._turn,
-          role: "error",
-          content: "",
-          error: sanitizeProviderErrorText(formatLoopError(err as Error, probe, { upstreamHost }), {
-            knownSecrets: [this.client.apiKey],
-            maxChars: 4096,
-          }),
-          errorDetail: {
-            name: cause.name,
-            message: safeCauseMessage,
-            phase,
-            code,
-            retryable,
-            recoverable: false,
-          },
-        };
-        this._steerQueue.length = 0;
-        return;
       }
 
       let billableUsage = usage;
@@ -1689,6 +1948,7 @@ export class CacheFirstLoop {
         reasoningContent,
         toolCalls,
         usage,
+        budget: this.getRequestBudget(this.model, requestMaxTokens),
       });
       const firstCallCost = costUsd(this.model, usage ?? new Usage(), undefined, {
         providerId: this.client.providerId,
@@ -1993,30 +2253,6 @@ export class CacheFirstLoop {
           activityState: "complete",
         };
       }
-    } else if (decision.kind === "exit-with-summary") {
-      for (const call of pendingCalls) {
-        yield {
-          turn: this._turn,
-          role: "tool_call_drop",
-          content: "Context guard stopped this call before execution.",
-          toolName: call.function.name,
-          ...toolCallEventFields(call),
-          terminalState: "dropped",
-        };
-      }
-      const before = decision.promptTokens;
-      const ctxMax = decision.ctxMax;
-      yield {
-        turn: this._turn,
-        role: "warning",
-        content: t("loop.forcingSummary", {
-          before: before.toLocaleString(),
-          ctxMax: ctxMax.toLocaleString(),
-          pct: Math.round((before / ctxMax) * 100),
-        }),
-      };
-      yield* forceSummaryAfterGuard(this.summaryContext(), { reason: "context-guard" });
-      return true;
     }
     return false;
   }
@@ -2073,3 +2309,4 @@ function parsePositiveIntEnv(raw: string | undefined): number | undefined {
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
+import { createHash } from "node:crypto";

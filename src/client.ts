@@ -7,6 +7,7 @@ import {
 } from "./attachments/projection.js";
 import { type AttachmentStore, attachments } from "./attachments/store.js";
 import { loadRateLimit, resolveBaseUrlEnv } from "./config.js";
+import { type RequestBudget, resolveRequestBudget } from "./context-budget.js";
 import {
   DEEPSEEK_FLASH_ALIASES,
   type ProviderDialect,
@@ -15,12 +16,18 @@ import {
 } from "./provider-capabilities.js";
 import {
   ProviderHttpError,
+  ProviderStreamError,
   providerHttpErrorFromResponse,
   sanitizeProviderErrorText,
 } from "./provider-http-error.js";
+import {
+  createProviderModelMetadataIdentity,
+  getProviderModelMetadata,
+  recordProviderModelMetadata,
+} from "./provider-model-metadata.js";
 import { normalizeOfficialDeepSeekModel } from "./provider-models.js";
 import { type RetryOptions, fetchWithRetry } from "./retry.js";
-import { resolveContextTokens } from "./telemetry/stats.js";
+import { declaredContextInputLimit } from "./telemetry/stats.js";
 import { countRequestTokens } from "./tokenizer.js";
 import type { ChatMessage, ChatRequestOptions, RawUsage, ToolCall, ToolSpec } from "./types.js";
 
@@ -283,6 +290,10 @@ export class DeepSeekClient {
   private readonly _fetch: typeof fetch;
   private readonly minChatIntervalMs: number;
   private nextChatRequestAt = 0;
+  private readonly contextLimits = new Map<
+    string,
+    { contextWindowTokens?: number; inputTokenLimit?: number }
+  >();
 
   constructor(opts: DeepSeekClientOptions = {}) {
     const apiKey = opts.apiKey ?? process.env.DEEPSEEK_API_KEY;
@@ -353,7 +364,49 @@ export class DeepSeekClient {
       : this.visionModels.includes(model);
   }
 
-  private buildPayload(opts: ChatRequestOptions, stream: boolean, messages?: WireMessage[]) {
+  learnContextLimit(
+    model: string,
+    limit: { contextWindowTokens?: number; inputTokenLimit?: number },
+  ): void {
+    const previous = this.contextLimits.get(model);
+    const next: { contextWindowTokens?: number; inputTokenLimit?: number } = { ...previous };
+    for (const key of ["contextWindowTokens", "inputTokenLimit"] as const) {
+      const value = limit[key];
+      if (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+        next[key] = Math.min(previous?.[key] ?? Number.POSITIVE_INFINITY, value);
+    }
+    this.contextLimits.set(model, next);
+  }
+
+  getRequestBudget(
+    opts: Pick<ChatRequestOptions, "model" | "maxTokens" | "thinking" | "reasoningEffort">,
+  ) {
+    const learned = this.contextLimits.get(opts.model);
+    const declaredInput = declaredContextInputLimit(opts.model);
+    const capability = getProviderModelMetadata(
+      createProviderModelMetadataIdentity(this),
+      this.officialDeepSeek ? normalizeOfficialDeepSeekModel(opts.model) : opts.model,
+    );
+    return resolveRequestBudget({
+      ...opts,
+      thinking: this.dialect === "deepseek" ? opts.thinking : undefined,
+      reasoningEffort: this.dialect === "deepseek" ? opts.reasoningEffort : undefined,
+      baseUrl: this.baseUrl,
+      capability,
+      dialect: this.dialect === "azure" ? "auto" : this.dialect,
+      inputTokenLimit: declaredInput,
+      inputTokenLimitExplicit: declaredInput !== undefined,
+      serverContextWindowTokens: learned?.contextWindowTokens,
+      serverInputTokenLimit: learned?.inputTokenLimit,
+    });
+  }
+
+  private buildPayload(
+    opts: ChatRequestOptions,
+    stream: boolean,
+    messages?: WireMessage[],
+    budget?: RequestBudget,
+  ) {
     const payload: Record<string, unknown> = {
       model: this.officialDeepSeek ? normalizeOfficialDeepSeekModel(opts.model) : opts.model,
       messages: messages ?? projectMessagesForDialect(opts.messages, this.dialect),
@@ -362,7 +415,8 @@ export class DeepSeekClient {
     if (stream && this.dialect === "deepseek") payload.stream_options = { include_usage: true };
     if (opts.tools?.length) payload.tools = opts.tools;
     if (opts.temperature !== undefined) payload.temperature = opts.temperature;
-    if (opts.maxTokens !== undefined) payload.max_tokens = opts.maxTokens;
+    const maxTokens = (budget ?? this.getRequestBudget(opts)).maxTokens;
+    if (maxTokens !== undefined) payload.max_tokens = maxTokens;
     if (opts.responseFormat) payload.response_format = opts.responseFormat;
     if (opts.thinking && this.dialect === "deepseek") {
       payload.thinking = { type: opts.thinking };
@@ -380,6 +434,7 @@ export class DeepSeekClient {
     stream: boolean,
     signal: AbortSignal,
   ): Promise<Response> {
+    const requestBudget = this.getRequestBudget(opts);
     const hasImages = opts.messages.some(
       (message) => message.attachments?.length || message.sourceAttachments?.length,
     );
@@ -422,7 +477,7 @@ export class DeepSeekClient {
           throw error;
         }
       } else this.lastImageRequest = null;
-      const payload = this.buildPayload(opts, stream, messages);
+      const payload = this.buildPayload(opts, stream, messages, requestBudget);
       let imageTokens = 0;
       const estimatedMessages = (payload.messages as WireMessage[]).map((message) => {
         if (!Array.isArray(message.content)) return message as ChatMessage;
@@ -442,7 +497,7 @@ export class DeepSeekClient {
           this.dialect === "deepseek",
           signal,
         )) + imageTokens;
-      const contextTokens = resolveContextTokens(opts.model);
+      const contextTokens = requestBudget.inputLimit;
       if (estimatedTokens > contextTokens)
         throw Object.assign(
           new Error(
@@ -529,6 +584,8 @@ export class DeepSeekClient {
           return [{ ...entry, id }];
         });
       }
+      if (!opts.signal?.aborted)
+        recordProviderModelMetadata(createProviderModelMetadataIdentity(this), data);
       return data;
     } catch {
       return null;
@@ -539,7 +596,7 @@ export class DeepSeekClient {
     const source = error instanceof Error ? error : new Error(String(error));
     const sanitize = (value: string) =>
       sanitizeProviderErrorText(value, { knownSecrets: [this.apiKey], maxChars: 4096 });
-    if (source instanceof ProviderHttpError) {
+    if (source instanceof ProviderHttpError || source instanceof ProviderStreamError) {
       source.stack = source.stack ? sanitize(source.stack) : undefined;
       return source;
     }
@@ -676,10 +733,14 @@ export class DeepSeekClient {
         }
         try {
           const json = JSON.parse(ev.data);
-          if (json?.error) {
-            const detail =
-              typeof json.error?.message === "string" ? json.error.message : "unknown error";
-            throw new Error(`Provider stream error: ${detail}`);
+          if (json?.error || ev.event === "error") {
+            parseError = new ProviderStreamError({
+              baseUrl: this.baseUrl,
+              rawBody: ev.data,
+              knownSecrets: [this.apiKey],
+            });
+            done = true;
+            return;
           }
           const delta = json.choices?.[0]?.delta ?? {};
           const rawFinishReason = json.choices?.[0]?.finish_reason;
@@ -740,11 +801,11 @@ export class DeepSeekClient {
     };
     try {
       while (true) {
-        if (parseError) throw parseError;
         if (queue.length > 0) {
           yield queue.shift()!;
           continue;
         }
+        if (parseError) throw parseError;
         if (done) break;
         let value: Uint8Array | undefined;
         let streamDone: boolean;
@@ -753,16 +814,21 @@ export class DeepSeekClient {
         } catch (readErr) {
           if (readErr instanceof Error && /idle timeout/i.test(readErr.message)) throw readErr;
           const cause = readErr instanceof Error ? readErr : new Error(String(readErr));
+          if (cause.name === "AbortError") throw cause;
           const code = "code" in cause && typeof cause.code === "string" ? cause.code : undefined;
           throw Object.assign(new Error(`SSE body read failed: ${cause.message}`), {
+            name: cause.name,
             phase: "stream_body_read" as const,
             code,
+            ...("status" in cause ? { status: cause.status } : {}),
+            cause,
           });
         }
         if (streamDone) {
           const tail = decoder.decode();
           if (tail) parser.feed(tail);
           parser.reset({ consume: true });
+          while (queue.length > 0) yield queue.shift()!;
           if (parseError) throw parseError;
           if (!sawDoneMarker && (requireDoneMarker || !sawTerminalFinishReason)) {
             throw new Error(
@@ -774,7 +840,6 @@ export class DeepSeekClient {
           break;
         }
         parser.feed(decoder.decode(value, { stream: true }));
-        if (parseError) throw parseError;
       }
       while (queue.length > 0) yield queue.shift()!;
     } finally {

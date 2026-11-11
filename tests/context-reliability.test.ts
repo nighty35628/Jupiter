@@ -81,15 +81,28 @@ describe("forced summary session binding", { retry: 0 }, () => {
     });
     let requests = 0;
     const fetch = vi.fn(async () => {
-      if (++requests === 1) {
+      if (++requests <= 2) {
         return Response.json({
           choices: [
-            { message: { role: "assistant", content: "Observed facts." }, finish_reason: "stop" },
+            {
+              message: {
+                role: "assistant",
+                content: "Observed facts.",
+                tool_calls: [
+                  {
+                    id: `repeated-${requests}`,
+                    type: "function",
+                    function: { name: "probe", arguments: "{}" },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
           ],
           usage: { prompt_tokens: 1800, completion_tokens: 10, total_tokens: 1810 },
         });
       }
-      if (requests === 2) {
+      if (requests === 3) {
         entered();
         return summary;
       }
@@ -109,6 +122,14 @@ describe("forced summary session binding", { retry: 0 }, () => {
       session: "forced-before",
     });
     const events: LoopEvent[] = [];
+    // Exercise the retained stuck-state summary, not the removed 80% capacity exit.
+    const process = loop.repair.process.bind(loop.repair);
+    vi.spyOn(loop.repair, "process").mockImplementation((...args) => {
+      const repaired = process(...args);
+      repaired.report.stormsBroken = 1;
+      repaired.calls = [];
+      return repaired;
+    });
     const pending = loop.run("begin", (event) => events.push(event));
     await started;
     return { loop, events, pending, resolve };
@@ -191,17 +212,20 @@ describe("forced summary session binding", { retry: 0 }, () => {
     expect(await task.loop.run("next task")).toBe("Recovered next turn.");
   });
 
-  it("preserves renamed disk and memory when the summary rewrite fails", async () => {
+  it("preserves renamed disk and memory when the summary append fails", async () => {
     const task = await startSummary();
     expect(sessions.renameSession("forced-before", "forced-after")).toBe(true);
     task.loop.rebindSession("forced-after");
     const before = task.loop.log.toFullHistory();
-    const rewrite = vi.spyOn(sessions, "rewriteSession").mockImplementation(() => {
+    const append = vi.spyOn(sessions, "appendSessionMessage").mockImplementation(() => {
       throw new Error("synthetic disk full");
     });
     task.resolve(response("Uncommitted recap."));
     await task.pending;
-    expect(rewrite).toHaveBeenCalledWith("forced-after", expect.any(Array));
+    expect(append).toHaveBeenCalledWith(
+      "forced-after",
+      expect.objectContaining({ content: "Uncommitted recap." }),
+    );
     expect(task.events.some((event) => event.role === "error")).toBe(true);
     expect(task.events.some((event) => event.forcedSummary)).toBe(false);
     expect(task.loop.log.toFullHistory()).toEqual(before);

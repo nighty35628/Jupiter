@@ -14,7 +14,7 @@ import {
   pathToFileUrl,
   readFileBytes,
 } from "../file-preview";
-import { getLang, t, useLang } from "../i18n";
+import { type TKey, getLang, t, useLang } from "../i18n";
 import { I } from "../icons";
 import type {
   McpSpecInfo,
@@ -25,7 +25,7 @@ import type {
   SubagentRunInfo,
 } from "../protocol";
 import { PanelErrorBoundary } from "./error-boundary";
-import { FileActionMenu } from "./file-action-menu";
+import { FileActionMenu, FileSaveNotice, useAndroidFileSave } from "./file-action-menu";
 import { FilePreviewRenderer, previewRendererKind } from "./file-preview-renderers";
 import { rankItems } from "./fuzzy";
 import { NativeBrowserWebview } from "./native-browser-webview";
@@ -119,6 +119,28 @@ function fileUrlToPath(url: string): string | null {
 }
 
 function ContextTokenPanel({ usage }: { usage: UsageStats }) {
+  const budget = usage.contextDiagnostics;
+  const contextMax =
+    budget && Number.isFinite(budget.ctxMax) && budget.ctxMax > 0
+      ? budget.ctxMax
+      : CONTEXT_MAX_TOKENS;
+  const outputReserve =
+    typeof budget?.outputReserveTokens === "number" && Number.isFinite(budget.outputReserveTokens)
+      ? Math.max(0, budget.outputReserveTokens)
+      : undefined;
+  const inputLimit =
+    typeof budget?.inputLimit === "number" && Number.isFinite(budget.inputLimit)
+      ? Math.max(0, Math.min(contextMax, budget.inputLimit))
+      : undefined;
+  const budgetSourceLabels: Record<string, TKey> = {
+    override: "contextPanel.budgetOverride",
+    metadata: "contextPanel.budgetMetadata",
+    official: "contextPanel.budgetOfficial",
+    fallback: "contextPanel.budgetFallback",
+  };
+  const sourceLabel = Object.hasOwn(budgetSourceLabels, budget?.budgetSource ?? "")
+    ? budgetSourceLabels[budget?.budgetSource ?? ""]
+    : undefined;
   const reserved = usage.reservedTokens;
   const lastHit = usage.lastCallCacheHit ?? 0;
   const lastMiss = usage.lastCallCacheMiss ?? 0;
@@ -126,16 +148,19 @@ function ContextTokenPanel({ usage }: { usage: UsageStats }) {
   const logTokens = Math.max(usage.liveLogTokens, observedLog);
   const cached = Math.min(logTokens, Math.max(0, lastHit - reserved));
   const used = Math.max(0, logTokens - cached);
-  const reservedPct = Math.min(100, (reserved / CONTEXT_MAX_TOKENS) * 100);
-  const usedPct = Math.min(100, (used / CONTEXT_MAX_TOKENS) * 100);
-  const cachedPct = Math.min(100, (cached / CONTEXT_MAX_TOKENS) * 100);
-  const free = Math.max(0, CONTEXT_MAX_TOKENS - reserved - used - cached);
+  const reservedPct = Math.min(100, (reserved / contextMax) * 100);
+  const usedPct = Math.min(100, (used / contextMax) * 100);
+  const cachedPct = Math.min(100, (cached / contextMax) * 100);
+  const free = Math.max(
+    0,
+    (inputLimit ?? contextMax - (outputReserve ?? 0)) - reserved - used - cached,
+  );
   return (
     <div className="ctx-block ctx-body-tokens">
-      <div className="h">
+      <div className="h" style={{ flexWrap: "wrap", gap: 4 }}>
         <span>{t("contextPanel.contextTokens")}</span>
         <span className="right">
-          {(reserved + used + cached).toLocaleString()} / {CONTEXT_MAX_TOKENS.toLocaleString()}
+          {(reserved + used + cached).toLocaleString()} / {contextMax.toLocaleString()}
         </span>
       </div>
       <div className="meter">
@@ -160,6 +185,28 @@ function ContextTokenPanel({ usage }: { usage: UsageStats }) {
           {t("contextPanel.freeKey")} <span className="v">{free.toLocaleString()}</span>
         </span>
       </div>
+      {outputReserve !== undefined || inputLimit !== undefined ? (
+        <div className="legend">
+          {outputReserve !== undefined ? (
+            <span className="l" style={{ flexWrap: "wrap" }}>
+              <span>{t("contextPanel.outputReserve")}</span>
+              <span className="v">{outputReserve.toLocaleString()}</span>
+            </span>
+          ) : null}
+          {inputLimit !== undefined ? (
+            <span className="l" style={{ flexWrap: "wrap" }}>
+              <span>{t("contextPanel.inputLimit")}</span>
+              <span className="v">{inputLimit.toLocaleString()}</span>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {budget?.budgetEstimated || sourceLabel ? (
+        <div className="legend">
+          {budget?.budgetEstimated ? <span className="l">{t("contextPanel.budgetEstimated")}</span> : null}
+          {sourceLabel ? <span className="l">{t(sourceLabel)}</span> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2395,6 +2442,8 @@ function CtxFiles({
   compact?: boolean;
 }) {
   const tree = useMemo(() => buildSessionTree(files), [files]);
+  const android = document.documentElement.dataset.hostPlatform === "android";
+  const fileSave = useAndroidFileSave();
   const [query, setQuery] = useState("");
   const [nonce, setNonce] = useState(0);
   const nonceRef = useRef(0);
@@ -2405,6 +2454,12 @@ function CtxFiles({
   } | null>(null);
   const workspaceDir = settings?.workspaceDir;
   const editor = settings?.editor;
+  const openFile = (path: string) => {
+    if (android) void fileSave.save(path, workspaceDir);
+    else void openContextFile(path, settings, onOpenHtmlFile);
+  };
+  const actionTitle = (path: string) => android
+    ? t("fileActions.saveFilePath", { path }) : t("contextPanel.openFile", { path });
   const canSearchProject = Boolean(onMentionQuery);
   useEffect(() => {
     if (!canSearchProject) return;
@@ -2480,14 +2535,16 @@ function CtxFiles({
       <button
         type="button"
         className="tree-action"
-        aria-label={t("contextPanel.openFile", { path: n.path })}
-        title={t("contextPanel.openFile", { path: n.path })}
+        aria-label={actionTitle(n.path)}
+        title={actionTitle(n.path)}
+        disabled={android && fileSave.saving}
+        aria-busy={android && fileSave.saving || undefined}
         onClick={(event) => {
           event.stopPropagation();
-          void openContextFile(n.path, settings, onOpenHtmlFile);
+          openFile(n.path);
         }}
       >
-        <I.file size={12} />
+        {android ? <I.download size={12} /> : <I.file size={12} />}
       </button>
       <button
         type="button"
@@ -2506,6 +2563,7 @@ function CtxFiles({
   return (
     <>
       <div className={compact ? "ctx-block" : "ctx-files-panel"}>
+        {android && <FileSaveNotice notice={fileSave.notice} />}
         {canSearchProject ? (
           <>
             <div className="ctx-file-search">
@@ -2590,18 +2648,16 @@ function CtxFiles({
                           <button
                             type="button"
                             className="tree-action"
-                            aria-label={t("contextPanel.openFile", {
-                              path: item.path,
-                            })}
-                            title={t("contextPanel.openFile", {
-                              path: item.path,
-                            })}
+                            aria-label={actionTitle(item.path)}
+                            title={actionTitle(item.path)}
+                            disabled={android && fileSave.saving}
+                            aria-busy={android && fileSave.saving || undefined}
                             onClick={(event) => {
                               event.stopPropagation();
-                              void openContextFile(item.path, settings, onOpenHtmlFile);
+                              openFile(item.path);
                             }}
                           >
-                            <I.file size={12} />
+                            {android ? <I.download size={12} /> : <I.file size={12} />}
                           </button>
                           <button
                             type="button"

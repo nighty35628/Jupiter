@@ -22,6 +22,9 @@ import {
 import { getLangLabel, getSupportedLangs, setLang, t, useLang } from "../i18n";
 import { I } from "../icons";
 import { PagePets } from "../pets/settings-page";
+import { PageScheduledTasks } from "./scheduled-tasks";
+import { SpeechSettings } from "../speech/settings";
+import type { ScheduledCommand, ScheduledTaskReceipt, ScheduledTasksEvent } from "../../../src/scheduler/types";
 import type { DesktopPetUi } from "../pets/types";
 import type {
   ComputerUseStatus,
@@ -74,6 +77,7 @@ function pageI18nName(id: PageId): string {
 
 export type PageId =
   | "general"
+  | "schedules"
   | "models"
   | "rules"
   | "mcp"
@@ -90,6 +94,7 @@ export type PageId =
 
 const PAGE_META: ReadonlyArray<{ id: PageId; icon: keyof typeof I }> = [
   { id: "general", icon: "cog" },
+  { id: "schedules", icon: "cpu" },
   { id: "models", icon: "brain" },
   { id: "rules", icon: "shield" },
   { id: "mcp", icon: "wrench" },
@@ -144,6 +149,10 @@ export function SettingsModal({
   customFontFamily,
   onSetCustomFontFamily,
   petUi,
+  scheduledTasks,
+  scheduledTaskResults,
+  onScheduledCommand,
+  onOpenScheduledSession,
   active = true,
   initialPage,
   mcpSpecs,
@@ -218,6 +227,10 @@ export function SettingsModal({
   customFontFamily: string;
   onSetCustomFontFamily: (family: string) => void;
   petUi: DesktopPetUi;
+  scheduledTasks?: ScheduledTasksEvent;
+  scheduledTaskResults?: Record<string, ScheduledTaskReceipt>;
+  onScheduledCommand?: (command: ScheduledCommand) => Promise<void>;
+  onOpenScheduledSession?: (name: string) => void;
   active?: boolean;
   initialPage?: PageId;
   mcpSpecs: McpSpecInfo[];
@@ -296,6 +309,7 @@ export function SettingsModal({
   onOpenAbout: () => void;
 }) {
   const webSurface = document.documentElement.dataset.runtime === "web";
+  const androidSurface = document.documentElement.dataset.hostPlatform === "android";
   const webHostConfigurationAllowed =
     !webSurface ||
     (document.documentElement.dataset.webMcpWrite === "true" &&
@@ -305,6 +319,7 @@ export function SettingsModal({
         (item) =>
           item.id !== "pets" &&
           item.id !== "shortcuts" &&
+          (!androidSurface || (item.id !== "computer-use" && item.id !== "components")) &&
           (webHostConfigurationAllowed || item.id !== "mcp"),
       )
     : PAGE_META;
@@ -333,7 +348,7 @@ export function SettingsModal({
   }, [initialPage]);
   useEffect(() => {
     if (!pageMeta.some((item) => item.id === page)) setPage("general");
-  }, [page, webHostConfigurationAllowed, webSurface]);
+  }, [page, webHostConfigurationAllowed, webSurface, androidSurface]);
   useEffect(() => {
     if (page === "archives") onRefreshArchivedSessions();
   }, [onRefreshArchivedSessions, page]);
@@ -341,8 +356,10 @@ export function SettingsModal({
     if (page === "storage") onScanStorage();
   }, [onScanStorage, page]);
   useEffect(() => {
-    if (page === "components" || page === "computer-use") onRefreshOptionalComponents();
-  }, [onRefreshOptionalComponents, page]);
+    if (!androidSurface && (page === "components" || page === "computer-use")) {
+      onRefreshOptionalComponents();
+    }
+  }, [onRefreshOptionalComponents, page, androidSurface]);
   useEffect(() => {
     restoreFocusRef.current =
       returnFocus?.current ??
@@ -594,6 +611,7 @@ export function SettingsModal({
               />
             )}
             {page === "pets" && <PagePets petUi={petUi} active={active} />}
+            {page === "schedules" && onScheduledCommand && <PageScheduledTasks key={settings.workspaceDir} workspaceDir={settings.workspaceDir} model={settings.model} active={active} result={scheduledTasks} results={scheduledTaskResults} send={onScheduledCommand} onOpenSession={onOpenScheduledSession ?? (() => {})} writable={!webSurface || (document.documentElement.dataset.webMode !== "public" && (document.documentElement.dataset.webMode === "local" || document.documentElement.dataset.webMcpWrite === "true") && document.documentElement.dataset.webWriter === "true")} />}
             {page === "billing" && (
               <PageBilling balance={balance} usageHistory={usageHistory} currency={currency} />
             )}
@@ -1153,6 +1171,11 @@ function PageGeneral({
 }) {
   const [editorDraft, setEditorDraft] = useState(settings.editor ?? "");
   const webSurface = document.documentElement.dataset.runtime === "web";
+  const androidSurface = document.documentElement.dataset.hostPlatform === "android";
+  const [androidNotifications, setAndroidNotifications] = useState(false);
+  useEffect(() => {
+    if (androidSurface) void invoke<boolean>("android_notifications_status").then(setAndroidNotifications).catch(() => setAndroidNotifications(false));
+  }, [androidSurface]);
   const [webNotificationState, setWebNotificationState] = useState(() => {
     if (!webSurface || typeof Notification === "undefined") return "unavailable";
     if (Notification.permission === "denied") return "denied";
@@ -1168,15 +1191,16 @@ function PageGeneral({
   } | null>(null);
   const [pairingUrl, setPairingUrl] = useState("");
   const refreshWebAccess = () => {
-    if (!webSurface) return;
+    if (!webSurface || androidSurface) return;
     void invoke<typeof webAccess>("web_devices_get")
       .then((value) => setWebAccess(value))
       .catch(() => setWebAccess(null));
   };
-  useEffect(refreshWebAccess, [webSurface]);
+  useEffect(refreshWebAccess, [webSurface, androidSurface]);
   const lang = useLang();
   return (
     <>
+      <SpeechSettings />
       <section className="section">
         <div className="stitle">{t("settings.workspaceSection")}</div>
         <div className="setting-row">
@@ -1190,7 +1214,7 @@ function PageGeneral({
             {t("settings.workspaceChange")}
           </button>
         </div>
-        <div className="setting-row">
+        {!androidSurface && <div className="setting-row">
           <div className="l">
             <div className="n">{t("settings.editor")}</div>
             <div className="h">{t("settings.editorHint")}</div>
@@ -1202,8 +1226,14 @@ function PageGeneral({
             onChange={(e) => setEditorDraft(e.target.value)}
             onBlur={() => onSave({ editor: editorDraft.trim() })}
           />
-        </div>
-        {webSurface ? (
+        </div>}
+        {androidSurface && <div className="setting-row">
+          <div className="l"><div className="n">{t("settings.androidNotifications")}</div></div>
+          <button type="button" className="btn" onClick={() => {
+            void invoke<boolean>("android_notifications_enable").then(setAndroidNotifications).catch(() => undefined);
+          }}>{androidNotifications ? t("settings.androidNotificationsManage") : t("settings.webNotificationsEnable")}</button>
+        </div>}
+        {webSurface && !androidSurface ? (
           <div className="setting-row">
             <div className="l">
               <div className="n">{t("settings.webNotifications")}</div>
@@ -1235,7 +1265,7 @@ function PageGeneral({
         ) : null}
       </section>
 
-      {webSurface ? (
+      {webSurface && !androidSurface ? (
         <section className="section">
           <div className="stitle">{t("settings.webAccessSection")}</div>
           <div className="setting-row">
@@ -1427,7 +1457,7 @@ function PageGeneral({
             </button>
           </div>
         </div>
-        <div className="setting-row">
+        {!androidSurface && <div className="setting-row">
           <div className="l">
             <div className="n">{t("settings.desktopCloseBehavior")}</div>
             <div className="h">{t("settings.desktopCloseBehaviorHint")}</div>
@@ -1448,7 +1478,7 @@ function PageGeneral({
               {t("settings.closeToTray")}
             </button>
           </div>
-        </div>
+        </div>}
         <div className="setting-row">
           <div className="l">
             <div className="n">{t("settings.language")}</div>
@@ -2507,7 +2537,7 @@ export function ProviderSection({
   const setVision = (value: boolean) => controller.edit("vision", value);
   const setImageTransport = (value: "auto" | "inline") => controller.edit("imageTransport", value);
   const visibleResult = controller.probeResult;
-  if (!settings.providerId || document.documentElement.dataset.runtime === "web") {
+  if (!settings.providerId || (document.documentElement.dataset.runtime === "web" && document.documentElement.dataset.hostPlatform !== "android")) {
     return (
       <section className="section">
         <div className="stitle">{t("settings.providerSection")}</div>
@@ -2695,13 +2725,23 @@ function PageModels({
   providerDraft,
   onSignOutApiKey,
 }: {
-  settings: SettingsType;
+  settings: SettingsType & Pick<SettingsPatch, "earlyCompactionTokens">;
   onSave: (patch: SettingsPatch) => string | void;
   onTestProvider: ProviderTestCallback;
   providerTestResult?: ProviderTestResultEvent | null;
   providerDraft?: ProviderDraftController;
   onSignOutApiKey: () => void;
 }) {
+  const earlyCompactionEnabled = settings.earlyCompactionTokens !== null;
+  const [earlyCompactionDraft, setEarlyCompactionDraft] = useState(
+    String(settings.earlyCompactionTokens ?? 160000),
+  );
+  useEffect(() => {
+    if (settings.earlyCompactionTokens !== null)
+      setEarlyCompactionDraft(String(settings.earlyCompactionTokens ?? 160000));
+  }, [settings.earlyCompactionTokens]);
+  const threshold = Number(earlyCompactionDraft);
+  const thresholdValid = Number.isSafeInteger(threshold) && threshold >= 1024;
   return (
     <>
       <ProviderSection
@@ -2741,6 +2781,52 @@ function PageModels({
               placeholder={t("settings.contextTokensPlaceholder")}
             />
           </div>
+        </div>
+        <div className="setting-row">
+          <div className="l">
+            <div className="n">{t("settings.earlyCompaction")}</div>
+            <div className="h">{t("settings.earlyCompactionHint")}</div>
+          </div>
+          <button
+            type="button"
+            className="pet-toggle"
+            role="switch"
+            aria-label={t("settings.earlyCompaction")}
+            aria-checked={earlyCompactionEnabled}
+            data-on={earlyCompactionEnabled}
+            onClick={() => onSave({
+              earlyCompactionTokens: earlyCompactionEnabled ? null : thresholdValid ? threshold : 160000,
+            })}
+          >
+            <span className="pet-toggle-track" aria-hidden="true"><span /></span>
+          </button>
+        </div>
+        <div className="setting-row">
+          <div className="l">
+            <label className="n" htmlFor="early-compaction-tokens">{t("settings.earlyCompactionTokens")}</label>
+            {earlyCompactionEnabled && !thresholdValid ? (
+              <div className="h warn" id="early-compaction-error" role="alert">
+                {t("settings.earlyCompactionInvalid")}
+              </div>
+            ) : null}
+          </div>
+          <input
+            id="early-compaction-tokens"
+            className="field mono"
+            type="number"
+            min={1024}
+            step={1}
+            value={earlyCompactionDraft}
+            disabled={!earlyCompactionEnabled}
+            aria-invalid={earlyCompactionEnabled && !thresholdValid}
+            aria-describedby={earlyCompactionEnabled && !thresholdValid ? "early-compaction-error" : undefined}
+            onChange={(event) => setEarlyCompactionDraft(event.target.value)}
+            onBlur={() => {
+              if (earlyCompactionEnabled && thresholdValid && threshold !== (settings.earlyCompactionTokens ?? 160000))
+                onSave({ earlyCompactionTokens: threshold });
+            }}
+            style={{ width: "12ch", maxWidth: "100%" }}
+          />
         </div>
       </section>
       <section className="section">

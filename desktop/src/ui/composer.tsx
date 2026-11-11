@@ -25,6 +25,8 @@ import { ImageAttachmentView, importImage } from "./image-attachments";
 import { type ImageAttachment, MAX_MESSAGE_IMAGES, MAX_IMAGE_INPUT_BYTES } from "../../../src/attachments/types";
 import { DEEPSEEK_MODELS } from "../../../src/provider-models";
 import "./prompt-prediction.css";
+import { SpeechButton, SpeechStatus } from "../speech/controls";
+import type { SpeechUi } from "../speech/use-speech-draft";
 
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
 export type EditMode = "review" | "auto" | "yolo";
@@ -409,6 +411,7 @@ export function Composer({
   predictionNotice = false,
   onPredictionNoticeSeen,
   onDisablePredictions,
+  speech,
 }: {
   tabId?: string;
   images?: ImageAttachment[];
@@ -464,6 +467,7 @@ export function Composer({
   predictionNotice?: boolean;
   onPredictionNoticeSeen?: () => void;
   onDisablePredictions?: () => void;
+  speech?: SpeechUi;
 }) {
   const [popup, setPopup] = useState<Popup>(null);
   const [pickedChips, setPickedChips] = useState<Map<string, Chip["kind"]>>(new Map());
@@ -526,6 +530,11 @@ export function Composer({
     consumePrediction();
     (onPredictionUnavailable ?? onPredictionDismiss)?.();
   }, [consumePrediction, onPredictionUnavailable, onPredictionDismiss]);
+  const speechWasPending = useRef(false);
+  useEffect(() => {
+    if (speech?.pending && !speechWasPending.current) invalidatePrediction();
+    speechWasPending.current = !!speech?.pending;
+  }, [speech?.pending, invalidatePrediction]);
 
   const imageIds = JSON.stringify(images.map((image) => image.id));
   const previousPredictionInputRef = useRef({ draft, imageIds, imageAttachments, imagePending });
@@ -559,7 +568,7 @@ export function Composer({
     prediction?.text.trim() && prediction.id !== consumedPredictionId &&
     draft === "" && images.length === 0 && imageAttachments.length === 0 &&
     chips.length === 0 && imagePending === 0 && !popup &&
-    !plusMenuOpen && !modeMenuOpen && !modelMenuOpen && !busy && !disabled,
+    !plusMenuOpen && !modeMenuOpen && !modelMenuOpen && !busy && !disabled && !speech?.pending,
   );
 
   const acceptPrediction = () => {
@@ -1391,6 +1400,7 @@ export function Composer({
             </div>
           ) : null}
 
+          {speech && <SpeechStatus speech={speech} />}
           <div className="composer-textarea-wrap">
             <div className="composer-backdrop" ref={backdropRef} aria-hidden="true">
               {backdropContent}
@@ -1417,9 +1427,11 @@ export function Composer({
               onCompositionStart={() => {
                 invalidatePrediction();
                 composingRef.current = true;
+                speech?.onComposition(true);
               }}
               onCompositionEnd={() => {
                 composingRef.current = false;
+                speech?.onComposition(false);
                 compositionEndedAtRef.current = Date.now();
               }}
               rows={DEFAULT_COMPOSER_ROWS}
@@ -1532,6 +1544,7 @@ export function Composer({
               >
                 <I.search size={15} />
               </button>
+              {speech && <SpeechButton speech={speech} />}
 
               {planArmed ? (
                 <button
