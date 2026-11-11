@@ -246,6 +246,8 @@ describe("compaction fitting contracts", { retry: 0 }, () => {
   });
 
   it("bounds all provider attempts, including when every reduction is rejected", async () => {
+    // Attempt bounds are independent of the runner's CPU speed; deadlines are tested above.
+    vi.useFakeTimers();
     const fetch = vi.fn(async () =>
       Response.json({ error: { message: "context_length_exceeded" } }, { status: 400 }),
     );
