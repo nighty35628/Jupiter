@@ -35,8 +35,8 @@ to an external service.
 
 ## Local Voice Input
 
-- `whisper-rs` 0.15.1 / `whisper-rs-sys` 0.14.1: Unlicense; their embedded
-  whisper.cpp 1.7.6 engine is MIT. Desktop uses local, CPU-only inference.
+- `whisper-rs` 0.16.0 / `whisper-rs-sys` 0.15.0: Unlicense; their embedded
+  whisper.cpp 1.8.3 engine is MIT. Desktop uses local, CPU-only inference.
 - `cpal` 0.16.0: Apache-2.0. The checked-in copy contains a small macOS input
   activation patch documented in `desktop/src-tauri/vendor/cpal/JUPITER-PATCH.md`;
   its upstream license is preserved.

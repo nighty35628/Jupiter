@@ -52,7 +52,7 @@ Silence suppression is not a validated VAD or an accuracy guarantee.
 ## Build
 
 Run Cargo from `desktop/src-tauri` so its `.cargo/config.toml` is applied.
-The exact engine pins are `whisper-rs = 0.15.1` and `whisper-rs-sys = 0.14.1`.
+The exact engine pins are `whisper-rs = 0.16.0` and `whisper-rs-sys = 0.15.0`.
 CMake and a C++ compiler are required. Linux also needs `libasound2-dev`.
 The local CPAL 0.16.0 source patches CoreAudio construction, ALSA input
 construction/read gating, and WASAPI actual-Start acknowledgement; see
@@ -120,5 +120,5 @@ Pinned model metadata:
 https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1
 
 Binding and capture API references:
-https://docs.rs/whisper-rs/0.15.1/whisper_rs/
+https://docs.rs/whisper-rs/0.16.0/whisper_rs/
 https://docs.rs/cpal/0.16.0/cpal/
