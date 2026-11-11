@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
@@ -87,7 +88,7 @@ describe("private Android bootstrap", { retry: 0 }, () => {
     expect(JSON.parse(written)).toMatchObject({
       role: "interactive",
       type: "android-bootstrap",
-      configPath: "/owned/home/config.json",
+      configPath: resolve("/owned/home/config.json"),
     });
     expect(Buffer.from(JSON.parse(written).dek, "base64")).toHaveLength(32);
     input.destroy();

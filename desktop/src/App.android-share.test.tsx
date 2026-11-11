@@ -413,7 +413,7 @@ describe("Android shares use the bound App draft/drop pipeline", { retry: 0 }, (
     expect(readImageDraft(key).text).toBe("keep me");
   });
 
-  it("rolls back a partial persistent upload, retries within quota, and restores only committed tokens after restart", async () => {
+  it.skipIf(process.platform === "win32")("rolls back a partial persistent upload, retries within quota, and restores only committed tokens after restart", async () => {
     const home = await realpath(await mkdtemp(join(tmpdir(), "jupiter-share-upload-rollback-")));
     const root = join(home, "uploads");
     const options = {

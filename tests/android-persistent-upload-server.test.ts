@@ -93,96 +93,105 @@ async function writer(handle: WebServerHandle) {
   return { ...headers, "x-jupiter-lease": lease.id, "x-jupiter-fence": String(lease.fence) };
 }
 
-describe("trusted Android upload persistence over real HTTP", { retry: 0 }, () => {
-  it("reopens an old nonimage draft token, authorizes it, reads its bytes, and deletes it durably", async () => {
-    const a = await start();
-    const firstAuth = await writer(a.handle);
-    const uploaded = await fetch(`${a.handle.baseUrl}/api/files/upload?name=shared.txt`, {
-      method: "POST",
-      headers: { ...firstAuth, "content-type": "text/plain" },
-      body: "persistent share bytes",
+// The trusted Android runtime requires POSIX directory fsync.
+describe.skipIf(process.platform === "win32")(
+  "trusted Android upload persistence over real HTTP",
+  { retry: 0 },
+  () => {
+    it("reopens an old nonimage draft token, authorizes it, reads its bytes, and deletes it durably", async () => {
+      const a = await start();
+      const firstAuth = await writer(a.handle);
+      const uploaded = await fetch(`${a.handle.baseUrl}/api/files/upload?name=shared.txt`, {
+        method: "POST",
+        headers: { ...firstAuth, "content-type": "text/plain" },
+        body: "persistent share bytes",
+      });
+      expect(uploaded.status).toBe(201);
+      const { file } = await uploaded.json();
+      await a.handle.close();
+      const b = await start();
+      const auth = await writer(b.handle);
+      const downloaded = await fetch(`${b.handle.baseUrl}/api/files/${file.id}`, {
+        headers: { cookie: auth.cookie },
+      });
+      expect(downloaded.status).toBe(200);
+      expect(await downloaded.text()).toBe("persistent share bytes");
+      const dispatched = await fetch(`${b.handle.baseUrl}/api/rpc`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({
+          commandId: "reopened_share_draft",
+          payload: { cmd: "user_input", text: `read @jupiter-file:${file.id}` },
+        }),
+      });
+      expect(dispatched.status).toBe(202);
+      expect(b.sidecar.commands.find((command) => command.cmd === "user_input")?.text).toBe(
+        `read @${join(home, ".jupiter", "uploads", file.id, "blob")}`,
+      );
+      expect(await readFile(b.registry.resolveFile(file.id).absolutePath, "utf8")).toBe(
+        "persistent share bytes",
+      );
+      expect(await readdir(join(home, ".jupiter"))).toEqual(["uploads"]);
+      expect(
+        (
+          await fetch(`${b.handle.baseUrl}/api/files/${file.id}`, {
+            method: "DELETE",
+            headers: auth,
+          })
+        ).status,
+      ).toBe(200);
+      await b.handle.close();
+      const c = await start();
+      expect(() => c.registry.resolveFile(file.id)).toThrow(/expired/);
+      expect(await readdir(join(home, ".jupiter", "uploads"))).toEqual([]);
     });
-    expect(uploaded.status).toBe(201);
-    const { file } = await uploaded.json();
-    await a.handle.close();
-    const b = await start();
-    const auth = await writer(b.handle);
-    const downloaded = await fetch(`${b.handle.baseUrl}/api/files/${file.id}`, {
-      headers: { cookie: auth.cookie },
-    });
-    expect(downloaded.status).toBe(200);
-    expect(await downloaded.text()).toBe("persistent share bytes");
-    const dispatched = await fetch(`${b.handle.baseUrl}/api/rpc`, {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify({
-        commandId: "reopened_share_draft",
-        payload: { cmd: "user_input", text: `read @jupiter-file:${file.id}` },
-      }),
-    });
-    expect(dispatched.status).toBe(202);
-    expect(b.sidecar.commands.find((command) => command.cmd === "user_input")?.text).toBe(
-      `read @${join(home, ".jupiter", "uploads", file.id, "blob")}`,
-    );
-    expect(await readFile(b.registry.resolveFile(file.id).absolutePath, "utf8")).toBe(
-      "persistent share bytes",
-    );
-    expect(await readdir(join(home, ".jupiter"))).toEqual(["uploads"]);
-    expect(
-      (await fetch(`${b.handle.baseUrl}/api/files/${file.id}`, { method: "DELETE", headers: auth }))
-        .status,
-    ).toBe(200);
-    await b.handle.close();
-    const c = await start();
-    expect(() => c.registry.resolveFile(file.id)).toThrow(/expired/);
-    expect(await readdir(join(home, ".jupiter", "uploads"))).toEqual([]);
-  });
 
-  it.each([undefined, "interactive", "scheduled"])(
-    "keeps non-host %s uploads ephemeral despite frontend/environment flags",
-    async (role) => {
-      android.current = role
-        ? { role, configPath: join(home, ".jupiter", "config.json") }
-        : undefined;
-      vi.stubEnv("JUPITER_RUNTIME_SURFACE", "android");
-      vi.stubEnv("JUPITER_ANDROID", "1");
+    it.each([undefined, "interactive", "scheduled"])(
+      "keeps non-host %s uploads ephemeral despite frontend/environment flags",
+      async (role) => {
+        android.current = role
+          ? { role, configPath: join(home, ".jupiter", "config.json") }
+          : undefined;
+        vi.stubEnv("JUPITER_RUNTIME_SURFACE", "android");
+        vi.stubEnv("JUPITER_ANDROID", "1");
+        const a = await start();
+        const auth = await writer(a.handle);
+        const response = await fetch(`${a.handle.baseUrl}/api/files/upload?name=shared.txt`, {
+          method: "POST",
+          headers: { ...auth, "content-type": "text/plain" },
+          body: "ephemeral bytes",
+        });
+        expect(response.status).toBe(201);
+        const { file } = await response.json();
+        const path = a.registry.resolveFile(file.id).absolutePath;
+        await a.handle.close();
+        await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(lstat(join(home, ".jupiter"))).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(lstat(join(home, "frontend-selected-root"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+    );
+
+    it("does not persist a cancelled HTTP body", async () => {
       const a = await start();
       const auth = await writer(a.handle);
-      const response = await fetch(`${a.handle.baseUrl}/api/files/upload?name=shared.txt`, {
+      const req = request(`${a.handle.baseUrl}/api/files/upload?name=cancelled.txt`, {
         method: "POST",
-        headers: { ...auth, "content-type": "text/plain" },
-        body: "ephemeral bytes",
+        headers: { ...auth, "content-type": "text/plain", "content-length": "20" },
       });
-      expect(response.status).toBe(201);
-      const { file } = await response.json();
-      const path = a.registry.resolveFile(file.id).absolutePath;
+      req.on("error", () => {});
+      req.write("partial");
+      const root = join(home, ".jupiter", "uploads");
+      await vi.waitFor(async () =>
+        expect((await readdir(root)).some((name) => name.startsWith(".staging-"))).toBe(true),
+      );
+      req.destroy();
+      await vi.waitFor(async () => expect(await readdir(root)).toEqual([]));
       await a.handle.close();
-      await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(lstat(join(home, ".jupiter"))).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(lstat(join(home, "frontend-selected-root"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    },
-  );
-
-  it("does not persist a cancelled HTTP body", async () => {
-    const a = await start();
-    const auth = await writer(a.handle);
-    const req = request(`${a.handle.baseUrl}/api/files/upload?name=cancelled.txt`, {
-      method: "POST",
-      headers: { ...auth, "content-type": "text/plain", "content-length": "20" },
+      const b = await start();
+      expect(await readdir(root)).toEqual([]);
+      expect(b.registry.list()).toEqual([]);
     });
-    req.on("error", () => {});
-    req.write("partial");
-    const root = join(home, ".jupiter", "uploads");
-    await vi.waitFor(async () =>
-      expect((await readdir(root)).some((name) => name.startsWith(".staging-"))).toBe(true),
-    );
-    req.destroy();
-    await vi.waitFor(async () => expect(await readdir(root)).toEqual([]));
-    await a.handle.close();
-    const b = await start();
-    expect(await readdir(root)).toEqual([]);
-    expect(b.registry.list()).toEqual([]);
-  });
-});
+  },
+);

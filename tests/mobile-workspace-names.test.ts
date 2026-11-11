@@ -109,21 +109,24 @@ describe("Android private project display metadata", { retry: 0 }, () => {
     expect(await readAndroidWorkspaceName(root, ID)).toBeUndefined();
   });
 
-  it("rejects symlink metadata, symlink parent directories, and nonregular files", async () => {
-    const target = join(root, "outside.txt");
-    await writeFile(target, "Not a project label");
-    await symlink(target, metadata);
-    expect(await readAndroidWorkspaceName(root, ID)).toBeUndefined();
-    await rm(metadata);
-    await mkdir(metadata);
-    expect(await readAndroidWorkspaceName(root, ID)).toBeUndefined();
-    await rm(names, { recursive: true });
-    const other = join(root, "other");
-    await mkdir(other);
-    await writeFile(join(other, `${ID}.txt`), "Not a project label");
-    await symlink(other, names);
-    expect(await readAndroidWorkspaceName(root, ID)).toBeUndefined();
-  });
+  it.skipIf(process.platform === "win32")(
+    "rejects symlink metadata, symlink parent directories, and nonregular files",
+    async () => {
+      const target = join(root, "outside.txt");
+      await writeFile(target, "Not a project label");
+      await symlink(target, metadata);
+      expect(await readAndroidWorkspaceName(root, ID)).toBeUndefined();
+      await rm(metadata);
+      await mkdir(metadata);
+      expect(await readAndroidWorkspaceName(root, ID)).toBeUndefined();
+      await rm(names, { recursive: true });
+      const other = join(root, "other");
+      await mkdir(other);
+      await writeFile(join(other, `${ID}.txt`), "Not a project label");
+      await symlink(other, names);
+      expect(await readAndroidWorkspaceName(root, ID)).toBeUndefined();
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "does not block opening a FIFO metadata entry",

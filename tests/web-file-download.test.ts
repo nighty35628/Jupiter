@@ -211,8 +211,13 @@ describe("workspace file downloads", { retry: 0 }, () => {
       let handle: fs.FileHandle | undefined;
       vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
         if (phase === "after-open") handle = await actualFs.open(...args);
-        await rename(join(workspace, "nested"), join(workspace, "original"));
-        await symlink(outside, join(workspace, "nested"), "dir");
+        try {
+          await rename(join(workspace, "nested"), join(workspace, "original"));
+          await symlink(outside, join(workspace, "nested"), "dir");
+        } catch (error) {
+          await handle?.close();
+          throw error;
+        }
         handle ??= await actualFs.open(...args);
         return handle;
       });

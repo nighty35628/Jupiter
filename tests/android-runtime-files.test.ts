@@ -23,7 +23,9 @@ describe("Android runtime archive inputs", { retry: 0 }, () => {
       expect(await detachHardlinks(root)).toBeGreaterThan(0);
       expect((await lstat(join(root, "a"))).nlink).toBe(1);
       expect((await lstat(join(root, "b"))).nlink).toBe(1);
-      expect((await lstat(join(root, "a"))).mode & 0o777).toBe(0o755);
+      if (process.platform !== "win32") {
+        expect((await lstat(join(root, "a"))).mode & 0o777).toBe(0o755);
+      }
       expect(await readFile(join(root, "b"), "utf8")).toBe("same contents");
       expect(await treeBytes(root)).toBe(26);
       expect((await lstat(join(parent, "outside/file"))).nlink).toBe(2);
