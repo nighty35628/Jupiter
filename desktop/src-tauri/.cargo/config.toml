@@ -1,7 +1,6 @@
 [env]
-# Use the binding crate's checked-in ABI and static, baseline CPU code on CI.
-# No libclang, GPU SDK, or compiler-host-specific instruction set is required.
-WHISPER_DONT_GENERATE_BINDINGS = "1"
+# Generate bindings for the host ABI; the upstream bundled bindings are Linux-only.
+# Keep static, baseline CPU code without a GPU SDK or host-specific instructions.
 CMAKE_PROJECT_INCLUDE = { value = "cmake/speech-portable.cmake", relative = true }
 # ggml's ARM backend rejects cl.exe. LLVM/Ninja are present on the existing
 # Windows runners; target-scoped values do not change macOS/Linux compilers.

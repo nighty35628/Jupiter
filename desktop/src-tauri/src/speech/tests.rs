@@ -190,6 +190,7 @@ fn cancel_before_permission_returns_never_starts_recording() {
     let h = Harness::new(true);
     let backend = FakeBackend::new(false, true);
     h.start("permission", &backend).unwrap();
+    wait_until(|| backend.permission_requests.load(Ordering::SeqCst) == 1);
     h.state.cancel("permission").unwrap();
     assert_eq!(h.states(), ["preparing", "cancelled"]);
     assert!(h.start("next", &backend).is_err());

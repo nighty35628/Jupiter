@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "jupiter-desktop"
-version = "1.0.12"
+version = "1.0.13"
 dependencies = [
  "anyhow",
  "block2",

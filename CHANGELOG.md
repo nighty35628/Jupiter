@@ -5,10 +5,11 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [1.0.12] — 2026-11-11
+## [1.0.13] — 2026-11-11
 
 ### 中文
 
+- 修正语音依赖的跨平台 ABI 绑定与 CI 原生工程配置，macOS 最低版本设为 11.0；1.0.12 打包未完成，不作为正式发布。
 - 统一模型上下文窗口、请求预算与诊断快照；引入独立压缩检查点，保留原始历史，改善超限恢复、跨轮次状态、共享会话压缩基线和取消后的数据保护。
 - 新增 Desktop 本地多语言 Whisper 语音转写、模型下载与校验、录音取消和麦克风权限处理；模型需另行下载，识别效果依赖设备与音频条件。
 - 新增 Android QA 本地运行工程及持久化文件上传、分享接收、导出、工作区与语音桥接；本次不发布正式 Android 安装包。
@@ -18,6 +19,7 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### English
 
+- Fixes cross-platform speech ABI bindings and native CI configuration; sets macOS 11.0 as the minimum. Version 1.0.12 did not finish packaging and is not a public release.
 - Unifies model context windows, request budgets and diagnostic snapshots. Separate compaction checkpoints preserve raw history and improve overflow recovery, cross-turn state, shared-session baselines and cancellation safety.
 - Adds local multilingual Whisper dictation on Desktop, model download/verification, recording cancellation and microphone permissions. Models are downloaded separately; recognition quality depends on hardware and audio conditions.
 - Adds the Android QA on-device runtime project with durable uploads, share intake, export, workspaces and speech bridges. No public Android installer is included in this release.

@@ -19,6 +19,7 @@
   },
   "bundle": {
     "macOS": {
+      "minimumSystemVersion": "11.0",
       "hardenedRuntime": true,
       "infoPlist": "Info.plist",
       "entitlements": "entitlements/main.plist"

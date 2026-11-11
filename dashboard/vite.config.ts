@@ -22,7 +22,7 @@ export default defineConfig(({ command }) => ({
     },
   ],
   define: {
-    __APP_VERSION__: JSON.stringify("1.0.12"),
+    __APP_VERSION__: JSON.stringify("1.0.13"),
   },
   resolve: {
     dedupe: ["react", "react-dom"],
