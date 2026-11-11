@@ -325,7 +325,7 @@ unsafe extern "C" fn abort_decode(data: *mut std::ffi::c_void) -> bool {
 }
 
 unsafe extern "C" fn discard_log(
-    _: std::os::raw::c_uint,
+    _: whisper_rs_sys::ggml_log_level,
     _: *const std::ffi::c_char,
     _: *mut std::ffi::c_void,
 ) {
