@@ -58,7 +58,8 @@ jobs:
         run: npm run build
 
       - name: Test desktop native layer
-        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked
+        working-directory: desktop/src-tauri
+        run: cargo test --locked
 
       - name: Test (vitest + coverage)
         run: npm run test:coverage
