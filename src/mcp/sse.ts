@@ -69,16 +69,7 @@ export class SseTransport implements McpTransport {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    while (this.waiters.length > 0) this.waiters.shift()!(null);
-    // Reject any still-pending send() that was waiting for the endpoint.
-    this.rejectEndpoint(new Error("MCP SSE transport closed before endpoint was ready"));
-    try {
-      this.controller.abort();
-    } catch {
-      /* already aborted */
-    }
+    this.markClosed();
   }
 
   private async runStream(): Promise<void> {
@@ -107,6 +98,7 @@ export class SseTransport implements McpTransport {
     try {
       for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
         parser.feed(decoder.decode(chunk, { stream: true }));
+        if (this.closed) break;
       }
     } catch (err) {
       if (!this.closed) {
@@ -118,6 +110,7 @@ export class SseTransport implements McpTransport {
   }
 
   private handleEvent(type: string, data: string): void {
+    if (this.closed) return;
     if (type === "endpoint") {
       if (this.postUrl) return; // ignore repeat announcements
       try {
@@ -164,5 +157,7 @@ export class SseTransport implements McpTransport {
     if (this.closed) return;
     this.closed = true;
     while (this.waiters.length > 0) this.waiters.shift()!(null);
+    this.rejectEndpoint(new Error("MCP SSE transport closed before endpoint was ready"));
+    this.controller.abort();
   }
 }
