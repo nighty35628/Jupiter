@@ -3,6 +3,29 @@ import { buildLoadedMessages } from "../src/cli/commands/desktop.js";
 import type { ChatMessage } from "../src/types.js";
 
 describe("desktop loaded session messages", () => {
+  it("keeps a bounded history page complete when reopened", () => {
+    const text = "history paragraph\n".repeat(15_000);
+    const loaded = buildLoadedMessages(
+      [
+        { role: "user", content: "previous question" },
+        { role: "assistant", content: text },
+        { role: "user", content: "latest question" },
+        { role: "assistant", content: "latest answer" },
+      ],
+      { startTurn: 40 },
+    );
+
+    const oldAnswer = loaded[1];
+    expect(oldAnswer).toMatchObject({ kind: "assistant", turn: 41 });
+    expect(
+      oldAnswer?.kind === "assistant" &&
+        oldAnswer.segments.length === 1 &&
+        oldAnswer.segments[0]?.kind === "text" &&
+        oldAnswer.segments[0].text === text,
+    ).toBe(true);
+    expect(loaded.every((message) => message.displayTruncated === undefined)).toBe(true);
+  });
+
   it("groups multiple assistant records from one user turn under the user turn", () => {
     const records: ChatMessage[] = [
       { role: "user", content: "inspect repo" },

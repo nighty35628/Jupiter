@@ -1029,6 +1029,8 @@ export const zhCN: typeof en = {
       newTab: "新标签",
     },
     header: {
+      showProcessDetails: "显示思考过程／工具调用",
+      hideProcessDetails: "隐藏思考过程／工具调用",
       noWorkspace: "未选择工作区",
       running: "运行中",
       clickToSelect: "点击选择工作区",

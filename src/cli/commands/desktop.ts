@@ -1648,7 +1648,9 @@ export function buildLoadedMessages(
       }
     }
   }
-  return options.budget === false ? out : budgetTranscriptMessages(out);
+  // Paged reads already bound the payload. Preview elision is only for legacy
+  // clients that request the entire session in a single snapshot.
+  return options.budget === true ? budgetTranscriptMessages(out) : out;
 }
 
 function collectSessionFiles(records: readonly ChatMessage[]): LoadedSessionFile[] {
@@ -2058,7 +2060,10 @@ async function loadSessionIntoTab(
   tab.runtime = null;
   previousRuntime?.loop.dispose();
   actions.persistOpenTabs();
-  const loadedMessages = buildLoadedMessages(records, { startTurn: page?.startTurn });
+  const loadedMessages = buildLoadedMessages(records, {
+    startTurn: page?.startTurn,
+    budget: !page,
+  });
   tab.sessionFiles = collectSessionFiles(records);
   if (loadedMessages.length === 0) {
     let sizeBytes = 0;
@@ -2145,7 +2150,7 @@ async function currentSessionSnapshot(
   const historyVersion = tab.sharedSession?.version;
   const page = tab.historyPaging === false ? undefined : await readSessionHistoryPage(name);
   const records = page?.records ?? loadSessionMessages(name);
-  const messages = buildLoadedMessages(records, { startTurn: page?.startTurn });
+  const messages = buildLoadedMessages(records, { startTurn: page?.startTurn, budget: !page });
   if (tab.currentSession !== name || tab.bindingId !== bindingId)
     throw Object.assign(new Error("Session changed during history read"), {
       code: "SESSION_SNAPSHOT_STALE",

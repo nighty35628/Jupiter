@@ -2627,6 +2627,14 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
   overflow-x: hidden;
   position: relative;
 }
+/* Virtuoso measures bounding rects but scrolls in layout pixels. Keep its
+   viewport and row wrappers unzoomed, then scale only the message content. */
+.thread > [data-virtuoso-scroller] {
+  zoom: calc(1 / var(--web-scale, 1));
+}
+.thread > [data-virtuoso-scroller] :is(.thread-inner, .thread-bottom-spacer) {
+  zoom: var(--web-scale, 1);
+}
 .thread::-webkit-scrollbar {
   width: 8px;
 }

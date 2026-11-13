@@ -91,6 +91,37 @@ describe("bounded session history pages", () => {
     });
   });
 
+  it("preserves full text across bounded pages and a fresh reopen", async () => {
+    const records: ChatMessage[] = Array.from({ length: 5 }, (_, index) => [
+      { role: "user" as const, content: `question-${index}` },
+      { role: "assistant" as const, content: `${"x".repeat(150_000)}end-${index}` },
+    ]).flat();
+    writeFileSync(sessionPath("s"), jsonl(records));
+    let cursor: string | undefined;
+    const answers = new Map<number, string>();
+    do {
+      const page = await readSessionHistoryPage("s", { cursor, limitTurns: 2 });
+      const loaded = buildLoadedMessages(page.records, { startTurn: page.startTurn });
+      expect(loaded.every((message) => message.displayTruncated === undefined)).toBe(true);
+      for (const message of loaded) {
+        if (message.kind === "assistant" && message.segments[0]?.kind === "text")
+          answers.set(message.turn, message.segments[0].text);
+      }
+      cursor = page.beforeCursor;
+    } while (cursor);
+    expect(answers.size).toBe(5);
+    for (let turn = 1; turn <= 5; turn++) {
+      expect(answers.get(turn)?.length).toBe(150_005);
+      expect(answers.get(turn)?.endsWith(`end-${turn - 1}`)).toBe(true);
+    }
+    invalidateSessionHistory("s");
+    const reopened = await readSessionHistoryPage("s");
+    const loaded = buildLoadedMessages(reopened.records, { startTurn: reopened.startTurn });
+    expect(loaded.every((message) => message.displayTruncated === undefined)).toBe(true);
+    expect(loaded.at(-1)).toMatchObject({ kind: "assistant", turn: 5 });
+    expect(reopened.hasMore).toBe(true);
+  });
+
   it("keeps append cursors valid and updates the final tool chain", async () => {
     writeFileSync(sessionPath("s"), jsonl(turns(4)));
     const page = await readSessionHistoryPage("s", { limitTurns: 1 });

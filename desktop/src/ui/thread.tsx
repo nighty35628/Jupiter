@@ -247,6 +247,7 @@ export const AssistantMsg = memo(function AssistantMsg({
   onAlwaysAllowConfirm,
   pendingConfirms,
   processCardsDefaultOpen = false,
+  hideProcessDetails = false,
   onLoadFullTurn,
   loadingFullTurn = false,
   onCopyFull,
@@ -262,6 +263,7 @@ export const AssistantMsg = memo(function AssistantMsg({
   onAlwaysAllowConfirm: (id: number, prefix: string) => void;
   pendingConfirms: PendingConfirm[];
   processCardsDefaultOpen?: boolean;
+  hideProcessDetails?: boolean;
   onLoadFullTurn?: () => void;
   loadingFullTurn?: boolean;
   onCopyFull?: () => Promise<void> | void;
@@ -436,6 +438,7 @@ export const AssistantMsg = memo(function AssistantMsg({
 
   for (let i = 0; i < segments.length; i++) {
     const s = segments[i]!;
+    if (hideProcessDetails && (s.kind === "reasoning" || s.kind === "tool")) continue;
     if (s.kind === "text") {
       flushToolGroup();
       if (!s.text.trim()) continue;

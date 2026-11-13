@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import * as desktopCommand from "../src/cli/commands/desktop.js";
 import type { ChatMessage } from "../src/types.js";
 
-type BuildLoadedMessages = (records: ChatMessage[]) => Array<{
+type BuildLoadedMessages = (
+  records: ChatMessage[],
+  options?: { budget?: boolean },
+) => Array<{
   kind: "assistant" | "user";
   displayTruncated?: boolean | { originalChars: number; visibleChars: number };
   segments?: Array<{
@@ -28,7 +31,7 @@ describe("desktop session loading", () => {
     );
   });
 
-  it("elides old heavy assistant segments before sending $session_loaded", () => {
+  it("bounds legacy unpaged snapshots when the preview budget is explicitly requested", () => {
     const buildLoadedMessages = (desktopCommand as { buildLoadedMessages?: BuildLoadedMessages })
       .buildLoadedMessages;
     expect(typeof buildLoadedMessages).toBe("function");
@@ -54,7 +57,7 @@ describe("desktop session loading", () => {
       records.push({ role: "tool", tool_call_id: `c-${i}`, content: huge });
     }
 
-    const loaded = buildLoadedMessages!(records);
+    const loaded = buildLoadedMessages!(records, { budget: true });
     const assistants = loaded.filter((message) => message.kind === "assistant");
     const folded = assistants.find((message) => message.displayTruncated === true);
     const newest = assistants.at(-1);
