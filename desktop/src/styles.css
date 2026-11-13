@@ -2632,8 +2632,7 @@ html:not([data-platform="macos"]) .shortcut kbd[data-key="mod"] {
 .thread > [data-virtuoso-scroller] {
   zoom: calc(1 / var(--web-scale, 1));
 }
-.thread > [data-virtuoso-scroller] .thread-inner,
-.thread > [data-virtuoso-scroller] .thread-bottom-spacer {
+.thread > [data-virtuoso-scroller] :is(.thread-inner, .thread-bottom-spacer) {
   zoom: var(--web-scale, 1);
 }
 .thread::-webkit-scrollbar {

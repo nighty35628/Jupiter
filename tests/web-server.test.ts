@@ -1,5 +1,6 @@
 import { type ClientRequest, type IncomingMessage, request } from "node:http";
 import { createServer as createNetServer } from "node:net";
+import { basename } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RawData, WebSocket } from "ws";
 import { attachments } from "../src/attachments/store.js";
@@ -830,7 +831,7 @@ describe("Jupiter Web Beta server", () => {
     const text = await stream.waitFor("$settings");
     expect(text).not.toContain(process.cwd());
     expect(text).toContain(auth.workspaceId);
-    expect(text).toContain("Jupiter");
+    expect(text).toContain(basename(process.cwd()));
     expect(text).not.toContain("private-provider");
     expect(text).not.toContain("sk-secret");
     expect(text).not.toContain("openai-compatible");
