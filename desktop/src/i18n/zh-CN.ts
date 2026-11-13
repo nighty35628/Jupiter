@@ -2,6 +2,19 @@ import type { en } from "./en";
 
 export const zhCN: typeof en = {
   scheduler: {
+    outputMode: "任务输出",
+    newOutput: "每次运行创建新会话",
+    continueOutput: "继续上次会话（目标任务始终延续）",
+    goalCompleted: "目标已验证完成",
+    goalRemaining: "目标尚未验证完成；待办步骤见下方检查点。",
+    runningEditHint: "运行中可修改计划时间和名称；修改执行设置前请先暂停。范围检查会额外调用模型，计入用量。",
+    computerUse: "允许操作桌面（需启用 Computer Use、视觉模型和驱动，保持桌面解锁）",
+    effort: "模型强度",
+    stagnation: "无进展暂停时限（分钟）",
+    goal: "目标任务：验证完成后停止",
+    objective: "任务目标",
+    criteria: "完成条件（每行一条）",
+    scope: "允许操作范围",
     create: "新建任务",
     title: "名称",
     prompt: "任务提示词",
@@ -1187,6 +1200,8 @@ export const zhCN: typeof en = {
       reviewDesc: "查看代码更改",
       terminalTitle: "终端",
       terminalDesc: "启动交互式 shell",
+      automationsTitle: "自动化",
+      automationsDesc: "定时执行任务与追踪目标",
     },
     placeholder: {
       sidechat: "侧边聊天入口已就绪，下一步再接入真实功能。",

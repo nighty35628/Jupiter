@@ -5,8 +5,14 @@ import { z } from "zod";
 import { defaultConfigPath } from "../config.js";
 import { atomicWriteSync } from "../core/atomic-write.js";
 import { SessionWriterLease } from "../memory/session-writer-lock.js";
+import { scheduledExecutionKey } from "./identity.js";
 import { nextScheduledTime } from "./schedule.js";
-import { type ScheduledTask, type ScheduledTaskInput, taskInputSchema } from "./types.js";
+import {
+  type ScheduledTask,
+  type ScheduledTaskInput,
+  progressSchema,
+  taskInputSchema,
+} from "./types.js";
 
 const recordSchema = taskInputSchema
   .extend({
@@ -16,6 +22,7 @@ const recordSchema = taskInputSchema
     createdAt: z.number().finite(),
     nextRunAt: z.number().finite().nullable(),
     manualRun: z.boolean().optional(),
+    goalCompletedAt: z.number().finite().optional(),
     runs: z
       .array(
         z
@@ -30,11 +37,16 @@ const recordSchema = taskInputSchema
               "cancelled",
               "blocked",
               "interrupted",
+              "paused",
             ]),
             session: z.string().optional(),
             summary: z.string().max(4000).optional(),
             ownerPid: z.number().int().positive(),
             cancelRequested: z.boolean().optional(),
+            progress: progressSchema.optional(),
+            goalVerified: z.boolean().optional(),
+            executionKey: z.string().max(64).optional(),
+            stopReason: z.enum(["paused", "cancelled"]).optional(),
           })
           .strict(),
       )
@@ -88,15 +100,27 @@ export class ScheduledTaskStore {
     revision?: number,
   ): ScheduledTask {
     const task = taskInputSchema.parse(input);
+    if (task.computerUse && task.mode !== "agent") throw Error("Computer Use requires Agent mode");
     if (task.mode === "ask" && task.budgetUsd !== undefined)
       throw Error("Per-run budgets require Agent mode");
     const nextRunAt = nextScheduledTime(task.schedule, this.now());
     if (task.enabled && nextRunAt === null) throw Error("The scheduled time must be in the future");
     return this.transaction((tasks) => {
       const previous = id ? this.find(tasks, id, workspaceDir, revision) : undefined;
-      if (previous?.runs.some((run) => run.status === "running"))
-        throw Error("Stop the running task before editing");
+      if (
+        previous?.runs.some((run) => run.status === "running") &&
+        scheduledExecutionKey(previous) !== scheduledExecutionKey(task)
+      )
+        throw Error(
+          "Pause the running task before changing its execution settings; schedule and title can be edited now",
+        );
       if (!previous && tasks.length >= 100) throw Error("Maximum 100 scheduled tasks");
+      if (
+        task.enabled &&
+        previous?.goalCompletedAt &&
+        scheduledExecutionKey(previous) === scheduledExecutionKey(task)
+      )
+        throw Error("Goal already completed; change its definition before enabling it again");
       const record: ScheduledTask = {
         ...task,
         id: previous?.id ?? randomUUID(),
@@ -105,6 +129,10 @@ export class ScheduledTaskStore {
         createdAt: previous?.createdAt ?? this.now(),
         nextRunAt: task.enabled ? nextRunAt : null,
         runs: previous?.runs ?? [],
+        goalCompletedAt:
+          previous && scheduledExecutionKey(previous) === scheduledExecutionKey(task)
+            ? previous.goalCompletedAt
+            : undefined,
       };
       if (previous) tasks[tasks.indexOf(previous)] = record;
       else tasks.push(record);
@@ -125,18 +153,52 @@ export class ScheduledTaskStore {
       const task = this.find(tasks, id, workspace, revision);
       const running = task.runs.find((run) => run.status === "running");
       if (action === "cancel") {
-        if (running) running.cancelRequested = true;
+        if (running) {
+          running.cancelRequested = true;
+          running.stopReason = "cancelled";
+        }
       } else if (action === "pause") {
+        if (running) {
+          running.cancelRequested = true;
+          running.stopReason = "paused";
+        }
         task.enabled = false;
         task.nextRunAt = null;
         task.manualRun = undefined;
       } else if (action === "resume") {
+        if (running) throw Error("Wait for the current run to stop before resuming");
+        if (
+          task.goal &&
+          task.runs.some(
+            (run) =>
+              run.status === "succeeded" &&
+              run.goalVerified &&
+              run.executionKey === scheduledExecutionKey(task),
+          )
+        )
+          throw Error("Goal already completed; change its definition before resuming");
         const next = nextScheduledTime(task.schedule, this.now());
-        if (next === null) throw Error("Edit the completed one-time task before resuming");
-        task.enabled = true;
+        const resumable =
+          task.runs[0] &&
+          (["paused", "blocked", "interrupted"].includes(task.runs[0].status) ||
+            (task.goal && !task.goalCompletedAt));
+        if (next === null && !resumable)
+          throw Error("Edit the completed one-time task before resuming");
+        if (resumable) task.manualRun = true;
+        task.enabled = next !== null;
         task.nextRunAt = next;
       } else if (action === "run") {
         if (running) throw Error("Task is already running");
+        if (
+          task.goal &&
+          task.runs.some(
+            (run) =>
+              run.status === "succeeded" &&
+              run.goalVerified &&
+              run.executionKey === scheduledExecutionKey(task),
+          )
+        )
+          throw Error("Goal already completed; change its definition before running again");
         // A manual run is queued durably without changing the recurrence.
         task.manualRun = true;
       } else if (action === "delete") {

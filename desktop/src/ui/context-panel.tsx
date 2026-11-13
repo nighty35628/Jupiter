@@ -500,6 +500,7 @@ export function ContextPanel({
   onOpenWebSource,
   onRevealFileSource,
   onOpenHtmlFile,
+  onOpenAutomations,
 }: {
   settings: Settings | null;
   usage: UsageStats;
@@ -545,6 +546,7 @@ export function ContextPanel({
   onRevealFileSource?: (path: string) => void;
   onPreviewFile?: (target: FilePreviewTarget) => void;
   onOpenHtmlFile?: (target: FilePreviewTarget) => void;
+  onOpenAutomations?: () => void;
 }) {
   useLang();
   const [localMode, setLocalMode] = useState<ContextPanelMode>("home");
@@ -645,7 +647,7 @@ export function ContextPanel({
         <PanelErrorBoundary key={activeTab?.id ?? activeMode} label={activeMode}>
           {activeMode === "home" ? (
             <div className="ctx-home-shell">
-              <CtxHome onSelect={openPanelMode} />
+              <CtxHome onSelect={openPanelMode} onOpenAutomations={onOpenAutomations} />
             </div>
           ) : activeMode === "files" ? (
             <div className="ctx-mode-shell">
@@ -1755,7 +1757,13 @@ function CtxTerminal({ settings }: { settings: Settings | null }) {
   );
 }
 
-function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
+function CtxHome({
+  onSelect,
+  onOpenAutomations,
+}: {
+  onSelect: (mode: ContextPanelMode) => void;
+  onOpenAutomations?: () => void;
+}) {
   const terminalAvailable =
     document.documentElement.dataset.runtime !== "web" ||
     document.documentElement.dataset.webTerminal === "true";
@@ -1817,6 +1825,15 @@ function CtxHome({ onSelect }: { onSelect: (mode: ContextPanelMode) => void }) {
           <span className="ctx-home-desc">{card.desc}</span>
         </button>
       ))}
+      {onOpenAutomations && (
+        <button type="button" className="ctx-home-card" onClick={onOpenAutomations}>
+          <span className="ctx-home-icon">
+            <I.clock size={34} />
+          </span>
+          <span className="ctx-home-title">{t("contextPanel.home.automationsTitle")}</span>
+          <span className="ctx-home-desc">{t("contextPanel.home.automationsDesc")}</span>
+        </button>
+      )}
     </div>
   );
 }

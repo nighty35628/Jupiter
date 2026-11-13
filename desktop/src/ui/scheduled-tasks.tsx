@@ -90,7 +90,7 @@ export function PageScheduledTasks({
       );
     };
     poll();
-    const timer = window.setInterval(poll, 3000);
+    const timer = window.setInterval(poll, 2000);
     return () => window.clearInterval(timer);
   }, [active, send, workspaceDir]);
   useEffect(() => {
@@ -328,7 +328,9 @@ export function PageScheduledTasks({
                   onChange={(e) =>
                     update({
                       mode: e.target.value as "ask" | "agent",
-                      ...(e.target.value === "ask" ? { budgetUsd: undefined } : {}),
+                      ...(e.target.value === "ask"
+                        ? { budgetUsd: undefined, computerUse: false }
+                        : {}),
                     })
                   }
                 >
@@ -344,6 +346,46 @@ export function PageScheduledTasks({
                   maxLength={200}
                   value={draft.model}
                   onChange={(e) => update({ model: e.target.value })}
+                />
+              </label>
+              <label>
+                {t("scheduler.effort")}
+                <select
+                  className="field"
+                  value={draft.reasoningEffort ?? "high"}
+                  onChange={(e) =>
+                    update({
+                      reasoningEffort: e.target.value as ScheduledTaskInput["reasoningEffort"],
+                    })
+                  }
+                >
+                  {["low", "medium", "high", "max"].map((level) => (
+                    <option key={level} value={level}>
+                      {level}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t("scheduler.outputMode")}
+                <select
+                  className="field"
+                  value={draft.outputMode ?? "new"}
+                  onChange={(e) => update({ outputMode: e.target.value as "new" | "continue" })}
+                >
+                  <option value="new">{t("scheduler.newOutput")}</option>
+                  <option value="continue">{t("scheduler.continueOutput")}</option>
+                </select>
+              </label>
+              <label>
+                {t("scheduler.stagnation")}
+                <input
+                  className="field"
+                  type="number"
+                  min={1}
+                  max={180}
+                  value={draft.stagnationMinutes ?? 15}
+                  onChange={(e) => update({ stagnationMinutes: Number(e.target.value) })}
                 />
               </label>
               {draft.mode === "agent" && (
@@ -394,6 +436,69 @@ export function PageScheduledTasks({
                 </label>
               )}
             </div>
+            {draft.mode === "agent" && (
+              <label className="scheduled-enabled">
+                <input
+                  type="checkbox"
+                  checked={draft.computerUse ?? false}
+                  onChange={(e) => update({ computerUse: e.target.checked })}
+                />
+                {t("scheduler.computerUse")}
+              </label>
+            )}
+            <label className="scheduled-enabled">
+              <input
+                type="checkbox"
+                checked={!!draft.goal}
+                onChange={(e) =>
+                  update({
+                    goal: e.target.checked
+                      ? { objective: "", completionCriteria: [""], allowedScope: "" }
+                      : undefined,
+                  })
+                }
+              />
+              {t("scheduler.goal")}
+            </label>
+            {draft.goal && (
+              <>
+                <label>
+                  {t("scheduler.objective")}
+                  <textarea
+                    className="field"
+                    required
+                    value={draft.goal.objective}
+                    onChange={(e) =>
+                      update({ goal: { ...draft.goal!, objective: e.target.value } })
+                    }
+                  />
+                </label>
+                <label>
+                  {t("scheduler.criteria")}
+                  <textarea
+                    className="field"
+                    required
+                    value={draft.goal.completionCriteria.join("\n")}
+                    onChange={(e) =>
+                      update({
+                        goal: { ...draft.goal!, completionCriteria: e.target.value.split("\n") },
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  {t("scheduler.scope")}
+                  <textarea
+                    className="field"
+                    required
+                    value={draft.goal.allowedScope}
+                    onChange={(e) =>
+                      update({ goal: { ...draft.goal!, allowedScope: e.target.value } })
+                    }
+                  />
+                </label>
+              </>
+            )}
             <label className="scheduled-enabled">
               <input
                 type="checkbox"
@@ -443,7 +548,13 @@ export function PageScheduledTasks({
                   </div>
                   <div className="scheduled-meta">
                     {t("scheduler.next")}: {stamp(task.nextRunAt)} ·{" "}
-                    {t(task.enabled ? "scheduler.enabled" : "scheduler.paused")}
+                    {t(
+                      task.goalCompletedAt
+                        ? "scheduler.goalCompleted"
+                        : task.enabled
+                          ? "scheduler.enabled"
+                          : "scheduler.paused",
+                    )}
                   </div>
                 </div>
                 <div className="scheduled-actions">
@@ -452,29 +563,47 @@ export function PageScheduledTasks({
                     type="button"
                     title={t("scheduler.run")}
                     aria-label={`${t("scheduler.run")}: ${task.title}`}
-                    disabled={!writable || !!pending || !!running || !!task.manualRun}
+                    disabled={
+                      !writable ||
+                      !!pending ||
+                      !!running ||
+                      !!task.manualRun ||
+                      !!task.goalCompletedAt
+                    }
                     onClick={() => action(task, "run")}
                   >
                     <I.play size={14} />
                   </button>
                   {running ? (
-                    <button
-                      className="icon-btn"
-                      type="button"
-                      title={t("scheduler.stop")}
-                      aria-label={`${t("scheduler.stop")}: ${task.title}`}
-                      disabled={!writable || !!pending || running.cancelRequested}
-                      onClick={() => action(task, "cancel")}
-                    >
-                      <I.stop size={14} />
-                    </button>
+                    <>
+                      <button
+                        className="icon-btn"
+                        type="button"
+                        aria-label={`${t("scheduler.pause")}: ${task.title}`}
+                        title={t("scheduler.pause")}
+                        disabled={!writable || !!pending || running.cancelRequested}
+                        onClick={() => action(task, "pause")}
+                      >
+                        <Pause size={14} />
+                      </button>
+                      <button
+                        className="icon-btn"
+                        type="button"
+                        title={t("scheduler.stop")}
+                        aria-label={`${t("scheduler.stop")}: ${task.title}`}
+                        disabled={!writable || !!pending || running.cancelRequested}
+                        onClick={() => action(task, "cancel")}
+                      >
+                        <I.stop size={14} />
+                      </button>
+                    </>
                   ) : (
                     <button
                       className="icon-btn"
                       type="button"
                       title={t(task.enabled ? "scheduler.pause" : "scheduler.resume")}
                       aria-label={`${t(task.enabled ? "scheduler.pause" : "scheduler.resume")}: ${task.title}`}
-                      disabled={!writable || !!pending}
+                      disabled={!writable || !!pending || !!task.goalCompletedAt}
                       onClick={() => action(task, task.enabled ? "pause" : "resume")}
                     >
                       <Pause size={14} />
@@ -485,7 +614,7 @@ export function PageScheduledTasks({
                     type="button"
                     title={t("scheduler.edit")}
                     aria-label={`${t("scheduler.edit")}: ${task.title}`}
-                    disabled={!writable || !!pending || !!running}
+                    disabled={!writable || !!pending}
                     onClick={() => {
                       const {
                         id,
@@ -499,6 +628,11 @@ export function PageScheduledTasks({
                         schedule,
                         timeoutMinutes,
                         budgetUsd,
+                        reasoningEffort,
+                        stagnationMinutes,
+                        goal,
+                        computerUse,
+                        outputMode,
                       } = task;
                       setEditing({
                         id,
@@ -513,6 +647,11 @@ export function PageScheduledTasks({
                           schedule,
                           timeoutMinutes,
                           budgetUsd,
+                          reasoningEffort,
+                          stagnationMinutes,
+                          goal,
+                          computerUse,
+                          outputMode,
                         },
                       });
                     }}
@@ -531,6 +670,21 @@ export function PageScheduledTasks({
                   </button>
                 </div>
               </div>
+              {running && (
+                <div role="status" className="scheduled-run">
+                  <strong>{running.progress?.currentStep ?? t("scheduler.running")}</strong>
+                  <span>
+                    {" "}
+                    · {Math.max(0, Math.floor((Date.now() - running.startedAt) / 1000))}s
+                  </span>
+                  {running.progress?.recentActions.slice(-5).map((item, index) => (
+                    <div key={`${item.at}:${index}`}>
+                      {stamp(item.at)} · {item.text}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {running && <p className="scheduled-runtime">{t("scheduler.runningEditHint")}</p>}
               {deleting === task.id && (
                 <div className="scheduled-actions">
                   <span>{t("scheduler.deleteConfirm")}</span>
@@ -570,6 +724,17 @@ export function PageScheduledTasks({
                       )}
                     </div>
                     <pre>{run.summary}</pre>
+                    {task.goal && run.goalVerified === false && (
+                      <p>{t("scheduler.goalRemaining")}</p>
+                    )}
+                    {run.progress?.pauseReason && <p role="alert">{run.progress.pauseReason}</p>}
+                    {run.progress?.checkpoints.map((checkpoint, index) => (
+                      <div key={`${checkpoint.at}:${index}`}>
+                        <strong>{checkpoint.step}</strong>
+                        <pre>{checkpoint.evidence.join("\n")}</pre>
+                        <pre>{checkpoint.remaining.join("\n")}</pre>
+                      </div>
+                    ))}
                   </div>
                 ))}
               </details>
