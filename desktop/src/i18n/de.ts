@@ -11,6 +11,19 @@ export const de: typeof en = {
     saveCancelled: "Speichern abgebrochen.",
   },
   scheduler: {
+    outputMode: "Ergebnissitzungen",
+    newOutput: "Neue Sitzung pro Ausführung",
+    continueOutput: "Vorherige Sitzung fortsetzen (Zielaufgaben immer)",
+    goalCompleted: "Zielabschluss bestätigt",
+    goalRemaining: "Ziel noch nicht bestätigt; verbleibende Schritte siehe unten.",
+    runningEditHint: "Im laufenden Task sind Zeitplan und Name änderbar; für weitere Einstellungen zuerst pausieren. Umfangsprüfungen erzeugen zusätzliche Modellaufrufe.",
+    computerUse: "Desktop-Steuerung erlauben (visuelles Modell, Treiber und entsperrter Desktop erforderlich)",
+    effort: "Denkaufwand",
+    stagnation: "Pause ohne Fortschritt (Minuten)",
+    goal: "Zielaufgabe: nach Prüfung beenden",
+    objective: "Ziel",
+    criteria: "Abschlusskriterien (eine pro Zeile)",
+    scope: "Erlaubter Umfang",
     create: "Neue Aufgabe",
     title: "Name",
     prompt: "Auftrag",
@@ -1224,6 +1237,8 @@ export const de: typeof en = {
       reviewDesc: "Codeänderungen ansehen",
       terminalTitle: "Terminal",
       terminalDesc: "Interaktive Shell starten",
+      automationsTitle: "Automatisierungen",
+      automationsDesc: "Aufgaben planen und Ziele verfolgen",
     },
     placeholder: {
       sidechat:

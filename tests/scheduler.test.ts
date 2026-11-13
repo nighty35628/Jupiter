@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScheduledTaskEngine } from "../src/scheduler/engine.js";
+import { scheduledExecutionKey } from "../src/scheduler/identity.js";
 import { nextScheduledTime } from "../src/scheduler/schedule.js";
 import { handleScheduledCommand } from "../src/scheduler/service.js";
 import { ScheduledTaskStore } from "../src/scheduler/store.js";
@@ -36,6 +37,162 @@ afterEach(() => {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("persistent scheduler", { retry: 0 }, () => {
+  it("does not let an audit result on a paused run prevent continuation", () => {
+    const task = store.save(
+      {
+        ...input(),
+        goal: { objective: "Finish", completionCriteria: ["Verified"], allowedScope: "Workspace" },
+      },
+      root,
+    );
+    store.transaction((all) => {
+      all[0]!.runs = [
+        {
+          id: randomUUID(),
+          startedAt: now,
+          ownerPid: process.pid,
+          status: "paused",
+          goalVerified: true,
+          executionKey: scheduledExecutionKey(task),
+        },
+      ];
+    });
+    store.action(task.id, root, task.revision, "resume");
+    expect(store.list()[0]?.manualRun).toBe(true);
+    const resumed = store.list()[0]!;
+    expect(() => store.action(task.id, root, resumed.revision, "run")).not.toThrow();
+  });
+  it("allows rescheduling a running task but fences changes to execution settings", async () => {
+    store.save(input(), root);
+    now += 60_000;
+    const engine = new ScheduledTaskEngine(
+      store,
+      (_task, signal) =>
+        new Promise((resolve) =>
+          signal.addEventListener("abort", () => resolve({ status: "cancelled" }), { once: true }),
+        ),
+      () => now,
+    );
+    engine.tick();
+    await settle();
+    let task = store.list()[0]!;
+    const changed = store.save(
+      { ...input(), title: "New name", schedule: { kind: "interval", minutes: 9 } },
+      root,
+      task.id,
+      task.revision,
+    );
+    expect(changed.nextRunAt).toBe(now + 9 * 60_000);
+    expect(changed.runs[0]?.status).toBe("running");
+    expect(() =>
+      store.save({ ...input(), prompt: "Different objective" }, root, changed.id, changed.revision),
+    ).toThrow(/Pause/);
+    store.action(changed.id, root, changed.revision, "pause");
+    engine.tick();
+    await settle();
+    task = store.list()[0]!;
+    expect(task.runs[0]?.status).toBe("paused");
+    expect(task.enabled).toBe(false);
+    store.action(task.id, root, task.revision, "resume");
+    expect(store.list()[0]?.manualRun).toBe(true);
+    await engine.stop();
+  });
+
+  it("resumes paused one-time work even after its original timestamp has passed", () => {
+    const task = store.save(
+      { ...input(), schedule: { kind: "once", at: new Date(now + 1000).toISOString() } },
+      root,
+    );
+    store.transaction((all) => {
+      all[0]!.enabled = false;
+      all[0]!.nextRunAt = null;
+      all[0]!.runs = [
+        {
+          id: randomUUID(),
+          startedAt: now,
+          ownerPid: process.pid,
+          status: "paused",
+          session: "paused-session",
+        },
+      ];
+    });
+    now += 5000;
+    store.action(task.id, root, task.revision, "resume");
+    expect(store.list()[0]?.manualRun).toBe(true);
+    expect(store.list()[0]?.nextRunAt).toBeNull();
+  });
+  it("disables future triggers only after goal completion is verified", async () => {
+    const task = store.save(
+      {
+        ...input(),
+        goal: {
+          objective: "Create report",
+          completionCriteria: ["Report exists"],
+          allowedScope: "Workspace",
+        },
+      },
+      root,
+    );
+    now += 60_000;
+    const engine = new ScheduledTaskEngine(
+      store,
+      async () => ({ status: "succeeded", goalVerified: true, summary: "Report verified" }),
+      () => now,
+    );
+    engine.tick();
+    await settle();
+    const saved = store.list()[0]!;
+    expect(saved.enabled).toBe(false);
+    expect(saved.nextRunAt).toBeNull();
+    expect(saved.runs[0]?.goalVerified).toBe(true);
+    await engine.stop();
+    expect(new ScheduledTaskStore(store.path).list()[0]?.id).toBe(task.id);
+  });
+
+  it("does not confuse successful output with a completed goal", async () => {
+    store.save(
+      {
+        ...input(),
+        goal: { objective: "Finish", completionCriteria: ["Verified"], allowedScope: "Workspace" },
+      },
+      root,
+    );
+    now += 60_000;
+    const engine = new ScheduledTaskEngine(
+      store,
+      async () => ({ status: "succeeded", goalVerified: false, summary: "More work remains" }),
+      () => now,
+    );
+    engine.tick();
+    await settle();
+    expect(store.list()[0]?.enabled).toBe(true);
+    await engine.stop();
+  });
+
+  it("persists progress and pauses recurrence when a watchdog blocks the run", async () => {
+    store.save(input(), root);
+    now += 60_000;
+    const engine = new ScheduledTaskEngine(
+      store,
+      async (_, _signal, _onSession, onProgress) => {
+        onProgress?.({
+          updatedAt: now,
+          currentStep: "Inspect result",
+          recentActions: [{ at: now, text: "read_file" }],
+          checkpoints: [],
+          pauseReason: "Repeated operation",
+        });
+        return { status: "blocked", summary: "Repeated operation" };
+      },
+      () => now,
+    );
+    engine.tick();
+    await settle();
+    const saved = new ScheduledTaskStore(store.path).list()[0]!;
+    expect(saved.enabled).toBe(false);
+    expect(saved.runs[0]?.progress?.pauseReason).toBe("Repeated operation");
+    await engine.stop();
+  });
   it("idle readiness ignores future schedules but protects eligible manual/due work", async () => {
     const task = store.save(input(), root);
     const engine = new ScheduledTaskEngine(store, vi.fn(), () => now);

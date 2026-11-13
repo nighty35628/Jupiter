@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { redactEventText } from "../core/event-redaction.js";
+import { scheduledExecutionKey } from "./identity.js";
 import { nextScheduledTime } from "./schedule.js";
 import type { ScheduledTaskStore } from "./store.js";
-import type { ScheduledRun, ScheduledTask } from "./types.js";
+import type { ScheduledProgress, ScheduledRun, ScheduledTask } from "./types.js";
 
 export type ScheduledExecutor = (
   task: ScheduledTask,
   signal: AbortSignal,
   onSession?: (name: string) => void,
-) => Promise<Pick<ScheduledRun, "status" | "summary" | "session">>;
+  onProgress?: (progress: ScheduledProgress) => void,
+) => Promise<Pick<ScheduledRun, "status" | "summary" | "session" | "goalVerified">>;
 
 export class ScheduledTaskEngine {
   private timer?: ReturnType<typeof setInterval>;
@@ -84,6 +86,9 @@ export class ScheduledTaskEngine {
             run.finishedAt = now;
             run.summary =
               "Jupiter stopped before this run finished; inspect its session before retrying.";
+            task.enabled = false;
+            task.nextRunAt = null;
+            task.manualRun = undefined;
             task.revision++;
           }
       if (all.some((t) => t.runs.some((r) => r.status === "running"))) return undefined;
@@ -107,6 +112,7 @@ export class ScheduledTaskEngine {
         startedAt: now,
         ownerPid: process.pid,
         status: "running",
+        executionKey: scheduledExecutionKey(task),
       };
       task.runs = [run, ...task.runs].slice(0, 20);
       task.revision++;
@@ -120,22 +126,33 @@ export class ScheduledTaskEngine {
     ]);
     const done = Promise.resolve()
       .then(() =>
-        this.execute(claimed.task, signal, (name) => {
-          this.store.transaction((all) => {
-            const task = all.find((t) => t.id === claimed.task.id);
-            const run = task?.runs.find((r) => r.id === claimed.runId);
-            if (run && task && run.session !== name) {
-              run.session = name;
-              task.revision++;
-            }
-          });
-        }),
+        this.execute(
+          claimed.task,
+          signal,
+          (name) => {
+            this.store.transaction((all) => {
+              const task = all.find((t) => t.id === claimed.task.id);
+              const run = task?.runs.find((r) => r.id === claimed.runId);
+              if (run && task && run.session !== name) {
+                run.session = name;
+                task.revision++;
+              }
+            });
+          },
+          (progress) => {
+            this.store.transaction((all) => {
+              const task = all.find((t) => t.id === claimed.task.id);
+              const run = task?.runs.find((r) => r.id === claimed.runId);
+              if (run?.status === "running") run.progress = progress;
+            });
+          },
+        ),
       )
       .catch(
         (error) =>
           ({ status: signal.aborted ? "cancelled" : "failed", summary: String(error) }) as Pick<
             ScheduledRun,
-            "status" | "summary" | "session"
+            "status" | "summary" | "session" | "goalVerified"
           >,
       )
       .then((result) => {
@@ -144,11 +161,36 @@ export class ScheduledTaskEngine {
           const run = task?.runs.find((r) => r.id === claimed.runId);
           if (run && task) {
             Object.assign(run, result, {
-              status: signal.aborted ? "cancelled" : result.status,
+              status: signal.aborted
+                ? (run.stopReason ?? (this.stopped ? "interrupted" : "cancelled"))
+                : result.status,
               summary: redactEventText(result.summary ?? "").slice(0, 4000),
               finishedAt: this.now(),
             });
             task.revision++;
+            const repeatedFailure =
+              task.runs.slice(0, 3).length === 3 &&
+              task.runs.slice(0, 3).every((entry) => entry.status === "failed");
+            if (repeatedFailure) {
+              run.progress ??= {
+                updatedAt: this.now(),
+                currentStep: "Stopped after repeated failures",
+                recentActions: [],
+                checkpoints: [],
+              };
+              run.progress.pauseReason = "Three consecutive scheduled runs failed";
+            }
+            if (
+              run.status === "blocked" ||
+              repeatedFailure ||
+              (task.goal && result.goalVerified === true && run.status === "succeeded")
+            ) {
+              task.enabled = false;
+              task.nextRunAt = null;
+              task.manualRun = undefined;
+              if (task.goal && result.goalVerified === true && run.status === "succeeded")
+                task.goalCompletedAt = this.now();
+            }
           }
         });
       })

@@ -6257,6 +6257,7 @@ function TabRuntimeInner({
               sideChatBusy={state.sideChats.some((entry) => entry.status === "pending")}
               sideChatDisabled={!state.ready || !rpcTransportAvailable}
               onSideChatSend={sendSideChat}
+              onOpenAutomations={() => openSettingsAt("schedules")}
               visible={bottomCollapsed ? !ctxCollapsed && !contextInfoOpen : !bottomCollapsed}
               placement={bottomCollapsed ? "side" : "bottom"}
               onOpenSubagent={(name) => {

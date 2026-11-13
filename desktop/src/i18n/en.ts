@@ -1,5 +1,18 @@
 export const en = {
   scheduler: {
+    outputMode: "Result sessions",
+    newOutput: "New session for each run",
+    continueOutput: "Continue previous session (goals always continue)",
+    goalCompleted: "Goal verified complete",
+    goalRemaining: "Goal not yet verified; remaining steps are recorded below.",
+    runningEditHint: "While running, you can change the schedule and name. Pause first to change execution settings. Scope checks use additional model calls and are included in usage.",
+    computerUse: "Allow Computer Use (requires enabled desktop access, visual model and driver; keep desktop unlocked)",
+    effort: "Reasoning effort",
+    stagnation: "Pause after no progress (minutes)",
+    goal: "Goal task: stop after verified completion",
+    objective: "Objective",
+    criteria: "Completion criteria (one per line)",
+    scope: "Allowed scope",
     create: "New task",
     title: "Name",
     prompt: "Task prompt",
@@ -1222,6 +1235,8 @@ export const en = {
       reviewDesc: "View code changes",
       terminalTitle: "Terminal",
       terminalDesc: "Start interactive shell",
+      automationsTitle: "Automations",
+      automationsDesc: "Schedule tasks and track goals",
     },
     placeholder: {
       sidechat: "Side Chat is reserved here; the interface is ready for the next step.",

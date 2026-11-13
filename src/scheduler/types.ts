@@ -19,6 +19,13 @@ export const scheduleSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+export const scheduledGoalSchema = z
+  .object({
+    objective: z.string().trim().min(1).max(8000),
+    completionCriteria: z.array(z.string().trim().min(1).max(2000)).min(1).max(30),
+    allowedScope: z.string().trim().min(1).max(8000),
+  })
+  .strict();
 export const taskInputSchema = z
   .object({
     title: z.string().trim().min(1).max(120),
@@ -30,19 +37,49 @@ export const taskInputSchema = z
     enabled: z.boolean(),
     timeoutMinutes: z.number().int().min(1).max(180),
     budgetUsd: z.number().positive().max(100).optional(),
+    reasoningEffort: z.enum(["low", "medium", "high", "max"]).optional(),
+    goal: scheduledGoalSchema.optional(),
+    computerUse: z.boolean().optional(),
+    stagnationMinutes: z.number().int().min(1).max(180).optional(),
+    outputMode: z.enum(["new", "continue"]).optional(),
   })
   .strict();
 export type TaskSchedule = z.infer<typeof scheduleSchema>;
 export type ScheduledTaskInput = z.infer<typeof taskInputSchema>;
+export const checkpointSchema = z
+  .object({
+    at: z.number().finite(),
+    step: z.string().max(2000),
+    evidence: z.array(z.string().max(2000)).max(30),
+    remaining: z.array(z.string().max(2000)).max(30),
+  })
+  .strict();
+export type ScheduledCheckpoint = z.infer<typeof checkpointSchema>;
+export const progressSchema = z
+  .object({
+    updatedAt: z.number().finite(),
+    currentStep: z.string().max(2000),
+    recentActions: z
+      .array(z.object({ at: z.number().finite(), text: z.string().max(2000) }).strict())
+      .max(50),
+    checkpoints: z.array(checkpointSchema).max(30),
+    pauseReason: z.string().max(2000).optional(),
+  })
+  .strict();
+export type ScheduledProgress = z.infer<typeof progressSchema>;
 export interface ScheduledRun {
   id: string;
   startedAt: number;
   finishedAt?: number;
-  status: "running" | "succeeded" | "failed" | "cancelled" | "blocked" | "interrupted";
+  status: "running" | "succeeded" | "failed" | "cancelled" | "blocked" | "interrupted" | "paused";
   session?: string;
   summary?: string;
   ownerPid: number;
   cancelRequested?: boolean;
+  progress?: ScheduledProgress;
+  goalVerified?: boolean;
+  executionKey?: string;
+  stopReason?: "paused" | "cancelled";
 }
 export interface ScheduledTask extends ScheduledTaskInput {
   id: string;
@@ -52,6 +89,7 @@ export interface ScheduledTask extends ScheduledTaskInput {
   nextRunAt: number | null;
   runs: ScheduledRun[];
   manualRun?: boolean;
+  goalCompletedAt?: number;
 }
 export type ScheduledCommand =
   | { cmd: "scheduled_list"; requestId: string }

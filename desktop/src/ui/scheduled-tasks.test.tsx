@@ -40,6 +40,83 @@ function draft() {
 }
 
 describe("scheduled task settings", { retry: 0 }, () => {
+  it("saves goal criteria, scope, effort and explicit desktop permission", () => {
+    const f = fixture();
+    draft();
+    fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "agent" } });
+    fireEvent.change(screen.getByLabelText("Reasoning effort"), { target: { value: "max" } });
+    fireEvent.click(screen.getByLabelText(/Goal task/));
+    fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Finish report" } });
+    fireEvent.change(screen.getByLabelText(/Completion criteria/), {
+      target: { value: "File exists\nChecks pass" },
+    });
+    fireEvent.change(screen.getByLabelText("Allowed scope"), {
+      target: { value: "Workspace only" },
+    });
+    fireEvent.click(screen.getByLabelText(/Allow Computer Use/));
+    fireEvent.submit(screen.getByRole("form", { name: "Edit task" }));
+    const command = f.send.mock.calls
+      .map(([item]) => item)
+      .find((item) => item.cmd === "scheduled_save");
+    expect(command?.cmd === "scheduled_save" && command.task).toMatchObject({
+      reasoningEffort: "max",
+      computerUse: true,
+      goal: {
+        objective: "Finish report",
+        completionCriteria: ["File exists", "Checks pass"],
+        allowedScope: "Workspace only",
+      },
+    });
+  });
+
+  it("shows live progress with pause, cancellation and schedule editing while running", () => {
+    const task: ScheduledTask = {
+      id: "qa",
+      revision: 2,
+      title: "QA",
+      prompt: "Report",
+      mode: "agent",
+      model: "synthetic",
+      editMode: "review",
+      timeoutMinutes: 30,
+      workspaceDir: "/qa",
+      createdAt: 1,
+      schedule: { kind: "daily", time: "09:00", timezone: "Asia/Shanghai" },
+      enabled: true,
+      nextRunAt: Date.now(),
+      runs: [
+        {
+          id: "run",
+          status: "running",
+          startedAt: Date.now() - 10000,
+          ownerPid: 1,
+          progress: {
+            updatedAt: Date.now(),
+            currentStep: "Verify report",
+            recentActions: [{ at: Date.now(), text: "read_file" }],
+            checkpoints: [],
+          },
+        },
+      ],
+    };
+    const f = fixture({
+      result: { type: "$scheduled_tasks", workspaceDir: "/qa", requestId: "list", tasks: [task] },
+    });
+    expect(screen.getByRole("status").textContent).toContain("Verify report");
+    expect(screen.getByRole("button", { name: "Pause: QA" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop run: QA" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Edit task: QA" }));
+    fireEvent.change(screen.getByLabelText("Time", { exact: true }), {
+      target: { value: "11:00" },
+    });
+    fireEvent.submit(screen.getByRole("form", { name: "Edit task" }));
+    const command = f.send.mock.calls
+      .map(([item]) => item)
+      .find((item) => item.cmd === "scheduled_save");
+    expect(command?.cmd === "scheduled_save" && command.task.schedule).toMatchObject({
+      time: "11:00",
+    });
+  });
   it("creates a default Ask task, prevents double submit, and keeps edits until correlated acknowledgment", async () => {
     const f = fixture();
     draft();

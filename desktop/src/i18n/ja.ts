@@ -1,5 +1,18 @@
 export const ja = {
   scheduler: {
+    outputMode: "実行結果",
+    newOutput: "毎回新しい会話を作成",
+    continueOutput: "前回の会話を継続（目標タスクは常に継続）",
+    goalCompleted: "目標達成を検証済み",
+    goalRemaining: "未完了の手順は下のチェックポイントに記録されています。",
+    runningEditHint: "実行中は時刻と名前を変更できます。その他の設定変更は一時停止後に行います。範囲確認には追加のモデル呼び出しが発生します。",
+    computerUse: "デスクトップ操作を許可（視覚モデル・ドライバー・ロック解除が必要）",
+    effort: "推論強度",
+    stagnation: "進捗がない場合の停止時間（分）",
+    goal: "目標達成の検証後に停止",
+    objective: "目標",
+    criteria: "完了条件（1行に1件）",
+    scope: "許可範囲",
     create: "タスクを作成",
     title: "名前",
     prompt: "タスクの指示",
@@ -1221,6 +1234,8 @@ export const ja = {
       reviewDesc: "コード変更を表示",
       terminalTitle: "ターミナル",
       terminalDesc: "対話型 shell を起動",
+      automationsTitle: "自動化",
+      automationsDesc: "タスクを予約して目標を追跡",
     },
     placeholder: {
       sidechat: "サイドチャットの入口は準備済みです。次のステップで機能を接続します。",
