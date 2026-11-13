@@ -163,7 +163,7 @@ describe("desktop incoming QQ/user message rendering", () => {
     ]);
   });
 
-  it("retains live history until turn completion, then bounds old assistant payloads", () => {
+  it("keeps full live history readable after a turn completes", () => {
     const big = "long-session-payload\n".repeat(500);
     const messages: ChatMessage[] = Array.from({ length: 250 }, (_, i) => ({
       kind: "assistant",
@@ -196,15 +196,13 @@ describe("desktop incoming QQ/user message rendering", () => {
     const oldest = next.messages[0];
     expect(oldest?.kind).toBe("assistant");
     if (oldest?.kind !== "assistant") return;
-    expect(oldest.displayTruncated).toBe(true);
-    expect(oldest.segments[0]).toMatchObject({
-      kind: "elision",
-      segmentCount: 3,
-      charCount: expect.any(Number),
-    });
-    expect(Buffer.byteLength(JSON.stringify(next.messages), "utf8")).toBeLessThanOrEqual(
-      4 * 1024 * 1024,
-    );
+    expect(oldest).toBe(messages[0]);
+    expect(oldest.displayTruncated).toBeUndefined();
+    expect(
+      next.messages
+        .slice(0, messages.length)
+        .every((message, index) => message === messages[index]),
+    ).toBe(true);
 
     const recent = next.messages.find(
       (message) => message.kind === "assistant" && message.turn === 250,

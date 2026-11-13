@@ -387,10 +387,47 @@ describe("history paging UI wire", () => {
     expect(within(visibleMain()).getByText("new chat first answer")).toBeTruthy();
   });
 
+  it("defaults history process details to hidden and resets on reopening", async () => {
+    const messages = [user(50), { kind: "assistant", turn: 50, messageId: "process-50", pending: false,
+      segments: [{ kind: "tool", callId: "process-tool", name: "run_command", args: '{"command":"echo process"}', result: "process output", ok: true }, { kind: "text", text: "Answer remains readable" }] }];
+    await start({ messages });
+    const label = t("app.header.showProcessDetails");
+    expect(within(visibleMain()).getByRole("button", { name: label }).getAttribute("aria-pressed")).toBe("false");
+    expect(visibleMain().querySelector(".tool-card, .shell-card, .tool-group")).toBeNull();
+    fireEvent.click(within(visibleMain()).getByRole("button", { name: label }));
+    expect(within(visibleMain()).getByRole("button", { name: t("app.header.hideProcessDetails") }).getAttribute("aria-pressed")).toBe("true");
+    await emitRpc({ ...snapshot(), messages, snapshot: { sessionId: "sid", bindingId: 3, reason: "load", payloadBytes: 0, truncated: false } });
+    expect(within(visibleMain()).getByRole("button", { name: label }).getAttribute("aria-pressed")).toBe("false");
+    expect(within(visibleMain()).getByText("Answer remains readable")).toBeTruthy();
+  });
+
   it("contains transcript margins inside measured Virtuoso rows", async () => {
     await start();
     const row = messageText(50).closest<HTMLElement>("[data-item-index]")!;
     expect(row.style.display).toBe("flow-root");
+  });
+
+  it("keeps loaded long answers readable while streaming and after reopening", async () => {
+    const text = "readable historical content ".repeat(12_000) + "END-OF-OLD-ANSWER";
+    const messages = [user(49), {
+      kind: "assistant", turn: 49, messageId: "ha49", pending: false,
+      segments: [{ kind: "text", text }],
+    }, user(50)];
+    const expectFullAnswer = () => {
+      expect(screen.getByTestId("virtuoso").textContent?.includes(text)).toBe(true);
+      expect(within(visibleMain()).queryByRole("button", { name: t("thread.loadFullTurn") })).toBeNull();
+    };
+    await start({ messages });
+    expectFullAnswer();
+    await emitRpc({ type: "model.delta", tabId: "tab-1", id: 1, ts: "now", turn: 50, channel: "content", text: "live answer" });
+    expectFullAnswer();
+    await emitRpc({ type: "$turn_complete", tabId: "tab-1" });
+    expectFullAnswer();
+    await emitRpc({ ...snapshot(), name: "other", messages: [], history: undefined,
+      snapshot: { sessionId: "other", bindingId: 3, reason: "load", payloadBytes: 0, truncated: false } });
+    await emitRpc({ ...snapshot(), messages,
+      snapshot: { sessionId: "sid", bindingId: 4, reason: "load", payloadBytes: 0, truncated: false } });
+    expectFullAnswer();
   });
 
   it("keeps the mounted live row through a busy history rewrite", async () => {

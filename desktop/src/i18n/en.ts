@@ -1029,6 +1029,8 @@ export const en = {
       newTab: "New tab",
     },
     header: {
+      showProcessDetails: "Show reasoning / tools",
+      hideProcessDetails: "Hide reasoning / tools",
       noWorkspace: "No workspace selected",
       running: "Running",
       clickToSelect: "Click to select workspace",

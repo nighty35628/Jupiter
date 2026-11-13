@@ -1,9 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Virtuoso } from "react-virtuoso";
 import { AssistantMsg } from "../src/ui/thread";
 import { PlanProgressOverlay } from "../src/ui/plan-progress-overlay";
-import { elideTranscriptMessages } from "../src/ui/transcript-elision";
 import type { AssistantSegment } from "../src/App";
 import "../src/styles.css";
 
@@ -26,10 +25,8 @@ messages[119].segments = [
   ...messages[119].segments,
 ];
 function Fixture() {
-  const [preserved, setPreserved] = useState(new Set<number>());
   const [done, setDone] = useState<string[]>([]);
   const [pending, setPending] = useState(true);
-  const data = useMemo(() => elideTranscriptMessages(messages, preserved), [preserved]);
   return (
     <main
       style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}
@@ -41,7 +38,7 @@ function Fixture() {
       <div className="thread">
         <Virtuoso
           style={{ height: "100%" }}
-          data={data}
+          data={messages}
           computeItemKey={(_, item) => item.messageId}
           itemContent={(_, item) => (
             <div className="thread-inner">
@@ -52,7 +49,6 @@ function Fixture() {
                 onRejectConfirm={() => {}}
                 onAlwaysAllowConfirm={() => {}}
                 pendingConfirms={[]}
-                onLoadFullTurn={() => setPreserved(new Set([...preserved, item.turn]))}
               />
             </div>
           )}

@@ -1041,6 +1041,8 @@ export const de: typeof en = {
     },
     header: {
       ...en.app.header,
+      showProcessDetails: "Denkprozess / Werkzeuge anzeigen",
+      hideProcessDetails: "Denkprozess / Werkzeuge ausblenden",
       noWorkspace: "Kein Arbeitsbereich ausgewählt",
       running: "Läuft",
       clickToSelect: "Klicken, um Arbeitsbereich auszuwählen",

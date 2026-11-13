@@ -1028,6 +1028,8 @@ export const ja = {
       newTab: "新しいタブ",
     },
     header: {
+      showProcessDetails: "思考過程・ツール呼び出しを表示",
+      hideProcessDetails: "思考過程・ツール呼び出しを非表示",
       noWorkspace: "ワークスペースが選択されていません",
       running: "実行中",
       clickToSelect: "クリックしてワークスペースを選択",

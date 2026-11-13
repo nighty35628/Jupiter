@@ -21,6 +21,21 @@ const baseProps = {
 };
 
 describe("AssistantMsg process cards", () => {
+  it("hides reasoning and tools without losing the answer and restores them on toggle", () => {
+    const segments: import("../App").AssistantSegment[] = [
+      { kind: "reasoning", text: "private process fixture" },
+      { kind: "tool", callId: "toggle-tool", name: "run_command", args: '{"command":"echo fixture"}', startedAt: 0, result: "tool output fixture", ok: true },
+      { kind: "text", text: "Readable final answer" },
+    ];
+    const { rerender } = render(<AssistantMsg {...baseProps} segments={segments} hideProcessDetails processCardsDefaultOpen />);
+    expect(screen.getByText("Readable final answer")).toBeTruthy();
+    expect(screen.queryByText("private process fixture")).toBeNull();
+    expect(screen.queryByText("tool output fixture")).toBeNull();
+    rerender(<AssistantMsg {...baseProps} segments={segments} processCardsDefaultOpen />);
+    expect(screen.getByText("private process fixture")).toBeTruthy();
+    expect(screen.getByText("tool output fixture")).toBeTruthy();
+    expect(screen.getByText("Readable final answer")).toBeTruthy();
+  });
   it("keeps completed shell output collapsed by default", () => {
     render(
       <AssistantMsg

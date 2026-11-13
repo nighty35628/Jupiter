@@ -184,7 +184,6 @@ import {
   UserMsg,
 } from "./ui/thread";
 import { getThreadMaxWidth, getVisibleContextWidth } from "./ui/thread-layout";
-import { createTranscriptProjector, retainRecentTranscript } from "./ui/transcript-elision";
 import { useAutoCollapse } from "./ui/useAutoCollapse";
 import { useDisableTextAssist } from "./ui/useDisableTextAssist";
 import { useBottomResizable, useResizable } from "./ui/useResizable";
@@ -1568,7 +1567,7 @@ export function applyIncoming(state: State, ev: IncomingEvent): State {
   const next = applyIncomingRaw(state, ev);
   if (ev.type !== "$turn_complete") return next;
   const messages = settleOpenToolCards(next.messages);
-  return { ...next, messages: retainRecentTranscript(messages, new Set(next.expandedTurns)) };
+  return { ...next, messages };
 }
 
 type SessionSnapshotEvent = Extract<
@@ -4912,11 +4911,12 @@ function TabRuntimeInner({
     [submitApprovalResponse],
   );
 
-  const projectTranscript = useMemo(() => createTranscriptProjector<ChatMessage>(), []);
-  const messageItems = useMemo(
-    () => projectTranscript(state.messages, new Set(state.expandedTurns)),
-    [state.messages, state.expandedTurns],
-  );
+  // Virtuoso bounds mounted rows; loaded text must survive scrolling and new turns.
+  const messageItems = state.messages;
+  const processViewKey = JSON.stringify([state.currentSessionId ?? state.currentSession, state.bindingId]);
+  const [processView, setProcessView] = useState({ key: "", visible: false });
+  const showProcessDetails = processView.key === processViewKey && processView.visible;
+  const toggleProcessDetails = () => setProcessView({ key: processViewKey, visible: !showProcessDetails });
   const jumpMessages = useMemo(() => {
     const used = new Set<number>();
     let last = state.messages.reduce((max, row) => row.kind === "user" ? Math.max(max, row.turn) : max, 0);
@@ -5775,6 +5775,8 @@ function TabRuntimeInner({
                 onAbort={abort}
                 onCopy={conversationCopy}
                 onExport={exportConversation}
+                showProcessDetails={showProcessDetails}
+                onToggleProcessDetails={toggleProcessDetails}
               />
               {state.sharedSessionUpdate && state.sharedSessionUpdate.sourceViewId !== state.conversationViewId ? (
                 <div className="shared-session-notice" role="status">
@@ -5918,6 +5920,7 @@ function TabRuntimeInner({
                                 if (rollbackTarget)
                                   rollbackToMessage(rollbackTarget.turn, rollbackTarget.role);
                               }}
+                              hideProcessDetails={!showProcessDetails}
                               processCardsDefaultOpen={
                                 state.settings?.processCardsDefaultOpen ?? false
                               }
@@ -6971,6 +6974,8 @@ function MainHead({
   onAbort,
   onCopy,
   onExport,
+  showProcessDetails,
+  onToggleProcessDetails,
 }: {
   session: string;
   busy: boolean;
@@ -6978,6 +6983,8 @@ function MainHead({
   onAbort: () => void;
   onCopy: () => void;
   onExport: () => void;
+  showProcessDetails: boolean;
+  onToggleProcessDetails: () => void;
 }) {
   useLang();
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -7008,6 +7015,16 @@ function MainHead({
         </h1>
       </div>
       <span className="grow" />
+      <button
+        type="button"
+        className="h-btn"
+        disabled={!hasMessages}
+        aria-pressed={showProcessDetails}
+        onClick={onToggleProcessDetails}
+        title={t(showProcessDetails ? "app.header.hideProcessDetails" : "app.header.showProcessDetails")}
+      >
+        {t(showProcessDetails ? "app.header.hideProcessDetails" : "app.header.showProcessDetails")}
+      </button>
       <div ref={exportMenuRef} className="head-action-wrap">
         <button
           type="button"
